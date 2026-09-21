@@ -190,7 +190,7 @@ describe('rail island', () => {
     expect(groups).toEqual(['gui.rail.pinned', 'gui.rail.from_cron', 'gui.rail.workdir', 'gui.rail.no_workdir'])
     /* Each pinned row wears its folder's name, with the whole path on hover;
        either separator. A pinned session stays in the pinned group. */
-    const tags = [...host.querySelectorAll('.sess .wdt')].map((n) => [n.textContent, n.getAttribute('title')])
+    const tags = [...host.querySelectorAll('.sess .rail-wdt')].map((n) => [n.textContent, n.getAttribute('title')])
     expect(tags).toEqual([['thesis', '/Users/me/thesis'], ['thesis', '/Users/me/thesis'], ['notes', 'C:\\work\\notes']])
     expect(host.querySelectorAll('.sess').length).toBe(4)
   })

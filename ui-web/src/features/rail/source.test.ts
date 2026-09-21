@@ -91,6 +91,7 @@ describe('a listed session as a row', () => {
       last_message_preview: 'the last thing said',
       message_count: 4,
       pinned: true,
+      workdir: '/w/thesis',
     })
 
     /* Conversation activity, not creation: updated_at wins. */
@@ -104,6 +105,7 @@ describe('a listed session as a row', () => {
       pin: true,
       persisted: true,
       from: undefined,
+      workdir: '/w/thesis',
     })
   })
 
@@ -117,6 +119,7 @@ describe('a listed session as a row', () => {
     const bare = part.rowFrom({ id: 'tui:20260610_100000_a1', message_count: 7 })
     expect(bare.title).toBe('gui.sess.fallback_title:{"id":"20260610_100000"}')
     expect(bare.last).toBe('gui.sess.n_messages:{"n":7}')
+    expect(bare.workdir).toBeNull()
   })
 
   it('sees past the scheduler wrapper, and borrows the job name when it has one', async () => {
