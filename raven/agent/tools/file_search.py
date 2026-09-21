@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import sysconfig
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -310,11 +311,10 @@ class GrepTool(_FsTool):
         if base.is_file():
             yield base
             return
-        for root, _dirs, names in tree_walk.walk(base):
-            for n in sorted(names):
-                if glob and not fnmatch.fnmatch(n, glob):
-                    continue
-                yield Path(root) / n
+        for root, name, is_dir in tree_walk.walk(base):
+            if is_dir or (glob and not fnmatch.fnmatch(name, glob)):
+                continue
+            yield Path(root) / name
 
     @staticmethod
     def _relpath(fp: Path, base: Path) -> str:
@@ -351,18 +351,38 @@ class GrepTool(_FsTool):
 
 # ``Path.glob`` folds case on Windows only; ``fnmatch`` decides the same way.
 _CASE_FLAGS = 0 if os.path.normcase("Aa") == "Aa" else re.IGNORECASE
+# A component with any of these is a matcher; one without is a literal name
+# the walk can start at instead of searching for.
+_MAGIC = re.compile(r"[*?\[]")
 
 
-def _compile_pattern(pattern: str) -> tuple[re.Pattern[str] | None, ...]:
+@dataclass(frozen=True)
+class _Pattern:
+    """A find pattern, compiled: where to start and what to match from there.
+
+    ``prefix`` is the run of leading components with no wildcard in them,
+    ``segments`` the matchers for what follows (``None`` stands for ``**``),
+    and ``dirs_only`` whether the pattern ended in a slash. ``src/**/*.py``
+    compiles to prefix ``('src',)`` and segments ``(**, *.py)``: the walk
+    starts inside ``src`` and never spends its budget in a sibling tree the
+    pattern could not match anything in.
+    """
+
+    prefix: tuple[str, ...]
+    segments: tuple[re.Pattern[str] | None, ...]
+    dirs_only: bool
+
+
+def _compile_pattern(pattern: str) -> _Pattern:
     """One matcher per path component of ``pattern``; ``None`` stands for ``**``.
 
     Follows what ``Path.glob`` accepted, which is what ``find`` used to call:
     a component is an ``fnmatch`` pattern that cannot cross a slash, and a
     component that is exactly ``**`` spans any number of components including
     none, so ``**/x`` also matches a top-level ``x`` and ``src/**`` matches
-    ``src`` itself and everything beneath it. ``..`` is refused rather than
-    followed, since a pattern must not reach outside the directory the fence
-    resolved.
+    ``src`` itself and everything beneath it; a trailing slash keeps its
+    directory-only meaning. ``..`` is refused rather than followed, since a
+    pattern must not reach outside the directory the fence resolved.
     """
     if pattern.startswith("/"):
         raise ValueError("pattern must be relative to path")
@@ -371,6 +391,7 @@ def _compile_pattern(pattern: str) -> tuple[re.Pattern[str] | None, ...]:
         raise ValueError("empty pattern")
     if ".." in segments:
         raise ValueError("pattern must not contain '..'")
+    prefix: list[str] = []
     compiled: list[re.Pattern[str] | None] = []
     for segment in segments:
         if segment == "**":
@@ -378,9 +399,11 @@ def _compile_pattern(pattern: str) -> tuple[re.Pattern[str] | None, ...]:
                 compiled.append(None)
         elif "**" in segment:
             raise ValueError("'**' can only be an entire path component")
+        elif not compiled and not _MAGIC.search(segment):
+            prefix.append(segment)
         else:
             compiled.append(re.compile(fnmatch.translate(segment), _CASE_FLAGS))
-    return tuple(compiled)
+    return _Pattern(tuple(prefix), tuple(compiled), pattern.endswith("/"))
 
 
 def _matches(components: list[str], segments: tuple[re.Pattern[str] | None, ...], i: int = 0, j: int = 0) -> bool:
@@ -471,10 +494,10 @@ class FindTool(_FsTool):
         # recursively (fd-style), so 'foo.py' finds it at any depth.
         glob_expr = f"**/{pattern}" if pattern and "/" not in pattern else pattern
         try:
-            segments = _compile_pattern(glob_expr)
+            compiled = _compile_pattern(glob_expr)
         except (ValueError, re.error) as e:
             return f"Error running find: {e}"
-        matches, incomplete = await asyncio.to_thread(self._search, base, segments)
+        matches, incomplete = await asyncio.to_thread(self._search, base, compiled)
         if not matches and not incomplete:
             return "No files found matching pattern."
 
@@ -491,23 +514,41 @@ class FindTool(_FsTool):
             result += f"\n\n({'; '.join(notes)})"
         return result
 
-    def _search(self, base: Path, segments: tuple[re.Pattern[str] | None, ...]) -> tuple[list[tuple[float, str]], bool]:
+    def _search(self, base: Path, compiled: _Pattern) -> tuple[list[tuple[float, str]], bool]:
         """Collect ``(mtime, display path)`` for every entry under ``base`` the pattern matches.
 
-        Runs in a worker thread. An entry is matched on its path components
-        relative to ``base``, and a matched directory is shown with a trailing
-        slash. The second value says whether the walk hit its deadline, in
+        Runs in a worker thread. The walk starts at the pattern's literal
+        prefix -- ``base/src`` for ``src/**/*.py`` -- and an entry is matched
+        on its path components from there; a matched directory is shown with
+        a trailing slash. The prefix itself is a match when the rest of the
+        pattern can match nothing at all (``src/**``, or a pattern that is all
+        literal), which is also how a pattern naming one file finds it without
+        a walk. The second value says whether the walk hit its deadline, in
         which case the list is what was found before it did.
         """
         matches: list[tuple[float, str]] = []
-        base_parts = len(base.parts)
+        start = base.joinpath(*compiled.prefix)
+        shown_prefix = "/".join(compiled.prefix)
+        if compiled.prefix:
+            if not start.exists():
+                return matches, False
+            if _matches([], compiled.segments) and (start.is_dir() or not compiled.dirs_only):
+                matches.append((self._mtime(start), f"{shown_prefix}{'/' if start.is_dir() else ''}"))
+            if not start.is_dir():
+                return matches, False
+        start_parts = len(start.parts)
+        last_root: str | None = None
+        parents: list[str] = []
         try:
-            for root, dirs, names in tree_walk.walk(base):
-                parents = list(Path(root).parts[base_parts:])
-                prefix = "/".join(parents) + "/" if parents else ""
-                for name, is_dir in [(d, True) for d in dirs] + [(n, False) for n in names]:
-                    if _matches([*parents, name], segments):
-                        matches.append((self._mtime(Path(root, name)), f"{prefix}{name}{'/' if is_dir else ''}"))
+            for root, name, is_dir in tree_walk.walk(start):
+                if root != last_root:
+                    last_root = root
+                    parents = list(Path(root).parts[start_parts:])
+                if compiled.dirs_only and not is_dir:
+                    continue
+                if _matches([*parents, name], compiled.segments):
+                    rel = "/".join([*compiled.prefix, *parents, name])
+                    matches.append((self._mtime(Path(root, name)), f"{rel}{'/' if is_dir else ''}"))
         except TimeoutError:
             return matches, True
         return matches, False

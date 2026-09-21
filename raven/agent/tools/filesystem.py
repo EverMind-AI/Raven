@@ -661,15 +661,15 @@ class ListDirTool(_FsTool):
         """
         found: list[tuple[tuple[str, ...], str]] = []
         incomplete = False
+        last_root: str | None = None
+        rel_root = Path()
         try:
-            for root, dirs, names in tree_walk.walk(dp):
-                rel_root = Path(root).relative_to(dp)
-                for name in dirs:
-                    rel = rel_root / name
-                    found.append((rel.parts, f"{rel}/"))
-                for name in names:
-                    rel = rel_root / name
-                    found.append((rel.parts, str(rel)))
+            for root, name, is_dir in tree_walk.walk(dp):
+                if root != last_root:
+                    last_root = root
+                    rel_root = Path(root).relative_to(dp)
+                rel = rel_root / name
+                found.append((rel.parts, f"{rel}/" if is_dir else str(rel)))
         except TimeoutError:
             incomplete = True
         found.sort(key=lambda entry: entry[0])

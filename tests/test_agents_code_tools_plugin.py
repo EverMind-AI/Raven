@@ -545,10 +545,11 @@ def test_glob_carries_a_childs_traversal_budget_into_the_merged_notice(tmp_path,
     assert "traversal budget" in merged
     assert all(is_notice(line) for line in merged.splitlines() if line)
 
-    # Each child walk reads the clock three times over this two-directory
-    # tree: its deadline, the root (in budget), then late/ (past it).
+    # Each child walk reads the clock four times over this tree: its
+    # deadline, then before ``late/`` and ``a.py`` at the root (in budget),
+    # then before ``late/b.ts`` (past it).
     monkeypatch.setattr(tree_walk, "WALK_DEADLINE_S", 20.0)
-    ticks = itertools.cycle([0.0, 0.0, tree_walk.WALK_DEADLINE_S + 1])
+    ticks = itertools.cycle([0.0, 0.0, 0.0, tree_walk.WALK_DEADLINE_S + 1])
     monkeypatch.setattr(tree_walk, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
     (tmp_path / "late").mkdir()
     (tmp_path / "late" / "b.ts").write_text("")

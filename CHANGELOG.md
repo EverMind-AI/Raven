@@ -99,11 +99,14 @@ All notable changes to Raven are documented here.
   no deadline, so the registry's 300s ceiling could not preempt it and every
   session stopped with it. The three tools now share one walk that prunes
   `node_modules`, `.git` and the other noise directories before entering
-  them, stops at a 20s wall-clock budget with a `PARTIAL result` trailer
-  that says absence of a match is not conclusive, and runs in a worker
-  thread. `find` answers what `Path.glob` answered for the same pattern,
-  refuses a pattern with `..` or a leading `/`, and lists files as well as
-  directories under a trailing `**`.
+  them, checks a 20s wall-clock budget before every entry it yields (so one
+  large or slow directory cannot run past it either) and ends with a
+  `PARTIAL result` trailer that says absence of a match is not conclusive,
+  and runs in a worker thread. `find` starts at a pattern's literal prefix
+  (`src/**/*.py` never enters a sibling of `src`), answers what `Path.glob`
+  answered for the same pattern, keeps a trailing slash's directory-only
+  meaning, refuses a pattern with `..` or a leading `/`, and lists files as
+  well as directories under a trailing `**`.
 
 - A sub-agent run that is stopped now tells the conversation that started
   it, and says why: `[Subagent '...' was cancelled]` with the reason (`the

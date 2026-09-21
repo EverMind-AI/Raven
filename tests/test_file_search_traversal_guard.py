@@ -25,10 +25,19 @@ from raven.agent.tools.file_search import FindTool, GrepTool
 from raven.agent.tools.filesystem import ListDirTool
 
 
-def _expire_after_first_directory(monkeypatch) -> None:
-    """The first directory is within budget; every directory after it is past it."""
-    ticks = itertools.chain([0.0, 0.0], itertools.repeat(tree_walk.WALK_DEADLINE_S + 1))
+def _expire_after_entries(monkeypatch, entries: int) -> None:
+    """The first ``entries`` entries are within budget; the one after is past it.
+
+    The walk reads the clock once for its deadline and once before each entry
+    it yields, so the tick after those is what the deadline check sees.
+    """
+    ticks = itertools.chain([0.0] * (1 + entries), itertools.repeat(tree_walk.WALK_DEADLINE_S + 1))
     monkeypatch.setattr(tree_walk, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+
+
+def _expire_after_first_directory(monkeypatch) -> None:
+    """The root's two entries (``late/`` then ``a.txt``) fit; ``late/b.txt`` does not."""
+    _expire_after_entries(monkeypatch, 2)
 
 
 def _tree_with_a_late_match(root: Path) -> None:
@@ -111,7 +120,7 @@ async def test_grep_fallback_walk_runs_off_the_event_loop(tmp_path, monkeypatch)
 
     def blocking_walk(base, **_):
         release.wait(2.0)
-        yield str(base), [], ["a.txt"]
+        yield str(base), "a.txt", False
 
     monkeypatch.setattr(tree_walk, "walk", blocking_walk)
     started = time.monotonic()
@@ -184,7 +193,9 @@ async def test_find_reports_the_limit_and_the_deadline_in_one_notice(tmp_path, m
     (tmp_path / "a.txt").write_text("", encoding="utf-8")
     (tmp_path / "b.txt").write_text("", encoding="utf-8")
     (tmp_path / "late").mkdir()
-    _expire_after_first_directory(monkeypatch)
+    (tmp_path / "late" / "c.txt").write_text("", encoding="utf-8")
+    # The root's three entries fit the budget; ``late/c.txt`` does not.
+    _expire_after_entries(monkeypatch, 3)
 
     result = await FindTool().execute(pattern="*", path=str(tmp_path), limit=1)
 
@@ -201,7 +212,7 @@ async def test_find_walk_runs_off_the_event_loop(tmp_path, monkeypatch):
 
     def blocking_walk(base, **_):
         release.wait(2.0)
-        yield str(base), [], ["a.py"]
+        yield str(base), "a.py", False
 
     monkeypatch.setattr(tree_walk, "walk", blocking_walk)
     started = time.monotonic()
@@ -243,6 +254,14 @@ def _glob_fixture(root: Path) -> None:
         "lib",
         "**/lib",
         ".*",
+        "src/lib/c.py",
+        "src/lib",
+        "src/lib/",
+        "*/",
+        "src/**/",
+        "src/*/",
+        "missing/*.py",
+        "src/nope.py",
     ],
 )
 async def test_find_matches_what_path_glob_matched(tmp_path, pattern):
@@ -260,6 +279,107 @@ async def test_find_matches_what_path_glob_matched(tmp_path, pattern):
 
     got = set() if result == "No files found matching pattern." else set(result.splitlines())
     assert got == expected
+
+
+@pytest.mark.asyncio
+async def test_find_starts_at_the_patterns_literal_prefix(tmp_path, monkeypatch):
+    """``src/**/*.py`` can match nothing outside ``src``, so the walk begins
+    there: a sibling tree visited first used to spend the budget and turn a sure
+    hit into a partial miss the advice to narrow the pattern could not fix."""
+    _glob_fixture(tmp_path)
+    for i in range(50):
+        (tmp_path / "unrelated" / f"d{i}").mkdir(parents=True)
+    opened: list[str] = []
+    real_scandir = os.scandir
+
+    def spy(path=".", *args, **kwargs):
+        opened.append(os.fspath(path))
+        return real_scandir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "scandir", spy)
+
+    result = await FindTool().execute(pattern="src/**/*.py", path=str(tmp_path))
+
+    assert set(result.splitlines()) == {"src/b.py", "src/lib/c.py"}
+    assert not [p for p in opened if "unrelated" in p], opened
+    assert str(tmp_path) not in opened, "the search root itself is never listed"
+
+
+@pytest.mark.asyncio
+async def test_find_with_a_literal_pattern_answers_without_a_walk(tmp_path, monkeypatch):
+    _glob_fixture(tmp_path)
+    monkeypatch.setattr(tree_walk, "walk", lambda *a, **k: pytest.fail("a pattern that names one path needs no walk"))
+
+    assert (await FindTool().execute(pattern="src/lib/c.py", path=str(tmp_path))).splitlines() == ["src/lib/c.py"]
+    assert (await FindTool().execute(pattern="src/lib/c.py/", path=str(tmp_path))) == "No files found matching pattern."
+    assert (await FindTool().execute(pattern="src/nope.py", path=str(tmp_path))) == "No files found matching pattern."
+
+
+@pytest.mark.asyncio
+async def test_find_keeps_a_trailing_slashs_directory_only_meaning(tmp_path):
+    _glob_fixture(tmp_path)
+
+    assert set((await FindTool().execute(pattern="*/", path=str(tmp_path))).splitlines()) == {"src/", "tests/"}
+    assert set((await FindTool().execute(pattern="src/**/", path=str(tmp_path))).splitlines()) == {"src/", "src/lib/"}
+
+
+def _slow_clock(monkeypatch, *, per_entry_s: float):
+    """A clock the caller's per-entry work advances, so the deadline check sees it."""
+    now = [0.0]
+    monkeypatch.setattr(tree_walk, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    def spend():
+        now[0] += per_entry_s
+
+    return spend
+
+
+@pytest.mark.asyncio
+async def test_find_deadline_covers_the_work_done_per_entry(tmp_path, monkeypatch):
+    """Eight matches in one flat directory, a stat that costs 30ms each and a
+    50ms budget: the old once-per-directory check let all eight through with no
+    notice, 240ms late. The check before every entry sees the stats."""
+    for i in range(8):
+        (tmp_path / f"f{i}.txt").write_text("", encoding="utf-8")
+    monkeypatch.setattr(tree_walk, "WALK_DEADLINE_S", 0.05)
+    spend = _slow_clock(monkeypatch, per_entry_s=0.03)
+    real_mtime = FindTool._mtime
+    monkeypatch.setattr(FindTool, "_mtime", staticmethod(lambda p: (spend(), real_mtime(p))[1]))
+
+    result = await FindTool().execute(pattern="*.txt", path=str(tmp_path))
+
+    paths, notice = result.split("\n\n")
+    assert len(paths.splitlines()) == 2, result
+    assert notice.startswith("(PARTIAL result:")
+
+
+@pytest.mark.asyncio
+async def test_grep_fallback_deadline_covers_the_work_done_per_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(file_search, "_resolve_rg", lambda: None)
+    for i in range(8):
+        (tmp_path / f"f{i}.txt").write_text("needle\n", encoding="utf-8")
+    monkeypatch.setattr(tree_walk, "WALK_DEADLINE_S", 0.05)
+    spend = _slow_clock(monkeypatch, per_entry_s=0.03)
+    real_read = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda self: (spend(), real_read(self))[1])
+
+    result = await GrepTool().execute(pattern="needle", path=str(tmp_path), output_mode="files_with_matches")
+
+    assert result.lower().startswith("warning: search incomplete")
+    assert len([line for line in result.splitlines() if line.endswith(".txt")]) == 2
+
+
+def test_the_walk_checks_the_deadline_before_every_entry(tmp_path, monkeypatch):
+    for i in range(4):
+        (tmp_path / f"f{i}").write_text("", encoding="utf-8")
+    _expire_after_entries(monkeypatch, 2)
+
+    seen = []
+    with pytest.raises(TimeoutError):
+        for _root, name, _is_dir in tree_walk.walk(tmp_path):
+            seen.append(name)
+
+    assert seen == ["f0", "f1"]
 
 
 @pytest.mark.asyncio
@@ -348,7 +468,7 @@ async def test_list_dir_recursive_walk_runs_off_the_event_loop(tmp_path, monkeyp
 
     def blocking_walk(base, **_):
         release.wait(2.0)
-        yield str(base), [], ["a.txt"]
+        yield str(base), "a.txt", False
 
     monkeypatch.setattr(tree_walk, "walk", blocking_walk)
     started = time.monotonic()
