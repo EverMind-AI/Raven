@@ -92,6 +92,18 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A sub-agent that finishes while the host is shutting down no longer loses its
+  result. Its announce submits a turn to a scheduler that is already draining;
+  the refusal escaped the announcing task, and the only trace was asyncio's
+  "Task exception was never retrieved" in the log. The undelivered text now
+  goes to the log in full, with the conversation it was for, and `raven serve`,
+  the TUI and the gateway's page cancel their sub-agents before sealing the
+  spine, the order the gateway's own spine already kept. A spawn or
+  `run_subagent_dag` that arrives once shutdown has begun is refused with a
+  message that says so, in both DAG modes, rather than started into a process
+  about to exit -- or, for a blocking DAG call, parked through the shutdown
+  grace.
+
 - Raven serving ACP sends a run of thought tokens as one
   `agent_thought_chunk` instead of one frame per token: consecutive thought
   chunks of a session are held for 200ms or 512 characters and go out
