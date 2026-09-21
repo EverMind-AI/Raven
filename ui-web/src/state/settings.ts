@@ -54,10 +54,12 @@ export function onOpen(fn: () => void): void {
    the new-job sheet the schedules section raises over the dialog. Left alone
    both survive a section pick and a close, and come back over whatever the
    reader opens next, still on the entry they were left on -- which is what
-   these slots take back. Each is registered by the domain that owns it, at its
-   own module evaluation, because state/ does not import an island; unfilled, a
-   leave asks nothing. */
-const SLOTS = ['clearConnChannel', 'closeCronSheet'] as const
+   these slots take back. What a slot may NOT do is throw work away: the
+   schedules one parks its sheet rather than closing it, because the link a
+   reader follows out of that form is inside the form (features/cron/store.ts).
+   Each is registered by the domain that owns it, at its own module evaluation,
+   because state/ does not import an island; unfilled, a leave asks nothing. */
+const SLOTS = ['clearConnChannel', 'parkCronSheet'] as const
 
 /** One of the sheets a section leaves behind. */
 export type LeaveSlot = (typeof SLOTS)[number]

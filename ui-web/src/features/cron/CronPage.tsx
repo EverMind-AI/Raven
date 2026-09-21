@@ -99,7 +99,7 @@ export function CronApp(): JSX.Element {
           <TwoPaneNone>{t('gui.cron.pick')}</TwoPaneNone>
         )}
       </TwoPane>
-      {s.sheet ? <JobSheet key={`sheet:${s.epoch}`} draft={s.sheet} /> : null}
+      {s.sheet && !s.parked ? <JobSheet key={`sheet:${s.epoch}`} draft={s.sheet} /> : null}
     </>
   )
 }

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as lang from '../../state/lang'
+import * as settingsDialog from '../../state/settings'
 import { resetSources, setSources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import { mountPageRoot } from '../../test/pageRoot'
@@ -194,6 +195,55 @@ describe('cron island', () => {
     })
     expect(await screen.findByText('gui.job.need_name')).toBeTruthy()
     expect(screen.getByText('gui.job.need_what')).toBeTruthy()
+  })
+
+  /* The one link out of this form is inside it: "where results go" opens
+     Channels, which is a section pick, which leaves this section. Dropping the
+     draft there deleted a half-written job to a press that reads like a
+     detour. */
+  describe('a draft the reader leaves the section with', () => {
+    const sheetUp = (): boolean => !!document.querySelector('#jobVeil .sheet')
+
+    it('goes off screen and comes back with what was typed in it', async () => {
+      install([])
+      await mount()
+      await act(async () => {
+        screen.getByLabelText('gui.cron_new').click()
+      })
+      const name = document.querySelector<HTMLInputElement>('#jobVeil input[type="text"]')!
+      await act(async () => {
+        name.value = 'half written'
+        name.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+
+      /* What the link does: the dialog leaves this section. */
+      await act(async () => { settingsDialog.leaveSection() })
+      expect(sheetUp(), 'the sheet does not float over the section it left').toBe(false)
+      expect(store.get().sheet, 'the draft is kept').toBeTruthy()
+      expect(document.getElementById('jobVeil')!.dataset.open).toBe('false')
+
+      /* And back. */
+      await act(async () => { settingsDialog.enterSection('cron') })
+      expect(sheetUp()).toBe(true)
+      expect(document.querySelector<HTMLInputElement>('#jobVeil input[type="text"]')!.value)
+        .toBe('half written')
+    })
+
+    /* Cancel is still cancel: what the reader ends deliberately does not come
+       back the next time they open the section. */
+    it('is gone for good once the reader cancels it', async () => {
+      install([])
+      await mount()
+      await act(async () => {
+        screen.getByLabelText('gui.cron_new').click()
+      })
+      await act(async () => {
+        ;(await screen.findByText('gui.cancel')).click()
+      })
+      await act(async () => { settingsDialog.enterSection('cron') })
+      expect(sheetUp()).toBe(false)
+      expect(store.get().sheet).toBeNull()
+    })
   })
 
   it('keeps the reader on the job page after a successful save', async () => {

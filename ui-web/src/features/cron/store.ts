@@ -31,10 +31,20 @@ export interface CronState {
      `epoch` remounts the form subtrees when a draft is replaced. */
   draft: CronDraft | null
   sheet: CronDraft | null
+  /* Whether the sheet is parked: the reader left this section with a draft
+     still in it. The draft is kept rather than dropped, because the way out of
+     this form that a reader actually takes is the one link inside it -- "where
+     results go" opens Channels -- and dropping the draft there costs a
+     half-written job to a press that reads like a detour. Off screen while
+     parked, since the sheet is a veil at the body and would otherwise float
+     over whichever section the reader went to. */
+  parked: boolean
   epoch: number
 }
 
-const store = makeStore<CronState>({ rows: [], rev: 0, loaded: false, viewId: null, draft: null, sheet: null, epoch: 0 })
+const store = makeStore<CronState>({
+  rows: [], rev: 0, loaded: false, viewId: null, draft: null, sheet: null, parked: false, epoch: 0,
+})
 
 export const { get, subscribe, _resetForTests } = store
 
@@ -75,7 +85,8 @@ export function open(): void {
    importing three island stores for three lines, which is three island graphs
    in the page's own wiring. */
 function enter(): void {
-  set({ viewId: null, draft: null })
+  /* Un-parked: a draft the reader left here is what they come back to. */
+  set({ viewId: null, draft: null, parked: false })
   void refresh()
 }
 settingsDialog.onEnter('cron', enter)
@@ -111,15 +122,21 @@ export function openSheet(j?: CronDraft): void {
     runs: [],
     fresh: true,
   }
-  set({ sheet: draft, epoch: get().epoch + 1 })
+  set({ sheet: draft, parked: false, epoch: get().epoch + 1 })
 }
 
 export function closeSheet(): void {
-  set({ sheet: null })
+  set({ sheet: null, parked: false })
 }
-/* And what leaving the section costs: a half-written job would come back over
-   whatever section the reader opens next. */
-settingsDialog.onLeave('closeCronSheet', closeSheet)
+
+/* What leaving the section costs: the sheet goes off screen, and the draft in
+   it does not. It used to be dropped here, which made the form's own link to
+   Channels -- the one a reader follows to set a delivery route up while they
+   are writing the job that needs it -- delete the job with no prompt. */
+function park(): void {
+  if (get().sheet) set({ parked: true })
+}
+settingsDialog.onLeave('parkCronSheet', park)
 
 /* A language flip changes nothing in this state, but every visible string
    comes from t(), so a re-render is the whole redraw. The island's own controls

@@ -4915,6 +4915,13 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
     scrollbar-width: thin;
   }
   .snav button.sitem { flex: none; white-space: nowrap; }
+  /* The hosted sections stack with it. A 276px list track beside the detail
+     leaves the detail about forty pixels at this width, which is a pane you
+     can open and cannot use -- so the list becomes a capped band above it and
+     the two scroll on their own. */
+  .two-pane { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .two-pane-side { border-right: 0; border-bottom: 1px solid var(--line-soft); max-height: 38vh; }
+  .two-pane-main { padding: 14px 16px 18px; }
   /* Sentence-cards stack; the visual pickers (theme / font minis) stay 3-up:
      a miniature blown up to full width reads as a wireframe, not an option. */
   .spick.n3:not(.thpick):not(.fpick), .kbdg { grid-template-columns: 1fr; }
