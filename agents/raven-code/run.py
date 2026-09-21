@@ -477,10 +477,11 @@ def render_config(source: Path, partition: Path, mode: str | None = None, *, una
         # a reply and exits, so the gate refuses every write and every command
         # instead of prompting (measured 2026-09-08: the model could not edit
         # one line and reported the task incomplete), and trunk's own one-shot
-        # spine names this the operator's call. The ACP hosting keeps the
-        # default: raven dispatching a sub-agent answers those prompts itself,
-        # and a person in an editor should still be asked. Builtin refusals
-        # (the catastrophic-command list) hold in every mode, and an explicit
+        # spine names this the operator's call. The ACP hosting keeps trunk's
+        # default, which is the smart tier: raven dispatching a sub-agent
+        # answers the prompts itself, and a person in an editor is still asked
+        # about whatever the reviewer escalates. Builtin refusals (the
+        # catastrophic-command list) hold in every mode, and an explicit
         # permissions block in a custom config wins.
         config.setdefault("permissions", {}).setdefault("mode", "full")
 
