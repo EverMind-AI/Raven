@@ -554,6 +554,25 @@ export interface ChannelStatusRow {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplateRow".
+ */
+export interface DeckTemplateRow {
+  /**
+   * The template's stem, which deck.templates.pick takes.
+   */
+  name: string;
+  /**
+   * The stem as words, for the picker's caption.
+   */
+  label: string;
+  size: number;
+  /**
+   * The first page as a JPEG data URL, or null where this host cannot render one.
+   */
+  cover?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "FsEntry".
  */
 export interface FsEntry {
@@ -4394,6 +4413,73 @@ export interface FsUploadParams {
  * via the `definition` "FsUploadResult".
  */
 export interface FsUploadResult {
+  /**
+   * Workspace-relative path to hand the agent; uploads never return bytes.
+   */
+  path: string;
+  abs_path: string;
+  size: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplatesListParams".
+ */
+export interface DeckTemplatesListParams {
+  /**
+   * False lists the names alone, without rendering a cover for each.
+   */
+  covers?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplatesListResult".
+ */
+export interface DeckTemplatesListResult {
+  templates: DeckTemplateRow[];
+  /**
+   * False when the deck engine is not installed here; the picker then stays hidden.
+   */
+  available: boolean;
+  /**
+   * True while a cover is still being drawn in the background; ask again for it.
+   */
+  pending?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplatesPagesParams".
+ */
+export interface DeckTemplatesPagesParams {
+  /**
+   * A row's name from deck.templates.list.
+   */
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplatesPagesResult".
+ */
+export interface DeckTemplatesPagesResult {
+  /**
+   * Every page as a JPEG data URL, in order; empty where this host cannot render.
+   */
+  pages: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplatesPickParams".
+ */
+export interface DeckTemplatesPickParams {
+  /**
+   * A row's name from deck.templates.list.
+   */
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplatesPickResult".
+ */
+export interface DeckTemplatesPickResult {
   /**
    * Workspace-relative path to hand the agent; uploads never return bytes.
    */

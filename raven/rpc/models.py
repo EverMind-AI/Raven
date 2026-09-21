@@ -3438,6 +3438,43 @@ class FsUploadResult(_Strict):
     size: int
 
 
+class DeckTemplatesListParams(_Strict):
+    covers: bool = Field(True, description="False lists the names alone, without rendering a cover for each.")
+
+
+class DeckTemplateRow(_Strict):
+    name: str = Field(..., description="The template's stem, which deck.templates.pick takes.")
+    label: str = Field(..., description="The stem as words, for the picker's caption.")
+    size: int
+    cover: str | None = Field(
+        None, description="The first page as a JPEG data URL, or null where this host cannot render one."
+    )
+
+
+class DeckTemplatesListResult(_Strict):
+    templates: list[DeckTemplateRow]
+    available: bool = Field(
+        ..., description="False when the deck engine is not installed here; the picker then stays hidden."
+    )
+    pending: bool = Field(
+        False, description="True while a cover is still being drawn in the background; ask again for it."
+    )
+
+
+class DeckTemplatesPagesParams(_Strict):
+    name: str = Field(..., description="A row's name from deck.templates.list.")
+
+
+class DeckTemplatesPagesResult(_Strict):
+    pages: list[str] = Field(
+        ..., description="Every page as a JPEG data URL, in order; empty where this host cannot render."
+    )
+
+
+class DeckTemplatesPickParams(_Strict):
+    name: str = Field(..., description="A row's name from deck.templates.list.")
+
+
 class FsRevealParams(_Strict):
     path: str = Field(..., description="Absolute, or relative to the session's working directory.")
     session: str | None = None
@@ -4711,6 +4748,10 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "fs.list": (FsListParams, FsListResult),
     "fs.read": (FsReadParams, FsReadResult),
     "fs.upload": (FsUploadParams, FsUploadResult),
+    "deck.templates.list": (DeckTemplatesListParams, DeckTemplatesListResult),
+    "deck.templates.pages": (DeckTemplatesPagesParams, DeckTemplatesPagesResult),
+    # The upload's own result: a picked template sits under uploads as an attachment would.
+    "deck.templates.pick": (DeckTemplatesPickParams, FsUploadResult),
     "fs.reveal": (FsRevealParams, FsRevealResult),
     "fs.open": (FsOpenParams, FsOpenResult),
     "deliverables.list": (DeliverablesListParams, DeliverablesListResult),

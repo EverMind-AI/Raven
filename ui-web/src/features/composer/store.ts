@@ -10,7 +10,7 @@ import { note as transcriptNote } from '../transcript/mount'
 import * as tail from '../transcript/tail'
 import * as turn from './turn'
 
-import type { Attachment, ComposerSource, SlashCmd } from './types'
+import type { Attachment, ComposerSource, SlashCmd, TemplateRow } from './types'
 
 /* Plain external store, same shape as the other islands: the dock is driven
  * by callers that are not React. The turn machine advances the phase, the
@@ -157,6 +157,12 @@ const ICON_STOP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="current
    static element in page.html that half the page reaches by id, and the whole
    of its get() is four attributes. */
 export function goPaint(): void {
+  /* The template button rides this paint because it has no moment of its own:
+     the dock is wired before the composer source exists (src/main.tsx installs
+     the dock, then boots), and this is the repaint every state change and the
+     boot itself ask for. */
+  const tpl = el<HTMLButtonElement>('tplBtn')
+  if (tpl) tpl.hidden = !canPickTemplate()
   const b = el<HTMLButtonElement>('go')
   if (!b) return
   if (turn.busy() && turn.cancellable()) {
@@ -395,6 +401,42 @@ export function canAttach(): boolean {
   } catch {
     return false
   }
+}
+
+/* Whether a deck template can be picked here: the live page installs the
+   picker's calls, the demo canvas does not. */
+export function canPickTemplate(): boolean {
+  try {
+    return !!source().templates
+  } catch {
+    return false
+  }
+}
+
+/* A picked template is staged like a file that is still uploading -- the
+   server is copying it under uploads -- and becomes an ordinary attachment
+   once the path lands. The cover rides as the chip's picture, so the tray
+   shows which template was picked rather than a file name. */
+export function addTemplate(row: TemplateRow): void {
+  const api = source().templates
+  if (!api) return
+  const entry: Attachment = { name: `${row.name}.pptx`, size: row.size, uploading: true, path: null, url: row.cover || null }
+  trayPaint(get().atts.concat([entry]))
+  goPaint()
+  api.pick(row.name)
+    .then((r) => {
+      entry.path = r.path
+      entry.size = r.size
+      entry.uploading = false
+      if (entry.url) attachmentCache.set(r.path, entry.url)
+      trayPaint(get().atts.slice())
+      goPaint()
+    })
+    .catch((e: unknown) => {
+      trayPaint(get().atts.filter((a) => a !== entry))
+      goPaint()
+      transcriptNote(t('gui.tpl.fail', { name: row.label }), failDetail(e))
+    })
 }
 
 /* Files are uploaded into <workspace>/uploads and handed to the agent as

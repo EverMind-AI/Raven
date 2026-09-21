@@ -290,6 +290,25 @@ describe('the sheet rack', () => {
   })
 })
 
+describe('re-adding a docked sheet', () => {
+  it('keeps its id and its place, so a repaint neither remounts nor lifts it', () => {
+    document.body.innerHTML = '<div id="sheetRack"></div>'
+    const k = session()
+    const a = document.createElement('div')
+    const b = document.createElement('div')
+    add(a, k, undefined, 'first')
+    add(b, k, undefined, 'second')
+    const rack = document.getElementById('sheetRack')!
+    expect([...rack.children]).toEqual([b, a])
+    const before = get().find((s) => s.el === a)!.id
+    add(a, k, undefined, 'first, repainted')
+    const after = get().find((s) => s.el === a)!
+    expect(after.id).toBe(before)
+    expect(after.view).toBe('first, repainted')
+    expect([...rack.children]).toEqual([b, a])
+  })
+})
+
 describe('who counts as asking', () => {
   /* `askingIn` decides who blocks the reader from `dataset.asks`, which each
      tenant sets on itself. That is a convention, and a convention is exactly
@@ -305,6 +324,9 @@ describe('who counts as asking', () => {
   const DOCKS: Record<string, boolean> = {
     'features/composer/approve.ts': true,
     'features/composer/clarify.ts': true,
+    /* The template picker docks a gallery, and asks nothing: the reader can
+       type on with it open. */
+    'features/composer/templates.ts': false,
   }
 
   const sources = (): Array<[string, string]> => {
