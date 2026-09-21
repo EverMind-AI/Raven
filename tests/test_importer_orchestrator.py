@@ -334,6 +334,53 @@ class TestBatchProgress:
         assert events == ["sent=0", "attempt", "attempt", "attempt", "sent=10", "attempt", "sent=12"]
 
     @pytest.mark.asyncio
+    async def test_a_stop_between_two_batches_reports_only_what_landed(self, tmp_path: Path) -> None:
+        """The rest of the source is never sent, so nothing may report it: a
+        later run sends the source whole and its share starts from zero again."""
+        state = ImportState(path=tmp_path / "state.json")
+        cancel = tmp_path / "import_cancel"
+        backend = FakeBackend()
+        inner = backend.store
+
+        async def _store_then_cancel(*args: Any, **kwargs: Any) -> bool:
+            landed = await inner(*args, **kwargs)
+            cancel.touch()
+            return landed
+
+        backend.store = _store_then_cancel  # type: ignore[method-assign]
+        scanner = FakeScanner({"a": _session(n_msgs=25, session_id="import-a")})
+        seen: list[int] = []
+
+        summary = await run_import(
+            [(scanner, _scan_result("a"))],
+            backend,
+            state,
+            on_batch=lambda _platform, _key, sent, _total: seen.append(sent),
+            cancel_path=cancel,
+        )
+
+        assert summary.cancelled is True
+        assert state.is_submitted("claude_code", "a") is False
+        assert seen == [0, 10]
+
+    @pytest.mark.asyncio
+    async def test_a_source_with_nothing_to_send_reports_nothing(self, tmp_path: Path) -> None:
+        """No messages is no batches: a (0, 0) report has a reader divide by it."""
+        state = ImportState(path=tmp_path / "state.json")
+        scanner = FakeScanner({"a": ImportSession(session_id="import-a", messages=())})
+        seen: list[tuple[int, int]] = []
+
+        await run_import(
+            [(scanner, _scan_result("a"))],
+            FakeBackend(),
+            state,
+            on_batch=lambda _platform, _key, sent, total: seen.append((sent, total)),
+        )
+
+        assert seen == []
+        assert state.is_submitted("claude_code", "a")
+
+    @pytest.mark.asyncio
     async def test_a_source_given_up_on_never_reports_its_last_batch_as_landed(self, tmp_path: Path) -> None:
         """The source fails with its second batch never accepted, so the count
         stops at the ten that did land."""

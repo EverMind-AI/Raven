@@ -303,6 +303,16 @@ async def import_status(params: dict) -> dict:
             failed += 1
             bucket["failed"] += 1
 
+    # A source the counts already hold: a failed source is fed again by the next
+    # run while its entry still says failed, so a reader adding its share on top
+    # of the count that already holds it would draw the same source twice.
+    current = dict(_CURRENT) if running and _CURRENT is not None else None
+    if current is not None and entries.get(f"{current['platform']}:{current['source_key']}", {}).get("status") in (
+        "submitted",
+        "failed",
+    ):
+        current = None
+
     return {
         "running": running,
         "total": total,
@@ -310,7 +320,7 @@ async def import_status(params: dict) -> dict:
         "failed": failed,
         "by_platform": by_platform,
         "phase": dict(_PHASE) if running and _PHASE is not None else None,
-        "current": dict(_CURRENT) if running and _CURRENT is not None else None,
+        "current": current,
         "phases": dict(meta["phases"]) if isinstance(meta.get("phases"), dict) else None,
         "tier": meta.get("tier"),
         "platforms": list(meta.get("platforms") or sorted(by_platform)),

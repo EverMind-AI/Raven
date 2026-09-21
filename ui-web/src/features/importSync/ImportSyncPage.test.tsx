@@ -63,6 +63,13 @@ describe('the import row', () => {
     expect(row()?.querySelector<HTMLElement>('.importSync-bar i')?.style.width).toBe('39%')
   })
 
+  it("carries the current source's own counts, which move with every batch", () => {
+    /* The share one source buys the percentage is a fraction of a point in a
+       run of many; its own count is what a reader sees move. */
+    draw(status({ running: true, total: 18, submitted: 6, failed: 1, current: { platform: 'claude_code', source_key: 'a', sent: 120, total: 287 } }))
+    expect(row()?.textContent).toContain('41% \u00b7 120/287')
+  })
+
   it("names the phase in flight with the phase's own count", () => {
     draw(status({ running: true, total: 18, submitted: 18, phase: { kind: 'skills', current: 1, total: 2 } }))
     expect(row()?.className).toContain('importSync-wrap')

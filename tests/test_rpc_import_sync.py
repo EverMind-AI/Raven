@@ -17,6 +17,7 @@ from raven.importer.state import ImportState
 from raven.importer.types import ImportMessage, ImportSession, Platform, ScanResult, SourceKind
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import import_sync
+from raven.rpc.models import METHOD_MODELS
 
 pytestmark = pytest.mark.asyncio
 
@@ -390,7 +391,15 @@ async def test_run_records_a_background_failure_and_frees_the_slot(cfg: Path, st
     monkeypatch.setattr(import_sync, "build_scanners", lambda: [_FakeScanner(Platform.CLAUDE_CODE)])
     backend = _FakeBackend()
     monkeypatch.setattr(import_sync, "maybe_build_memory_backend", lambda *a, **k: backend)
-    monkeypatch.setattr(import_sync, "run_import", AsyncMock(side_effect=OSError("state file unwritable")))
+
+    async def _report_then_crash(_items, _backend, _state, *, on_batch=None, **_kwargs):
+        # A crash after the pass has named a source: the source has to go with
+        # the run, or the next one opens on it.
+        if on_batch:
+            on_batch("claude_code", "k1", 3, 9)
+        raise OSError("state file unwritable")
+
+    monkeypatch.setattr(import_sync, "run_import", _report_then_crash)
     lines: list[str] = []
     sink = logger.add(lambda m: lines.append(str(m)), level="ERROR")
     try:
@@ -404,6 +413,7 @@ async def test_run_records_a_background_failure_and_frees_the_slot(cfg: Path, st
 
     assert backend.stopped is True
     assert import_sync._TASK is None
+    assert import_sync._CURRENT is None
     assert (await import_sync.import_status({}))["running"] is False
     assert any("background import failed" in line and "state file unwritable" in line for line in lines)
 
@@ -737,7 +747,8 @@ async def test_the_current_source_is_what_a_real_pass_is_feeding_and_is_dropped_
     file counts it. A source left named after it settles is counted twice by a
     reader adding its share to the settled ones -- the row reaches 100% with
     sources still to send, then falls back."""
-    fed: list[tuple[str, int, int] | None] = []
+    fed: list[tuple[str, str, int, int] | None] = []
+    answers: list[dict] = []
     between: list[object] = []
 
     class _Scanner:
@@ -757,8 +768,10 @@ async def test_the_current_source_is_what_a_real_pass_is_feeding_and_is_dropped_
 
     class _Backend(_FakeBackend):
         async def store(self, session_id: str, messages: list[dict], *, metadata=None) -> bool:
-            cur = (await import_sync.import_status({}))["current"]
-            fed.append(None if cur is None else (cur["source_key"], cur["sent"], cur["total"]))
+            out = await import_sync.import_status({})
+            answers.append(out)
+            cur = out["current"]
+            fed.append(None if cur is None else (cur["platform"], cur["source_key"], cur["sent"], cur["total"]))
             return await super().store(session_id, messages, metadata=metadata)
 
     results = [_scan_result("k1", Platform.CLAUDE_CODE), _scan_result("k2", Platform.CLAUDE_CODE)]
@@ -772,8 +785,147 @@ async def test_the_current_source_is_what_a_real_pass_is_feeding_and_is_dropped_
 
     # Twelve messages is two batches: the first store carries none-landed-yet,
     # the second the ten the first one landed, and the key moves with the source.
-    assert fed == [("k1", 0, 12), ("k1", 10, 12), ("k2", 0, 12), ("k2", 10, 12)]
+    # What the pass puts in the slot is what goes on the wire: every field the
+    # result model declares, and no field it does not. Validated out here, not
+    # inside store() -- a raise in there is swallowed as a refused batch.
+    for answer in answers:
+        METHOD_MODELS["import.status"][1].model_validate(answer)
+    assert fed == [
+        ("claude_code", "k1", 0, 12),
+        ("claude_code", "k1", 10, 12),
+        ("claude_code", "k2", 0, 12),
+        ("claude_code", "k2", 10, 12),
+    ]
     assert between == [None, None]
+
+
+async def test_a_source_given_up_on_or_skipped_stops_being_named_too(
+    cfg: Path, state: ImportState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Failed and skipped sources settle the same way a submitted one does: the
+    state file counts them from there on, so a reader still adding the share of
+    a named source would draw it twice."""
+    monkeypatch.setattr("raven.importer.orchestrator._STORE_RETRY_BACKOFF_S", ())
+    state.set_total(
+        3, keys=["claude_code:k1", "claude_code:k2", "claude_code:k3"], tier="memory_files", platforms=["claude_code"]
+    )
+    state.mark_submitted("claude_code", "k2")
+    seen: list[tuple[object, object]] = []
+
+    class _Scanner:
+        platform = Platform.CLAUDE_CODE
+
+        async def scan(self) -> list[ScanResult]:
+            return []
+
+        async def read(self, result: ScanResult) -> ImportSession:
+            # k3 is read after k1 was given up on and k2 was skipped: neither may
+            # still be named, on the wire or in this process.
+            seen.append(((await import_sync.import_status({}))["current"], import_sync._CURRENT))
+            return ImportSession(
+                session_id=result.source_key,
+                messages=tuple(ImportMessage(role="user", content=f"m{i}", timestamp=i) for i in range(12)),
+            )
+
+    class _Backend(_FakeBackend):
+        async def store(self, session_id: str, messages: list[dict], *, metadata=None) -> bool:
+            # k1's first batch lands, its second is refused for good.
+            if session_id == "k1" and messages[0]["content"] == "m10":
+                return False
+            return await super().store(session_id, messages, metadata=metadata)
+
+    results = [_scan_result(k, Platform.CLAUDE_CODE) for k in ("k1", "k2", "k3")]
+    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=results))
+    monkeypatch.setattr(import_sync, "build_scanners", lambda: [_Scanner()])
+    monkeypatch.setattr(import_sync, "maybe_build_memory_backend", lambda *a, **k: _Backend())
+
+    assert (await import_sync.import_run({"platforms": ["claude_code"], "tier": "memory_files"}))["started"] is True
+    await import_sync._TASK
+
+    out = await import_sync.import_status({})
+    assert (out["submitted"], out["failed"]) == (2, 1)
+    assert seen == [(None, None), (None, None)]
+
+
+async def test_a_source_the_counts_already_hold_is_not_named_while_it_is_sent_again(
+    cfg: Path, state: ImportState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source that failed is sent again by the next run while its entry still
+    says failed, so the counts hold it for the whole of that pass. Naming it as
+    well has a reader add its share on top of a count that already holds it:
+    the row overshoots, then falls back when the source lands."""
+    monkeypatch.setattr("raven.importer.orchestrator._STORE_RETRY_BACKOFF_S", ())
+    state.set_total(2, keys=["claude_code:k1", "claude_code:k2"], tier="memory_files", platforms=["claude_code"])
+    state.mark_failed("claude_code", "k1", "the memory service did not accept a batch")
+    seen: list[tuple[int, int, object]] = []
+
+    class _Scanner(_FakeScanner):
+        async def read(self, result: ScanResult) -> ImportSession:
+            return ImportSession(
+                session_id=result.source_key,
+                messages=tuple(ImportMessage(role="user", content=f"m{i}", timestamp=i) for i in range(12)),
+            )
+
+    class _Backend(_FakeBackend):
+        async def store(self, session_id: str, messages: list[dict], *, metadata=None) -> bool:
+            out = await import_sync.import_status({})
+            seen.append((out["submitted"], out["failed"], out["current"]))
+            return await super().store(session_id, messages, metadata=metadata)
+
+    results = [_scan_result(k, Platform.CLAUDE_CODE) for k in ("k1", "k2")]
+    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=results))
+    monkeypatch.setattr(import_sync, "build_scanners", lambda: [_Scanner(Platform.CLAUDE_CODE)])
+    monkeypatch.setattr(import_sync, "maybe_build_memory_backend", lambda *a, **k: _Backend())
+
+    assert (await import_sync.import_run({"platforms": ["claude_code"], "tier": "memory_files"}))["started"] is True
+    await import_sync._TASK
+
+    # k1 is counted by its failed entry throughout its two batches and named by
+    # neither; k2 has no entry yet, so it is named and not counted.
+    assert seen[:2] == [(0, 1, None), (0, 1, None)]
+    assert seen[2] == (1, 0, {"platform": "claude_code", "source_key": "k2", "sent": 0, "total": 12})
+    assert (await import_sync.import_status({}))["submitted"] == 2
+
+
+async def test_a_source_a_stop_left_half_sent_is_not_named_into_the_teardown(
+    cfg: Path, state: ImportState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stop between two batches is the one exit that settles nothing: no
+    progress event fires, so the run itself has to drop the source before the
+    backend teardown, which the status still reports as a running pass."""
+    state.set_total(1, keys=["claude_code:k1"], tier="memory_files", platforms=["claude_code"])
+    seen: list[object] = []
+
+    class _Scanner(_FakeScanner):
+        async def read(self, result: ScanResult) -> ImportSession:
+            return ImportSession(
+                session_id=result.source_key,
+                messages=tuple(ImportMessage(role="user", content=f"m{i}", timestamp=i) for i in range(12)),
+            )
+
+    class _Backend(_FakeBackend):
+        async def store(self, session_id: str, messages: list[dict], *, metadata=None) -> bool:
+            landed = await super().store(session_id, messages, metadata=metadata)
+            await import_sync.import_stop({})
+            return landed
+
+        async def stop(self) -> None:
+            # The teardown the run awaits while its task is still the one in
+            # flight: a poll landing here reads a running pass.
+            out = await import_sync.import_status({})
+            seen.append((out["running"], out["current"]))
+            await super().stop()
+
+    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=[_scan_result("k1", Platform.CLAUDE_CODE)]))
+    monkeypatch.setattr(import_sync, "build_scanners", lambda: [_Scanner(Platform.CLAUDE_CODE)])
+    monkeypatch.setattr(import_sync, "maybe_build_memory_backend", lambda *a, **k: _Backend())
+
+    assert (await import_sync.import_run({"platforms": ["claude_code"], "tier": "memory_files"}))["started"] is True
+    await import_sync._TASK
+
+    assert state.is_submitted("claude_code", "k1") is False
+    assert seen == [(True, None)]
+    assert import_sync._CURRENT is None
 
 
 async def test_status_carries_how_the_phases_ended(state: ImportState) -> None:
