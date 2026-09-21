@@ -9,7 +9,16 @@ from pydantic import ValidationError
 
 from raven.agent import harness_capabilities
 from raven.agent.subagent.charter import parse
-from raven.playbook.agent_generator import _persona_spec_from_args, persona_tool
+from raven.playbook.agent_generator import (
+    _choice_profile,
+    _persona_spec_from_args,
+    _profile_payload,
+    _task_spec_from_args,
+    _tool_inventory,
+    emit_tool,
+    persona_tool,
+    task_tool,
+)
 from raven.playbook.agent_spec import AgentPlaybookSpec
 
 
@@ -50,6 +59,123 @@ def test_disabling_fields_removes_them_from_generation(tmp_path, monkeypatch) ->
 
     assert not ({"systemPrompt", "stopWhen", "tools", "checks", "functions"} & properties.keys())
     assert {"as", "agent", "brief", "timeoutSeconds"} <= properties.keys()
+
+
+def test_task_schema_and_compatibility_alias_respect_disabled_tools(tmp_path, monkeypatch) -> None:
+    _disabled_document(tmp_path, monkeypatch)
+
+    schema = task_tool(["worker"], ["read_file"])
+    worker = schema[0]["function"]["parameters"]["properties"]["workers"]["items"]
+
+    assert "tools" not in worker["properties"]
+    assert emit_tool(["worker"], ["read_file"], {"worker": {}}, {"old": "ignored"}) == schema
+
+
+def test_generator_profiles_and_tool_inventory_normalize_safe_inputs() -> None:
+    class Choice:
+        id = "max"
+        label = "Maximum"
+        description = "Use deeper reasoning"
+
+    assert _choice_profile({"value": "fast", "name": "Fast"}) == {"id": "fast", "name": "Fast"}
+    assert _choice_profile(Choice()) == {
+        "id": "max",
+        "name": "Maximum",
+        "description": "Use deeper reasoning",
+    }
+    assert _profile_payload("  owns current web research  ") == {"description": "owns current web research"}
+    assert _tool_inventory(
+        [
+            "write_file",
+            {"function": {"name": "read_file", "description": "Read a file"}},
+            {"function": []},
+            object(),
+        ]
+    ) == [
+        {"name": "read_file", "description": "Read a file"},
+        {"name": "write_file", "description": ""},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("worker", "message"),
+    [
+        ("worker", "worker must be an object"),
+        ({"agent": "worker", "prompt": "do it", "brief": "forbidden"}, "field.*not allowed"),
+        ({"agent": "missing", "prompt": "do it"}, "unknown agent"),
+        ({"agent": "worker", "prompt": ""}, "prompt must be non-empty"),
+        ({"agent": "worker", "prompt": "do it", "tools": "read_file"}, "tools must be an array"),
+        ({"agent": "worker", "prompt": "do it", "tools": ["missing"]}, "unknown tool"),
+    ],
+)
+def test_task_generator_rejects_unusable_workers(worker, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        _task_spec_from_args(
+            {"workers": [worker]},
+            {"worker"},
+            {"read_file"},
+        )
+
+
+def test_task_generator_requires_workers_and_rejects_disabled_tools(tmp_path, monkeypatch) -> None:
+    with pytest.raises(ValueError, match="workers must be a non-empty list"):
+        _task_spec_from_args({"workers": []}, {"worker"})
+
+    _disabled_document(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="disabled harness field.*tools"):
+        _task_spec_from_args(
+            {"workers": [{"agent": "worker", "prompt": "do it", "tools": ["read_file"]}]},
+            {"worker"},
+            {"read_file"},
+        )
+
+
+def test_persona_generator_assembles_judge_rules_and_known_tools() -> None:
+    judge = "def judge(name, params, prior):\n    return []"
+    spec, _ = _persona_spec_from_args(
+        {
+            "workers": [
+                {
+                    "as": "watcher",
+                    "agent": "worker",
+                    "brief": "Watch booking deadlines",
+                    "tools": ["web_search"],
+                    "checks": [{"tool": "web_search"}],
+                    "functions": {"judge": judge},
+                }
+            ]
+        },
+        {"worker"},
+        {"web_search"},
+    )
+
+    playbook = spec.delegate[0].playbook
+    assert playbook is not None
+    assert playbook.capability.tools == ["web_search"]
+    assert playbook.action.checks.code == judge
+    assert [rule.tool for rule in playbook.action.checks.rules] == ["web_search"]
+
+
+def test_persona_generator_requires_object_workers_and_known_tools() -> None:
+    with pytest.raises(ValueError, match="workers must be a non-empty list"):
+        _persona_spec_from_args({"workers": []}, {"worker"})
+    with pytest.raises(ValueError, match="worker must be an object"):
+        _persona_spec_from_args({"workers": ["worker"]}, {"worker"})
+    with pytest.raises(ValueError, match="unknown tool"):
+        _persona_spec_from_args(
+            {
+                "workers": [
+                    {
+                        "as": "watcher",
+                        "agent": "worker",
+                        "brief": "Watch booking deadlines",
+                        "tools": ["missing"],
+                    }
+                ]
+            },
+            {"worker"},
+            {"web_search"},
+        )
 
 
 def test_disabling_fields_rejects_generated_and_stored_values(tmp_path, monkeypatch) -> None:
