@@ -12,7 +12,7 @@ from typing import Any
 from loguru import logger
 
 from raven.session.title import TITLE_STORAGE_MAX, collapse_to_line
-from raven.utils.atomic_io import atomic_replace, locked_append
+from raven.utils.atomic_io import atomic_replace, locked_append, write_transaction
 from raven.utils.paths import ensure_dir, safe_filename, safe_path_segment
 
 # Channel for subagent transcripts. Defined here, not in the subagent package,
@@ -142,6 +142,19 @@ class SessionResolution:
     candidates: tuple[str, ...] = ()
 
 
+def _stamp(path: Path) -> tuple[int, int] | None:
+    """A transcript's (size, mtime_ns), or None when it is not there.
+
+    What a saved copy compares itself against to know whether anybody else has
+    written to the file since it last read or wrote it.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_size, st.st_mtime_ns)
+
+
 @dataclass
 class Session:
     """
@@ -167,6 +180,10 @@ class Session:
     pending_clarification: dict | None = field(default=None)
     # Messages already on disk; save() appends only past this index.
     _persisted_count: int = field(default=0, repr=False)
+    # What the transcript looked like the last time this copy read or wrote it,
+    # as (size, mtime_ns). save() compares it to decide whether anybody else
+    # has written since, and only then re-reads the record to merge under.
+    _file_stamp: tuple[int, int] | None = field(default=None, repr=False)
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
@@ -650,6 +667,7 @@ class SessionManager:
                 pending_clarification=pending_clarification,
             )
             session._persisted_count = len(messages)
+            session._file_stamp = _stamp(path)
             return session
         except Exception as e:
             logger.warning("Failed to load session {}: {}", key, e)
@@ -716,32 +734,65 @@ class SessionManager:
         }
         session.metadata = {**reserved, **session.metadata}
 
-        metadata_line = json.dumps(
-            {
-                "_type": "metadata",
-                "key": session.key,
-                "created_at": session.created_at.isoformat(),
-                "updated_at": session.updated_at.isoformat(),
-                "metadata": session.metadata,
-                "last_consolidated": session.last_consolidated,
-                # Personalization: persist clarification wait-state across restarts
-                "pending_clarification": session.pending_clarification,
-            },
-            ensure_ascii=False,
-        )
+        # The read and the write are one transaction: the record this merges
+        # under can otherwise be written between them and lost anyway.
+        with write_transaction(path):
+            session.metadata = self._metadata_to_write(session, path)
+            metadata_line = json.dumps(
+                {
+                    "_type": "metadata",
+                    "key": session.key,
+                    "created_at": session.created_at.isoformat(),
+                    "updated_at": session.updated_at.isoformat(),
+                    "metadata": session.metadata,
+                    "last_consolidated": session.last_consolidated,
+                    # Personalization: persist clarification wait-state across restarts
+                    "pending_clarification": session.pending_clarification,
+                },
+                ensure_ascii=False,
+            )
 
-        if len(session.messages) < session._persisted_count:
-            lines = [metadata_line]
-            lines += [json.dumps(m, ensure_ascii=False) for m in session.messages]
-            atomic_replace(path, "".join(line + "\n" for line in lines))
-        else:
-            new_messages = session.messages[session._persisted_count :]
-            lines = [metadata_line]
-            lines += [json.dumps(m, ensure_ascii=False) for m in new_messages]
-            locked_append(path, lines)
+            if len(session.messages) < session._persisted_count:
+                lines = [metadata_line]
+                lines += [json.dumps(m, ensure_ascii=False) for m in session.messages]
+                atomic_replace(path, "".join(line + "\n" for line in lines))
+            else:
+                new_messages = session.messages[session._persisted_count :]
+                lines = [metadata_line]
+                lines += [json.dumps(m, ensure_ascii=False) for m in new_messages]
+                locked_append(path, lines)
+            session._file_stamp = _stamp(path)
 
         session._persisted_count = len(session.messages)
         self._cache[session.key] = session
+
+    def _metadata_to_write(self, session: "Session", path: Path) -> dict[str, Any]:
+        """This copy's metadata over whatever else the record on disk carries.
+
+        A save rewrites the whole metadata record, so on its own it speaks for
+        every key its own copy happens to hold: a flag another client wrote
+        after this copy was loaded -- archived, most visibly -- was gone the
+        next time anything here saved, and the conversation came back. Only the
+        keys this copy carries win; the rest of the record is kept.
+
+        **Removal is written, never left unsaid.** This merge cannot tell a key
+        this copy dropped from one it never had, so every remover states a
+        false value instead (``session.pin``, :meth:`Session.set_title`, the
+        output-limit stamp). A new remover that omits a key instead will find
+        it resurrected here.
+
+        The re-read is skipped while the file is byte for byte what this copy
+        last read or wrote, which is every save in the ordinary case of one
+        writer -- so a conversation pays for the scan only when somebody else
+        has actually written to it.
+        """
+        stamp = _stamp(path)
+        if stamp is None or stamp == session._file_stamp:
+            return session.metadata
+        last, *_rest = self._scan_file(path)
+        if last is None:
+            return session.metadata
+        return {**(last.get("metadata") or {}), **session.metadata}
 
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""

@@ -48,6 +48,93 @@ def test_save_writes_nested_channel_path(tmp_path: Path):
     assert (tmp_path / "sessions" / "tui" / "20260610_143052_a1b2c3.jsonl").exists()
 
 
+def _last_metadata(path: Path) -> dict:
+    last: dict = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        if row.get("_type") == "metadata":
+            last = row.get("metadata") or {}
+    return last
+
+
+def test_a_save_keeps_a_key_another_writer_added(tmp_path: Path):
+    """A save speaks for the keys its own copy carries and for no others.
+
+    A page and a terminal over one home are two managers over one file. The
+    saved record used to be this copy's metadata whole, so a flag the other
+    one wrote after this copy was loaded -- archiving, most visibly -- was gone
+    the next time anything here saved, and the conversation came back.
+    """
+    key = "tui:20260610_100000_merge"
+    holder = SessionManager(tmp_path)
+    session = holder.get_or_create(key)
+    session.add_message("user", "hello")
+    holder.save(session)
+
+    SessionManager(tmp_path).append_metadata_patch(key, {"archived": True})
+    assert session.metadata.get("archived") is None, "this copy never saw it"
+
+    session.add_message("user", "still talking here")
+    holder.save(session)
+
+    path = holder.session_path(key)
+    assert _last_metadata(path).get("archived") is True
+    assert SessionManager(tmp_path).peek(key).metadata.get("archived") is True
+
+
+def test_a_save_does_not_resurrect_a_key_this_copy_cleared(tmp_path: Path):
+    """The merge keeps what it did not write, which makes clearing explicit.
+
+    Nothing may clear a key by leaving it out any more -- the record on disk
+    would hand it back. Every remover states a false value instead, and this
+    pins that the stated value wins over the one on disk.
+    """
+    key = "tui:20260610_100000_cleared"
+    holder = SessionManager(tmp_path)
+    session = holder.get_or_create(key)
+    session.add_message("user", "hello")
+    session.metadata["pinned"] = True
+    holder.save(session)
+
+    # Another writer touches the file, so the next save has to merge.
+    SessionManager(tmp_path).append_metadata_patch(key, {"archived": True})
+
+    session.metadata["pinned"] = False
+    session.add_message("user", "unpinned now")
+    holder.save(session)
+
+    stored = _last_metadata(holder.session_path(key))
+    assert stored.get("pinned") is False
+    assert stored.get("archived") is True
+
+
+def test_a_save_re_reads_only_when_the_file_moved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The merge costs a scan, and an undisturbed conversation does not pay it.
+
+    Every turn saves, so re-reading the transcript on each one would put the
+    file's whole length on the hot path. The copy knows what it last wrote, so
+    it only looks when the bytes moved.
+    """
+    key = "tui:20260610_100000_stamp"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(key)
+    session.add_message("user", "hello")
+    mgr.save(session)
+
+    scans: list[Path] = []
+    real_scan = mgr._scan_file
+    monkeypatch.setattr(mgr, "_scan_file", lambda path: (scans.append(path), real_scan(path))[1])
+
+    session.add_message("user", "nobody else wrote")
+    mgr.save(session)
+    assert scans == []
+
+    SessionManager(tmp_path).append_metadata_patch(key, {"archived": True})
+    session.add_message("user", "somebody did")
+    mgr.save(session)
+    assert scans == [mgr.session_path(key)]
+
+
 def test_key_from_path_reverses_nested_encoding(tmp_path: Path):
     """key_from_path maps sessions/{channel}/{chat_id}.jsonl back to
     channel:chat_id; a chat_id containing an underscore is preserved verbatim."""
