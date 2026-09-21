@@ -2516,7 +2516,8 @@ this instance that the client never sent and so has no row of its own to anchor 
 those two lanes this read is the only thing that carries any of it (the wire tags an instance
 on the four events of a *direct* turn and nothing else). Addressed by
 `(session_key, agent, handle)` through a second live index, because the first one is keyed by
-the record's directory - a task id no reader of a *conversation* ever sees.
+the record's address - the conversation's node root plus a node id no reader of a
+*conversation* ever sees.
 _Avoid_: reading the absence of live rows as "the turn ended" - a transport with no per-step
 visibility reports none for the whole of every turn.
 
