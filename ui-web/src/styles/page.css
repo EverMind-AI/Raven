@@ -5043,6 +5043,10 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 /* The confirm veil stacks under the page's layers (40); a question the wizard
    asks -- a stale agent's migrate -- has to stand above the wizard instead. */
 body:has(#onb:not([hidden])) #veil { z-index: calc(var(--z-onboarding) + 1); }
+/* Same for the model picker: it is one body-level surface at the picker
+   layer (46) since the roles card stopped carrying its own, and the wizard's
+   model step opens it from a pill inside #onb -- behind which it landed. */
+body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
 
 /* Floating workspace desk and the four-pane surface. */
 .desk-ready .ws > .ws-top,

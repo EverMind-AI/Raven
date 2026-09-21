@@ -15,6 +15,7 @@
 import { ProviderIcon } from '../../../components/ProviderMark'
 import { t } from '../../../i18n/t'
 import * as store from '../store'
+import { groupOf } from './Providers'
 
 import type { ProvFilter } from '../store'
 import type { ProviderRow } from '../types'
@@ -37,10 +38,7 @@ export function provMatch(p: ProviderRow, q: string, f: ProvFilter): boolean {
   if (needle && !`${p.name} ${p.id}`.toLowerCase().includes(needle)) return false
   if (f === 'all') return true
   if (f === 'on') return p.on
-  if (f === 'gateway') return !!p.gateway
-  if (f === 'oauth') return p.kind === 'oauth'
-  if (f === 'local') return p.kind === 'local'
-  return !p.gateway && (p.kind === 'key' || p.kind === 'endpoint')
+  return groupOf(p) === f
 }
 
 export const provRows = (rows: ProviderRow[], q: string, f: ProvFilter): ProviderRow[] => {

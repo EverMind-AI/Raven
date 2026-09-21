@@ -7,6 +7,7 @@ import { t } from '../../../i18n/t'
 import { Card, Chip, KeyLink, Row, Rov, Tag } from '../Fields'
 import * as store from '../store'
 
+import type { ProvFilter } from '../store'
 import type { ProviderRow } from '../types'
 import type { JSX } from 'react'
 
@@ -20,6 +21,19 @@ const KINDS: Array<[string, string]> = [
 ]
 export const kindOf = (p: ProviderRow): string => (p.kind === 'oauth' ? 'oauth' : p.kind === 'local' || p.kind === 'endpoint' ? 'local' : 'key')
 export const kindLabel = (p: ProviderRow): string => t((KINDS.find(([k]) => k === kindOf(p)) || KINDS[0]!)[1])
+/* The four shape buckets, defined here and read by the catalogue page's filter
+   too so the two cannot drift: an aggregator first, since it resells whatever
+   shape it takes, then the sign-in and self-hosted shapes, and everything else
+   is a vendor held directly -- an endpoint credential too. */
+export type ProvGroup = Exclude<ProvFilter, 'all' | 'on'>
+const GROUPS: Array<[ProvGroup, string]> = [
+  ['direct', 'gui.settings.providers.filter_direct'],
+  ['gateway', 'gui.settings.providers.filter_gateway'],
+  ['oauth', 'gui.settings.providers.filter_oauth'],
+  ['local', 'gui.model.kind.local'],
+]
+export const groupOf = (p: ProviderRow): ProvGroup =>
+  p.gateway ? 'gateway' : p.kind === 'oauth' ? 'oauth' : p.kind === 'local' ? 'local' : 'direct'
 /* Whether the pane draws a key field and an address field for this vendor,
    and whether the key is what connects it: a local server may sit behind a
    token but is reached by its address, so its key is optional. */
@@ -72,8 +86,8 @@ function AddBlock({ slug, hideCancel }: { slug: string; hideCancel?: boolean }):
         <span className="settings-selw">
           <select className="settings-sel" value={p.id} aria-label={t('gui.settings.providers.vendor')}
             onChange={(e) => { store.set({ provAdd: e.currentTarget.value }); setKey(''); const n = rows.find((x) => x.id === e.currentTarget.value); setBase(n ? (n.apiBase || n.defaultApiBase || '') : '') }}>
-            {KINDS.map(([kind, label]) => {
-              const group = rows.filter((x) => kindOf(x) === kind)
+            {GROUPS.map(([kind, label]) => {
+              const group = rows.filter((x) => groupOf(x) === kind)
               return group.length ? (
                 <optgroup key={kind} label={t(label)}>
                   {group.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
@@ -99,10 +113,10 @@ function AddBlock({ slug, hideCancel }: { slug: string; hideCancel?: boolean }):
                 onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') connect() }} />
             </Row>
           )}
-          {(takesBase(p) || p.kind === 'endpoint') && (
+          {(takesBase(p) || p.gateway || p.kind === 'endpoint') && (
             <Row label={t('gui.settings.providers.base')}>
               <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')}
-                placeholder={kindOf(p) === 'local' ? 'http://localhost:11434' : (p.needsBase ? 'https://' : t('gui.settings.providers.base_default'))}
+                placeholder={kindOf(p) === 'local' ? 'http://localhost:11434' : (p.needsBase ? 'https://' : (p.defaultApiBase || t('gui.settings.providers.base_default')))}
                 onChange={(e) => setBase(e.currentTarget.value)} />
             </Row>
           )}

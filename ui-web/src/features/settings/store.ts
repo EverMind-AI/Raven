@@ -413,7 +413,14 @@ async function oauthPoll(): Promise<void> {
   if (!o) { oauthStop(); return }
   await refresh()
   const p = get().snap.providers.find((x) => x.id === o.slug)
-  if (p && p.on) { oauthStop(); set({ oauth: null }); return }
+  if (p && p.on) {
+    oauthStop()
+    /* The add form that started this flow is done with it: left pointing at a
+       slug that is now connected, it silently redrew itself for the next
+       unconnected vendor. */
+    set({ oauth: null, provAdd: get().provAdd === o.slug ? null : get().provAdd })
+    return
+  }
   if (Date.now() > o.until) { oauthStop(); set({ oauth: { ...o, expired: true } }) }
 }
 

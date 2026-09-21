@@ -74,6 +74,42 @@ describe('ModelStepBody', () => {
     expect(screen.queryByText('gui.settings.providers.add')).toBeNull()
   })
 
+  it('groups the vendors the catalogue page\'s way, an aggregator by what it resells and not by its credential', async () => {
+    const data = noneConnected()
+    data.providers.push(
+      { id: 'custom', name: 'Custom', models: [], configured: [], on: false, kind: 'endpoint', acceptsKey: true, gateway: true },
+      { id: 'azure_openai', name: 'Azure', models: [], configured: [], on: false, kind: 'endpoint', acceptsKey: true, needsBase: true },
+    )
+    install(data)
+    await openBody(ModelStepBody)
+    const groups = [...document.querySelectorAll('.settings-padd select optgroup')]
+    expect(groups.map((g) => g.getAttribute('label'))).toEqual([
+      'gui.settings.providers.filter_direct',
+      'gui.settings.providers.filter_gateway',
+      'gui.settings.providers.filter_oauth',
+      'gui.model.kind.local',
+    ])
+    const inGroup = (label: string): string[] =>
+      [...groups.find((g) => g.getAttribute('label') === label)!.querySelectorAll('option')].map((o) => o.getAttribute('value')!)
+    expect(inGroup('gui.settings.providers.filter_gateway')).toEqual(['openrouter', 'custom'])
+    expect(inGroup('gui.settings.providers.filter_direct')).toEqual(['anthropic', 'openai', 'azure_openai'])
+    expect(inGroup('gui.settings.providers.filter_oauth')).toEqual(['minimax_global'])
+    expect(inGroup('gui.model.kind.local')).toEqual(['ollama'])
+  })
+
+  it('an aggregator takes an address too, filled and hinted from the one it ships with', async () => {
+    const data = noneConnected()
+    data.providers = data.providers.map((p) => (p.id === 'openrouter' ? { ...p, apiBase: '' } : p))
+    install(data)
+    await openBody(ModelStepBody)
+    const select = document.querySelector('.settings-padd select') as HTMLSelectElement
+    expect(screen.queryByLabelText('gui.settings.providers.base')).toBeNull()
+    await act(async () => { fireEvent.change(select, { target: { value: 'openrouter' } }) })
+    const address = screen.getByLabelText('gui.settings.providers.base') as HTMLInputElement
+    expect(address.value).toBe('https://openrouter.ai/api/v1')
+    expect(address.placeholder).toBe('https://openrouter.ai/api/v1')
+  })
+
   it('the Cancel button is back once a provider is connected', async () => {
     install()
     await openBody(ModelStepBody)

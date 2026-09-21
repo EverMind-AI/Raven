@@ -413,7 +413,12 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
    The shape is one page's for now -- the prototype shares it with channels and
    memory, which are not built here, so it is copied when they are rather than
    abstracted for pages that do not exist. */
-.settings-tp {display:grid; grid-template-columns:286px minmax(0,1fr); border:1px solid var(--line); border-radius:12px; overflow:hidden; min-height:420px; max-height:calc(100vh - 220px)}
+/* A definite height, not a max: a grid's fr row resolves against the container
+   only when that is definite, so under max-height both columns grew to the
+   vendor list's 2000px and were clipped -- the list could not scroll and the
+   "pick one" placeholder, centred in a column that tall, sat below the fold.
+   Of the 220, the dialog's shell and body padding take 184. */
+.settings-tp {display:grid; grid-template-columns:286px minmax(0,1fr); grid-template-rows:minmax(0,1fr); border:1px solid var(--line); border-radius:12px; overflow:hidden; height:calc(100vh - 220px); min-height:420px}
 .settings-tp-side {border-right:1px solid var(--line-soft); padding:13px; display:flex; flex-direction:column; gap:9px; min-height:0}
 .settings-tp-find {display:flex; gap:8px; align-items:center}
 .settings-tp-find input {flex:1; min-width:0; font:inherit; font-size:13px; padding:7px 11px; border:1px solid var(--line); border-radius:9px; background:var(--paper); color:var(--text); outline:none}
