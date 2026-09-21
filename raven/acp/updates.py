@@ -874,15 +874,11 @@ class UpdateTranslator:
     async def _deliver(self, session: AcpSession, event: Any) -> None:
         result = translate(event, cwd=session.cwd)
         # Held thoughts go out before anything that has to follow them: a
-        # chunk of the answer, a tool call, a latch or an ending. An event that
-        # carries none of those (a thought, or nothing at all) leaves them held,
-        # which is what lets a run of thought tokens become one frame.
-        if (
-            any(update.get("sessionUpdate") != "agent_thought_chunk" for update in result.updates)
-            or result.stop
-            or result.latch
-            or _ends_the_stream(event)
-        ):
+        # chunk of the answer, a tool call, an ending. An event that carries
+        # none of those (a thought, or nothing at all) leaves them held, which
+        # is what lets a run of thought tokens become one frame. A latch and a
+        # stream-ending error both arrive on an update the first test catches.
+        if any(update.get("sessionUpdate") != "agent_thought_chunk" for update in result.updates) or result.stop:
             self.flush_thoughts(session.session_id)
         for update in result.updates:
             if update.get("sessionUpdate") == "agent_thought_chunk":

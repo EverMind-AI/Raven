@@ -1281,6 +1281,36 @@ class TestThoughtCoalescing:
         assert [u["content"]["text"] for u in _updates(written)] == ["straggler"]
         assert translator._thoughts == {}
 
+    async def test_settling_the_turn_from_outside_the_stream_sends_what_is_held(self):
+        """A teardown or a cancel settles the prompt without an ending event on
+        the stream; the held text still has to precede the response it settles."""
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+        translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "t")
+
+        await translator.send_frame(self._thought("half a"))
+        assert translator.settle_turn("acp:s1", "cancelled")
+
+        assert [u["content"]["text"] for u in _updates(written)] == ["half a"]
+
+    async def test_the_window_is_measured_from_the_first_held_chunk_not_the_last(self, monkeypatch):
+        """A sliding window would let a steady trickle of tokens hold the text for
+        as long as the trickle lasts; the bound is 200ms from the first chunk."""
+        monkeypatch.setattr(updates_mod, "THOUGHT_COALESCE_WINDOW_S", 0.05)
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        # Chunks every 20ms for 120ms: a sliding window would never close.
+        for i in range(6):
+            await translator.send_frame(self._thought(f"t{i}"))
+            await asyncio.sleep(0.02)
+
+        assert written, "the first chunk's window closed while the trickle went on"
+        assert _updates(written)[0]["content"]["text"].startswith("t0")
+
     async def test_a_released_session_sends_what_it_held(self):
         written = []
         translator = UpdateTranslator(emit=written.append)

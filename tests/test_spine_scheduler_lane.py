@@ -320,6 +320,20 @@ async def test_a_failure_with_no_message_still_names_itself():
     assert failed.error == "TimeoutError"
 
 
+def test_a_message_that_already_names_its_class_is_not_prefixed_twice():
+    """Several SDK errors open with their own class name; the event must read
+    `APIError: rate limited`, not `APIError: APIError: rate limited`."""
+    from raven.spine.scheduler import describe_failure
+
+    class APIError(Exception):
+        pass
+
+    assert describe_failure(APIError("APIError: rate limited")) == "APIError: rate limited"
+    assert describe_failure(APIError("rate limited")) == "APIError: rate limited"
+    assert describe_failure(APIError("")) == "APIError"
+    assert describe_failure(ValueError("boom")) == "ValueError: boom"
+
+
 async def test_run_exception_is_logged_with_a_traceback():
     # The failure event carries only str(exc) to the front-end, so without a log
     # here the process side of a failed turn is completely silent.

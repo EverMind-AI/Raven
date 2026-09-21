@@ -99,7 +99,9 @@ All notable changes to Raven are documented here.
   answer, a tool call, the turn's end). One design run wrote 58,675 thought
   frames averaging under six characters; each frame is a blocking write on
   the client's pipe, and a client that stopped reading held the server on
-  that write. The same stream replays to 4,333 frames.
+  that write. The same stream replays to 4,333 frames. The first thought
+  token of a turn therefore reaches an ACP client up to 200ms later than
+  before; the answer's own chunks are not held.
 
 - A failed turn names what failed. The failure event carried only
   `str(exc)`, which is empty for the bare `TimeoutError` a stalled model

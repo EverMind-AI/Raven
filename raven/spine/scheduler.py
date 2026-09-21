@@ -31,7 +31,15 @@ def describe_failure(exc: BaseException) -> str:
     """
     text = str(exc).strip()
     name = type(exc).__name__
-    return f"{name}: {text}" if text else name
+    if not text:
+        return name
+    # Several SDK errors already open with their own class name; a second
+    # copy would read as a stutter. Decided here, on the text alone, rather
+    # than by the provider layer's own prefix rule: the kernel does not import
+    # providers.
+    if text.startswith(f"{name}:") or text.startswith(f"{name} ") or text == name:
+        return text
+    return f"{name}: {text}"
 
 
 def conversation_id(req: TurnRequest) -> str:
@@ -471,9 +479,10 @@ class Lane:
             self._payload_reported = True
             raise
         except Exception as exc:
-            # The event carries only str(exc) to the front-end, so this is the
-            # only place the traceback is ever recorded — without it a failed
-            # turn leaves no trace on the process side at all.
+            # The event carries only the exception's class and message to the
+            # front-end, so this is the only place the traceback is ever
+            # recorded — without it a failed turn leaves no trace on the process
+            # side at all.
             logger.opt(exception=exc).error("Turn failed on {}: {}", self._conversation_id, exc)
             # Unpaired with TurnStarted when the failure came from acquiring the pool
             # or from the sink's own TurnStarted call, both of which sit inside the
