@@ -28,7 +28,6 @@ import {
   persistModel,
   providers,
   setDefaultPair,
-  showModel,
 } from '../model/source'
 import { loadSessions, SESS_CHANNELS } from '../rail/source'
 
@@ -124,8 +123,14 @@ export async function loadSettings(): Promise<void> {
   // provider), while the composer chip shows whatever the open conversation
   // runs. Sharing one value made the settings control display the session's
   // model -- and badge the session's provider -- as the default.
+  //
+  // Which is why this load stops here. It used to paint the chip from the same
+  // defaults, so opening the dialog -- or any settings write, each of which
+  // reloads -- put the default back over a conversation that had switched, and
+  // the switch read as lost until a reload. The chip belongs to
+  // `loadProviders`, which asks `model.options` for the visible conversation
+  // and is run by every path that changes which one that is.
   setDefaultPair(defaults.model || '', defaults.provider || '')
-  if (defaults.model) showModel(defaults.model)
 }
 
 /* The settings plus the provider catalogue behind `model.options`. Deliberately
