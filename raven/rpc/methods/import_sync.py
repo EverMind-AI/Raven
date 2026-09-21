@@ -29,7 +29,7 @@ from raven.core.plugin_stack import (
     maybe_build_memory_backend,
     memory_enabled,
 )
-from raven.importer.orchestrator import run_import
+from raven.importer.orchestrator import ProgressEvent, run_import
 from raven.importer.phases import run_phases, skill_source_for
 from raven.importer.scanners import build_scanners, scan_all
 from raven.importer.skills import SkillOrigin
@@ -55,6 +55,9 @@ _STARTING = False
 # running task's progress callback and cleared with the slot: the state file
 # knows nothing of the phases, so this is the only place their progress lives.
 _PHASE: dict[str, Any] | None = None
+# The source the message pass is on and how far into it: a large source is
+# many batches, and the per-source counts do not move for any of them.
+_CURRENT: dict[str, Any] | None = None
 
 
 def _busy() -> bool:
@@ -214,10 +217,30 @@ async def import_run(params: dict) -> dict:
             global _PHASE
             _PHASE = {"kind": kind, "current": current, "total": total}
 
+        def _on_batch(platform: str, source_key: str, sent: int, total: int) -> None:
+            global _CURRENT
+            _CURRENT = {"platform": platform, "source_key": source_key, "sent": sent, "total": total}
+
+        def _on_progress(_event: ProgressEvent) -> None:
+            # The source this fires for is settled, and the state file counts it
+            # from here on. Leaving its last batch report standing would have a
+            # reader add the same source twice -- the row would reach 100% with
+            # sources still to send, then fall back when the next one starts.
+            global _CURRENT
+            _CURRENT = None
+
         async def _run(backend: "MemoryBackend", started: bool) -> None:
-            global _TASK, _PHASE
+            global _TASK, _PHASE, _CURRENT
             try:
-                summary = await run_import(items, backend, state, cancel_path=state.cancel_path)
+                summary = await run_import(
+                    items,
+                    backend,
+                    state,
+                    on_progress=_on_progress,
+                    on_batch=_on_batch,
+                    cancel_path=state.cancel_path,
+                )
+                _CURRENT = None
                 # A stop has to stop the run, not hand it its two longest steps.
                 if not summary.cancelled:
                     await run_phases(
@@ -239,6 +262,7 @@ async def import_run(params: dict) -> dict:
                     except Exception:
                         logger.exception("import.run: the memory backend did not stop cleanly")
                 _PHASE = None
+                _CURRENT = None
                 _TASK = None
 
         _TASK = asyncio.create_task(_run(backend, bool(items)))
@@ -264,6 +288,14 @@ async def import_status(params: dict) -> dict:
     scope = list(keys) if keys is not None else list(entries)
     total = len(scope) if keys is not None else meta.get("total", len(entries))
 
+    # A source is counted or named, never both. A source that failed is sent
+    # again by the next run while its entry still says failed, and a reader
+    # adding the share of a named source to a count that already holds it draws
+    # the same source twice; leaving it out of the count instead keeps its own
+    # progress visible for the whole of the retry.
+    current = dict(_CURRENT) if running and _CURRENT is not None else None
+    in_flight = f"{current['platform']}:{current['source_key']}" if current is not None else None
+
     submitted = 0
     failed = 0
     by_platform: dict[str, dict[str, int]] = {}
@@ -271,7 +303,7 @@ async def import_status(params: dict) -> dict:
         platform = key.split(":", 1)[0]
         bucket = by_platform.setdefault(platform, {"total": 0, "submitted": 0, "failed": 0})
         bucket["total"] += 1
-        status = entries.get(key, {}).get("status")
+        status = None if key == in_flight else entries.get(key, {}).get("status")
         if status == "submitted":
             submitted += 1
             bucket["submitted"] += 1
@@ -286,6 +318,7 @@ async def import_status(params: dict) -> dict:
         "failed": failed,
         "by_platform": by_platform,
         "phase": dict(_PHASE) if running and _PHASE is not None else None,
+        "current": current,
         "phases": dict(meta["phases"]) if isinstance(meta.get("phases"), dict) else None,
         "tier": meta.get("tier"),
         "platforms": list(meta.get("platforms") or sorted(by_platform)),
