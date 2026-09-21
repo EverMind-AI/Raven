@@ -375,6 +375,8 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     ctx: dict[str, Any] = {
         "start_calls": [],
         "stop_calls": [],
+        # The teardown steps whose relative order a test pins.
+        "order": [],
     }
 
     class _SpyBackend:
@@ -395,6 +397,7 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     fake_agent_loop.cron_service = None
     fake_agent_loop.tools.get.return_value = None
     fake_agent_loop.subagents.set_submit = MagicMock()
+    fake_agent_loop.subagents.cancel_all = AsyncMock(side_effect=lambda: ctx["order"].append("cancel_all"))
     ctx["agent_loop"] = fake_agent_loop
 
     monkeypatch.setattr(
@@ -466,7 +469,7 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     fake_turn_ids: dict = {}
 
     async def _fake_turn_teardown():
-        pass
+        ctx["order"].append("turn_teardown")
 
     fake_build_rpc_spine = MagicMock(
         return_value=(fake_turn_scheduler, fake_turn_hub, fake_turn_ids, _fake_turn_teardown)
@@ -556,6 +559,28 @@ async def test_rpc_runner_calls_backend_stop_on_exit(rpc_server_deps, monkeypatc
     await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
 
     assert rpc_server_deps["stop_calls"] == ["stop"], "backend.stop() must be called exactly once in the finally block"
+
+
+async def test_rpc_runner_cancels_subagents_before_the_spine_seals(rpc_server_deps, monkeypatch) -> None:
+    """Sealing the scheduler is the first thing the spine's teardown does, and a
+    sub-agent that finishes after it announces its result into a submit that
+    refuses new turns -- the only route that result has back. Cancelled first,
+    the run ends as the stop it is instead of as a result nobody received."""
+    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+
+    assert rpc_server_deps["order"] == ["cancel_all", "turn_teardown"]
+
+
+async def test_rpc_runner_seals_the_spine_even_when_the_cancel_fails(rpc_server_deps, monkeypatch) -> None:
+    """The cancel now runs ahead of the turn teardown, so a failure in it would
+    be a failure in front of the spine's own teardown -- logged and stepped
+    over, the way the rest of this finally block treats its steps."""
+    rpc_server_deps["agent_loop"].subagents.cancel_all = AsyncMock(side_effect=RuntimeError("cancel blew up"))
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+
+    assert rpc_server_deps["order"] == ["turn_teardown"]
+    assert rpc_server_deps["stop_calls"] == ["stop"]
 
 
 async def test_rpc_runner_wires_and_cancels_approval_broker(rpc_server_deps, monkeypatch) -> None:
