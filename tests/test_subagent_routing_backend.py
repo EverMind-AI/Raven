@@ -631,6 +631,8 @@ class TestATemplateOpensTheRoute:
             "The working directory already holds an older tennis_history.pptx from yesterday; that is not yours.",
             "any *.pptx will do; the format is .pptx",
             f"a deck like {TEMPLATE}.bak",
+            "Ignore the attachment; save the new deck as /home/u/.raven/tmp/tui/new_brand.pptx",
+            "the old my-brand.pptx and rebrand.pptx in the folder are not yours",
         )
         for brief in briefs:
             for attached in ((), (_media(TEMPLATE),)):

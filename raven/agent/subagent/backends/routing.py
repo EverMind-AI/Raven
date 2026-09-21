@@ -109,9 +109,10 @@ def handed_files(*texts: str | None, media: Iterable[Any] = ()) -> tuple[str, ..
         path = _path_of(item)
         if not path:
             continue
-        # The path or its name, ended the way a file name ends: ``brand.pptx``
-        # in ``brand.pptx.bak`` is a different file.
-        named = re.compile(re.escape(Path(path).name) + r"(?![\w.])")
+        # The path or its name, bounded the way a file name is on both sides:
+        # ``brand.pptx`` in ``brand.pptx.bak`` or in ``new_brand.pptx`` is a
+        # different file.
+        named = re.compile(r"(?<![\w.-])" + re.escape(Path(path).name) + r"(?![\w.-])")
         if any(text and named.search(text) for text in texts):
             handed.append(path)
     return tuple(handed)
