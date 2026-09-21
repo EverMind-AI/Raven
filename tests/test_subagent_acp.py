@@ -262,6 +262,102 @@ async def test_verify_survives_diagnostics_on_stdout_and_bulk_stderr() -> None:
     assert snapshot.status == "ready"
 
 
+async def test_a_snapshot_remembers_that_the_refusal_was_about_a_credential() -> None:
+    """Whether a refusal was an auth refusal is decided here and nowhere else.
+
+    ``verify_agent`` already reads it off the handshake's auth methods and the
+    error text; it used to spend that on picking a status and then drop it. A
+    later reader cannot recover it: the surviving evidence is ``auth_methods``,
+    and a perfectly usable agent advertises those too (CodeBuddy names four),
+    so the pair "not ready and has auth methods" is a guess where this is a
+    measurement. The agents page renders it as ``Unauthorized``.
+    """
+    refused = await verify_agent(stub_config(mode="no_session"))
+    assert refused.needs_auth is True
+
+    ready = await verify_agent(stub_config())
+    assert ready.needs_auth is False
+    assert ready.auth_methods, "the ready agent advertises auth methods too -- that is the whole point"
+
+
+async def test_a_refusal_about_anything_else_is_not_a_credential_verdict() -> None:
+    """The advertisement is not the evidence.
+
+    ``initialize`` lists the auth methods an agent supports, and an agent that
+    works lists them too -- the stub does, and so does every measured one. So a
+    session refusal on an agent that advertises auth is not thereby a refusal
+    ABOUT auth: any unrelated remote error would take the same branch, and the
+    page would present a disabled "Unauthorized" for a transient model or
+    configuration failure with no way back.
+
+    The coarse status keeps its old reading, which the advertisement is good
+    enough for -- it only decides whether this is worth a reader's attention.
+    """
+    other = await verify_agent(stub_config(mode="no_session_other"))
+    assert other.needs_auth is False
+    assert other.status == "attention", "still worth attention -- just not a credential story"
+    assert other.auth_methods, "the agent did advertise; that is what must not be enough"
+
+    credential = await verify_agent(stub_config(mode="no_session"))
+    assert credential.needs_auth is True
+
+
+async def test_the_credential_verdict_outlives_the_process_that_measured_it(tmp_path: Path) -> None:
+    """It is read back from disk on every later page load, so it has to persist.
+
+    Kept out of ``usable``, which stays "ready and not stale": an agent that
+    needs signing in is not usable and not broken either, and collapsing the two
+    is how a row that wants a credential came to read as one that wants a bug
+    report.
+    """
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    cfg = stub_config("a", mode="no_session")
+    store.record(await verify_agent(cfg))
+
+    loaded = store.load([cfg])["a"]
+    assert loaded.needs_auth is True
+    assert loaded.usable is False
+
+
+async def test_a_passing_test_clears_a_recorded_credential_refusal(tmp_path: Path, monkeypatch) -> None:
+    """The way out of `Unauthorized`, and the only one there is.
+
+    The page offers no press on a row whose agent asked to be signed in -- the
+    remedy is not on the page -- so the row's whole recovery path is: sign in,
+    then press Test on the card. That works only if Test replaces the recorded
+    verdict, and for a row nobody has configured it did not: `_test_acp` records
+    on `source == "config"` alone, so the refusal outlived the sign-in and the
+    control stayed disabled with nothing left to press. A restart did not help
+    either, which is the other half of this, guarded next door.
+    """
+    import raven.acp_client.capabilities as caps_mod
+
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    monkeypatch.setattr(caps_mod, "SnapshotStore", lambda *a, **k: store)
+
+    # The agent works now -- this is the user who has just signed in -- and the
+    # store still holds what it said before they did, under this launch config.
+    cfg = stub_config("signed-in")
+    store.record(
+        CapabilitySnapshot(
+            agent="signed-in",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="attention",
+            detail="connected, but no session could be opened: sign in",
+            measured_at_ms=1,
+            needs_auth=True,
+        )
+    )
+    assert store.load([cfg])["signed-in"].needs_auth is True
+
+    result = await run_test(cfg, source="preset")
+    assert result.ok is True
+
+    after = store.load([cfg])["signed-in"]
+    assert after.needs_auth is False, "the page would still be showing Unauthorized"
+    assert after.status == "ready"
+
+
 async def test_snapshot_store_round_trips_and_invalidates_on_launch_change(tmp_path: Path) -> None:
     store = SnapshotStore(path=tmp_path / "caps.json")
     cfg = stub_config("a")
@@ -4671,7 +4767,7 @@ async def test_a_session_open_behind_a_running_turn_says_busy_not_broken(tmp_pat
     assert "Wait for the" in message and "re-dispatching" in message.lower() or "re-dispatching" in message
 
 
-async def test_a_session_open_timeout_with_no_turn_in_flight_drops_the_connection(tmp_path: Path, monkeypatch) -> None:
+async def test_a_session_open_timeout_with_no_turn_in_flight_drops_the_connection(tmp_path: Path) -> None:
     """No pending prompt means the silence is not queueing -- the agent really
     did not answer. The connection is dropped on the spot, so a retry launches
     a fresh process instead of waiting out the same budget against the same
@@ -4680,12 +4776,23 @@ async def test_a_session_open_timeout_with_no_turn_in_flight_drops_the_connectio
     from raven.acp_client.protocol import AcpTimeoutError
 
     cfg = stub_config("a")
+    dropped: list[str] = []
+
+    class _Pool:
+        async def drop(self, name: str) -> None:
+            dropped.append(name)
+
+    # Handed in rather than patched over the module: the backend takes the pool
+    # it serves turns from, so the drop is asserted on the one this backend was
+    # actually given -- which for a caller running on a pool of its own (see
+    # ``ping_agent``) is the only one it may touch.
     backend = AcpAgentBackend(
         name="a",
         command=cfg.command,
         env=dict(cfg.env),
         snapshot=_snapshot("a", cfg, can_resume=False),
         registry=InstanceRegistry(path=tmp_path / "instances.json"),
+        pool=_Pool(),
     )
 
     class _DeafClient:
@@ -4693,14 +4800,6 @@ async def test_a_session_open_timeout_with_no_turn_in_flight_drops_the_connectio
 
         async def request(self, method: str, params: dict[str, Any], *, timeout: float):
             raise AcpTimeoutError(f"acp agent 'a': {method} timed out after {timeout}s")
-
-    dropped: list[str] = []
-
-    class _Pool:
-        async def drop(self, name: str) -> None:
-            dropped.append(name)
-
-    monkeypatch.setattr("raven.acp_client.pool.get_pool", lambda: _Pool())
 
     with pytest.raises(AcpTimeoutError, match="fresh agent process"):
         await backend._open_session(_DeafClient(), cwd=str(tmp_path), skey="s", handle="w", budget=5, mcp_servers=[])
@@ -4917,3 +5016,34 @@ async def test_response_meta_alone_never_records_an_output_limit(tmp_path: Path)
 
     assert did.response_meta, "the table still reaches the record verbatim"
     assert did.output_limited is False
+
+
+async def test_a_dispatch_goes_to_the_backend_s_own_pool(tmp_path: Path) -> None:
+    """The pool is an argument, so a caller that must not disturb the roster can
+    hand in one of its own.
+
+    ``ping_agent`` is that caller: its workspace is a fresh temporary directory
+    per call, which never matches a held connection's launch key, so on the
+    shared pool every ping retires that agent's live connections before opening
+    its own. Reading the field back off the backend cannot show where a turn
+    actually goes -- only running one can -- so both pools answer here and the
+    exception that escapes names the one that was asked.
+    """
+
+    class _Marker(Exception):
+        pass
+
+    class _Shared(Exception):
+        pass
+
+    class _Mine:
+        async def acquire(self, **kwargs: Any) -> Any:
+            raise _Marker
+
+    backend = AcpAgentBackend(name="a", command="true", pool=_Mine())
+
+    def _never() -> Any:
+        raise _Shared
+
+    with patch("raven.acp_client.acp_agent.get_pool", _never), pytest.raises(_Marker):
+        await backend.run("hello", task_id="t1", workspace=tmp_path, executor=None)

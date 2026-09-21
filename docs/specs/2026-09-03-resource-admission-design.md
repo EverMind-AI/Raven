@@ -214,7 +214,10 @@ frees its cards while still running.
 - Spend: `spent_minutes` reads width and whether ids were assigned from the
   staged `.raven-resources` file (written at submit next to `config.json`, so a
   restart loses nothing), builds spans `width` wide, and bills assigned-device
-  spans additively and the rest under the declared overlap (decision 5). The
+  spans additively and the rest under the declared overlap (decision 5). Only
+  jobs in the campaign's own ledger (and those this executor submitted) are
+  placed on the timeline: campaigns of one task share a `remote_dir`, and a
+  directory walk billed each campaign for its siblings' runs. The
   openfoam backend keeps its own measured
   width and, when the measured `processor*` count differs from the declared
   `cores_per_job`, records `{"declared": 8, "measured": 16}` on the record and

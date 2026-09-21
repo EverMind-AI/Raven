@@ -187,13 +187,25 @@ def _operator_at(command: str, index: int) -> str | None:
 
 
 def _split_on_operators(command: str) -> Iterator[str]:
-    """Yield the command's pieces, split at unquoted operators.
+    """Yield the command's pieces, split at unquoted operators."""
+
+    for piece, _ in _split_on_operators_with_separators(command):
+        yield piece
+
+
+def _split_on_operators_with_separators(command: str) -> Iterator[tuple[str, str]]:
+    """Yield each piece with the operator that terminated it, ``""`` at the end.
 
     Quote state is tracked here and nowhere else, because this is the only place
     that still has it. A single-quoted run is literal; inside double quotes a
     backslash escapes; outside quotes a backslash escapes the next character. An
     unterminated quote yields what there is, and the caller's own ``shlex`` pass
     is what rejects it -- refusing here would make this function decide policy.
+
+    The operator belongs to the piece before it, because that is the question a
+    caller asks of it: whether what follows runs, and whether it runs *because*
+    this piece succeeded. An empty piece is dropped along with its operator, so
+    a later piece never inherits a separator that was not its own.
     """
 
     piece: list[str] = []
@@ -225,7 +237,7 @@ def _split_on_operators(command: str) -> Iterator[str]:
         if operator is not None:
             text = "".join(piece).strip()
             if text:
-                yield text
+                yield text, operator
             piece = []
             index += len(operator)
             continue
@@ -233,7 +245,7 @@ def _split_on_operators(command: str) -> Iterator[str]:
         index += 1
     text = "".join(piece).strip()
     if text:
-        yield text
+        yield text, ""
 
 
 _HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(?:'([^']+)'|\"([^\"]+)\"|\\?([A-Za-z_][A-Za-z0-9_]*))")
@@ -346,13 +358,20 @@ def _command_segments(command: str) -> Iterator[list[str]]:
     :func:`_split_on_operators`); each piece is then tokenised on its own.
     """
 
-    for piece in _split_on_operators(command):
+    for segment, _ in _command_segments_with_separators(command):
+        yield segment
+
+
+def _command_segments_with_separators(command: str) -> Iterator[tuple[list[str], str]]:
+    """:func:`_command_segments`, each segment paired with the operator after it."""
+
+    for piece, operator in _split_on_operators_with_separators(command):
         lexer = shlex.shlex(piece, posix=True)
         lexer.commenters = ""
         lexer.whitespace_split = True
         segment = list(lexer)
         if segment:
-            yield segment
+            yield segment, operator
 
 
 def _embedded_shell_command(segment: list[str]) -> str | None:

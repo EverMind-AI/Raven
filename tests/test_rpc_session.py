@@ -645,6 +645,32 @@ async def test_session_list_item_shape(tmp_path: Path, monkeypatch: pytest.Monke
     assert isinstance(item["started_at"], (int, float))
 
 
+async def test_session_list_item_carries_the_workdir_it_was_pinned_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rail groups conversations by whether they were pinned to a folder,
+    so the list says which: the stored override, or null for the policy default."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    from raven.session.manager import SessionManager
+
+    mgr = SessionManager(tmp_path)
+    pinned = mgr.get_or_create("tui:20260610_100000_pinned")
+    pinned.metadata["workdir"] = "/work/project"
+    pinned.add_message("user", "hello")
+    mgr.save(pinned)
+    plain = mgr.get_or_create("tui:20260610_110000_plainx")
+    plain.add_message("user", "hello")
+    mgr.save(plain)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    items = {item["id"]: item for item in (await session_list({}))["sessions"]}
+    assert items["tui:20260610_100000_pinned"]["workdir"] == "/work/project"
+    assert items["tui:20260610_110000_plainx"]["workdir"] is None
+
+
 async def test_session_list_only_tui_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.list does not include sessions from non-tui channels."""
     cfg = load_config()

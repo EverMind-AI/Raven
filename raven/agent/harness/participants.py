@@ -17,11 +17,14 @@ escalate by answering badly.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from raven.contracts.participant import AgentParticipant, StepView
+
+logger = logging.getLogger(__name__)
 
 _KINDS = ("accept", "resample", "end")
 
@@ -58,6 +61,22 @@ class Intake:
 
 def _text(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+async def _answer(participant: AgentParticipant, verb: str, *args: Any) -> Any:
+    try:
+        return await getattr(participant, verb)(*args)
+    except Exception:
+        logger.exception("participant %s.%s raised; treating its answer as silence", type(participant).__name__, verb)
+        return None
+
+
+def _answer_sync(participant: AgentParticipant, verb: str, *args: Any) -> Any:
+    try:
+        return getattr(participant, verb)(*args)
+    except Exception:
+        logger.exception("participant %s.%s raised; treating its answer as silence", type(participant).__name__, verb)
+        return None
 
 
 def read_verdict(answer: Any) -> Verdict:
@@ -107,7 +126,7 @@ async def compose_intake(text: str, step: StepView, participants: Sequence[Agent
     notes: list[str] = []
     changed = False
     for participant in participants:
-        intake = read_intake(await participant.intake(current, step), text=current)
+        intake = read_intake(await _answer(participant, "intake", current, step), text=current)
         if intake is None:
             continue
         if intake.note:
@@ -123,14 +142,14 @@ async def compose_intake(text: str, step: StepView, participants: Sequence[Agent
 
 
 async def compose_advice(step: StepView, participants: Sequence[AgentParticipant]) -> str | None:
-    notes = [note for participant in participants if (note := _text(await participant.advise(step)))]
+    notes = [note for participant in participants if (note := _text(await _answer(participant, "advise", step)))]
     return "\n\n".join(notes) or None
 
 
 async def compose_review(step: StepView, participants: Sequence[AgentParticipant]) -> Verdict:
     accepted: list[Verdict] = []
     for participant in participants:
-        verdict = read_verdict(await participant.review(step))
+        verdict = read_verdict(await _answer(participant, "review", step))
         if not verdict.accepted:
             return verdict
         accepted.append(verdict)
@@ -151,7 +170,7 @@ async def compose_review(step: StepView, participants: Sequence[AgentParticipant
 
 async def compose_salvage(step: StepView, participants: Sequence[AgentParticipant]) -> str | None:
     for participant in participants:
-        salvaged = await participant.salvage(step)
+        salvaged = await _answer(participant, "salvage", step)
         if isinstance(salvaged, str) and salvaged:
             return salvaged
     return None
@@ -171,7 +190,7 @@ def compose_judge(
     verb is.
     """
     for participant in participants:
-        refusals = participant.judge(name, params, prior)
+        refusals = _answer_sync(participant, "judge", name, params, prior)
         # A bare ``str`` satisfies ``Sequence[str]`` structurally, so neither
         # the annotation nor a type checker objects -- and iterating it turns
         # one sentence into one refusal per character, which is the opposite of
@@ -192,7 +211,7 @@ async def compose_addendum(step: StepView, participants: Sequence[AgentParticipa
     texts: list[str] = []
     notes: list[str] = []
     for participant in participants:
-        addendum = read_intake(await participant.system_addendum(step))
+        addendum = read_intake(await _answer(participant, "system_addendum", step))
         if addendum is None:
             continue
         if addendum.note:
@@ -206,6 +225,16 @@ async def compose_addendum(step: StepView, participants: Sequence[AgentParticipa
     return Intake(text="\n\n".join(texts), note="\n".join(notes) or None)
 
 
+async def compose_outbound(reply: str, step: StepView, participants: Sequence[AgentParticipant]) -> str:
+    """The reply each participant leaves for the next, with failures silent."""
+    current = reply
+    for participant in participants:
+        changed = await _answer(participant, "outbound", current, step)
+        if isinstance(changed, str):
+            current = changed
+    return current
+
+
 async def compose_record(
     step: StepView, reply: str | None, participants: Sequence[AgentParticipant]
 ) -> dict[str, Any] | None:
@@ -214,7 +243,7 @@ async def compose_record(
     them, so two participants stamping the same name both survive."""
     filed: dict[str, Any] = {}
     for participant in participants:
-        stamped = await participant.archive(step, reply)
+        stamped = await _answer(participant, "archive", step, reply)
         if not isinstance(stamped, Mapping):
             continue
         for name, counters in stamped.items():
@@ -238,7 +267,7 @@ async def compose_tools(
     current = list(offered)
     changed = False
     for participant in participants:
-        answer = await participant.select_tools(list(current), step)
+        answer = await _answer(participant, "select_tools", list(current), step)
         if not isinstance(answer, Sequence) or isinstance(answer, str):
             continue
         rows = [row for row in answer if isinstance(row, Mapping)]
@@ -255,6 +284,7 @@ __all__ = [
     "compose_advice",
     "compose_intake",
     "compose_judge",
+    "compose_outbound",
     "compose_record",
     "compose_review",
     "compose_salvage",

@@ -515,6 +515,18 @@ describe('the sheet', () => {
     expect(sheetActs()).toEqual(['gui.agent.connect'])
   })
 
+  it('names a refused agent on its row instead of offering to connect it', async () => {
+    const { acts } = install([
+      row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'attention', needs_auth: true }),
+    ])
+    await mount()
+    expect(sectionOf('codex')).toBe('gui.agent.g_avail')
+    expect(buttonOf('codex')!.textContent).toBe('gui.agent.unauthorized')
+    expect(buttonOf('codex')!.disabled).toBe(true)
+    await click(buttonOf('codex'))
+    expect(acts).toEqual([])
+  })
+
   it('keeps its rendered shape, list', async () => {
     install([
       row({ name: 'Raven', preset: undefined, kind: 'builtin', builtin: true, configured: false, probe_status: 'unknown' }),

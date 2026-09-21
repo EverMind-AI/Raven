@@ -9,6 +9,7 @@ import { show as toast } from '../../state/toast'
 import { open as openCron } from '../cron/store'
 import * as store from './store'
 import { plainTitle } from './title'
+import './styles.css'
 
 import type { MenuItem } from '../../state/menu'
 import type { SessRow } from './types'
@@ -56,6 +57,13 @@ const enterOrSpace = (fn: () => void) => (e: KeyboardEvent) => {
     e.preventDefault()
     fn()
   }
+}
+
+/* The last segment of a path, either separator: the gateway may be on the
+   other platform from the browser. */
+function folderName(path: string): string {
+  const last = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
+  return last || path
 }
 
 function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }): JSX.Element {
@@ -183,6 +191,9 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
         ) : (
           <span key="txt">{plainTitle(s.title)}</span>
         )}
+        {s.workdir && !editing ? (
+          <span key="wd" className="rail-wdt" title={s.workdir}>{folderName(s.workdir)}</span>
+        ) : null}
       </div>
       {/* The stamp is always rendered -- it is what gives the tail its width.
           A marker hides the text in place rather than replacing the element,
@@ -344,8 +355,14 @@ export function RailApp(): JSX.Element | null {
   }
 
   // Straight through, in the order the source already holds: newest last activity
-  // first, which is the same value each row's clock shows.
+  // first, which is the same value each row's clock shows. Split once more on
+  // whether the conversation was pinned to a folder: the two kinds of work read
+  // differently (one has a project behind it, the other is a chat), and a
+  // reader looking for the folder's conversations should not have to scan the
+  // chats to find them. The folder group only exists while something is in it.
   const rest = rows.filter(x => !x.pin && x.from !== 'cron')
+  const inFolder = rest.filter(x => !!x.workdir)
+  const noFolder = rest.filter(x => !x.workdir)
   return (
     <>
       <Group label={t('gui.rail.pinned')} items={rows.filter(x => x.pin)} gid="pin" cur={snap.cur} busy={snap.busy} />
@@ -359,7 +376,16 @@ export function RailApp(): JSX.Element | null {
         cur={snap.cur}
         busy={snap.busy}
       />
-      <Group label={t('gui.rail.recent')} items={rest} cap={15} gid="recent" always cur={snap.cur} busy={snap.busy} />
+      <Group label={t('gui.rail.workdir')} items={inFolder} cap={15} gid="workdir" cur={snap.cur} busy={snap.busy} />
+      <Group
+        label={t(inFolder.length ? 'gui.rail.no_workdir' : 'gui.rail.recent')}
+        items={noFolder}
+        cap={15}
+        gid="recent"
+        always
+        cur={snap.cur}
+        busy={snap.busy}
+      />
     </>
   )
 }

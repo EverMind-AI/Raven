@@ -27,7 +27,7 @@ from loguru import logger
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
-from raven.agent.subagent.presets import install_hint_for, shim_requirement_for
+from raven.agent.subagent.presets import install_hint_for, shim_requirement_for, third_party_subagent_presets
 from raven.agent.subagent.probe_state import LastTest
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
@@ -475,7 +475,22 @@ async def ping_agent(cfg: Any) -> PingResult:
 
     So this spends one call on the agent's own quota, which is why it is reached
     only from an explicit switch-on and never from a listing.
+
+    It runs on a pool of its own, closed on the way out. The shared pool keys a
+    connection on its launch arguments and ``cwd`` falls back to the caller's
+    workspace, which here is a fresh temporary directory per call -- so a ping on
+    the shared pool never matches a held connection and ``acquire`` retires every
+    connection of that agent before opening its own. Measured 2026-09-20 against
+    a live adapter: a second Connect pressed while the first was still running
+    took the first one's connection down, and the first came back "did not answer
+    a test message" for a failure raven had caused; a ping fired while that agent
+    was serving a real run would have taken that run's connection with it.
     """
+    # Function-level like the rest of this module's acp imports: the client family
+    # is future shelf cargo and must not be named at import time.
+    from raven.acp_client import pool as acp_pool
+
+    pool = acp_pool.AcpConnectionPool()
     try:
         with tempfile.TemporaryDirectory(prefix="raven_subagent_ping_") as tmp:
             backend = build_third_party_backend(
@@ -491,6 +506,7 @@ async def ping_agent(cfg: Any) -> PingResult:
                     getattr(cfg, "ready_timeout_ms", None) or _ENABLE_PING_TIMEOUT_SECONDS * 1000,
                     _ENABLE_PING_TIMEOUT_SECONDS * 1000,
                 ),
+                pool=pool,
             )
             reply = await asyncio.wait_for(
                 backend.run(PROBE_PROMPT, task_id=f"ping-{uuid.uuid4().hex[:8]}", workspace=Path(tmp), executor=None),
@@ -500,6 +516,11 @@ async def ping_agent(cfg: Any) -> PingResult:
         return PingResult(False, f"it did not answer within {_ENABLE_PING_TIMEOUT_SECONDS}s")
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
         return PingResult(False, str(exc)[:_DETAIL_CAP])
+    finally:
+        # The pool is this call's alone, so nothing else will ever close it, and a
+        # pool left open holds the child process it launched for the rest of the
+        # gateway's life -- one per press.
+        await pool.close_all()
 
     text = (reply or "").strip()
     if not text:
@@ -522,14 +543,12 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     slow first `npx` download) as this test's verdict forever. A truly absent
     executable still fails fast -- launch raises before any timeout waits.
     """
-    # Function-level on purpose: the acp client family is future shelf cargo,
-    # and this module must not name it at import time (binding-time debt).
-    from raven.acp_client.capabilities import verify_agent
-
-    # Presets are templates, not entries: recording a snapshot for one would
-    # key it to a name no config claims, and the roster would then read
-    # capabilities off a preset the user never installed.
-    snapshot = await record_capabilities(cfg) if source != "preset" else await verify_agent(cfg)
+    # A preset's snapshot is recorded too, and has to be: the page draws a
+    # preset row's verdict from it -- a recorded credential refusal is what puts
+    # "Unauthorized" there -- so Test is that row's only way back. The store
+    # keys on a fingerprint of the launch fields, so a record under a preset's
+    # name is returned only to a config that launches the same way.
+    snapshot = await record_capabilities(cfg)
     reply = ", ".join(snapshot.available_models[:5]) or None
     return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
 
@@ -591,6 +610,7 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
         stale=False,
         status=snapshot.status,
         detail=snapshot.detail,
+        needs_auth=getattr(snapshot, "needs_auth", False),
         measured_at_ms=snapshot.measured_at_ms,
         elapsed_ms=snapshot.elapsed_ms,
     )
@@ -604,6 +624,65 @@ _VERIFY_TASKS: set[asyncio.Task] = set()
 """The running backfill task, if any. Kept by reference: asyncio holds only a
 weak reference to a task it did not create, and an unrefed task can be collected
 mid-run with a "Task was destroyed but it is pending!" warning at exit."""
+
+
+class _PresetRow:
+    """A registry-row shape around a preset, so one backfill serves both halves.
+
+    The registry holds configured agents only. Everything the reader has not
+    connected yet is therefore invisible to it -- which is exactly the set whose
+    Connect button is about to promise something the agent will refuse.
+    """
+
+    __slots__ = ("config", "enabled", "kind", "name")
+
+    def __init__(self, config: Any) -> None:
+        self.config = config
+        self.name = getattr(config, "name", "")
+        self.kind = "acp"
+        self.enabled = False
+
+
+def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> list[Any]:
+    """Shipped acp presets this machine could actually answer for.
+
+    Three filters, each for its own reason. A configured name is the registry
+    half's already. A non-acp preset has no handshake to record -- an openai
+    row's credential is settled by the free ``/models`` probe and a cli row is
+    never handshaken at all. And a command that does not resolve is one whose
+    verdict the free probe already reached for nothing: launching it to learn
+    the same thing is the cost this filter exists to refuse.
+
+    ``path`` is the login shell's, captured once by the caller -- the same PATH
+    ``_probe_acp`` resolves against. Reading this process's instead would answer
+    a different question from the one the row on screen was answered with, and
+    skip an agent the page is reporting as installed.
+    """
+    from raven.config.schema import SubagentsConfig
+
+    wanted = [
+        preset
+        for preset in third_party_subagent_presets()
+        if preset.get("kind") == "acp" and preset.get("name") not in configured
+    ]
+    here = []
+    for preset in wanted:
+        try:
+            argv = shlex.split((preset.get("command") or "").strip())
+        except ValueError:
+            continue
+        if argv and shutil.which(argv[0], path=path or None) is not None:
+            here.append(preset)
+    if not here:
+        return []
+    try:
+        # Validated as one list, the way the row builder reads the same table:
+        # these are shipped entries, so a failure here is a packaging fault, not
+        # a user's typo, and it must not take the boot with it.
+        return [_PresetRow(cfg) for cfg in SubagentsConfig(agents=here).agents]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("acp presets cannot be read for auto-verify: {}", exc)
+        return []
 
 
 def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
@@ -628,16 +707,21 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
         # scheduling nothing is the correct degradation, not a missing feature.
         return None
     _SCHEDULED = True
-    rows = [row for row in registry.rows() if getattr(row, "kind", None) == "acp" and getattr(row, "enabled", False)]
-    if not rows:
-        return None
-    task = asyncio.create_task(_verify_missing_snapshots(manager, rows))
+    live = list(registry.rows())
+    rows = [row for row in live if getattr(row, "kind", None) == "acp" and getattr(row, "enabled", False)]
+    # No early return on an empty list any more: the shipped presets are the
+    # other half of the work, and whether any of them is on this machine cannot
+    # be answered here -- that needs the login shell's PATH, and this is the
+    # synchronous side.
+    task = asyncio.create_task(
+        _verify_missing_snapshots(manager, rows, configured={getattr(row, "name", "") for row in live})
+    )
     _VERIFY_TASKS.add(task)
     task.add_done_callback(_VERIFY_TASKS.discard)
     return task
 
 
-async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
+async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured: set[str] | None = None) -> None:
     """One verification per missing or stale row, sequentially, never raising.
 
     Sequential, not concurrent: every acp verify spawns a child process, and a
@@ -649,6 +733,11 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
     """
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
+    # After the configured rows, never before: those are the ones a run can
+    # dispatch to this minute, and a slow preset adapter ahead of them would hold
+    # the roster's own capabilities back behind an agent nobody has asked for yet.
+    if configured is not None:
+        rows = [*rows, *_unconfigured_acp_preset_rows(configured, path=await _captured_login_path())]
     store = SnapshotStore()
     # Optional: a caller's own stand-in (tests substitute a bare `record`-only
     # object) may not carry it, and its absence must not itself force a
@@ -666,10 +755,20 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
                 and has_model_menu is not None
                 and not has_model_menu(getattr(row, "name", "") or "")
             )
-            if snapshot is not None and not snapshot.stale and not outdated_menu:
+            # A fresh snapshot is taken on trust, with one exception. Staleness
+            # asks whether the launch config moved, and signing in does not move
+            # it -- so a recorded credential refusal never goes stale, and the
+            # row it came from would go on saying "Unauthorized" across every
+            # restart after the sign-in that cured it.
+            refused = getattr(snapshot, "needs_auth", False)
+            if snapshot is not None and not snapshot.stale and not outdated_menu and not refused:
                 continue
             result = await verify_agent(cfg)
-            if result.status == "ready":
+            # A pass, or a refusal the agent explained. Every other failure stays
+            # unrecorded on purpose: a timeout or a crashed adapter is a fact
+            # about this minute, and a snapshot of one would label a working
+            # agent broken until somebody happened to press Test.
+            if result.status == "ready" or getattr(result, "needs_auth", False):
                 store.record(result)
                 recorded = True
             logger.info("acp agent {!r}: auto-verify {}", getattr(row, "name", ""), result.status)

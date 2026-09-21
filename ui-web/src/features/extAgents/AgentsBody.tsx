@@ -50,14 +50,14 @@ function AvailableRow({ row, joining }: { row: ExtAgentRow; joining: boolean }):
   return (
     <SetupRow
       act={
-        <button className="mini" disabled={joining} onClick={connect}>
+        <button className="mini" disabled={joining || stageOf(row) === 'unauthorized'} onClick={connect}>
           {joining ? (
             <>
               <span className="extAgents-spin" />
               {t('gui.agent.setup_connecting')}
             </>
           ) : (
-            t('gui.agent.connect')
+            t(stageOf(row) === 'unauthorized' ? 'gui.agent.unauthorized' : 'gui.agent.connect')
           )}
         </button>
       }

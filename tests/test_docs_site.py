@@ -12,8 +12,11 @@ nowhere, reddens nothing, and is visible only to someone looking at the page.
 from __future__ import annotations
 
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pytest
+from markdown import markdown
 from markdown.extensions.toc import slugify
 
 REPO = Path(__file__).resolve().parent.parent
@@ -25,6 +28,90 @@ HEADING = re.compile(r"^(#{2,6})\s+(.+?)\s*$", re.M)
 ANCHOR = re.compile(r"\{\s*#([\w-]+)\s*\}")
 CLASS_ATTR = re.compile(r'class="([^"]*)"')
 CSS_SELECTOR = re.compile(r"\.(em-[a-z][a-z0-9-]*)")
+
+# Published fragments are a compatibility contract, independent of current headings.
+PROACTIVITY_LEGACY_SECTIONS = {
+    "proactivity": {
+        "proactivity-design.md#components-and-assembly": ("architecture-overview",),
+        "proactivity-design.md#context-and-decision-contracts": (
+            "1-data-types-sentineltypespy",
+            "plannerdecision",
+            "plannercontext",
+            "3-context-assembly-contextassembler-sentinelpredictorcontext_assemblerpy",
+            "4-decision-layer-proactiveplanner-sentinelplannerpy",
+        ),
+        "proactivity-design.md#tick-lifecycle": (
+            "2-orchestration-sentinelrunner-sentinelexecutorrunnerpy",
+            "one-tick",
+            "fast-path-rules-skip-only",
+            "scheduled-fire-fast-path",
+            "drive-modes",
+            "tickoutcome",
+        ),
+        "proactivity-design.md#action-routing": (
+            "action",
+            "degradation",
+            "6-the-three-nudge-execution-paths",
+            "nudgedispatcher-sentinelexecutordispatcherpy",
+            "nudgeinjector-sentinelexecutorinjectorpy",
+            "defermanager-sentinelexecutordefer_managerpy",
+            "7-the-spawn_agent-path-proactivespawn-sentinelexecutorspawnpy",
+        ),
+        "proactivity-design.md#policy-boundaries": (
+            "5-the-gate-nudgepolicy-sentineltrigger_policypolicypy",
+            "layered-checks",
+            "adaptive-multiplier",
+            "readwrite-split",
+            "personalization-and-persistence",
+        ),
+        "proactivity-design.md#state-and-feedback": (
+            "8-feedback-loop-nudgefeedbacktracker-the-nudge-feedback-tool",
+            "9-state-files",
+        ),
+        "proactivity-design.md#routines-and-task-discovery": ("12-task-discovery-anticipatory-menus",),
+        "proactivity-design.md#cron-heartbeat-and-the-spine": (
+            "10-cron-schedulerscron",
+            "11-heartbeat-and-event-driven-wake",
+            "13-spine-integration-and-the-user-inbound-gates",
+            "mid-turn-user-input-busypolicyinject",
+            "ask_user-pausing-a-turn-to-ask-the-user",
+        ),
+    },
+    "proactivity-design": {
+        "#design-rationale": (
+            "1-three-layers-of-proactivity",
+            "2-the-core-idea-periodic-planner-plus-on-demand-spawn",
+            "7-scenarios",
+            "l2-routine-automation",
+            "l3-memory-linked-reminder",
+            "l3-context-aware-resumption",
+            "l3-proactive-status-check",
+        ),
+        "#components-and-assembly": ("3-components",),
+        "#context-and-decision-contracts": (
+            "proactiveplanner-periodic-reasoner",
+            "contextassembler-input-packaging",
+            "planner-decision-quality",
+        ),
+        "#action-routing": (
+            "4-action-space",
+            "proactivespawn-multi-step-execution-bridge",
+        ),
+        "#policy-boundaries": (
+            "nudgepolicy-the-shared-anti-spam-gate",
+            "5-anti-spam-the-nudgepolicy-gate",
+            "9-risks-and-mitigations",
+            "over-notification",
+        ),
+        "#routines-and-task-discovery": (
+            "routinelearner-behavior-pattern-learning",
+            "task-discovery-anticipatory-menus",
+            "history-format-drift",
+        ),
+        "#cron-heartbeat-and-the-spine": ("6-delivery-and-turn-transport-the-spine",),
+        "proactivity.md#costs-and-safety-limits": ("8-cost", "spawn-safety"),
+    },
+}
 
 
 def _pages() -> list[Path]:
@@ -125,3 +212,63 @@ def test_chinese_headings_pin_the_anchor_their_english_twin_gets_for_free() -> N
                 )
 
     assert not offenders, "\n".join(offenders)
+
+
+def _render_page(name: str) -> ET.Element:
+    html = markdown(
+        (SITE / name).read_text(encoding="utf-8"),
+        extensions=["admonition", "attr_list", "md_in_html", "tables", "toc", "fenced_code"],
+    )
+    return ET.fromstring(f"<article>{html}</article>")
+
+
+@pytest.mark.parametrize("language", ["", ".zh"])
+@pytest.mark.parametrize("page", PROACTIVITY_LEGACY_SECTIONS)
+def test_proactivity_legacy_sections_reach_current_content(page: str, language: str) -> None:
+    root = _render_page(f"{page}{language}.md")
+    elements = list(root.iter())
+    ids = [element.attrib["id"] for element in elements if "id" in element.attrib]
+    assert len(ids) == len(set(ids)), f"duplicate IDs in {page}{language}"
+    by_id = {element.attrib["id"]: element for element in elements if "id" in element.attrib}
+    parents = {child: parent for parent in elements for child in parent}
+
+    for target, legacy_ids in PROACTIVITY_LEGACY_SECTIONS[page].items():
+        target_page, target_id = target.split("#")
+        destination = _render_page(f"{Path(target_page).stem}{language}.md") if target_page else root
+        assert any(element.get("id") == target_id for element in destination.iter("h2")), target
+
+        for legacy_id in legacy_ids:
+            assert legacy_id in by_id, f"{page}{language}.md lost #{legacy_id}"
+            anchor = by_id[legacy_id]
+            if target_page:
+                container = parents[anchor]
+                assert container.tag in {"li", "p"}, f"#{legacy_id} has no visible migration entry"
+                assert any(
+                    link.get("href") == target and "".join(link.itertext()).strip() for link in container.iter("a")
+                ), f"#{legacy_id} has no migration link to {target}"
+            else:
+                next_heading = next(
+                    element for element in elements[elements.index(anchor) + 1 :] if element.tag == "h2"
+                )
+                assert next_heading.get("id") == target_id, f"#{legacy_id} lands before the wrong section"
+
+
+@pytest.mark.parametrize("language", ["", ".zh"])
+@pytest.mark.parametrize("page", PROACTIVITY_LEGACY_SECTIONS)
+def test_proactivity_preserves_published_title_anchors(page: str, language: str) -> None:
+    title_id = "_1" if language else "proactivity-reference" if page == "proactivity" else page
+    root = _render_page(f"{page}{language}.md")
+    assert root.find(f"h1[@id='{title_id}']") is not None
+
+
+@pytest.mark.parametrize(
+    "document",
+    [SITE / "tracing-api.md", SITE / "tracing-api.zh.md", REPO / "docs" / "TRACING_STANDARD_API.md"],
+)
+def test_tracing_descriptor_documentation_points_to_bundled_files(document: Path) -> None:
+    paths = re.findall(r"`([^`\n]+/descriptors/)`", document.read_text(encoding="utf-8"))
+    assert paths, f"{document.name} does not name the bundled descriptor directory"
+    for path in paths:
+        directory = REPO / path
+        assert directory.is_dir(), f"{document.name} points to missing directory {path}"
+        assert any(directory.glob("*.json")), f"{path} has no bundled JSON descriptors"

@@ -220,6 +220,12 @@ async def test_fs_round_trip(workspace: Path) -> None:
     read = _check("fs.read", await console.fs_read({"path": uploaded.path, "max_bytes": 1}))
     assert read.truncated is True
 
+    dirs = _check("fs.dirs", await console.fs_dirs({"path": str(workspace.parent)}))
+    # The workspace is the agent's home here, and the one child a session may
+    # not be pinned to.
+    assert {e.name: e.ok for e in dirs.entries}["ws"] is False
+    assert dirs.parent is not None
+
 
 # ---------------------------------------------------------------------------
 # browser.*

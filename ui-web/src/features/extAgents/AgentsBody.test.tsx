@@ -124,6 +124,21 @@ describe('the onboarding wizard\'s agents pane', () => {
     expect(actBtn('shipped').textContent).toBe('gui.agent.disconnect')
   })
 
+  it('names a refused row instead of offering to connect it', async () => {
+    const { acts } = install([row({ name: 'refused', kind: 'acp', probe_status: 'attention', needs_auth: true })])
+    render(<AgentsStepBody />)
+    await act(async () => {
+      await store.load(true)
+    })
+    expect(groupCount('gui.agent.setup_available')).toBe('1')
+    expect(actBtn('refused').textContent).toBe('gui.agent.unauthorized')
+    expect(actBtn('refused').disabled).toBe(true)
+    await act(async () => {
+      actBtn('refused').click()
+    })
+    expect(acts).toEqual([])
+  })
+
   it('hides the built-in agent, a missing row and an unfound row entirely', async () => {
     install([
       row({ name: 'raven', kind: 'builtin', builtin: true }),
