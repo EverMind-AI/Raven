@@ -1,8 +1,8 @@
 /* The tasks panel's state, outside React.
  *
  * The page drives this panel imperatively -- a tab click draws it, a session
- * switch resets it, the composer strip and the desk light each other up --
- * so the state lives where those callers can reach it and the component
+ * switch resets it, the strip above the composer reads the same rows -- so
+ * the state lives where those callers can reach it and the component
  * subscribes. Rows are addressed by (kind, id): a spawn's id and a dag's run
  * id share no namespace and can theoretically collide.
  */
@@ -24,9 +24,6 @@ export interface TasksState {
      task, so a single selected-node field would move every open pane when
      the reader picked in one of them. */
   nodes: Record<string, string>
-  /* Pointed at from either side: the composer strip and the list light each
-     other up, and neither owns the pointer. */
-  hover: string | null
   /* Which tab each pane is pinned to, once its reader has picked one --
      keyed by the pane's own id so two open task windows do not move each
      other's tab. A pane absent here has not been pinned: the card decides
@@ -52,7 +49,7 @@ export interface TasksState {
 }
 
 const initial: TasksState = {
-  rows: [], loaded: false, nodes: {}, hover: null, tabByPane: {}, nodeVersions: {}, folds: {},
+  rows: [], loaded: false, nodes: {}, tabByPane: {}, nodeVersions: {}, folds: {},
 }
 
 const store = makeStore<TasksState>(initial)
@@ -187,8 +184,6 @@ export const tabOf = (paneId: string): 'context' | 'order' | null => store.get()
 export function pickTab(paneId: string, tab: 'context' | 'order'): void {
   patch({ tabByPane: { ...store.get().tabByPane, [paneId]: tab } })
 }
-
-export const hover = (id: string | null): void => patch({ hover: id })
 
 const nodeKeyOf = (kind: TaskKind, id: string, nodeId: string): string => `${kind}:${id}:${nodeId}`
 

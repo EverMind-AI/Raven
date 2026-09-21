@@ -124,10 +124,9 @@ const ErrorTag = (): JSX.Element => <span className="tkerr">error</span>
 
 /* ── the list ─────────────────────────────────────────────────────────── */
 
-function Row({ row, now, hl, open, onOpen }: {
-  row: TaskRow; now: number; hl: boolean; open: boolean; onOpen: (r: TaskRow) => void
+function Row({ row, now, open, onOpen }: {
+  row: TaskRow; now: number; open: boolean; onOpen: (r: TaskRow) => void
 }): JSX.Element {
-  const key = store.rowKey(row)
   const dur = taskDuration(row, now)
   /* The step fragment only while the task is running -- a settled row's
      ending is already said by the group it sits in and by the products
@@ -139,12 +138,10 @@ function Row({ row, now, hl, open, onOpen }: {
   return (
     <button
       type="button"
-      className={'sarow task' + (hl ? ' hl' : '')}
+      className="sarow task"
       data-st={tdotState(row.status)}
       aria-current={open || undefined}
       onClick={() => onOpen(row)}
-      onMouseEnter={() => store.hover(key)}
-      onMouseLeave={() => store.hover(null)}
     >
       <span className={'dot ' + dotOf(row.status)} />
       <div className="bd">
@@ -159,9 +156,8 @@ function Row({ row, now, hl, open, onOpen }: {
   )
 }
 
-function Group({ label, list, now, hover, openIds, onOpen }: {
-  label: string; list: TaskRow[]; now: number; hover: string | null; openIds: Set<string>
-  onOpen: (r: TaskRow) => void
+function Group({ label, list, now, openIds, onOpen }: {
+  label: string; list: TaskRow[]; now: number; openIds: Set<string>; onOpen: (r: TaskRow) => void
 }): JSX.Element | null {
   if (!list.length) return null
   return (
@@ -169,7 +165,7 @@ function Group({ label, list, now, hover, openIds, onOpen }: {
       <div className="wsgrp">{label}</div>
       {list.map((r) => (
         <Row
-          key={store.rowKey(r)} row={r} now={now} hl={hover === store.rowKey(r)}
+          key={store.rowKey(r)} row={r} now={now}
           open={openIds.has(paneIdOf(r))} onOpen={onOpen}
         />
       ))}
@@ -190,11 +186,11 @@ function List(): JSX.Element {
   return (
     <div className="salist tasks">
       <Group
-        label={t('gui.tasks.running')} list={store.running(s.rows)} now={now} hover={s.hover}
+        label={t('gui.tasks.running')} list={store.running(s.rows)} now={now}
         openIds={openIds} onOpen={desk.openDeskTask}
       />
       <Group
-        label={t('gui.tasks.settled')} list={store.settled(s.rows)} now={now} hover={s.hover}
+        label={t('gui.tasks.settled')} list={store.settled(s.rows)} now={now}
         openIds={openIds} onOpen={desk.openDeskTask}
       />
     </div>

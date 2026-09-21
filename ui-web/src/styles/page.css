@@ -6311,7 +6311,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .salist.tasks .wsgrp { padding: 8px 11px 4px; font: 9.5px/1.4 var(--mono); letter-spacing: .06em; }
 .sarow.task { align-items: flex-start; }
 .sarow.task > .dot { margin-top: 5px; }
-.sarow.task.hl { background: var(--surface); }
 /* A two-line row with a hairline under it and a hint of which one has its
    pane open already -- the row geometry the prototype's task list uses. */
 .sarow.task {
