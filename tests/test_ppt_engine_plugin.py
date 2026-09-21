@@ -429,7 +429,7 @@ def test_the_hook_stages_rewrites_and_announces(tmp_path: Path) -> None:
     assert f"Published a 3-slide deck.\nDeck: {deck}\nMEDIA: {deck}" in outbound.modified_content
 
 
-def test_a_renamed_copy_of_the_published_deck_gets_the_preview_under_its_own_name(tmp_path: Path) -> None:
+def test_a_renamed_copy_of_the_published_deck_is_announced_without_a_preview(tmp_path: Path) -> None:
     """The PDF follows the deck the reply names, not the stem the publish wrote.
 
     A live run copied `out/deck.pptx` to a title of its own with `exec` and named the
@@ -459,10 +459,12 @@ def test_a_renamed_copy_of_the_published_deck_gets_the_preview_under_its_own_nam
         return outbound, copy
 
     outbound, copy = asyncio.run(run())
-    preview = copy.with_suffix(".pdf")
-    assert preview.read_bytes() == b"%PDF-1.4 rendered"
     assert f"Deck: {copy}\nMEDIA: {copy}" in outbound.modified_content
-    assert f"Preview (the same deck as a PDF, for viewing): {preview}\nMEDIA: {preview}" in outbound.modified_content
+    # The deck alone: the render under out/ is the engine's own preview and is
+    # neither copied beside the deck nor announced as a second MEDIA line.
+    assert not copy.with_suffix(".pdf").exists()
+    assert "Preview" not in outbound.modified_content
+    assert ".pdf" not in outbound.modified_content
 
 
 def test_a_turn_that_skipped_the_inbound_phase_is_pointed_at_the_deck_on_its_first_iteration(tmp_path: Path) -> None:
@@ -990,9 +992,10 @@ def test_a_reply_naming_a_copy_the_publish_step_never_wrote_is_sent_back_with_th
     assert "The last build was refused: not published: 1 blocking" in sent.modified_content
 
 
-def test_the_announcement_carries_the_pdf_beside_the_deck(tmp_path: Path) -> None:
-    """A .pptx is a download and nothing more on the web surface; the PDF the build wrote
-    beside it is the same deck as pages, and the announcement hands both over."""
+def test_the_announcement_does_not_carry_the_pdf_beside_the_deck(tmp_path: Path) -> None:
+    """The render under out/ is the engine's own preview: the web surface renders a deck
+    it is shown by itself, and a second MEDIA line made the PDF a second deliverable the
+    user never asked for. The announcement hands over the deck alone."""
     hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
     wd = tmp_path / "session"
     wd.mkdir()
@@ -1010,7 +1013,7 @@ def test_the_announcement_carries_the_pdf_beside_the_deck(tmp_path: Path) -> Non
 
     decision, deck = asyncio.run(run())
     assert f"Deck: {deck}\nMEDIA: {deck}" in decision.modified_content
-    assert f"{deck.with_suffix('.pdf')}\nMEDIA: {deck.with_suffix('.pdf')}" in decision.modified_content
+    assert str(deck.with_suffix(".pdf")) not in decision.modified_content
 
 
 def _reply(text: str, tool_calls=()):
@@ -1285,10 +1288,8 @@ def test_a_turn_with_no_deck_in_progress_is_left_alone(tmp_path: Path) -> None:
 
 
 def test_a_preview_from_an_earlier_deck_is_not_announced_as_this_one(tmp_path: Path) -> None:
-    """`_pdf_beside` returns None when the build could not render a PDF, and the older
-    file it leaves in place is a picture of a deck that no longer exists. Announced as
-    "the same deck" it is worse than no preview, so the announcement takes only a
-    preview at least as new as the deck it stands for."""
+    """No PDF is announced at all now, an older one beside the deck least of all: it is
+    a picture of a deck that no longer exists, and the deliverable is the deck alone."""
     import os
     import time
 
@@ -1341,9 +1342,10 @@ def _delivered_record(own: Path, deck: Path, delivered: Path) -> None:
     )
 
 
-def test_the_delivered_path_is_announced_with_its_preview(tmp_path: Path) -> None:
+def test_the_delivered_path_is_announced_without_a_preview(tmp_path: Path) -> None:
     """The user asked for the file at a path of their own; the reply that names it is
-    confirmed rather than contradicted, and its PDF rides along."""
+    confirmed rather than contradicted, and nothing but the deck is announced -- a PDF
+    sitting beside it is a file the user has, not a deliverable this turn adds."""
     hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
     wd = tmp_path / "session"
     wd.mkdir()
@@ -1368,7 +1370,7 @@ def test_the_delivered_path_is_announced_with_its_preview(tmp_path: Path) -> Non
     decision, delivered, iteration = asyncio.run(run())
     assert not iteration.rollback, "a reply naming the delivered path is a finished turn"
     assert f"Published a 3-slide deck.\nDeck: {delivered}\nMEDIA: {delivered}" in decision.modified_content
-    assert f"MEDIA: {delivered.with_suffix('.pdf')}" in decision.modified_content
+    assert f"MEDIA: {delivered.with_suffix('.pdf')}" not in decision.modified_content
     assert "No deck was published" not in decision.modified_content
 
 
