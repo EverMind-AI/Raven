@@ -11,28 +11,43 @@ that declares a capability the run then quietly does not have.
 
 The delivery that works for every agent that reads a prompt is the prompt, and
 what goes into it is the same thing a built-in loop's menu holds: each skill's
-name, one-line description and the path of its SKILL.md, with the instruction
-to read the one that applies. Not the body -- a skill is discovered
-progressively, and ten named skills pasted whole would be ten documents the
-step has to read before it starts. That is what the playbook specification
-promised ("folded into this step's promptTemplate before dispatch").
+name, one-line description and where its SKILL.md is, with the instruction to
+read the one that applies. Not the body -- a skill is discovered progressively,
+and ten named skills pasted whole would be ten documents the step has to read
+before it starts. That is what the playbook specification promised ("folded
+into this step's promptTemplate before dispatch").
 
-The body is quoted only for an agent that cannot read this filesystem
-(``reads_local_files`` false), because for it the path is a dead end; then one
-skill is cut at :data:`SKILL_BODY_CAP` and the section at :data:`SECTION_CAP`,
-and a cut says so. A name the catalog does not have is a notice rather than a
-refusal, on the terms every capability gap has: a playbook written on a
-better-equipped machine still runs here with the parts that work, and the
-caller is told which part did not.
+Where the file is, is inside the step's own working directory: the skill's
+directory is copied to :data:`SKILLS_DIR` there and the menu names the relative
+path. An agent confined to its working directory -- a raven peer with
+``restrictToWorkspace``, a cli agent's sandbox -- can open that where it could
+not open the host's skills tree, and the host does not have to know which
+agents are confined. The body is quoted only for an agent declared unable to
+read local files at all (``reads_local_files`` false), because for it no path
+is any good; then one skill is cut at :data:`SKILL_BODY_CAP` and the section at
+:data:`SECTION_CAP`, and a cut says so. A name the catalog does not have is a
+notice rather than a refusal, on the terms every capability gap has: a playbook
+written on a better-equipped machine still runs here with the parts that work,
+and the caller is told which part did not.
 """
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec
 
-__all__ = ["SECTION_CAP", "SKILL_BODY_CAP", "fold_skills", "skills_section"]
+__all__ = ["SECTION_CAP", "SKILLS_DIR", "SKILL_BODY_CAP", "fold_skills", "skills_section"]
+
+#: Where a step's skills are placed inside its working directory, so the agent
+#: running the step can open them whatever its sandbox allows outside that
+#: directory. ``.raven/`` is the host's own corner of a project -- the shadow
+#: repository lives there too -- which a stint's commits leave out and its
+#: boundary pass does not grade, so a copy here dirties nothing and is nobody's
+#: stray write.
+SKILLS_DIR = ".raven/skills"
 
 #: Characters of one SKILL.md body that reach a prompt before it is cut.
 SKILL_BODY_CAP = 6000
@@ -94,7 +109,41 @@ def _match(names: Iterable[str], catalog: CatalogLike) -> tuple[list[SkillLike],
     return found, missing
 
 
-def _menu(found: Sequence[SkillLike]) -> str:
+def _place(found: Sequence[SkillLike], workdir: Path | None) -> tuple[list[tuple[SkillLike, str]], list[str]]:
+    """Each skill with the location the menu should name, and what could not be placed.
+
+    With a working directory, the skill's whole directory is copied under
+    :data:`SKILLS_DIR` there and the location is the relative path, so the file
+    and everything beside it are inside whatever the agent may read. Copied
+    over an earlier copy rather than around it, so a skill edited between two
+    rounds reaches the next one. Without a working directory, or when the copy
+    fails, the location is the catalog's own absolute path -- true, if not
+    always readable -- and the failure is said.
+    """
+    placed: list[tuple[SkillLike, str]] = []
+    problems: list[str] = []
+    for entry in found:
+        source = Path(entry.path)
+        if workdir is None or not source.is_file():
+            placed.append((entry, str(entry.path)))
+            continue
+        target = Path(workdir) / SKILLS_DIR / entry.name
+        try:
+            shutil.copytree(
+                source.parent,
+                target,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("__pycache__", ".git", "*.pyc"),
+            )
+        except OSError as exc:
+            problems.append(f"skill '{entry.name}' could not be copied into the working directory ({exc})")
+            placed.append((entry, str(entry.path)))
+            continue
+        placed.append((entry, f"{SKILLS_DIR}/{entry.name}/{source.name}"))
+    return placed, problems
+
+
+def _menu(placed: Sequence[tuple[SkillLike, str]]) -> str:
     """The same directory a built-in loop is shown: name, description, location.
 
     Progressive on purpose: the body is not here. A skill is read when the step
@@ -102,11 +151,11 @@ def _menu(found: Sequence[SkillLike]) -> str:
     what keeps ten named skills from being ten pasted documents.
     """
     lines = ["<skills>"]
-    for entry in found:
+    for entry, location in placed:
         lines.append("  <skill>")
         lines.append(f"    <name>{_escape(entry.name)}</name>")
         lines.append(f"    <description>{_escape(entry.description or entry.name)}</description>")
-        lines.append(f"    <location>{entry.path}</location>")
+        lines.append(f"    <location>{location}</location>")
         lines.append("  </skill>")
     lines.append("</skills>")
     return "\n".join(lines)
@@ -138,30 +187,43 @@ def _escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def skills_section(names: Iterable[str], catalog: CatalogLike, *, quote_bodies: bool = False) -> tuple[str, list[str]]:
-    """The prompt section for ``names``, and the names the catalog did not have.
+def skills_section(
+    names: Iterable[str],
+    catalog: CatalogLike,
+    *,
+    quote_bodies: bool = False,
+    workdir: str | Path | None = None,
+) -> tuple[str, list[str]]:
+    """The prompt section for ``names``, and what went wrong: names the catalog lacks, copies that failed.
 
-    The menu by default -- what a built-in loop sees -- and the bodies only for
-    ``quote_bodies``, which a caller passes for an agent that cannot read this
-    filesystem and so has no way to open the file the menu points at.
+    The menu by default -- what a built-in loop sees -- with each skill placed
+    under ``workdir`` when one is given (see :func:`_place`); the bodies only
+    for ``quote_bodies``, which a caller passes for an agent that cannot read
+    local files at all and so has no way to open any file the menu points at.
 
     Empty text for an empty list: ``skills: []`` means "no skills", and a
     heading over nothing would read as a list somebody forgot to fill.
     """
     found, missing = _match(names, catalog)
+    problems = [f"skill '{name}' is not on this machine's catalog" for name in missing]
     if not found:
-        return "", missing
+        return "", problems
     if quote_bodies:
-        return f"{HEADING}\n\n{LEAD_QUOTED}\n\n{_quoted(found)}", missing
-    return f"{HEADING}\n\n{LEAD}\n\n{_menu(found)}", missing
+        return f"{HEADING}\n\n{LEAD_QUOTED}\n\n{_quoted(found)}", problems
+    placed, failed = _place(found, Path(workdir) if workdir is not None else None)
+    return f"{HEADING}\n\n{LEAD}\n\n{_menu(placed)}", [*problems, *failed]
 
 
 def fold_skills(
     spec: SubAgentDagSpec,
     capabilities: Mapping[str, Any],
     catalog: CatalogLike,
+    workdir: str | Path | None = None,
 ) -> tuple[SubAgentDagSpec, list[str]]:
-    """The graph with every menu-less node's skills quoted into its prompt, and the notices.
+    """The graph with every menu-less node's skills folded into its prompt, and the notices.
+
+    ``workdir`` is the nodes' working directory; given, each skill is copied
+    under it so the menu can point inside it.
 
     A node whose agent takes an injected menu (``injectable_skills``) is left
     alone: its list reaches the loop as ``skills_allow`` and the menu says the
@@ -188,14 +250,14 @@ def fold_skills(
             nodes.append(node.model_copy(update={"prompt_template": f"{node.prompt_template.rstrip()}\n\n{NONE}\n"}))
             changed = True
             continue
-        section, missing = skills_section(
-            node.skills, catalog, quote_bodies=not getattr(caps, "reads_local_files", True)
+        section, problems = skills_section(
+            node.skills,
+            catalog,
+            quote_bodies=not getattr(caps, "reads_local_files", True),
+            workdir=workdir,
         )
-        for name in missing:
-            notices.append(
-                f"node '{node.id}': skill '{name}' is not on this machine's catalog, so it was not handed to "
-                f"agent '{node.subagent}'"
-            )
+        for problem in problems:
+            notices.append(f"node '{node.id}' (agent '{node.subagent}'): {problem}")
         if not section:
             nodes.append(node)
             continue

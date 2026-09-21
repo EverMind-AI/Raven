@@ -1311,15 +1311,17 @@ class SubAgentDagTool(Tool):
         """
         return self._node_schema()
 
-    def _with_skills(self, spec: SubAgentDagSpec, capabilities: dict[str, Any]) -> tuple[SubAgentDagSpec, list[str]]:
-        """The graph with its menu-less nodes' skills quoted in, or the graph as it was.
+    def _with_skills(
+        self, spec: SubAgentDagSpec, capabilities: dict[str, Any], run_workdir: str
+    ) -> tuple[SubAgentDagSpec, list[str]]:
+        """The graph with its menu-less nodes' skills folded in, or the graph as it was.
 
         A catalog that cannot be read is a notice, not a failed dispatch: the
         skills are the step's helpers, and a graph that ran without them beats
         one that never ran because a skills directory was unreadable.
         """
         try:
-            return fold_skills(spec, capabilities, self._skill_catalog())
+            return fold_skills(spec, capabilities, self._skill_catalog(), workdir=run_workdir)
         except Exception as exc:  # noqa: BLE001 - the fold is a courtesy to the step, not its gate
             logger.warning("DAG skills could not be handed to the nodes that named them: {}", exc)
             named = [node.id for node in spec.nodes if node.skills]
@@ -1521,8 +1523,6 @@ class SubAgentDagTool(Tool):
             validate_and_order(spec, self._reference_roots(), known)
             pre = await self._preflight(spec)
             spec, dispatch_backends, notices, capabilities = pre.spec, pre.backends, pre.notices, pre.capabilities
-            spec, handed = self._with_skills(spec, capabilities)
-            notices = [*notices, *handed]
         except DagValidationError as exc:
             return self._validation_error(exc)
 
@@ -1547,6 +1547,10 @@ class SubAgentDagTool(Tool):
             nodes_root=str(nodes_root(session_dir)),
             subagents_root=str(session_history_root(session_dir)),
         )
+        # After the working directory is settled, because the skills a node
+        # names are placed inside it and the menu points there.
+        spec, handed = self._with_skills(spec, capabilities, dirs.workdir)
+        notices = [*notices, *handed]
         # Ahead of the charge: a graph the user turns down must not spend budget
         # either. Behind validation, so a graph that could never run does not get
         # a confirmation prompt.
@@ -1791,7 +1795,7 @@ class SubAgentDagTool(Tool):
             )
         if self._charge is not None and (refusal := self._charge(origin.conversation)) is not None:
             return refusal
-        spec, _handed = self._with_skills(pre.spec, pre.capabilities)
+        spec, _handed = self._with_skills(pre.spec, pre.capabilities, str(workdir.current() or self._workspace))
         spec, auto = self._mint_missing_instances(spec, pre.capabilities)
         return ReplanPlan(
             run_id=make_run_id(),

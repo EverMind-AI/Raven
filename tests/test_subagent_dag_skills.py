@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from raven.agent.subagent.dag_graph import parse_dag_spec
-from raven.agent.subagent.dag_skills import SECTION_CAP, SKILL_BODY_CAP, fold_skills, skills_section
+from raven.agent.subagent.dag_skills import SECTION_CAP, SKILL_BODY_CAP, SKILLS_DIR, fold_skills, skills_section
 from raven.agent.subagent.prompt_capabilities import AgentCapabilities
 
 
@@ -53,6 +53,7 @@ def test_a_menu_less_agent_gets_the_same_menu_a_built_in_one_would() -> None:
     section = prompt.split("## Skills for this step")[1]
     assert "<name>game-testing</name>" in section
     assert "<description>how to test a game build</description>" in section
+    # No working directory to place it in, so the catalog's own path is named.
     assert "<location>/w/skills/game-testing/SKILL.md</location>" in section
     assert "Read the SKILL.md" in section
     assert "Run the demo." not in section, "the body is read on demand, not pasted"
@@ -147,3 +148,62 @@ def test_the_section_as_a_whole_has_a_budget() -> None:
     assert len(section) < SECTION_CAP + SKILL_BODY_CAP
     assert "(not quoted: this step's skills already fill their budget)" in section
     assert all(f"### s{i}" in section for i in range(5)), "every named skill is at least pointed at"
+
+
+def _real_catalog(tmp_path: Path) -> _Catalog:
+    home = tmp_path / "home" / "skills" / "game-testing"
+    home.mkdir(parents=True)
+    (home / "SKILL.md").write_text("---\nname: game-testing\n---\nRun the demo.\n", encoding="utf-8")
+    (home / "references").mkdir()
+    (home / "references" / "gates.md").write_text("the gates\n", encoding="utf-8")
+    (home / "__pycache__").mkdir()
+    (home / "__pycache__" / "x.pyc").write_bytes(b"\x00")
+    return _Catalog(_Skill("game-testing", "how to test a game build", home / "SKILL.md", "Run the demo.\n"))
+
+
+def test_the_skill_is_placed_inside_the_step_s_working_directory_and_the_menu_points_there(tmp_path: Path) -> None:
+    """An agent confined to its working directory -- a raven peer with
+    `restrictToWorkspace`, a cli agent's sandbox -- cannot open the host's
+    skills tree, and the host cannot tell which agents are confined. Inside
+    `.raven/` the copy dirties nothing: a stint's commits leave that directory
+    out and its boundary pass does not grade it."""
+    work = tmp_path / "project"
+    work.mkdir()
+    spec = _spec({"id": "a", "subagent": "coder", "prompt_template": "go", "skills": ["game-testing"]})
+
+    folded, notices = fold_skills(spec, {"coder": AgentCapabilities(injectable_skills=False)}, _real_catalog(tmp_path), workdir=work)
+
+    copy = work / SKILLS_DIR / "game-testing"
+    assert (copy / "SKILL.md").read_text(encoding="utf-8").endswith("Run the demo.\n")
+    assert (copy / "references" / "gates.md").is_file(), "what the skill refers to travels with it"
+    assert not (copy / "__pycache__").exists()
+    assert f"<location>{SKILLS_DIR}/game-testing/SKILL.md</location>" in folded.nodes[0].prompt_template
+    assert notices == []
+
+
+def test_a_second_round_refreshes_the_copy_rather_than_tripping_over_it(tmp_path: Path) -> None:
+    work = tmp_path / "project"
+    work.mkdir()
+    catalog = _real_catalog(tmp_path)
+    spec = _spec({"id": "a", "subagent": "coder", "prompt_template": "go", "skills": ["game-testing"]})
+    caps = {"coder": AgentCapabilities(injectable_skills=False)}
+
+    fold_skills(spec, caps, catalog, workdir=work)
+    Path(catalog.list_all()[0].path).write_text("---\nname: game-testing\n---\nRun the demo twice.\n", encoding="utf-8")
+    _, notices = fold_skills(spec, caps, catalog, workdir=work)
+
+    assert "twice" in (work / SKILLS_DIR / "game-testing" / "SKILL.md").read_text(encoding="utf-8")
+    assert notices == []
+
+
+def test_a_copy_that_cannot_be_made_falls_back_to_the_catalog_path_and_says_so(tmp_path: Path) -> None:
+    not_a_dir = tmp_path / "file"
+    not_a_dir.write_text("x", encoding="utf-8")
+    spec = _spec({"id": "a", "subagent": "coder", "prompt_template": "go", "skills": ["game-testing"]})
+
+    folded, notices = fold_skills(
+        spec, {"coder": AgentCapabilities(injectable_skills=False)}, _real_catalog(tmp_path), workdir=not_a_dir
+    )
+
+    assert f"<location>{tmp_path / 'home' / 'skills' / 'game-testing' / 'SKILL.md'}</location>" in folded.nodes[0].prompt_template
+    assert len(notices) == 1 and "could not be copied into the working directory" in notices[0]
