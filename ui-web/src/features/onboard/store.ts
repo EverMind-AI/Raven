@@ -20,8 +20,6 @@ export const STEPS: readonly StepId[] = ['model', 'search', 'agents', 'sync']
 /** How long the closing fade runs before the island comes down (styles.css). */
 export const CLOSE_MS = 500
 
-export const SYNC_TIER = 'full'
-
 export interface OnboardState {
   open: boolean
   /* Bumped on every open, so a reopened wizard starts from a fresh tree. */
@@ -190,7 +188,8 @@ export async function finish(): Promise<void> {
     const platforms = Object.entries(get().syncPick).filter(([, on]) => on).map(([id]) => id)
     set({ busy: true, error: '' })
     try {
-      const r = await source().startImport(platforms, SYNC_TIER)
+      // Memory files only from the web: conversations take hours and stay a CLI option.
+      const r = await source().startImport(platforms, 'memory_files')
       if (!r.started) { set({ error: r.detail || 'import did not start' }); return }
     } catch (e) {
       set({ error: failure(e) })

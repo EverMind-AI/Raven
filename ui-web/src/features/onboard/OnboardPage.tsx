@@ -43,7 +43,9 @@ function Body({ body }: { body: StepBody }): JSX.Element {
 }
 
 /* One row per agent the machine has: what the importer found for it and a
-   switch, or the chip that says the importer cannot read that agent yet. */
+   switch, or the chip that says the importer cannot read that agent yet. The
+   web path imports memory files only: conversations are the difference between
+   minutes and hours (measured), and stay a CLI option. */
 function SyncBody(): JSX.Element {
   const s = store.get()
   return (
@@ -57,7 +59,10 @@ function SyncBody(): JSX.Element {
             <div className="ob-am">
               <div className="ob-at">{agent.name}</div>
               {p?.scannable ? (
-                <div className="ob-ad">{t('gui.onb.sync_counts', { files: p.memory_files, convs: p.conversations })}</div>
+                <div className="ob-ad">
+                  {t('gui.onb.sync_counts', { files: p.memory_files })}
+                  {p.skills ? ` · ${t('gui.onb.sync_skills', { n: p.skills })}` : ''}
+                </div>
               ) : null}
             </div>
             {p?.scannable ? (
