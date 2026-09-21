@@ -1,24 +1,19 @@
-/* The one SVG renderer for a DAG, shared by the composer sheet and the
- * transcript tool-call card. The surfaces choose their scale and lifecycle;
- * node geometry, label fitting, status marks, edges and interaction stay one
- * implementation.
+/* The board's renderer: layout, edges, selection, and click and keyboard on
+ * each node. The caller draws every node's own box, handed to it through
+ * `renderNode` and laid out inside a `foreignObject` sized to `dims`.
  */
 
-import { t } from '../../i18n/t'
-import { MARKS, depths, layout, took } from './graph'
-import { trimShared } from './labels'
+import { layout } from './graph'
 
 import type { Dims, Flow } from './graph'
-import type { DagNode, NodeStatus } from './types'
+import type { DagNode } from './types'
 import type { JSX } from 'react'
 
-export type DagSurface = 'card' | 'sheet'
-
-/* A caller's own box for a node, in place of the default one below. Given the
-   node and the same clock the default box's own duration reads, and laid out
-   inside a `foreignObject` sized to the node's box -- edges, layout,
-   selection and click/keyboard handling all stay DagGraph's; only what a node
-   looks like changes. */
+/* A caller's own box for a node. Given the node and the clock a running
+   node's own duration is measured against, and laid out inside a
+   `foreignObject` sized to the node's box -- edges, layout, selection and
+   click/keyboard handling all stay DagGraph's; only what a node looks like
+   changes. */
 export type CardRenderer = (node: DagNode, now: number) => JSX.Element
 
 interface DagGraphProps {
@@ -27,52 +22,10 @@ interface DagGraphProps {
   now: number
   onPick: (node: DagNode) => void
   selectedId?: string | null
-  stopPropagation?: boolean
-  surface: DagSurface
-  /* Left to right unless the surface says otherwise. The task board reads top
+  /* Left to right unless the flow says otherwise. The task board reads top
      to bottom; see `Flow` in ./graph. */
   flow?: Flow
-  /* Unset on every caller but the tasks board: default is today's SVG box
-     (rect, mark, two-line label, tooltip), byte-for-byte. */
-  renderNode?: CardRenderer
-}
-
-const CARD_LAYERS = 5
-
-/* What a node's box is titled by. The summary is what the model was required to
-   write about this step -- "research the current hot topics and pick two" -- and
-   the id is a key: a playbook namespaces it, so a graph's ids share their first
-   twenty characters and differ in the tail the box has least room for. The id is
-   still reachable, one row down in the node panel, where the fields a dependency
-   or a run dir is keyed by belong. */
-const nodeLabel = (n: DagNode): string => n.node_summary || n.id
-
-export function visibleLayers(nodes: DagNode[], limit = CARD_LAYERS): {
-  hiddenLayers: number
-  nodes: DagNode[]
-} {
-  const at = depths(nodes)
-  const count = Math.max(...nodes.map((n) => at.get(n.id) || 0), -1) + 1
-  if (count <= limit) return { hiddenLayers: 0, nodes }
-  return {
-    hiddenLayers: count - limit,
-    nodes: nodes.filter((n) => (at.get(n.id) || 0) < limit),
-  }
-}
-
-function Working({ x, y }: { x: number; y: number }): JSX.Element {
-  return (
-    <g className="workv" aria-hidden="true">
-      {[0, 4, 8].map((dx) => <circle key={dx} cx={x - 4 + dx} cy={y} r={1.5} />)}
-    </g>
-  )
-}
-
-function Mark({ status, x, y }: { status: NodeStatus | string; x: number; y: number }): JSX.Element {
-  if (status === 'running') return <Working x={x} y={y} />
-  const mark = MARKS[status]
-  if (mark) return <path d={mark.d} transform={`translate(${x} ${y})`} className={'mk ' + mark.cls} />
-  return <circle cx={x} cy={y} r={3.6} className="mk wait" />
+  renderNode: CardRenderer
 }
 
 /* One edge, drawn along whichever way the graph runs: out of the downstream
@@ -133,92 +86,39 @@ export function DagGraph({
   now,
   onPick,
   selectedId = null,
-  stopPropagation = false,
-  surface,
   flow = 'across',
   renderNode,
 }: DagGraphProps): JSX.Element {
-  const visible = surface === 'card' ? visibleLayers(nodes) : { hiddenLayers: 0, nodes }
-  const shown = visible.nodes
-  const { at, width, height } = layout(shown, dims, flow)
-  const card = surface === 'card'
-  const markX = card ? 16 : 17
-  const labelX = card ? 29 : 31
-  const pad = card ? 9 : 11
-  /* The room the text has, which is the box minus the mark beside it. It is
-     given to the label as a width and the box cuts what does not fit; the
-     number below is read for one thing only, whether these labels are long
-     enough to be worth stripping a shared namespace from. */
-  const room = Math.max(0, dims.W - labelX - pad)
-  const labels = trimShared(shown.map(nodeLabel), room, card ? 11 : 12)
-
-  const held = new Map<string, number>()
-  nodes.forEach((n) => { if (n.instance) held.set(n.instance, (held.get(n.instance) || 0) + 1) })
+  const { at, width, height } = layout(nodes, dims, flow)
 
   return (
-    <div className="canvas daggraph" data-flow={flow} data-surface={surface} data-hidden-layers={visible.hiddenLayers || undefined}>
-      {visible.hiddenLayers
-        ? <div className="dagcap">{t('gui.dag.more_layers', { n: visible.hiddenLayers })}</div>
-        : null}
+    <div className="daggraph">
       <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-        <Edges dims={dims} nodes={shown} at={at} down={flow === 'down'} />
-        {shown.map((n, i) => {
+        <Edges dims={dims} nodes={nodes} at={at} down={flow === 'down'} />
+        {nodes.map((n) => {
           const p = at.get(n.id)
           if (!p) return null
-          const handle = n.instance && (held.get(n.instance) || 0) > 1 ? ' @' + n.instance : ''
           const pick = (): void => onPick(n)
-          /* The node's place is written on each shape rather than as a
+          /* The node's place is written on the box rather than as a
              `transform` on the group. WebKit paints a `foreignObject` without
              its ancestor group's transform -- the box is hit-tested where the
              layout put it but drawn at the SVG's origin -- so on Safari every
              card in the task board landed on the first node's spot and the
-             arrows pointed at empty canvas. Absolute x/y on the shapes
-             themselves is honoured by every engine. */
+             arrows pointed at empty canvas. Absolute x/y on the box itself is
+             honoured by every engine. */
           return (
             <g key={n.id} role="button" tabIndex={0} className="nd"
               data-st={n.status || 'pending'} data-node={n.id}
               {...(selectedId === n.id ? { 'data-sel': '1' } : {})}
-              onClick={(e) => { if (stopPropagation) e.stopPropagation(); pick() }}
+              onClick={pick}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter' && e.key !== ' ') return
                 e.preventDefault()
-                if (stopPropagation) e.stopPropagation()
                 pick()
               }}>
-              {renderNode
-                ? (
-                  <foreignObject x={p.x} y={p.y} width={dims.W} height={dims.H}>
-                    {renderNode(n, now)}
-                  </foreignObject>
-                )
-                : (
-                  <>
-                    <rect x={p.x} y={p.y} width={dims.W} height={dims.H} rx={9} />
-                    <Mark status={n.status} x={p.x + markX} y={p.y + dims.H / 2} />
-                    {/* Laid out as HTML inside the box rather than as SVG text
-                        beside it: a line that is longer than its node then ends
-                        where the node ends, at whatever width the box is and
-                        whenever the font finally arrives, instead of at a
-                        length something measured once and wrote down. */}
-                    <foreignObject x={p.x + labelX} y={p.y} width={room} height={dims.H}>
-                      <div className="lbl">
-                        <div className="ln">
-                          <span className={n.node_summary ? 'id prose' : 'id'}>{labels[i]}</span>
-                          {card ? null : <span className="tm">{took(n, now)}</span>}
-                        </div>
-                        <div className="ln">
-                          <span className="ag">{n.subagent + handle}</span>
-                          {card ? <span className="tm">{n.status === 'running' ? '' : took(n, now)}</span> : null}
-                        </div>
-                      </div>
-                    </foreignObject>
-                    {/* Both, because the box shows one of them truncated: the
-                        summary is what the step is for, the id is what
-                        everything else keys on. */}
-                    <title>{[n.node_summary, n.id, n.subagent + (n.instance ? ' @' + n.instance : '')]
-                      .filter(Boolean).join(' \u00b7 ')}</title>
-                  </>
-                )}
+              <foreignObject x={p.x} y={p.y} width={dims.W} height={dims.H}>
+                {renderNode(n, now)}
+              </foreignObject>
             </g>
           )
         })}

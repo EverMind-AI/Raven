@@ -502,7 +502,7 @@ change brings its tests is a review item, like the nine rules in this file
 whose verifier is a reader rather than a run.
 
 `npm test` is `vitest run` over both trees, so it is every unit suite and every
-gate at once. `README.md` lists the 37 gates and what each pins. `npm run lint`
+gate at once. `README.md` lists the gates and what each pins. `npm run lint`
 is the eslint pass (section 9).
 
 ## 9. Tooling
