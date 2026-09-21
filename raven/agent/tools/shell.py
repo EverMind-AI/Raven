@@ -550,9 +550,9 @@ class ExecTool(Tool):
         started in: this command's ``$PWD`` is the workspace, whatever this
         process inherited.
         """
-        from raven.sandbox.direct_executor import _baseline_env
+        from raven.sandbox.direct_executor import baseline_env
 
-        env = _baseline_env()
+        env = baseline_env()
         env["PWD"] = str(cwd)
         return env
 
