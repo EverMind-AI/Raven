@@ -29,7 +29,7 @@ from raven.core.plugin_stack import (
     maybe_build_memory_backend,
     memory_enabled,
 )
-from raven.importer.orchestrator import run_import
+from raven.importer.orchestrator import ProgressEvent, run_import
 from raven.importer.phases import run_phases, skill_source_for
 from raven.importer.scanners import build_scanners, scan_all
 from raven.importer.skills import SkillOrigin
@@ -221,10 +221,25 @@ async def import_run(params: dict) -> dict:
             global _CURRENT
             _CURRENT = {"platform": platform, "source_key": source_key, "sent": sent, "total": total}
 
+        def _on_progress(_event: ProgressEvent) -> None:
+            # The source this fires for is settled, and the state file counts it
+            # from here on. Leaving its last batch report standing would have a
+            # reader add the same source twice -- the row would reach 100% with
+            # sources still to send, then fall back when the next one starts.
+            global _CURRENT
+            _CURRENT = None
+
         async def _run(backend: "MemoryBackend", started: bool) -> None:
             global _TASK, _PHASE, _CURRENT
             try:
-                summary = await run_import(items, backend, state, on_batch=_on_batch, cancel_path=state.cancel_path)
+                summary = await run_import(
+                    items,
+                    backend,
+                    state,
+                    on_progress=_on_progress,
+                    on_batch=_on_batch,
+                    cancel_path=state.cancel_path,
+                )
                 _CURRENT = None
                 # A stop has to stop the run, not hand it its two longest steps.
                 if not summary.cancelled:

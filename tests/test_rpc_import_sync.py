@@ -26,6 +26,8 @@ def _reset_task_slot(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every test starts, and ends, with no import in flight in this module."""
     monkeypatch.setattr(import_sync, "_TASK", None)
     monkeypatch.setattr(import_sync, "_STARTING", False)
+    monkeypatch.setattr(import_sync, "_PHASE", None)
+    monkeypatch.setattr(import_sync, "_CURRENT", None)
 
 
 @pytest.fixture(autouse=True)
@@ -725,6 +727,53 @@ async def test_status_carries_the_current_source_while_the_pass_is_on(
 
     monkeypatch.setattr(import_sync, "_TASK", None)
     assert (await import_sync.import_status({}))["current"] is None
+
+
+async def test_the_current_source_is_what_a_real_pass_is_feeding_and_is_dropped_once_it_settles(
+    cfg: Path, state: ImportState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read from the run itself, not from a set global: the pass must report the
+    source it is on while it feeds it, and stop naming it the moment the state
+    file counts it. A source left named after it settles is counted twice by a
+    reader adding its share to the settled ones -- the row reaches 100% with
+    sources still to send, then falls back."""
+    fed: list[tuple[str, int, int] | None] = []
+    between: list[object] = []
+
+    class _Scanner:
+        platform = Platform.CLAUDE_CODE
+
+        async def scan(self) -> list[ScanResult]:
+            return []
+
+        async def read(self, result: ScanResult) -> ImportSession:
+            # The window run_import leaves open between one source settling and
+            # the next one's first batch: a real read awaits a thread here.
+            between.append((await import_sync.import_status({}))["current"])
+            return ImportSession(
+                session_id=result.source_key,
+                messages=tuple(ImportMessage(role="user", content=f"m{i}", timestamp=i) for i in range(12)),
+            )
+
+    class _Backend(_FakeBackend):
+        async def store(self, session_id: str, messages: list[dict], *, metadata=None) -> bool:
+            cur = (await import_sync.import_status({}))["current"]
+            fed.append(None if cur is None else (cur["source_key"], cur["sent"], cur["total"]))
+            return await super().store(session_id, messages, metadata=metadata)
+
+    results = [_scan_result("k1", Platform.CLAUDE_CODE), _scan_result("k2", Platform.CLAUDE_CODE)]
+    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=results))
+    monkeypatch.setattr(import_sync, "build_scanners", lambda: [_Scanner()])
+    monkeypatch.setattr(import_sync, "maybe_build_memory_backend", lambda *a, **k: _Backend())
+
+    out = await import_sync.import_run({"platforms": ["claude_code"], "tier": "memory_files"})
+    assert out["started"] is True
+    await import_sync._TASK
+
+    # Twelve messages is two batches: the first store carries none-landed-yet,
+    # the second the ten the first one landed, and the key moves with the source.
+    assert fed == [("k1", 0, 12), ("k1", 10, 12), ("k2", 0, 12), ("k2", 10, 12)]
+    assert between == [None, None]
 
 
 async def test_status_carries_how_the_phases_ended(state: ImportState) -> None:

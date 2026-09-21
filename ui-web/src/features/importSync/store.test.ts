@@ -67,6 +67,23 @@ describe('what the row shows', () => {
     expect(store.view(state(status({ running: true, total: 18, submitted: 6, failed: 1 }))).pct).toBe(39)
   })
 
+  it('counts no share for a source with nothing to count, or one that reports more than it holds', () => {
+    const on = { running: true, total: 18, submitted: 6, failed: 1 }
+    const src = { platform: 'claude_code', source_key: 'a' }
+    expect(store.view(state(status({ ...on, current: { ...src, sent: 0, total: 0 } }))).pct).toBe(39)
+    expect(store.view(state(status({ ...on, current: { ...src, sent: 300, total: 287 } }))).pct).toBe(44)
+  })
+
+  it('counts no share for the source a run that is no longer on was left pointing at', () => {
+    /* Nothing is being fed, so the settled counts are the whole truth: a share
+       added on top of them would draw the same source twice. */
+    const v = store.view(state(status({
+      running: false, total: 18, submitted: 11, failed: 1, tier: 'memory_files', platforms: ['claude_code'],
+      current: { platform: 'claude_code', source_key: 'a', sent: 200, total: 287 },
+    })))
+    expect(v).toMatchObject({ kind: 'paused', pct: 67 })
+  })
+
   it("a phase's own share while one is on", () => {
     const v = store.view(state(status({ running: true, total: 18, submitted: 18, phase: { kind: 'profile', current: 1, total: 3 } })))
     expect(v).toMatchObject({ kind: 'wrap', pct: 33, phase: { kind: 'profile', current: 1, total: 3 } })

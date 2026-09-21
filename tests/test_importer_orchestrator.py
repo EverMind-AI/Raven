@@ -291,6 +291,67 @@ class TestBatchProgress:
             ("claude_code", "a", 25, 25),
         ]
 
+    @pytest.mark.asyncio
+    async def test_the_reports_name_the_source_the_pass_is_on(self, tmp_path: Path) -> None:
+        """A reader draws one source's share at a time, so a report has to name
+        the source it belongs to -- not the first of the run."""
+        state = ImportState(path=tmp_path / "state.json")
+        scanner = FakeScanner(
+            {"a": _session(n_msgs=12, session_id="import-a"), "b": _session(n_msgs=3, session_id="import-b")}
+        )
+        seen: list[tuple[str, int, int]] = []
+
+        await run_import(
+            [(scanner, _scan_result("a")), (scanner, _scan_result("b"))],
+            FakeBackend(),
+            state,
+            on_batch=lambda _platform, key, sent, total: seen.append((key, sent, total)),
+        )
+
+        assert seen == [("a", 0, 12), ("a", 10, 12), ("a", 12, 12), ("b", 0, 3), ("b", 3, 3)]
+
+    @pytest.mark.asyncio
+    async def test_a_retried_batch_is_counted_once_and_only_after_it_lands(self, tmp_path: Path) -> None:
+        """The count is what the memory service holds, not what was attempted:
+        a batch refused twice adds its ten once, after the attempt that lands."""
+        state = ImportState(path=tmp_path / "state.json")
+        events: list[str] = []
+
+        class _Recording(FakeBackend):
+            async def store(self, session_id: str, messages: list[dict[str, Any]], *, metadata=None) -> bool:
+                events.append("attempt")
+                return await super().store(session_id, messages, metadata=metadata)
+
+        scanner = FakeScanner({"a": _session(n_msgs=12, session_id="import-a")})
+
+        await run_import(
+            [(scanner, _scan_result("a"))],
+            _Recording(drop_first={"import-a": 2}),
+            state,
+            on_batch=lambda _platform, _key, sent, _total: events.append(f"sent={sent}"),
+        )
+
+        assert events == ["sent=0", "attempt", "attempt", "attempt", "sent=10", "attempt", "sent=12"]
+
+    @pytest.mark.asyncio
+    async def test_a_source_given_up_on_never_reports_its_last_batch_as_landed(self, tmp_path: Path) -> None:
+        """The source fails with its second batch never accepted, so the count
+        stops at the ten that did land."""
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend(drop_first={"import-a": 99})
+        scanner = FakeScanner({"a": _session(n_msgs=12, session_id="import-a")})
+        seen: list[int] = []
+
+        summary = await run_import(
+            [(scanner, _scan_result("a"))],
+            backend,
+            state,
+            on_batch=lambda _platform, _key, sent, _total: seen.append(sent),
+        )
+
+        assert summary.failed == 1
+        assert seen == [0]
+
 
 class TestStoreRetry:
     """A refused batch is sent again, with a wait, before its source is given up on."""
