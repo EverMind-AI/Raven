@@ -13,7 +13,15 @@ import json
 import pytest
 
 from raven.providers import registry_data
-from raven.providers.registry_data import CAPABILITIES, MODALITIES, curated_for, provider_metadata, row_for
+from raven.providers.registry_data import (
+    CAPABILITIES,
+    MODALITIES,
+    curated_for,
+    inferred_tags,
+    kind_of,
+    provider_metadata,
+    row_for,
+)
 
 
 def test_a_reseller_reads_the_vendors_row_without_carrying_a_copy() -> None:
@@ -430,3 +438,24 @@ def test_a_model_tagged_from_its_endpoint_reaches_the_same_bucket_as_a_catalogue
     assert kind_of(["video-generation"], []) == "video"
     # Reading pictures is still something a text model does.
     assert kind_of(["image-recognition"], ["text"]) == "text"
+
+
+# The same nine rows, with the same kinds, sit in ui-web/src/features/model/types.test.ts:
+# the page copies inferred_tags' two patterns for a typed id's chip, and this
+# table is what keeps the copy honest.
+NAME_GUESSES = [
+    ("openai/text-embedding-3-small", "embedding"),
+    ("BAAI/bge-reranker-v2-m3", "reranker"),
+    ("my-team/bge-reranker-custom", "reranker"),
+    ("jina-embeddings-v3", "embedding"),
+    ("bge-m3", "embedding"),
+    ("gte-large", "embedding"),
+    ("rerank-co/gpt-4", "text"),
+    ("google/gemini-2.5-flash-image", "text"),
+    ("deepseek-v4-pro", "text"),
+]
+
+
+@pytest.mark.parametrize(("model_id", "kind"), NAME_GUESSES)
+def test_kind_of_a_name_alone(model_id: str, kind: str) -> None:
+    assert kind_of(inferred_tags(model_id), ()) == kind

@@ -154,6 +154,13 @@ exports[`the model picker > keeps its rendered shape 1`] = `
           span
         span.ct
         span.provider-status.on
+      div.row.model-provider-row.dim
+        button.model-provider-action
+        span.nm
+          span.provider-icon.fallback
+          span
+        span.ct
+        span.provider-status.on
     div.model-pane
       div.model-toolbar
         div.model-toolbar-copy

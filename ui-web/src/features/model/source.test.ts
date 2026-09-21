@@ -114,7 +114,6 @@ async function live({ session = null, answers = null }: Options = {}) {
     loadPermMode: settingsModule.loadPermMode,
     loadSettings: settingsModule.loadSettings,
     settingsSnapshot: settingsModule.settingsSnapshot,
-    HIDDEN_PROVIDERS: model.HIDDEN_PROVIDERS,
     get providersLive() { return model.providers() },
     get defaultModelLive() { return model.defaultModel() },
     get defaultProviderLive() { return model.defaultProvider() },
@@ -321,26 +320,27 @@ describe('providers the page does not offer', () => {
     return h.settings.providersLive
   }
 
-  it('keeps the generic endpoint rows out of the rail and every other row in', async () => {
+  it('keeps every row the wire reports, the two generic ones included', async () => {
+    /* `hosted_vllm` and `custom` used to be dropped here, on the reasoning that
+       a row whose name says nothing about what it reaches is noise beside fifty
+       that do. The settings catalogue has a search box and six filters, and
+       `custom` is the page's only entry for a vendor Raven carries no spec for,
+       so the whole list travels and the surfaces choose. */
     const rows = await listed([row('anthropic'), row('custom'), row('hosted_vllm'), row('ollama_chat')])
 
-    expect(rows.map((p) => p.id)).toEqual(['anthropic', 'ollama_chat'])
+    expect(rows.map((p) => p.id)).toEqual(['anthropic', 'custom', 'hosted_vllm', 'ollama_chat'])
   })
 
-  it('hides exactly the two it declares, so the list cannot drift from the page', async () => {
-    /* Read off the part rather than restated: a copy here would agree with
-       itself while the page shipped something else. */
-    const h = await live()
-    expect([...h.settings.HIDDEN_PROVIDERS]).toEqual(['hosted_vllm', 'custom'])
-  })
+  it('carries the two facts only the registry has: gateway and which row is current', async () => {
+    const rows = await listed([
+      { ...row('openrouter'), gateway: true },
+      { ...row('anthropic'), is_current: true },
+    ])
 
-  it('leaves a hidden provider configured and routable, only unlisted', async () => {
-    /* The row goes; the section does not. `model.options` still reports it --
-       which is what keeps an existing `custom` deployment serving -- and the
-       page simply does not draw it. */
-    const rows = await listed([{ ...row('custom'), authenticated: true, models: ['custom/local-7b'] }])
-
-    expect(rows).toEqual([])
+    expect(rows.map((p) => [p.id, !!p.gateway, !!p.current])).toEqual([
+      ['openrouter', true, false],
+      ['anthropic', false, true],
+    ])
   })
 })
 

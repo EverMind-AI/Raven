@@ -1,7 +1,25 @@
 /* The model picker: providers on the left, that provider's models on the
  * right, a typed id at the bottom. Props only -- no store, no transport -- so
- * the settings dialog opens it for a role and the composer can open it for a
- * conversation with the same component.
+ * a caller that owns its own list opens it with that list.
+ *
+ * DEBT, and the plan to pay it. `features/model/ModelPicker` is the same
+ * control, reimplemented: search, the two columns, the count, the tick, the
+ * typed row and the empty state all correspond, class for class. The composer
+ * and the settings roles card moved there; this copy survives for its last
+ * caller, the agents page, because that picker's list is not the model store's
+ * -- an ACP agent advertises its own choices, bucketed the way it bucketed
+ * them, and none of that is in `model.options`.
+ *
+ * The block is one optional field, not a difference in kind: the newer picker
+ * reads `source().providers()` where this one takes them as a prop, so it needs
+ * an `Offer` that carries a caller-supplied list (plus this file's
+ * `allowTyped`). Its `column()` already copes -- `offered` falls back to
+ * `models` when nothing is `configured`, and an untagged model reads as text.
+ * What makes this more than an afternoon is the verification: moving the agents
+ * page's picker means re-testing the agents page, and its acceptance is not
+ * part of the run that produced this file's other half.
+ *
+ * Until then both exist, and `page.css` keeps both sets of rules.
  *
  * A floating panel anchored to the control that opened it, hanging below it
  * where there is room and above it where there is not. The caller passes that

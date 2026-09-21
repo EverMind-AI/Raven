@@ -17,8 +17,9 @@
  *
  * `place` is the two composer popovers' whole geometry, which was the same eight
  * lines in state/perm.ts and state/tier.ts down to the constants. The model
- * picker keeps its own, because it hangs BELOW its anchor when there is no room
- * above and clamps to a different margin.
+ * pickers keep their own: `.mpick` has two placements (above the composer card
+ * from the chip, below the row from a settings slot), and `anchorRow` below
+ * serves `components/ModelPicker`, whose last caller is the agents page.
  */
 
 /* The card, not `.dock` around it: the dock is a full-width positioning strip

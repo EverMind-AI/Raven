@@ -141,6 +141,30 @@ async def test_options_current_provider_derived_from_model(fake_home: Path) -> N
     assert _entry(result, "anthropic")["is_current"] is True
 
 
+async def test_options_rows_carry_the_gateway_flag(fake_home: Path) -> None:
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    result = await model_options({})
+    assert _entry(result, "openrouter")["gateway"] is True
+    assert _entry(result, "custom")["gateway"] is True
+    assert _entry(result, "anthropic")["gateway"] is False
+
+
+async def test_model_labels_carry_a_kind(fake_home: Path) -> None:
+    # openrouter with a key and one configured model whose name is the only
+    # thing that says what it is
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": "openrouter/anthropic/claude-sonnet-4-5"}},
+            "providers": {"openrouter": {"apiKey": "sk-or-xxx", "models": ["openai/text-embedding-3-small"]}},
+        },
+    )
+    result = await model_options({})
+    labels = _entry(result, "openrouter")["model_labels"]
+    assert labels["openai/text-embedding-3-small"]["kind"] == "embedding"
+    assert all("kind" in v for v in labels.values())
+
+
 async def test_options_oauth_provider_warning_and_auth_type(fake_home: Path) -> None:
     _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
     result = await model_options({})
@@ -1351,7 +1375,7 @@ async def test_a_user_written_overlay_reaches_the_picker(fake_home: Path) -> Non
     )
     entry = _entry(await model_options({}), "hosted_vllm")
     label = (entry.get("model_labels") or {}).get("hosted-vllm/my-finetune-v3")
-    assert label == {"label": "Our finetune", "description": "tuned on tickets"}
+    assert label == {"label": "Our finetune", "description": "tuned on tickets", "kind": "text"}
 
 
 async def test_the_picker_gets_the_tags_it_draws_as_icons(fake_home: Path) -> None:

@@ -9,7 +9,7 @@
  */
 
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
-import type { ResultOf } from '../generated'
+import type { ModelLabel, ResultOf } from '../generated'
 import type { Overrides } from '../overrideTransport'
 
 type Provider = ResultOf<'model.options'>['providers'][number]
@@ -28,6 +28,12 @@ interface Entry {
   needs_api_base?: boolean
   /** Where the vendor hands out keys; the registry carries it for a few. */
   key_url?: string
+  /** Resells other vendors' models; the catalogue page filters on it. */
+  gateway?: boolean
+  /** The kind per model id, where it is not text. The live reply carries one
+      for every described model; offline, only the rows a page filters on need
+      to differ, and text is what a missing label means. */
+  kinds?: Record<string, ModelLabel['kind']>
 }
 
 const PROVIDERS: Entry[] = [
@@ -48,6 +54,16 @@ const PROVIDERS: Entry[] = [
   { slug: 'lm_studio', name: 'LM Studio', homepage: 'https://lmstudio.ai/', models: [],
     authenticated: false, auth_type: 'local', needs_api_base: true,
     default_api_base: 'http://localhost:1234/v1' },
+  /* A gateway with one model of each kind a role slot filters on, so the
+     offline page can open every slot's picker and show the filter working. */
+  { slug: 'openrouter', name: 'OpenRouter', homepage: 'https://openrouter.ai/',
+    key_url: 'https://openrouter.ai/keys', gateway: true, authenticated: true, auth_type: 'key',
+    models: ['anthropic/claude-sonnet-4-5', 'openai/text-embedding-3-small', 'BAAI/bge-reranker-v2-m3', 'google/gemini-2.5-flash-image'],
+    kinds: {
+      'openai/text-embedding-3-small': 'embedding',
+      'BAAI/bge-reranker-v2-m3': 'reranker',
+      'google/gemini-2.5-flash-image': 'image',
+    } },
 ]
 
 /* The first-run canvas's own list. Nine rows rather than seven, and every one
@@ -85,6 +101,12 @@ const wire = (e: Entry, current: string): Provider => ({
   needs_api_base: !!e.needs_api_base, warning: '',
   key_url: e.key_url ?? null,
   extra_headers: {},
+  gateway: !!e.gateway,
+  /* One label per model, because the live reply carries a kind on every row it
+     describes and the surfaces file a model by it. */
+  model_labels: Object.fromEntries(
+    e.models.map((m) => [m, { label: m.split('/').pop() as string, kind: e.kinds?.[m] ?? 'text' }]),
+  ),
   ...(e.default_api_base ? { default_api_base: e.default_api_base } : {}),
 })
 

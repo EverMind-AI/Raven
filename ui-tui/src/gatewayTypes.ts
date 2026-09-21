@@ -378,6 +378,10 @@ export interface ModelOptionProvider {
      picker's offer -- config plus a curated shortlist plus a catalogue -- which
      is what the TUI picker draws; a surface managing the list reads this one. */
   configured_models?: string[]
+  /* Resells other vendors' models under `vendor/model` ids (the registry's
+     `is_gateway`). The web settings page filters its catalogue on it; here it
+     is declared so the drift check stays honest about what the wire sends. */
+  gateway?: boolean
   model_labels?: Record<
     string,
     {
@@ -385,6 +389,9 @@ export interface ModelOptionProvider {
       context_window?: number
       description?: string
       input_modalities?: string[]
+      /* Which bucket a model list files this under, from what it writes
+         (`registry_data.kind_of`): reading pictures leaves a model in `text`. */
+      kind: 'audio' | 'embedding' | 'image' | 'reranker' | 'text' | 'video'
       label: string
       output_modalities?: string[]
     }
