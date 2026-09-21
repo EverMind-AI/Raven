@@ -18,7 +18,7 @@ import { switchTo } from '../../state/session/registry'
 import { replace as sessionReplace, rows as sessionRows, sess } from '../../state/session/rows'
 import { show as toast } from '../../state/toast'
 import { busy } from '../composer/turn'
-import { draw as sessionDraw } from './store'
+import { draw as sessionDraw, reconcileRows } from './store'
 import { plainTitle } from './title'
 
 import type { ResultOf } from '../../rpc/generated'
@@ -123,13 +123,18 @@ export const SESS_CHANNELS = ['tui', 'cron']
 export async function loadSessions(): Promise<void> {
   await loadCronNames()
   const r = await gateway().call('session.list', { channels: SESS_CHANNELS })
-  sessionReplace((r.sessions || []).map(rowFrom).sort((a, b) => (b.at || 0) - (a.at || 0)))
-  /* Replacing the rows is not showing them, which every other writer here
-     already knew: leave.ts and the registry both draw after their replace. A
-     restore from the archive page reaches the rail only through this function,
-     so without the draw the row came back on the server and on disk and stayed
-     off the screen until the page was reloaded. At boot the rail is still held,
-     where a draw is the skeleton and `releaseRail` paints the rows. */
+  const listed = (r.sessions || []).map(rowFrom).sort((a, b) => (b.at || 0) - (a.at || 0))
+  /* Through the reconcile, because the answer does not carry what only this
+     page knows: which conversation has a turn running, and the current one
+     while it is too new to be listed. Replacing without it dropped both, which
+     was invisible while nothing redrew and is a wiped running badge now that
+     something does. `currentMissing` is left to `refreshList`, whose job the
+     conversation having been deleted under the reader is. */
+  sessionReplace(reconcileRows(sessionRows(), listed, sessionCurrent()).rows)
+  /* And replacing the rows is not showing them: wire.ts and the registry both
+     draw after theirs, and the archive page's restore reaches the rail only
+     through here. At boot the rail is held, so this draw is inert until
+     `releaseRail` paints. */
   sessionDraw()
 }
 
