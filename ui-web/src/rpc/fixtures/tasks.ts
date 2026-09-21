@@ -50,7 +50,7 @@ function counts(nodes: readonly TaskNode[]): TaskCounts {
 
 function row(over: Partial<TaskRow> & Pick<TaskRow, 'id' | 'kind' | 'status' | 'nodes'>): TaskRow {
   return {
-    task_summary: null, started_at: null, ended_at: null, agent: null, handle: null, playbook: null,
+    task_summary: null, started_at: null, ended_at: null, agent: null, handle: null,
     counts: counts(over.nodes),
     ...over,
   }
@@ -163,7 +163,7 @@ function scenarioPlaybookFailed(env: FixtureEnv): TaskRow[] {
   ]
   return [row({
     id: '20260917T230000654321Z-nightly9f', kind: 'dag', status: 'failed', nodes,
-    task_summary: 'Nightly regression sweep', playbook: 'nightly-checks', started_at: started,
+    task_summary: 'Nightly regression sweep', started_at: started,
     ended_at: started + 211 * SEC,
   })]
 }

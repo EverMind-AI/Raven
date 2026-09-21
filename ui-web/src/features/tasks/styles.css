@@ -61,19 +61,6 @@
   color: var(--muted);
 }
 
-/* The list row's optional playbook chip: a quiet, monospaced category label,
-   never competing with the row's own name. */
-.tksrc {
-  flex: none;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--faint);
-  background: var(--surface);
-  border-radius: 5px;
-  padding: 2px 6px;
-  white-space: nowrap;
-}
-
 /* A written file's chip prints its size in the same quiet register as the
    chip that carries it -- a secondary fact riding along, not a second name. */
 .tkkd {
