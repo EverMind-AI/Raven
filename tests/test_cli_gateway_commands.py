@@ -790,6 +790,20 @@ def test_the_gateway_shutdown_cancels_subagents_before_it_closes_the_transports(
     assert drain < cancel < pool
 
 
+def test_the_gateway_shutdown_cancels_subagents_before_the_page_spine_seals() -> None:
+    """A sub-agent whose conversation lives on the page announces into the
+    page's own spine, and the mount's teardown seals that spine first -- so a
+    run finishing between the two would announce into a refusal. The swap path
+    already cancels before the mount goes; the shutdown path has to match."""
+    src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "gateway_commands.py").read_text(encoding="utf-8")
+    shutdown = src[src.index("except KeyboardInterrupt:") :]
+    cancel = shutdown.index("await agent.subagents.cancel_all()")
+    page = shutdown.index("await page_mount.teardown()")
+    spine = shutdown.index("await gw_teardown()")
+
+    assert cancel < page < spine
+
+
 def test_question_body_numbers_choices_and_shows_batch_progress() -> None:
     """On a chat channel the batch has no dialog to show progress in, so the
     position has to ride in the message text itself."""

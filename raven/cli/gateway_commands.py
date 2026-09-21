@@ -1144,8 +1144,6 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     await sentinel_runner.stop()
                 if question_broker is not None:
                     question_broker.cancel_all()  # release any turn blocked on ask_user
-                if page_mount is not None:
-                    await page_mount.teardown()
                 if control is not None:
                     await control.stop()
                 from raven.acp_client.client import begin_drain
@@ -1161,6 +1159,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # on when its process is about to go.
                 begin_drain()
                 await agent.subagents.cancel_all()
+                # The page's spine seals after the sub-agents are cancelled, the
+                # order the generation swap already keeps: a sub-agent whose
+                # conversation lives on the page announces into that spine, and
+                # sealed first it would refuse the result.
+                if page_mount is not None:
+                    await page_mount.teardown()
                 if gw_teardown is not None:
                     await gw_teardown()
                 # ACP agents are launched with start_new_session, so they do not

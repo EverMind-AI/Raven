@@ -391,6 +391,26 @@ async def build_rpc_stack(
                 agent_loop.cron_service.stop()
             except Exception:
                 pass
+        # Sub-agents go before the spine seals, and sealing is the first thing
+        # the turn teardown does: a run that finishes after it announces its
+        # result into a submit that refuses new turns, and that announce is the
+        # only route the result has back to its conversation. Cancelled first,
+        # those runs end as the stops they are. Same order every host follows:
+        # drain, cancel, then close -- cancelling after the pool closed would
+        # report each in-flight turn as a connection failure instead of as the
+        # stop it is, and sub-agents also go before the memory backend, whose
+        # adapter a run still going can hand another write. A mounted stack
+        # leaves this to its host, which owns the sub-agents and cancels them
+        # before tearing the mount down.
+        if owns_loop:
+            try:
+                from raven.acp_client.client import begin_drain
+
+                begin_drain()
+                if agent_loop is not None:
+                    await agent_loop.subagents.cancel_all()
+            except Exception:
+                logger.exception("serve: cancelling in-flight sub-agents failed; continuing shutdown")
         if turn_teardown is not None:
             try:
                 await turn_teardown()
@@ -400,27 +420,13 @@ async def build_rpc_stack(
         # the ACP pool are the host process's to close, not this stack's.
         if not owns_loop:
             return
-        # Contributed services stop first of all -- producers before drains,
-        # the same order dispose follows.
+        # Contributed services stop before the stores drain -- producers before
+        # drains, the same order dispose follows.
         if agent_loop is not None:
             try:
                 await agent_loop.stop_plugin_services()
             except Exception:
                 logger.exception("plugin services stop failed; continuing shutdown")
-        # Same order every host follows: drain, cancel, then close. Cancelling
-        # after the pool closed would report each in-flight turn as a connection
-        # failure instead of as the stop it is. Sub-agents also go before the
-        # memory backend: a run that is still going can hand the backend another
-        # write, and closing the adapter under it fails that write for a reason
-        # that has nothing to do with the service.
-        try:
-            from raven.acp_client.client import begin_drain
-
-            begin_drain()
-            if agent_loop is not None:
-                await agent_loop.subagents.cancel_all()
-        except Exception:
-            logger.exception("serve: cancelling in-flight sub-agents failed; continuing shutdown")
         if agent_loop is not None and agent_loop.backend is not None:
             try:
                 # Drain before stop, the same order the CLI hosts follow:

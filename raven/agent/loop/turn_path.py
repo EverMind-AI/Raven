@@ -2085,6 +2085,7 @@ class TurnPathMixin:
             if on_episode_start is not None:
                 await on_episode_start(index)
 
+        from raven.agent.subagent.attachments import turn_attachments
         from raven.agent.subagent.mode_tiers import turn_tier
 
         async def _attempt(seed: list[dict], attempt: int):
@@ -2175,7 +2176,10 @@ class TurnPathMixin:
             # The tier this turn dispatches sub-agents at, frozen here for the
             # same reason the iteration cap is read once: a switch arriving mid-turn
             # lands on the next turn, not on a sub-agent this one has yet to call.
-            with turn_tier(self.session_tier(key)):
+            # And its attachments, for the same reader: a dispatch that names a
+            # file the user attached is handing it over, one that names any other
+            # .pptx is not, and only the turn knows which is which.
+            with turn_tier(self.session_tier(key)), turn_attachments(req.media):
                 final_content, _, all_msgs, outcome = await _attempt(initial_messages, attempt_no)
                 # The conditional rerun. A dead turn has no answer to damage -- "empty
                 # implies wrong" is a scoring rule, so the count of right answers among
