@@ -4,7 +4,15 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Raven</title>
+<!-- Two, because the mark is a silhouette rather than a drawing with its own
+     palette: the bird is one solid black body with the eyes cut out of it, which
+     measures 21:1 on a light tab strip and 1.25:1 on a dark one.
+     assets/raven-dark.png is the same file with its RGB inverted and its alpha
+     kept, which is the treatment the splash takes in CSS and the one the page's
+     own mono marks take (`.agent-mark[data-tone="mono"]`). The dark candidate
+     is second because the last matching link is the one that wins. -->
 <link rel="icon" type="image/png" href="assets/raven.png" />
+<link rel="icon" type="image/png" href="assets/raven-dark.png" media="(prefers-color-scheme: dark)" />
 <style>
 /*__STYLE__*/
 </style>

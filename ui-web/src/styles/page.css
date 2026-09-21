@@ -4999,6 +4999,22 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .sp-rv { width: 111px; height: 111px; user-select: none;
   filter: drop-shadow(0 12px 10px rgba(17, 21, 30, .22));
   animation: spfloat 3.2s ease-in-out infinite; }
+/* Inverted on the dark ground, the way the page's own mono marks are
+   (`.agent-mark[data-tone="mono"]`, pinned by scripts/gates/agent-mark-css).
+   The mark is a silhouette -- one solid body with the eyes cut out of it -- so
+   on --ink at #1d1d1d the body measures 1.25:1 and what is left is two white
+   eyes floating on black. Inverting takes the body to 16.9:1 and turns the eyes
+   into the holes they are, which is what RavenMark draws from `currentColor`
+   and `--mark-eye` on the rest of the page. Both dark paths, because they are
+   not one rule: an explicit choice stamps `data-theme` and the system setting
+   stamps nothing. The shadow rides after the invert so it is not inverted too,
+   and it is restated because `filter` takes one list. */
+:root[data-theme="dark"] .sp-rv {
+  filter: invert(1) drop-shadow(0 12px 10px rgba(17, 21, 30, .22)); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sp-rv {
+    filter: invert(1) drop-shadow(0 12px 10px rgba(17, 21, 30, .22)); }
+}
 .sp-wl { margin-top: 20px; font-family: var(--serif); font-size: 30px;
   letter-spacing: -.008em; color: var(--text); line-height: 1; }
 .sp-bar { margin-top: 36px; width: 104px; height: 2px; border-radius: 1px;
