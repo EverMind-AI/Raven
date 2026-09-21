@@ -59,6 +59,15 @@ export const KIND_ORDER: readonly Kind[] = ['text', 'image', 'embedding', 'reran
  * whose key works but whose model list nobody has built yet still has to be
  * visible, or the reader cannot tell it is connected (and a model set by
  * onboarding, never "added", would have nowhere to be marked). */
+/* What one opening of the picker lists and what picking means.
+ *
+ * DEBT: every opening draws from the model store, so a caller that owns its
+ * own list cannot use this picker at all -- which is why
+ * `components/ModelPicker` is still in the tree for the agents page, where an
+ * ACP agent advertises its own choices. Paying it means a field here for a
+ * caller-supplied list and one for suppressing the typed row; `store.column()`
+ * needs nothing, since `offered` already falls back to `models` and an
+ * untagged model already reads as text. That file's header has the rest. */
 export interface Offer {
   kind: Kind
   /* Provider ids this opening may list; absent means every connected one. */
