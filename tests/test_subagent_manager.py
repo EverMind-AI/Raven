@@ -478,6 +478,28 @@ async def test_a_spawn_after_the_sweep_is_turned_away_before_it_writes_anything(
     assert mgr.get_running_count() == 0
 
 
+async def test_a_paused_host_that_is_shutting_down_gives_the_terminal_reason(monkeypatch):
+    """Both gates refuse, so their order decides what the model is told. The
+    pause refusal says to ask the user to resume, and during a shutdown nobody
+    can, so the shutdown gate reads first and the reason given is the reason
+    the dispatch cannot go ahead. The paused-only spawn is the control: the
+    pause text is still what a host that is merely paused says."""
+    mgr = _stub_mgr(monkeypatch)
+    mgr.set_paused(True)
+
+    paused_only = await mgr.spawn(task="write the report", session_key="web:sess1")
+    assert "paused" in paused_only
+    assert "resume" in paused_only
+
+    await mgr.cancel_all()
+    both = await mgr.spawn(task="write the report", session_key="web:sess1")
+
+    assert "Spawn refused" in both
+    assert "shutting down" in both
+    assert "paused" not in both
+    assert "resume" not in both
+
+
 async def test_a_dag_run_handed_over_after_the_sweep_is_refused_and_cancelled_unstarted(monkeypatch):
     """``adopt_background_run`` is the DAG's admission, and the DAG tool adopts
     the task in the same step that created it -- so the refusing cancel lands

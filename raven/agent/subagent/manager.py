@@ -846,15 +846,18 @@ class SubagentManager:
         would re-inject the whole file.
         """
         agent = agent or GENERIC_AGENT
+        # Shutdown before pause: a host that is both answers with the terminal
+        # reason. The pause text tells the model to ask the user to resume, and
+        # during a shutdown nobody can.
+        if self._dispatch_closed:
+            logger.info("Spawn refused: the host is shutting down")
+            return _SHUTDOWN_REFUSAL
         if self._paused:
             logger.info("Spawn refused: delegation is paused")
             return (
                 f"{SPAWN_REFUSED_PREFIX}delegation is paused. The user paused sub-agent "
                 "spawning; do the work in this turn instead, or ask them to resume."
             )
-        if self._dispatch_closed:
-            logger.info("Spawn refused: the host is shutting down")
-            return _SHUTDOWN_REFUSAL
         try:
             backend = self._resolve_backend(agent)
         except RuntimeError as exc:
