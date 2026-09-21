@@ -106,13 +106,16 @@ class ApprovalBroker:
         self._hard_timeout_s = hard_timeout_s
         self._pending: dict[str, _PendingApproval] = {}
         # The queue behind each conversation's one prompt.
-        # ponytail: one lock per conversation ever asked, never reclaimed. A
-        # gateway serving thousands of conversations holds thousands of empty
-        # locks; drop one when its queue drains if that ever shows up in a heap.
         self._lanes: dict[str, asyncio.Lock] = {}
         # What each answered grant's write did, for the undo. An entry appears
         # when the answer is a persisted grant and is dropped once an undo has
         # read it, so a second undo of the same grant finds nothing.
+        #
+        # ponytail: neither map is reclaimed -- a lock per conversation ever
+        # asked, a receipt per saved rule nobody undid. Both are bounded by what
+        # a person did in one process's life and each entry is a few dozen
+        # bytes; drop a lane when its queue drains and a receipt on a timer if
+        # either ever shows up in a heap.
         self._grants: dict[str, _Grant] = {}
 
     async def await_approval(
@@ -295,6 +298,10 @@ class ApprovalBroker:
             logger.warning("approval_broker: no grant receipt for {} after {}s", approval_id, timeout_s)
             return None
         finally:
+            # Dropped on the timeout too, so a gate that reports late finds no
+            # slot and the undo stays refused rather than removing a rule long
+            # after the reader asked. The refusal names the config, which is
+            # where they can still delete it by hand.
             self._grants.pop(approval_id, None)
         return grant.pattern if grant.written else None
 
