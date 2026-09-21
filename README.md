@@ -162,8 +162,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8"><img src="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8" alt="Task graph: Raven-Code into Raven-Oncall into Raven-Design, run in sequence" width="100%"></a></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/5120c2c0-9aeb-4224-ac85-df9dc188b5cc"><img src="https://github.com/user-attachments/assets/5120c2c0-9aeb-4224-ac85-df9dc188b5cc" alt="Comparison board: six orchestration frameworks against four dimensions, each tagged explicit graph or canvas, declared task flow, or dynamic at runtime" width="86%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a"><img src="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a" alt="Retrieval sweep: recall@k is set by top_k alone, and latency stays flat across the grid" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/5120c2c0-9aeb-4224-ac85-df9dc188b5cc"><img src="https://github.com/user-attachments/assets/5120c2c0-9aeb-4224-ac85-df9dc188b5cc" alt="Comparison board: six orchestration frameworks against four dimensions, each tagged explicit graph or canvas, declared task flow, or dynamic at runtime" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/10679855-e2c5-4422-81c3-17cd784123ce"><img src="https://github.com/user-attachments/assets/10679855-e2c5-4422-81c3-17cd784123ce" alt="Retrieval sweep dashboard: recall@k is set by top_k alone and latency stays broadly flat, with a sixteen-cell grid of measured recall and latency and the best cell ringed at top_k 10, chunk_size 1024" width="99%"></a></p></td>
 </tr>
 </table>
 
