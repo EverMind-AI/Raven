@@ -180,13 +180,17 @@ export async function refresh(): Promise<void> {
 
 /* Ask for a run and follow it. Every caller comes here -- the rail's own click
    and the wizard's sync step, which reaches it through the seam (src/app/
-   install.ts) rather than calling the same method a second way. Asking is what
-   makes the run this page's to follow, which is what keeps its finished row on
+   install.ts) rather than calling the same method a second way. A run that
+   starts is the run this page follows, which is what keeps its finished row on
    the rail afterwards. */
 export async function start(platforms: string[], tier: ImportTier): Promise<ImportStarted> {
-  set({ starting: true, watching: true, error: '' })
+  set({ starting: true, error: '' })
   try {
     const r = await source().run(platforms, tier)
+    /* Only a run that started is one to follow. A refusal ("nothing to
+       import") leaves whatever settled run is already on file untouched, and
+       the read below would otherwise adopt it as this page's. */
+    if (r.started) set({ watching: true })
     /* Read after, then report: a refusal is this call's news, and the read
        that follows it clears the transport error slot as every read does. */
     await refresh()

@@ -285,6 +285,18 @@ describe('following a run', () => {
     expect(store.view(store.get()).kind).toBe('done')
   })
 
+  /* A refusal is not a run. The gateway answers "nothing to import" without
+     starting anything, and whatever settled run is already on file is still
+     somebody else's. */
+  it('follows nothing when the gateway refuses to start a run', async () => {
+    const f = fake([status({ total: 2, submitted: 2, platforms: ['claude_code'] })])
+    f.src.run = async () => ({ started: false, total: 0, detail: 'nothing to import' })
+    setSources({ importSync: f.src })
+    const r = await store.start(['hermes'], 'full')
+    expect(r.started).toBe(false)
+    expect(store.view(store.get()).kind).toBe('hidden')
+  })
+
   /* A page outlives a run. Having followed one is not having followed the
      next one somebody started from the CLI. */
   it('does not draw a later run it did not follow', async () => {
