@@ -699,12 +699,13 @@ def _remember_session_model(loop: Any, session_key: str, model: str, provider_na
     if sessions is None:
         return
     try:
-        session = sessions.get_or_create(session_key)
-        session.metadata["model"] = model
+        patch: dict[str, Any] = {"model": model}
         if provider_name:
-            session.metadata["provider"] = provider_name
-        if sessions.exists(session_key):
-            sessions.save(session)
+            patch["provider"] = provider_name
+        sessions.get_or_create(session_key).metadata.update(patch)
+        # The patch is a no-op for a session with no transcript yet, which is
+        # the lazy case this helper already answered by not saving.
+        sessions.append_metadata_patch(session_key, patch)
     except Exception:
         logger.warning("could not persist the model on session {!r}", session_key)
 
@@ -716,10 +717,8 @@ def _remember_session_permission_mode(loop: Any, session_key: str, mode: str) ->
     if sessions is None:
         return
     try:
-        session = sessions.get_or_create(session_key)
-        session.metadata["permissions_mode"] = mode
-        if sessions.exists(session_key):
-            sessions.save(session)
+        sessions.get_or_create(session_key).metadata["permissions_mode"] = mode
+        sessions.append_metadata_patch(session_key, {"permissions_mode": mode})
     except Exception:
         logger.warning("could not persist the permission mode on session {!r}", session_key)
 

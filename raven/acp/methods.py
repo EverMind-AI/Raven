@@ -723,7 +723,11 @@ class AcpMethods:
                         }
                         stored = sessions.get_or_create(session.session_key)
                         stored.metadata["usage_owner"] = owner
-                        sessions.save(stored)
+                        # The turn reads this off the same manager, so the
+                        # in-memory write is what it needs; the patch is for
+                        # the record, and no longer manufactures a transcript
+                        # for a session that has not had one yet.
+                        sessions.append_metadata_patch(session.session_key, {"usage_owner": owner})
                 # The charter this dispatch brought, staged for the turn below.
                 # Held on the loop rather than in session metadata: it describes
                 # one dispatch, and metadata survives the process.

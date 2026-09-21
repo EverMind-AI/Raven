@@ -1829,8 +1829,88 @@ async def test_session_pin_persists_and_shows_up_in_the_list(tmp_path: Path, mon
 
     result = await session_pin({"session_id": "tui:20260610_100000_pin001", "pinned": False})
     assert result["pinned"] is False
+    # Unpinned is written, not left unsaid: one appended key cannot remove a
+    # key, and every reader of this flag asks whether it is true.
     reloaded = SessionManager(tmp_path).peek("tui:20260610_100000_pin001")
-    assert reloaded is not None and "pinned" not in reloaded.metadata
+    assert reloaded is not None and reloaded.metadata.get("pinned") is False
+    listed = await session_list({})
+    row = next(r for r in listed["sessions"] if r["id"] == "tui:20260610_100000_pin001")
+    assert row["pinned"] is False
+
+
+async def test_a_refused_pin_or_rename_is_reported_rather_than_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A filesystem that refuses the append answers pending, not success.
+
+    Same contract the archive verb answers under: the flag holds in memory for
+    as long as this process lives, and the reply says it did not reach the
+    disk, so a client does not draw a state the next load will contradict.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+    for key in ("tui:20260610_100000_pinrefused", "tui:20260610_100000_titlerefused"):
+        session = mgr.get_or_create(key)
+        session.add_message("user", "hello")
+        mgr.save(session)
+
+    def refuse(*_args: object, **_kwargs: object) -> bool:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(mgr, "append_metadata_patch", refuse)
+
+    pinned = await session_pin({"session_id": "tui:20260610_100000_pinrefused", "pinned": True})
+    assert pinned == {"pinned": True, "session_key": "tui:20260610_100000_pinrefused", "pending": True}
+    assert mgr.get_or_create("tui:20260610_100000_pinrefused").metadata["pinned"] is True
+
+    named = await session_title({"session_id": "tui:20260610_100000_titlerefused", "title": "by hand"})
+    assert named == {"title": "by hand", "session_key": "tui:20260610_100000_titlerefused", "pending": True}
+    assert mgr.get_or_create("tui:20260610_100000_titlerefused").metadata["title"] == "by hand"
+
+
+async def test_pinning_and_renaming_keep_a_key_another_writer_added(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each verb speaks for its own key and for nothing else.
+
+    Both used to persist by saving the whole session, which rewrites the
+    metadata record from this manager's copy of it -- so a flag written to the
+    file after that copy was loaded was dropped by an unrelated pin or rename.
+    A page and a terminal over one home are two managers over one file, which
+    is how archiving a conversation from one of them and renaming it from the
+    other put it back in everybody's list.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    for key, verb in (
+        ("tui:20260610_100000_pinkeep", "pin"),
+        ("tui:20260610_100000_titlekeep", "title"),
+    ):
+        session = mgr.get_or_create(key)
+        session.add_message("user", "two writers hold this")
+        mgr.save(session)
+        # Somebody else archives it straight on the file; this manager's copy
+        # of the metadata knows nothing about it.
+        SessionManager(tmp_path).append_metadata_patch(key, {"archived": True})
+        assert mgr.get_or_create(key).metadata.get("archived") is None
+
+        if verb == "pin":
+            assert (await session_pin({"session_id": key, "pinned": True}))["pending"] is False
+        else:
+            assert (await session_title({"session_id": key, "title": "renamed"}))["pending"] is False
+
+        reloaded = SessionManager(tmp_path).peek(key)
+        assert reloaded is not None
+        assert reloaded.metadata.get("archived") is True, verb
 
 
 async def test_session_archive_persists_and_filters_the_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
