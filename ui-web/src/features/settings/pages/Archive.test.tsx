@@ -14,6 +14,9 @@ import type { ArchivedSession } from '../types'
 
 vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => {}, get: () => [] }))
 
+const railRefreshes: number[] = []
+vi.mock('../../../state/session/registry', () => ({ refreshList: async () => { railRefreshes.push(1) } }))
+
 const rows: ArchivedSession[] = [
   { id: 'tui:1', title: 'Quarterly deck', preview: 'p', last_message_preview: 'l', message_count: 3, started_at: 1, updated_at: Math.floor(Date.now() / 1000) - 3 * 86400 },
   { id: 'tui:2', title: '', preview: 'untitled one', last_message_preview: 'l', message_count: 1, started_at: 1, updated_at: Math.floor(Date.now() / 1000) - 40 * 86400 },
@@ -21,6 +24,7 @@ const rows: ArchivedSession[] = [
 
 
 beforeEach(() => {
+  railRefreshes.length = 0
   setSources({ settings: settingsSource, model: modelSource })
 })
 
@@ -82,5 +86,32 @@ describe('archive page', () => {
     expect(sw.getAttribute('aria-checked')).toBe('true')
     await act(async () => { fireEvent.click(sw) })
     expect(second.calls.filter(([m]) => m === 'set')).toEqual([['set', { key: 'sessions.autoArchiveAfterDays', value: null }]])
+  })
+
+  it('turning the switch on re-reads both lists, which is what runs the sweep', async () => {
+    /* The sweep lives inside session.list, so the write alone moves nothing:
+       the card went on saying nothing was archived and the rail went on showing
+       the stale conversations, until a reload made a pile of them vanish at
+       once. The two reads are the sweep and its result. */
+    const { calls } = install(undefined, { archived: async () => { calls.push(['archived', null]); return [] } })
+    await mount('archive')
+    calls.length = 0
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'gui.settings.archive.auto' })) })
+    expect(calls.map(([m]) => m)).toEqual(['set', 'archived'])
+    expect(railRefreshes).toEqual([1])
+  })
+
+  it('a refused write re-reads nothing', async () => {
+    /* The control: nothing was swept, so re-listing would only say so twice --
+       and a green refresh after a failed write reads as though it took. */
+    const { calls } = install(undefined, {
+      archived: async () => { calls.push(['archived', null]); return [] },
+      set: async () => { throw new Error('nope') },
+    })
+    await mount('archive')
+    calls.length = 0
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'gui.settings.archive.auto' })) })
+    expect(calls.some(([m]) => m === 'archived')).toBe(false)
+    expect(railRefreshes).toEqual([])
   })
 })
