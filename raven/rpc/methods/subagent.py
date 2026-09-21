@@ -47,7 +47,7 @@ from loguru import logger
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.dag_live import live_run_ids
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME
-from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
+from raven.agent.subagent.history import dag_root, nodes_root, session_history_root, spawn_live_key
 from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.config.loader import load_config
@@ -464,7 +464,8 @@ async def subagent_context(
     # collected in this very process, so a watching panel reads that. Copied
     # entry-by-entry because the collector republishes on every update from the
     # agent, and a list mutated mid-iteration is a crash in a read-only path.
-    if not transcribed and (live := run_activity.live(files.node_id)) is not None:
+    live_key = spawn_live_key(files.root, files.node_id)
+    if not transcribed and (live := run_activity.live(live_key)) is not None:
         stored.extend(
             normalize_row(entry) for entry in list(live.transcript) if isinstance(entry, dict) and entry.get("role")
         )
@@ -472,7 +473,7 @@ async def subagent_context(
     # output (a cli agent streams no transcript). Gone once the run finishes:
     # the live index empties with the collecting block, and the record's answer
     # takes over.
-    if (live_run := run_activity.live(files.node_id)) is not None and live_run.console:
+    if (live_run := run_activity.live(live_key)) is not None and live_run.console:
         stored.append({"role": "console", "content": live_run.console})
     if answer is not None:
         answer_msg: dict[str, Any] = {"role": "assistant", "content": answer}
