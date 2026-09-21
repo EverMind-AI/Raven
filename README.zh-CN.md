@@ -124,21 +124,6 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>用二分法测出一根梁的极限载荷</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>一次溃坝模拟，调到水相不再越界</b></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783"><img src="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a CalculiX cantilever plastic limit chain, 3 of 3 done in 5m21s, 1m28s and 4m11s" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/050707b5-2af9-4f29-9d65-1564e96fef9d"><img src="https://github.com/user-attachments/assets/050707b5-2af9-4f29-9d65-1564e96fef9d" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a dam-break chain, 3 of 3 done in 11m48s, 1m16s and 3m58s" width="100%"></a></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7d195366-8764-4788-84a6-22bf60cbb058"><img src="https://github.com/user-attachments/assets/7d195366-8764-4788-84a6-22bf60cbb058" alt="Limit-load search: a cantilever beam under rising load colored by von Mises stress, with the bisection bracket narrowing from 1800-2000 kN down to 3.125 kN over eight rounds" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/e814c6b9-f41f-4070-94cb-d1bc8ca9c51e"><img src="https://github.com/user-attachments/assets/e814c6b9-f41f-4070-94cb-d1bc8ca9c51e" alt="Dam-break solve: a collapsing water column resolved to fine free-surface structure, with the out-of-bounds water fraction falling from 1e0 to 1.36e-10 over seven rounds" width="100%"></a></p></td>
-</tr>
-</table>
-
-<table>
-<tr>
 <td width="50%" valign="top"><p align="center"><b>宋代居家美学</b></p></td>
 <td width="50%" valign="top"><p align="center"><b>古希腊如何被漂白</b></p></td>
 </tr>
@@ -194,6 +179,21 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7767ac05-6785-4e6a-9e27-c1b123753766"><img src="https://github.com/user-attachments/assets/7767ac05-6785-4e6a-9e27-c1b123753766" alt="Key visual plus the derived series: street poster, data panel, social square and wide banner" width="100%"></a></p></td>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/25c57220-c5fc-4f72-94fb-ea4b7e83f429"><img src="https://github.com/user-attachments/assets/25c57220-c5fc-4f72-94fb-ea4b7e83f429" alt="GPS trilateration explainer: the live page, and the fix at two, three and four satellites" width="97%"></a></p></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="50%" valign="top"><p align="center"><b>用二分法测出一根梁的极限载荷</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>一次溃坝模拟，调到水相不再越界</b></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783"><img src="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a CalculiX cantilever plastic limit chain, 3 of 3 done in 5m21s, 1m28s and 4m11s" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/050707b5-2af9-4f29-9d65-1564e96fef9d"><img src="https://github.com/user-attachments/assets/050707b5-2af9-4f29-9d65-1564e96fef9d" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a dam-break chain, 3 of 3 done in 11m48s, 1m16s and 3m58s" width="100%"></a></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7d195366-8764-4788-84a6-22bf60cbb058"><img src="https://github.com/user-attachments/assets/7d195366-8764-4788-84a6-22bf60cbb058" alt="Limit-load search: a cantilever beam under rising load colored by von Mises stress, with the bisection bracket narrowing from 1800-2000 kN down to 3.125 kN over eight rounds" width="90%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/e814c6b9-f41f-4070-94cb-d1bc8ca9c51e"><img src="https://github.com/user-attachments/assets/e814c6b9-f41f-4070-94cb-d1bc8ca9c51e" alt="Dam-break solve: a collapsing water column resolved to fine free-surface structure, with the out-of-bounds water fraction falling from 1e0 to 1.36e-10 over seven rounds" width="90%"></a></p></td>
 </tr>
 </table>
 
