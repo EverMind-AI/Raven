@@ -148,6 +148,7 @@ def test_the_workers_replace_the_dag_roster_too(workspace) -> None:
         description = _dag_schema(loop)["description"]
 
     assert prop["enum"] == ["research-a", "research-b"]
+    assert "the label itself, not the agent it runs on" in prop["description"]
     assert "research-a: only A's pricing [runs on Raven-Research]" in description
 
 

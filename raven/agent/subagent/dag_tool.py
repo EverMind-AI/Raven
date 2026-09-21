@@ -1017,7 +1017,13 @@ class SubAgentDagTool(Tool):
         table = self._worker_table_for()
         names = table.labels() if table else self._registry.names()
         if names:
-            schema["properties"]["subagent"]["enum"] = names
+            subagent = schema["properties"]["subagent"]
+            subagent["enum"] = names
+            if table:
+                subagent["description"] = (
+                    "Which worker runs this node. Required: pass one of the labels in the list -- "
+                    "the label itself, not the agent it runs on."
+                )
         return schema
 
     def node_schema(self) -> dict[str, Any]:
