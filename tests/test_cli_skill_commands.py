@@ -210,6 +210,26 @@ def test_skill_unblock_removes_from_config(tmp_config: Path) -> None:
     assert _read_blocklist(tmp_config) == ["other"]
 
 
+def test_skill_block_reports_the_block_it_wrote_on_a_snake_config(tmp_config: Path) -> None:
+    """The result line must not name a key this write did not use.
+
+    On a snake_case config the write lands on ``skill_forge.blocklist``, so a
+    line naming ``skillForge.blocklist`` sends the operator to grep for a key
+    their file does not carry.
+    """
+    import json
+
+    tmp_config.write_text(json.dumps({"skill_forge": {}}), encoding="utf-8")
+
+    r = runner.invoke(app, ["skill", "block", "tag-memory"])
+
+    assert r.exit_code == 0
+    assert "tag-memory" in r.stdout
+    assert "skillForge" not in r.stdout
+    data = json.loads(tmp_config.read_text(encoding="utf-8"))
+    assert data["skill_forge"]["blocklist"] == ["tag-memory"]
+
+
 def test_skill_unblock_absent_is_noop(tmp_config: Path) -> None:
     r = runner.invoke(app, ["skill", "unblock", "ghost"])
     assert r.exit_code == 0

@@ -140,7 +140,7 @@ def skill_block(name: str = typer.Argument(..., help="Skill name / slug to refus
     from raven.config.update import set_skill_blocked
 
     blocklist = set_skill_blocked(name, True)
-    console.print(f"[green]Blocked[/green] {name!r}. skillForge.blocklist = {blocklist}")
+    console.print(f"[green]Blocked[/green] {name!r}. Skill blocklist = {blocklist}")
     console.print("[dim]Takes effect on the next agent/gateway start.[/dim]")
 
 
@@ -150,7 +150,7 @@ def skill_unblock(name: str = typer.Argument(..., help="Skill name / slug to all
     from raven.config.update import set_skill_blocked
 
     blocklist = set_skill_blocked(name, False)
-    console.print(f"[green]Unblocked[/green] {name!r}. skillForge.blocklist = {blocklist}")
+    console.print(f"[green]Unblocked[/green] {name!r}. Skill blocklist = {blocklist}")
     console.print("[dim]Takes effect on the next agent/gateway start.[/dim]")
 
 
