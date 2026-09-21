@@ -617,10 +617,10 @@ async def test_a_redirection_before_the_destination_does_not_hide_it(registry, t
         ("ssh -p 58717 root@h >", [("h", 58717)]),
         ("ssh root@h >; ssh -p 9 root@k", [("h", 22), ("k", 9)]),
         ("ssh root@h <<EOF\nfoo\nEOF", [("h", 22)]),
-        ("ssh -o Port=58717 -o 'Port 22' root@h", [("h", 22)]),
+        ("ssh -o Port=58717 -o 'Port 22' root@h", [("h", 58717)]),
         ("ssh 2>&1", []),
     ],
-    ids=["after-host", "dangling", "dangling-then-separator", "heredoc", "later-option-wins", "no-host"],
+    ids=["after-host", "dangling", "dangling-then-separator", "heredoc", "first-port-wins", "no-host"],
 )
 def test_redirections_are_stepped_over_wherever_they_fall(command, expected):
     """A redirection is neither a destination nor the end of the command.
@@ -630,6 +630,30 @@ def test_redirections_are_stepped_over_wherever_they_fall(command, expected):
     swallow the separator, so the next ssh in the line is still found.
     """
     assert machine_exec._ssh_destinations(command) == expected
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("ssh -o Port=58717 -o 'Port 22' root@h", 58717),
+        ("ssh -o 'Port 22' -o Port=58717 root@h", 22),
+        ("ssh -p 2222 -o Port=58717 root@h", 2222),
+        ("ssh -o Port=58717 -p 2222 root@h", 58717),
+        ("ssh -p 58717 -p 22 root@h", 58717),
+        ("ssh -p 22 -p 58717 root@h", 22),
+    ],
+    ids=["option-then-option", "reversed", "flag-then-option", "option-then-flag", "flag-twice", "flag-twice-reversed"],
+)
+def test_a_repeated_port_keeps_the_first_value_as_ssh_does(command, expected):
+    """ssh takes the first obtained value for every option, `-p` and `-o Port`
+    queueing together: `ssh -G -p 2222 -o Port=58717 host` prints 2222 and the
+    two reversed prints 58717 (measured with OpenSSH 9.9p2).
+
+    Overwriting instead read `-p 58717 -p 22` as port 22, so a command that
+    really reaches the registered machine on 58717 read as unregistered and
+    ran on the plain shell path -- the bypass this guard exists to close.
+    """
+    assert machine_exec._ssh_destinations(command) == [("h", expected)]
 
 
 @pytest.mark.asyncio

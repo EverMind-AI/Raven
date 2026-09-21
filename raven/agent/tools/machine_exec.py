@@ -139,7 +139,7 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     spellings OpenSSH honours -- ``-o Port=58717`` and ``-o "Port 58717"`` --
     because the registry holds several machines at one address on different
     ports: the address alone picks whichever row is listed first and names the
-    wrong machine.
+    wrong machine. Repeats keep the first value, as ssh does.
     """
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
@@ -158,6 +158,7 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
             continue
         index += 1
         port = 22
+        port_set = False
         destination: str | None = None
         while index < len(tokens):
             word = tokens[index]
@@ -204,8 +205,15 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
                         # went unrecognised (reviewed 2026-09-20).
                         pair = _OPTION_SPLIT.split(value.strip(), maxsplit=1)
                         value = pair[1].strip() if len(pair) == 2 and pair[0].lower() == "port" else ""
-                    if value.isdigit():
+                    # First obtained value wins, which is ssh's own rule for
+                    # every option: `ssh -G -p 2222 -o Port=58717 host` prints
+                    # 2222, and reversing the two prints 58717. Overwriting
+                    # instead read `-p 58717 -p 22` as port 22 and let a
+                    # command that really reaches the registered machine past
+                    # the guard (reviewed 2026-09-21).
+                    if value.isdigit() and not port_set:
                         port = int(value)
+                        port_set = True
                 elif len(word) == 2 and word[1] in _SSH_VALUE_FLAGS:
                     index += 1
                 continue
