@@ -543,7 +543,7 @@ export function createTurn(env: FixtureEnv, host: TurnHost, websearchOn: () => b
         seq += 1
         const id = `sub-${seq}`
         subs.set(p.session_key, id)
-        return { subscription_id: id }
+        return { subscription_id: id, running: false }
       },
       'turn.unsubscribe': (p) => {
         for (const [key, id] of subs) if (id === p.subscription_id) subs.delete(key)

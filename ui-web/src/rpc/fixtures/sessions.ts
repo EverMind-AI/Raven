@@ -144,7 +144,7 @@ const info = (title: string): InitInfo => ({
   model: 'claude-fable-5', model_id: 'claude-fable-5', provider: 'anthropic',
   context_window: 200000, lazy: false, skills: {}, tools: {},
   usage: { input: 0, output: 0, cost_usd: 0, calls: 0, context_max: 200000, context_used: 0, context_percent: 0 },
-  version: '0.1.0', cwd: '~/work/raven', mcp_servers: [], title,
+  version: '0.1.0', cwd: '~/work/raven', mcp_servers: [], title, running: false,
 })
 
 export interface SessionsFixture {
@@ -175,6 +175,9 @@ export function createSessions(env: FixtureEnv, turn: () => TurnFixture): Sessio
     updated_at: Math.floor((env.now() - s.ago) / 1000),
     ...(s.from ? { source: s.from } : {}),
     pinned: !!s.pin,
+    /* A scripted turn plays out from the send that starts it, so nothing is
+       ever in flight at the moment this canvas answers a list. */
+    running: false,
   })
 
   const archived: Fixture[] = []

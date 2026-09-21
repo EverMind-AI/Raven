@@ -24,8 +24,18 @@ type Wiring = typeof import('../../app/install')
 interface Row { id: string; title?: string; status?: string | null }
 interface Staged { model: unknown; tier: string | null; perm: string | null }
 
-async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?: boolean } = {}) {
+async function harness(
+  { rows, deferSubscribe, subscribeRunning }: { rows?: Row[]; deferSubscribe?: boolean; subscribeRunning?: boolean } = {},
+) {
   const calls: unknown[][] = []
+  const IDLE: TurnSnapshot = { phase: 'idle', cancellable: false, resume: null }
+  /* Where the island's turn machine has been driven to, read off the events the
+     switch dispatched rather than off the machine itself: the fake below is what
+     stands in for it here, and the switch asks it whether the turn is still
+     busy. */
+  const machine = (): TurnSnapshot => calls
+    .filter((c) => c[0] === 'turnDispatch')
+    .reduce((state, c) => reduce(state, c[1] as TurnEvent), IDLE)
   document.body.innerHTML = '<h1 id="title"></h1><div id="stage"></div><div id="flash"></div>'
   const boxes: Record<string, HTMLElement | null | undefined> = {}
   for (const id of ['#title', '#stage', '#flash']) boxes[id] = document.getElementById(id.slice(1))
@@ -88,7 +98,7 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
         queueShift: () => undefined,
         turn: {
           dispatch: (event: TurnEvent) => calls.push(['turnDispatch', event]),
-          busy: () => false, snapshot: () => ({}),
+          busy: () => machine().phase !== 'idle', snapshot: () => ({}),
           restore: () => {}, reduce: (phase: unknown) => phase,
         },
       },
@@ -132,7 +142,7 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
       return new Promise((res, rej) => pending.push({ id: params.session_id!, res, rej }))
     }
     if (method === 'turn.subscribe') {
-      const answer = { subscription_id: `sub:${params.session_key}` }
+      const answer = { subscription_id: `sub:${params.session_key}`, running: !!subscribeRunning }
       if (!deferSubscribe) return Promise.resolve(answer)
       return new Promise((res) => subs.push({ id: params.session_key!, res: () => res(answer) }))
     }
@@ -170,14 +180,8 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
     sess: (id: string) => (rows || []).find((r) => r.id === id),
   }
   const asked = (method: string) => calls.filter((c) => c[0] === 'rpc' && c[1] === method).map((c) => c[2])
-  const IDLE: TurnSnapshot = { phase: 'idle', cancellable: false, resume: null }
   return {
-    /* Where the island's turn machine has been driven to, read off the events
-       the switch dispatched rather than off the machine itself: the fake above
-       is what stands in for it here. */
-    turnState: () => calls
-      .filter((c) => c[0] === 'turnDispatch')
-      .reduce((state, c) => reduce(state, c[1] as TurnEvent), IDLE),
+    turnState: machine,
     subscribe: registry.subscribe,
     startDraft: registry.switchToDraft,
     openLiveSession: (row: Row) => registry.switchTo(row as SessRow),
@@ -247,7 +251,9 @@ describe('the live session switch', () => {
   })
 
   it('puts the stop button back on a conversation whose turn is still running', async () => {
-    const h = await harness({ rows: [{ id: 'a' }] })
+    /* Both answers agree the turn is running: the resume arms the machine and
+       the subscription that confirms it will carry the rest of the turn. */
+    const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: true })
 
     h.openLiveSession({ id: 'a', title: 'Alpha' })
     await h.settle('a', { session_id: 'a', messages: [{ text: 'a' }], info: { running: true } })
@@ -257,6 +263,41 @@ describe('the live session switch', () => {
        come opening a step of their own. */
     expect(h.turnState()).toMatchObject({ phase: 'streaming', cancellable: true })
     expect(h.calls).toContainEqual(['goPaint'])
+    expect(h.asked('session.resume')).toHaveLength(1)
+  })
+
+  /* The gap between the two round trips. The resume is read before the
+     subscription exists, so a turn that ends in between takes its completion to
+     nobody: the buffer the gateway would have replayed is dropped with it, and
+     the machine armed by the resume waits for an event that no longer exists --
+     the stop button stayed up for the life of the tab. The subscription's own
+     answer is the one that cannot be stale, and a `false` there means the whole
+     conversation has to be read back off disk: the transcript painted from the
+     resume is missing the answer for exactly the same reason. */
+  it('opens the conversation again when the turn ended between resume and subscribe', async () => {
+    const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: false })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [{ text: 'a' }], info: { running: true } })
+    expect(h.inFlight()).toEqual(['a'])
+    await h.settle('a', { session_id: 'a', messages: [{ text: 'a+answer' }], info: { running: false } })
+
+    expect(h.asked('session.resume')).toHaveLength(2)
+    expect(painted(h.calls)).toEqual(['a', 'a+answer'])
+    expect(h.turnState().phase).toBe('idle')
+  })
+
+  it('leaves a conversation alone when only the subscription reports the turn', async () => {
+    /* Nothing was missed: the reader arrived while the turn was between its
+       start and this page, and the replay the subscription is handed opens it
+       with a message.start of its own. */
+    const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: true })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [{ text: 'a' }], info: { running: false } })
+
+    expect(h.asked('session.resume')).toHaveLength(1)
+    expect(h.turnState().phase).toBe('idle')
   })
 
   it('leaves a conversation that is not answering idle', async () => {

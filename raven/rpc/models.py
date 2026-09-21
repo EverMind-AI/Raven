@@ -1465,6 +1465,10 @@ class TurnSubscribeParams(_Strict):
 
 class TurnSubscribeResult(_Strict):
     subscription_id: str
+    running: bool = Field(
+        default=False,
+        description="A turn is in flight on this session, and this subscription receives the rest of it.",
+    )
 
 
 class TurnUnsubscribeParams(_Strict):

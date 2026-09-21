@@ -581,14 +581,21 @@ async def turn_subscribe(
     *,
     emitter: SubscriptionEmitter | None = None,
 ) -> dict[str, Any]:
-    """``turn.subscribe`` — open a subscription, return ``{subscription_id}``."""
+    """``turn.subscribe`` — open a subscription, return ``{subscription_id, running}``.
+
+    ``running`` is taken on the far side of the publish, which is what makes it
+    trustworthy where ``session.resume``'s answer is not: a turn that ends after
+    this reading emits its completion into this very subscription, so a client
+    armed by ``session.resume`` and told ``false`` here knows the turn ended in
+    the gap between the two calls and that nothing is coming to end it.
+    """
     parsed = TurnSubscribeParams.model_validate(params)
     if emitter is None:
         raise RuntimeError(
             "turn.subscribe requires a SubscriptionEmitter; register_turn_methods must be called with emitter=...",
         )
     sub_id = await emitter.register(parsed.session_key)
-    return {"subscription_id": sub_id}
+    return {"subscription_id": sub_id, "running": emitter.in_flight(parsed.session_key)}
 
 
 async def turn_unsubscribe(

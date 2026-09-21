@@ -123,16 +123,23 @@ export function mint(rt: SessionRuntime, key: string): void {
 
 /* ---- subscriptions ----------------------------------------------------- */
 
-export async function subscribe(sessionKey: string): Promise<void> {
+/* Whether the gateway handed this subscription a turn in flight, or `null`
+   when there was nothing to ask: the conversation already had a stream, or the
+   call failed. Answered from the far side of the registration, so a `false`
+   means the turn ended before this subscription existed and no event of it is
+   coming -- see turn_subscribe in raven/rpc/methods/turn.py. */
+export async function subscribe(sessionKey: string): Promise<boolean | null> {
   // One subscription per session per socket: re-opening a session reuses its
   // stream, so a conversation's frames never double up.
   const known = ensure(sessionKey)
-  if (known.subscriptionId) return
+  if (known.subscriptionId) return null
   try {
     const r = await gateway().call('turn.subscribe', { session_key: sessionKey })
     record(sessionKey, r.subscription_id)
+    return !!r.running
   } catch (e) {
     toast(t('gui.op.subscribe_failed', { detail: (e as Error).message || e }))
+    return null
   }
 }
 
@@ -337,11 +344,22 @@ export async function switchTo(s: SessRow): Promise<void> {
        the socket dropped, and one whose messages a compaction has since
        archived. Not awaited: the shelf fills when it answers. */
     loadDeliveries(s.id)
-    await subscribe(s.id)
+    const running = await subscribe(s.id)
     /* Checked again on this side of the subscribe: the round trip is one more
        place a reader can leave from, and a replayed file window opens on
        whichever desk is on screen. */
     if (gen !== switches) return
+    /* The turn ended between the two round trips: resume said it was running,
+       the subscription that would carry its end says it is not, and the machine
+       armed above is still waiting for an event that will never arrive. Open the
+       conversation again rather than pushing the machine back to idle -- the
+       transcript painted above is missing the answer for the same reason, and a
+       re-open reads both back off disk. The second pass cannot come back here:
+       resume now reports the turn as finished. */
+    if (r.info && r.info.running && running === false && turn.busy()) {
+      await switchTo(s)
+      return
+    }
     /* Last, and only on this path. The reader may be arriving here after a
        reload -- or after an upgrade replaced the page under them -- in which
        case the graph they were watching and the windows they had open are

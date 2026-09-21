@@ -2117,6 +2117,10 @@ export interface TurnSubscribeParams {
 }
 export interface TurnSubscribeResult {
   subscription_id: string;
+  /**
+   * A turn is in flight on this session, and this subscription receives the rest of it.
+   */
+  running?: boolean;
 }
 export interface TurnUnsubscribeParams {
   subscription_id: string;

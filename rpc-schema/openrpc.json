@@ -714,6 +714,10 @@
           "properties": {
             "subscription_id": {
               "type": "string"
+            },
+            "running": {
+              "type": "boolean",
+              "description": "A turn is in flight on this session, and this subscription receives the rest of it."
             }
           }
         }
