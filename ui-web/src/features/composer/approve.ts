@@ -193,6 +193,10 @@ function wordsFor(req: ApprovalReq): GateWords {
   const ev = req.evidence || {}
   const path = str(ev.path)
   const vars = {
+    /* A name is a value, not copy: the catalogue translates the sentence around
+       it and leaves names, commands and paths alone (the same rule the
+       sub-agent's own name rides on), so the default agent's name is a literal
+       here rather than a key. */
     who: req.origin?.kind === 'subagent' && req.origin.name ? req.origin.name : 'Raven',
     cwd: str(ev.cwd) || str(ev.machine),
     path,
