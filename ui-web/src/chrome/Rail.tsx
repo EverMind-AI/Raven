@@ -229,6 +229,12 @@ function RailFoot(): JSX.Element {
         <span className="t">{t('gui.update.note')}</span>
         <span className="rl">{t('gui.update.reload')}</span>
       </button>
+      {/* The cold-start import the wizard's last step starts, followed here
+           because it outlives the wizard: hours for a full one, and the reader
+           has to be able to find it, stop it, and start it again after a
+           gateway restart. The slot is the foot's; the row in it is the
+           importSync domain's, mounted by src/main.tsx from its manifest. */}
+      <div id="importRow" />
       {/* The foot is the door to settings, and only that: accounts are not a
            thing this product has, so nothing down here pretends to be one. The
            build number and the shortcut that used to sit under the label went

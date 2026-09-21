@@ -184,6 +184,8 @@ const UNSENT = new Set([
   'ext.list.mcp[].auth_url', 'ext.list.tools[].mcp_server', 'ext.list.tools[].needs',
   // fs.open: 1
   'fs.open.app',
+  // import.status: 3
+  'import.status.phase', 'import.status.phases', 'import.status.tier',
   // knowledge.search: 2
   'knowledge.search.embed_ms', 'knowledge.search.search_ms',
   // knowledge.status: 1

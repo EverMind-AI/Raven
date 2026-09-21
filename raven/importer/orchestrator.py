@@ -17,7 +17,11 @@ from raven.importer.types import ImportMessage, ImportSession, Scanner, ScanResu
 # message_id from (session_id, timestamp_ms, index-within-batch), so those
 # boundaries are part of the id: two messages sharing a millisecond collide,
 # and one is dropped, if they land at the same index in different batches.
-_BATCH_MSG_LIMIT = 100
+# Fifty, not a hundred: EverOS extracts on every add, and that cost is
+# superlinear in the message count -- against a real service a 15-message
+# batch took 12s and a 52-message batch 24s, while a batch of 100 ran past the
+# six-minute extraction budget and failed every memory-file source.
+_BATCH_MSG_LIMIT = 50
 _BATCH_CHAR_LIMIT = 30_000
 
 
@@ -116,7 +120,11 @@ async def run_import(
         logger.info("[{}/{}] importing {}/{}", i + 1, total, platform, key)
         try:
             session = await scanner.read(result)
-            await _feed_session(backend, session)
+            if not await _feed_session(backend, session, cancel_path=cancel_path):
+                # Stopped between two batches: the source is neither done nor
+                # failed, so it keeps no entry and a later run sends it whole.
+                logger.info("[{}/{}] import cancelled inside {}/{}", i + 1, total, platform, key)
+                break
             state.mark_submitted(platform, key)
             submitted += 1
             logger.info(
@@ -191,16 +199,28 @@ class MemoryWriteDroppedError(RuntimeError):
     """
 
 
-async def _feed_session(backend: MemoryBackend, session: ImportSession) -> None:
+async def _feed_session(
+    backend: MemoryBackend,
+    session: ImportSession,
+    *,
+    cancel_path: Path | None = None,
+) -> bool:
+    """Store the session in batches. Returns False when a stop request arrived
+    between two batches, leaving the rest unsent; a long conversation is many
+    batches, and a stop that waited for the whole source was not a stop."""
     if not session.messages:
-        return
+        return True
     all_dicts = [_to_store_dict(m) for m in session.messages]
     batch: list[dict[str, Any]] = []
     batch_chars = 0
 
+    def _cancelled() -> bool:
+        return cancel_path is not None and cancel_path.exists()
+
     async def _flush(*, is_final: bool) -> None:
         nonlocal batch, batch_chars
-        metadata: dict[str, Any] = {"is_final": is_final}
+        # bulk: nothing waits on an import write; the backend budgets it as extraction.
+        metadata: dict[str, Any] = {"is_final": is_final, "bulk": True}
         _log_store_request(session.session_id, batch, metadata, batch_chars)
         landed = await backend.store(session.session_id, batch, metadata=metadata)
         if landed is False:
@@ -214,12 +234,17 @@ async def _feed_session(backend: MemoryBackend, session: ImportSession) -> None:
     for msg_dict in all_dicts:
         msg_chars = len(msg_dict["content"])
         if batch and (len(batch) >= _BATCH_MSG_LIMIT or batch_chars + msg_chars > _BATCH_CHAR_LIMIT):
+            if _cancelled():
+                return False
             await _flush(is_final=False)
         batch.append(msg_dict)
         batch_chars += msg_chars
 
     if batch:
+        if _cancelled():
+            return False
         await _flush(is_final=True)
+    return True
 
 
 def _log_store_request(

@@ -21,6 +21,7 @@ already been imported.
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,22 +45,42 @@ class SkillImportSummary:
     pristine: int = 0
     skipped: int = 0
     failed: int = 0
+    # One entry per skill that failed to copy, "<name>: <reason>", so a phase
+    # verdict can name them; the count alone cannot be retried by name.
+    errors: tuple[str, ...] = ()
 
 
 async def install_skills(
     source: SkillSource,
     workspace: Path,
     state: ImportState,
+    *,
+    on_progress: Callable[[int, int], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> SkillImportSummary:
+    """Copy the source's skills into the pool under the platform's own source label.
+
+    ``on_progress(done, total)`` is called before each copy and once more at the
+    end, the way the profile mirror reports: a copy of a large skill tree is
+    the one step here a caller cannot otherwise tell from a hang. ``cancelled``
+    is asked before each copy; a stop leaves the rest for the next run, which
+    finds them absent from the state and copies them then.
+    """
     discovered = await source.discover()
     wanted = [s for s in discovered if s.origin not in _SKIP_ORIGINS]
-    dest_root = workspace / "skills" / "hermes"
+    dest_root = workspace / "skills" / source.platform.value
 
     installed = skipped = failed = 0
+    errors: list[str] = []
     pristine = len(discovered) - len(wanted)
     claimed: set[str] = set()
     claimed_registry_names: set[str] = set()
-    for skill in wanted:
+    for index, skill in enumerate(wanted):
+        if cancelled is not None and cancelled():
+            skipped += len(wanted) - index
+            break
+        if on_progress is not None:
+            on_progress(index, len(wanted))
         target = _target_for(skill, dest_root, claimed)
         if target is None:
             skipped += 1
@@ -104,13 +125,17 @@ async def install_skills(
             logger.warning("skill import failed for {}: {}", skill.name, exc)
             state.mark_failed(source.platform, key, str(exc))
             failed += 1
+            errors.append(f"{skill.name}: {exc}")
             continue
         state.mark_submitted(source.platform, key)
         claimed_registry_names.add(skill.registry_name)
         installed += 1
 
+    if on_progress is not None and wanted:
+        on_progress(len(wanted), len(wanted))
     logger.info(
-        "hermes skills: {} discovered, {} pristine, {} installed, {} skipped, {} failed",
+        "{} skills: {} discovered, {} pristine, {} installed, {} skipped, {} failed",
+        source.platform.value,
         len(discovered),
         pristine,
         installed,
@@ -123,6 +148,7 @@ async def install_skills(
         pristine=pristine,
         skipped=skipped,
         failed=failed,
+        errors=tuple(errors),
     )
 
 

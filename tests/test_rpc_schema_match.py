@@ -124,12 +124,16 @@ def _normalize_oas_type(
         else:
             out["type"] = node["type"]
     if "enum" in node:
-        out["enum"] = sorted(node["enum"])
+        # Nullability is not compared (see the module docstring), so a null
+        # listed among an enum's values is left out the way a null branch is.
+        out["enum"] = sorted(v for v in node["enum"] if v is not None)
     if "const" in node:
         out["const"] = node["const"]
-    if node.get("type") == "array" and "items" in node:
+    # Read the reduced type, not the raw one: a nullable ``["object", "null"]``
+    # still has properties to descend into.
+    if out.get("type") == "array" and "items" in node:
         out["items"] = _normalize_oas_type(node["items"], schema, _seen)
-    if node.get("type") == "object":
+    if out.get("type") == "object":
         if "properties" in node:
             out["properties"] = {
                 pname: _normalize_oas_type(psub, schema, _seen) for pname, psub in node["properties"].items()

@@ -28,6 +28,19 @@ def _reset_task_slot(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(import_sync, "_STARTING", False)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_phases(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The phases read the developer's own ~/.claude and copy skill trees; a
+    test that wants them says so by replacing these two again."""
+
+    async def _phases_done(items, workspace, st, **_kwargs):
+        st.set_phases("done")
+        return None
+
+    monkeypatch.setattr(import_sync, "run_phases", _phases_done)
+    monkeypatch.setattr(import_sync, "_skill_count", AsyncMock(return_value=0))
+
+
 @pytest.fixture()
 def cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """An isolated config file plus workspace, the way ``_load_workspace_and_config``
@@ -157,6 +170,7 @@ async def test_scan_lists_every_platform_with_counts_and_scannable_flags(
         "memory_files": 1,
         "conversations": 1,
         "estimated_size": 30,
+        "skills": 0,
     }
     assert by_platform["hermes"] == {
         "platform": "hermes",
@@ -164,6 +178,7 @@ async def test_scan_lists_every_platform_with_counts_and_scannable_flags(
         "memory_files": 1,
         "conversations": 0,
         "estimated_size": 5,
+        "skills": 0,
     }
     # A platform with no results and no scanner still gets a zeroed row.
     assert by_platform["codex"] == {
@@ -172,7 +187,27 @@ async def test_scan_lists_every_platform_with_counts_and_scannable_flags(
         "memory_files": 0,
         "conversations": 0,
         "estimated_size": 0,
+        "skills": 0,
     }
+
+
+async def test_scan_counts_the_skills_a_platform_would_install(cfg: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skills never travel as scan results, and a platform can hold nothing but
+    them; the wizard has to be able to show that there is something to import."""
+    monkeypatch.setattr(import_sync, "build_scanners", lambda: [])
+    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=[]))
+    monkeypatch.setattr(import_sync, "memory_enabled", lambda *_a: True)
+
+    async def _count(platform: Platform) -> int:
+        return 3 if platform is Platform.CLAUDE_CODE else 0
+
+    monkeypatch.setattr(import_sync, "_skill_count", _count)
+
+    out = await import_sync.import_scan({})
+
+    rows = {p["platform"]: p["skills"] for p in out["platforms"]}
+    assert rows["claude_code"] == 3
+    assert rows["hermes"] == 0
 
 
 async def test_scan_ready_false_when_backend_never_selected(cfg: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -422,7 +457,17 @@ async def test_run_clears_a_stale_cancel_file_on_a_fresh_start(cfg: Path, state:
 
 async def test_status_before_during_and_after_a_run(state: ImportState, monkeypatch: pytest.MonkeyPatch) -> None:
     out = await import_sync.import_status({})
-    assert out == {"running": False, "total": 0, "submitted": 0, "failed": 0, "by_platform": {}}
+    assert out == {
+        "running": False,
+        "total": 0,
+        "submitted": 0,
+        "failed": 0,
+        "by_platform": {},
+        "phase": None,
+        "phases": None,
+        "tier": None,
+        "platforms": [],
+    }
 
     task = await _running_task()
     monkeypatch.setattr(import_sync, "_TASK", task)
@@ -472,6 +517,10 @@ async def test_status_counts_only_the_run_import_run_started(cfg: Path, state: I
         "submitted": 2,
         "failed": 0,
         "by_platform": {"claude_code": {"total": 2, "submitted": 2, "failed": 0}},
+        "phase": None,
+        "phases": {"status": "done", "errors": []},
+        "tier": "full",
+        "platforms": ["claude_code"],
     }
     # The wider run's entries are still there for the next run to skip on.
     assert state.is_submitted("hermes", "h1")
@@ -509,3 +558,163 @@ async def test_stop_touches_the_cancel_file_only_while_running(
     assert state.cancel_path.exists()
 
     await _cancel(task)
+
+
+# ---------------------------------------------------------------------------
+# the post-import phases, and what a client needs to resume
+# ---------------------------------------------------------------------------
+
+
+def _one_source_run(monkeypatch: pytest.MonkeyPatch) -> _FakeBackend:
+    result = _scan_result("k1", Platform.CLAUDE_CODE)
+    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=[result]))
+    monkeypatch.setattr(import_sync, "build_scanners", lambda: [_FakeScanner(Platform.CLAUDE_CODE)])
+    backend = _FakeBackend()
+    monkeypatch.setattr(import_sync, "maybe_build_memory_backend", lambda *a, **k: backend)
+    return backend
+
+
+async def test_run_lands_the_phases_after_the_message_pass(cfg: Path, state: ImportState, monkeypatch) -> None:
+    """The web path used to stop at the message pass; the profile mirror and the
+    skill install are the same two phases the CLI lands, on the same items."""
+    backend = _one_source_run(monkeypatch)
+    calls: list[tuple[str, object, object, object]] = []
+
+    async def _fake_phases(items, workspace, st, *, provider, model, platforms=None, on_phase=None, cancel_path=None):
+        calls.append(("phases", [r.source_key for _s, r in items], set(platforms or ()), cancel_path))
+        return None
+
+    monkeypatch.setattr(import_sync, "run_phases", _fake_phases)
+
+    out = await import_sync.import_run({"platforms": ["claude_code"], "tier": "memory_files"})
+    assert out["started"] is True
+    await import_sync._TASK
+
+    # The run's own scope and its stop file travel with the items, so the
+    # phases install a platform's skills without a scan result to go on and
+    # notice a stop asked for while they run.
+    assert calls == [("phases", ["k1"], {Platform.CLAUDE_CODE}, state.cancel_path)]
+    assert backend.stopped is True
+
+
+async def test_a_platform_with_only_skills_still_gets_a_run(cfg: Path, state: ImportState, monkeypatch) -> None:
+    """No scan result, nothing for the memory backend, and still something to
+    import: the skills. The backend is left alone -- there is nothing to send
+    it -- and the phases get the requested platform as their scope."""
+    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=[]))
+    monkeypatch.setattr(import_sync, "build_scanners", lambda: [_FakeScanner(Platform.CLAUDE_CODE)])
+    backend = _FakeBackend()
+    monkeypatch.setattr(import_sync, "maybe_build_memory_backend", lambda *a, **k: backend)
+    monkeypatch.setattr(import_sync, "_skill_count", AsyncMock(return_value=2))
+    seen: list[set[Platform]] = []
+
+    async def _fake_phases(items, workspace, st, *, platforms=None, **_kwargs):
+        seen.append(set(platforms or ()))
+        st.set_phases("done")
+        return None
+
+    monkeypatch.setattr(import_sync, "run_phases", _fake_phases)
+
+    out = await import_sync.import_run({"platforms": ["claude_code"], "tier": "memory_files"})
+    assert out == {"started": True, "total": 0, "detail": ""}
+    await import_sync._TASK
+
+    assert seen == [{Platform.CLAUDE_CODE}]
+    assert backend.started is False
+    status = await import_sync.import_status({})
+    assert status["phases"] == {"status": "done", "errors": []}
+    assert (status["tier"], status["platforms"]) == ("memory_files", ["claude_code"])
+
+
+async def test_nothing_at_all_to_import_is_refused(cfg: Path, state: ImportState, monkeypatch) -> None:
+    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=[]))
+    monkeypatch.setattr(import_sync, "build_scanners", lambda: [_FakeScanner(Platform.CLAUDE_CODE)])
+    monkeypatch.setattr(import_sync, "maybe_build_memory_backend", lambda *a, **k: _FakeBackend())
+
+    out = await import_sync.import_run({"platforms": ["claude_code"], "tier": "memory_files"})
+
+    assert out == {"started": False, "total": 0, "detail": "nothing to import"}
+    assert import_sync._TASK is None
+
+
+async def test_a_cancelled_run_skips_the_phases(cfg: Path, state: ImportState, monkeypatch) -> None:
+    from raven.importer.orchestrator import ImportSummary
+
+    _one_source_run(monkeypatch)
+    cancelled = ImportSummary(total=1, submitted=0, skipped=0, failed=0, errors=(), cancelled=True)
+    monkeypatch.setattr(import_sync, "run_import", AsyncMock(return_value=cancelled))
+    phases = AsyncMock(return_value=None)
+    monkeypatch.setattr(import_sync, "run_phases", phases)
+
+    await import_sync.import_run({"platforms": ["claude_code"], "tier": "full"})
+    await import_sync._TASK
+
+    phases.assert_not_awaited()
+
+
+async def test_status_reports_the_phase_in_flight_and_forgets_it_after(
+    cfg: Path, state: ImportState, monkeypatch
+) -> None:
+    _one_source_run(monkeypatch)
+    release = asyncio.Event()
+
+    async def _fake_phases(items, workspace, st, *, on_phase=None, **_kwargs):
+        on_phase("profile", 1, 3)
+        await release.wait()
+        return None
+
+    monkeypatch.setattr(import_sync, "run_phases", _fake_phases)
+
+    await import_sync.import_run({"platforms": ["claude_code"], "tier": "full"})
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if import_sync._PHASE is not None:
+            break
+
+    during = await import_sync.import_status({})
+    assert during["running"] is True
+    assert during["phase"] == {"kind": "profile", "current": 1, "total": 3}
+
+    release.set()
+    await import_sync._TASK
+    after = await import_sync.import_status({})
+    assert after["running"] is False
+    assert after["phase"] is None
+
+
+async def test_status_names_the_request_a_stopped_run_was_asked_for(state: ImportState) -> None:
+    """The gateway restarted under a run: the task is gone, the file is not, and
+    a client that reads this can start the same request again."""
+    state.set_total(
+        3, keys=["claude_code:a", "claude_code:b", "hermes:c"], tier="memory_files", platforms=["claude_code", "hermes"]
+    )
+    state.mark_submitted("claude_code", "a")
+
+    out = await import_sync.import_status({})
+
+    assert out["running"] is False
+    assert (out["total"], out["submitted"], out["failed"]) == (3, 1, 0)
+    assert out["tier"] == "memory_files"
+    assert out["platforms"] == ["claude_code", "hermes"]
+    assert out["phase"] is None
+    # No verdict on the phases: the run never reached them.
+    assert out["phases"] is None
+
+
+async def test_status_carries_how_the_phases_ended(state: ImportState) -> None:
+    """Every source is settled before the phases begin, so the counts alone
+    would call a run whose phases failed, or were lost, finished."""
+    state.set_total(1, keys=["claude_code:a"], tier="memory_files", platforms=["claude_code"])
+    state.mark_submitted("claude_code", "a")
+    state.set_phases("failed", ["profile: bad byte"])
+
+    out = await import_sync.import_status({})
+
+    assert (out["total"], out["submitted"]) == (1, 1)
+    assert out["phases"] == {"status": "failed", "errors": ["profile: bad byte"]}
+
+
+async def test_profile_provider_is_none_without_credentials() -> None:
+    from raven.config.schema import Config
+
+    assert import_sync._profile_provider(Config()) is None

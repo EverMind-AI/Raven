@@ -24,7 +24,7 @@ const source = (scan: ImportScan): OnboardSource => ({
 const READY: ImportScan = {
   ready: true,
   reason: '',
-  platforms: [{ platform: 'hermes', scannable: true, memory_files: 8, conversations: 52, estimated_size: 0 }],
+  platforms: [{ platform: 'hermes', scannable: true, memory_files: 8, conversations: 52, estimated_size: 0, skills: 0 }],
 }
 
 afterEach(() => {
@@ -200,5 +200,35 @@ describe('the wizard store', () => {
     await store.skip()
     expect(store.get().skipped).toEqual({ search: true })
     expect(store.get().step).toBe('agents')
+  })
+})
+
+describe('the tier', () => {
+  const HERMES: FoundAgent[] = [{ id: 'hermes', name: 'Hermes' }]
+
+  const readyToSync = async (): Promise<[string[], string][]> => {
+    const runs: [string[], string][] = []
+    setSources({
+      onboard: {
+        providerConfigured: async () => true,
+        scan: async () => READY,
+        startImport: async (platforms, tier) => { runs.push([platforms, tier]); return { started: true, total: 1, detail: '' } },
+      },
+    })
+    store.setBodies({ model: body(true) as StepBody, search: body(true) as StepBody, agents: body(true, HERMES) })
+    store.open()
+    await Promise.resolve()
+    await Promise.resolve()
+    store.set({ step: 'sync' })
+    store.toggleSync('hermes')
+    return runs
+  }
+
+  it('asks for memory files only -- minutes, not hours; conversations stay a CLI option', async () => {
+    const runs = await readyToSync()
+
+    await store.finish()
+
+    expect(runs).toEqual([[['hermes'], 'memory_files']])
   })
 })

@@ -9,18 +9,16 @@ progress bar. Only one import runs at a time inside this process: the slot is
 claimed before ``import.run`` awaits anything, so two frames dispatched together
 cannot both pass the guard and submit the same source twice.
 
-Unlike the CLI's ``run`` command, ``import.run`` never lands the Hermes
-``user.md`` mirror or installs Hermes skills: those are CLI-only extras
-(``raven.cli.import_commands._land_hermes_user_md`` /
-``_install_hermes_skills``), and the wizard's sync step covers memory files
-and conversations only.
+After the message pass the run lands the same two phases the CLI does
+(``raven.importer.phases``): the profile mirror and the skill install. Their
+progress is this process's own knowledge, reported through ``import.status``
+beside the counts the state file holds.
 """
 
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -32,13 +30,17 @@ from raven.core.plugin_stack import (
     memory_enabled,
 )
 from raven.importer.orchestrator import run_import
+from raven.importer.phases import run_phases, skill_source_for
 from raven.importer.scanners import build_scanners, scan_all
+from raven.importer.skills import SkillOrigin
 from raven.importer.state import ImportState
 from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
 from raven.rpc.errors import ConfigValidationError
 
 if TYPE_CHECKING:
     from raven.config.raven import RavenConfig
+    from raven.config.schema import Config
+    from raven.contracts.llm_provider import LLMProvider
     from raven.contracts.memory import MemoryBackend
     from raven.rpc.dispatcher import Dispatcher
 
@@ -49,6 +51,10 @@ if TYPE_CHECKING:
 # its own ``finally``.
 _TASK: asyncio.Task | None = None
 _STARTING = False
+# The post-import phase in flight, as ``import.status`` reports it. Set by the
+# running task's progress callback and cleared with the slot: the state file
+# knows nothing of the phases, so this is the only place their progress lives.
+_PHASE: dict[str, Any] | None = None
 
 
 def _busy() -> bool:
@@ -72,18 +78,50 @@ def _no_backend_reason(ec_config: "RavenConfig") -> str:
     return "no memory backend is configured; finish the memory step of onboarding first"
 
 
-def _load_workspace_and_config() -> tuple[Path, "RavenConfig"]:
+def _load_configs() -> tuple["Config", "RavenConfig"]:
     from raven.config.loader import load_config
     from raven.config.raven import load_raven_config
 
-    workspace = load_config().workspace_path
-    return workspace, load_raven_config()
+    return load_config(), load_raven_config()
+
+
+def _profile_provider(config: "Config") -> "LLMProvider | None":
+    """Best-effort provider for the profile heading classifier.
+
+    ``make_provider`` raises when no LLM credentials are configured; the
+    import must still land in that case, under the mirror's fallback heading.
+    """
+    from raven.providers.factory import make_provider
+
+    try:
+        return make_provider(config)
+    except Exception as exc:
+        logger.info("import.run: no LLM provider for the profile mirror ({}); using the fallback heading", exc)
+        return None
+
+
+async def _skill_count(platform: Platform) -> int:
+    """How many skills an import of ``platform`` would install; 0 when it has none to offer.
+
+    Skills are directories, not message sources, so no scan counts them; the
+    installer leaves factory copies alone, and so does this count.
+    """
+    source = skill_source_for(platform)
+    if source is None:
+        return 0
+    try:
+        discovered = await source.discover()
+    except Exception as exc:
+        logger.warning("import: {} skill preview unavailable: {}", platform.value, exc)
+        return 0
+    return sum(1 for skill in discovered if skill.origin is not SkillOrigin.BUNDLED_PRISTINE)
 
 
 async def import_scan(params: dict) -> dict:
     """``import.scan`` -- what each platform holds, and whether import can run."""
     del params
-    workspace, ec_config = _load_workspace_and_config()
+    config, ec_config = _load_configs()
+    workspace = config.workspace_path
 
     def _on_scan_error(platform: Platform, error: BaseException) -> None:
         logger.warning("import.scan: {} scan failed: {}", platform.value, error)
@@ -101,6 +139,8 @@ async def import_scan(params: dict) -> dict:
         elif r.kind == SourceKind.CONVERSATION:
             bucket["conversations"] += 1
         bucket["estimated_size"] += r.estimated_size
+    for p in Platform:
+        counts[p]["skills"] = await _skill_count(p)
 
     ready = memory_enabled(workspace, ec_config)
     platforms = [{"platform": p.value, "scannable": p in scannable, **counts[p]} for p in Platform]
@@ -129,7 +169,8 @@ async def import_run(params: dict) -> dict:
         # still starting is then seen by the run's first poll rather than lost.
         state.cancel_path.unlink(missing_ok=True)
 
-        workspace, ec_config = _load_workspace_and_config()
+        config, ec_config = _load_configs()
+        workspace = config.workspace_path
         from raven.core.plugin_stack import build_plugin_registry
 
         registry = build_plugin_registry(ec_config)
@@ -144,33 +185,63 @@ async def import_run(params: dict) -> dict:
         items: list[tuple[Scanner, ScanResult]] = [
             (scanner_map[r.platform], r) for r in tiered if r.platform in scanner_map
         ]
-        if not items:
+        # Skills never travel as ScanResults: a platform whose only importable
+        # data is skills has no items and still has a run to make.
+        skills = sum([await _skill_count(p) for p in requested])
+        if not items and not skills:
             return {"started": False, "total": 0, "detail": "nothing to import"}
 
-        await backend.start()
-        health = await backend.health()
-        if health is not None and not health.ready:
-            await backend.stop()
-            hints = [f"{c.label}: {c.hint or c.status}" for c in health.checks if c.status != "ok" or c.hint]
-            detail = "; ".join(hints) or "memory service is not ready"
-            return {"started": False, "total": 0, "detail": detail}
+        # The memory backend serves the message pass alone; a skills-only run
+        # has nothing to send it, and starting it would start a service for
+        # nothing.
+        if items:
+            await backend.start()
+            health = await backend.health()
+            if health is not None and not health.ready:
+                await backend.stop()
+                hints = [f"{c.label}: {c.hint or c.status}" for c in health.checks if c.status != "ok" or c.hint]
+                detail = "; ".join(hints) or "memory service is not ready"
+                return {"started": False, "total": 0, "detail": detail}
 
-        state.set_total(len(items), keys=[f"{r.platform.value}:{r.source_key}" for _, r in items])
+        state.set_total(
+            len(items),
+            keys=[f"{r.platform.value}:{r.source_key}" for _, r in items],
+            tier=tier.value,
+            platforms=[p.value for p in requested],
+        )
 
-        async def _run(backend: "MemoryBackend") -> None:
-            global _TASK
+        def _on_phase(kind: str, current: int, total: int) -> None:
+            global _PHASE
+            _PHASE = {"kind": kind, "current": current, "total": total}
+
+        async def _run(backend: "MemoryBackend", started: bool) -> None:
+            global _TASK, _PHASE
             try:
-                await run_import(items, backend, state, cancel_path=state.cancel_path)
+                summary = await run_import(items, backend, state, cancel_path=state.cancel_path)
+                # A stop has to stop the run, not hand it its two longest steps.
+                if not summary.cancelled:
+                    await run_phases(
+                        items,
+                        workspace,
+                        state,
+                        provider=_profile_provider(config),
+                        model=config.agents.defaults.model,
+                        platforms=requested,
+                        on_phase=_on_phase,
+                        cancel_path=state.cancel_path,
+                    )
             except Exception:
                 logger.exception("import.run: the background import failed")
             finally:
-                try:
-                    await backend.stop()
-                except Exception:
-                    logger.exception("import.run: the memory backend did not stop cleanly")
+                if started:
+                    try:
+                        await backend.stop()
+                    except Exception:
+                        logger.exception("import.run: the memory backend did not stop cleanly")
+                _PHASE = None
                 _TASK = None
 
-        _TASK = asyncio.create_task(_run(backend))
+        _TASK = asyncio.create_task(_run(backend, bool(items)))
         return {"started": True, "total": len(items), "detail": ""}
     finally:
         _STARTING = False
@@ -214,6 +285,10 @@ async def import_status(params: dict) -> dict:
         "submitted": submitted,
         "failed": failed,
         "by_platform": by_platform,
+        "phase": dict(_PHASE) if running and _PHASE is not None else None,
+        "phases": dict(meta["phases"]) if isinstance(meta.get("phases"), dict) else None,
+        "tier": meta.get("tier"),
+        "platforms": list(meta.get("platforms") or sorted(by_platform)),
     }
 
 
