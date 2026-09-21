@@ -1228,12 +1228,22 @@ async def test_usage_daily_buckets_cover_the_range_with_zero_days(telemetry):
     assert r["tools"]["counts"] == [{"name": "exec", "count": 1}]
 
 
-def _transcript(home, name: str, days_ago: int, calls: list[str]) -> None:
-    """One session file whose tool calls the fallback scan may or may not count.
+def _tool_row(name: str, call_id: str) -> dict:
+    return {
+        "_type": "tool_call",
+        "schema_version": 2,
+        "name": name,
+        "tool_call_id": call_id,
+        "session_key": "web:s1",
+        "root_session_key": "web:s1",
+    }
 
-    The scan reads a transcript when its mtime is inside the window, so the
-    mtime is what the case is about; the rows themselves are the same either
-    way.
+
+def _transcript(home, name: str, days_ago: int, calls: list[str]) -> None:
+    """One session file carrying tool calls, with its mtime set by ``days_ago``.
+
+    Nothing in the reply may be counted off it -- the cases below are about a
+    transcript NOT reaching the tallies -- so the mtime is what they vary.
     """
     import os
     from datetime import datetime, timedelta
@@ -1248,25 +1258,31 @@ def _transcript(home, name: str, days_ago: int, calls: list[str]) -> None:
     os.utime(f, (when, when))
 
 
-async def test_usage_tool_scan_is_bounded_at_both_ends(telemetry, tmp_path):
-    """A transcript touched after `to` is outside the window the reply reports.
+async def test_usage_counts_a_tool_call_on_the_day_it_was_recorded(telemetry, tmp_path):
+    """One range read one way, tools included.
 
-    The LLM and telemetry-tool tallies read the selected days' files only, so
-    counting a transcript modified later made one reply disagree with itself:
-    the tool total covered a wider range than the dates beside it.
+    The tool tally used to be topped up by reading session transcripts, and a
+    transcript counted as in-range when its file mtime was -- which handed the
+    range every tool call that conversation had ever made, while its model
+    calls, dated per day, stayed outside it. A page showing thousands of tool
+    calls beside no model calls at all reads as broken, and is: one reply
+    cannot carry two readings of the same range.
     """
-    _transcript(tmp_path, "inside", 4, ["exec"])
-    _transcript(tmp_path, "after", 0, ["read_file", "read_file"])
-    _transcript(tmp_path, "before", 40, ["grep"])
+    telemetry(1, [_tool_row("exec", "in-1")])
+    telemetry(40, [_tool_row("grep", "old-1")])
+    # Touched today, so the old scan would have taken it, and full of tool
+    # calls that belong to no day this reply reports.
+    _transcript(tmp_path, "touched-today", 0, ["read_file", "read_file"])
 
-    r = await rpc_console.settings_usage({"from": _iso(5), "to": _iso(3)})
+    r = await rpc_console.settings_usage({"from": _iso(5), "to": _iso(0)})
     assert r["tools"]["counts"] == [{"name": "exec", "count": 1}]
     assert r["tools"]["total"] == 1
 
-    # And the same scan does count it once the range reaches that day.
-    r = await rpc_console.settings_usage({"from": _iso(5), "to": _iso(0)})
-    assert sorted(c["name"] for c in r["tools"]["counts"]) == ["exec", "read_file"]
-    assert r["tools"]["total"] == 3
+    # The day itself is what decides, not the file: widen the range and the
+    # older call joins; the transcript still does not.
+    r = await rpc_console.settings_usage({"from": _iso(41), "to": _iso(0)})
+    assert sorted(c["name"] for c in r["tools"]["counts"]) == ["exec", "grep"]
+    assert r["tools"]["total"] == 2
 
 
 async def test_usage_from_is_clamped_and_reversed_range_refused(telemetry):
