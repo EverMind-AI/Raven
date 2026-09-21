@@ -483,6 +483,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   min-height: 1lh;
 }
 .sess .t span { overflow: hidden; text-overflow: ellipsis; }
+/* The folder a conversation was pinned to, beside its title: the name only,
+   the full path on hover. A quiet tag, since the group heading above it has
+   already said these rows have one. */
+.sess .t .wdt { flex: none; max-width: 38%; font-family: var(--mono); font-size: 9.5px; font-weight: 400;
+  color: var(--faint); border: 1px solid var(--line-soft); border-radius: 5px; padding: 0 5px; line-height: 1.5; }
 /* The stamp is a fixed-width note on the row, so it keeps its own weight when
    the row goes bold. */
 .sess .w {
@@ -883,6 +888,36 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .pop .prow[aria-checked="true"] { background: color-mix(in oklab, var(--text) 9%, transparent); }
 .pop .prow .tick { flex: none; width: 13px; height: 13px; color: var(--amber); margin-top: 2px; }
 .pop .note { padding: 7px 9px 4px; font-size: 10.5px; line-height: 1.5; color: var(--faint); }
+.pop .note.err { color: var(--clay); }
+/* The working-directory chip and its panel (shell/workdir.ts). A folder that
+   was picked reads in the text colour so the row shows the choice was made;
+   once the conversation exists the chip is disabled and only reports, so it
+   drops the hover affordance without dropping the name. */
+.chip.set { color: var(--muted); }
+.chip:disabled { cursor: default; }
+.chip:disabled:hover { background: none; color: var(--faint); }
+.chip.set:disabled:hover { color: var(--muted); }
+.pop.wd { width: 340px; }
+.pop .sec { padding: 8px 9px 2px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--faint); }
+.pop .rulel { height: 1px; margin: 5px 4px; background: var(--line-soft); }
+/* A folder that cannot itself be the workspace, but can be entered. */
+.pop .prow.off .txt { color: var(--faint); }
+.pop .prow.off .pic { opacity: .55; }
+/* The browser: where we are, then what is here, then the two ways out. The path
+   is drawn from its tail because the tail is the part that changes as one
+   descends and the part that names the folder. */
+.wdpath { display: flex; align-items: center; gap: 4px; padding: 4px 6px 6px; }
+.wdpath .icb { flex: none; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none;
+  color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.wdpath .icb svg { width: 14px; height: 14px; }
+.wdpath .icb:hover:not(:disabled) { background: var(--raised); color: var(--text); }
+.wdpath .icb:disabled { opacity: .35; cursor: default; }
+.wdpath .p { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.wdlist { max-height: 260px; overflow-y: auto; }
+.wdlist .prow { padding: 6px 9px; }
+.wdfoot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 8px 6px 2px; }
 
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
 /* Bottom inset tracks the floating composer (--lift is the card's height plus
@@ -5086,9 +5121,14 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   overflow: hidden; color: var(--muted); }
 .agent-mark svg { display: block; width: 14px; height: 14px; stroke-linecap: round; stroke-linejoin: round; }
 .agent-mark img { display: block; width: 14px; height: 14px; object-fit: contain; }
-/* The one mark that IS a tile: MiroMind's file is a favicon and carries its own
-   rounded card, so it fills the frame instead of sitting a card inside one. */
+/* The two marks that ARE tiles fill the frame instead of sitting a card inside
+   one. MiroMind's file is a favicon and carries its own rounded card. */
 .agent-mark img[data-agent="mirothinker"] { width: 100%; height: 100%; }
+/* The second mark that is a tile: raven.svg carries an opaque plate of its own,
+   for the reason the color-scheme comment below records. Keyed by file, because
+   `data-agent` carries the preset and raven's own rows have none -- the same
+   reason agent-mark.tsx holds it outside MARKS. */
+.agent-mark img[src$="agents/raven.svg"] { width: 100%; height: 100%; }
 /* Only the marks that draw in currentColor, which an <img> resolves against its
    own document and so renders black. `mono` is every shape, so the whole file
    inverts, as the provider marks already do. `hybrid` is qoder alone: brand
@@ -5104,15 +5144,17 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   :root:not([data-theme="light"]) .agent-mark img[data-tone="mono"] { filter: invert(1); }
   :root:not([data-theme="light"]) .agent-mark img[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
 }
-/* Two marks answer the theme from inside their own file, each with a
-   prefers-color-scheme rule: miromind.svg, which is a favicon, and raven.svg,
-   which is a black bird and would otherwise sit at 1.2:1 on the dark surface --
-   no tone filter can help it, because it is not one colour to invert. An
+/* miromind.svg answers the theme from inside its own file, with a
+   prefers-color-scheme rule of its own. An
    <img>'s SVG evaluates that rule against the used color-scheme of the element
    embedding it, NOT against this page's data-theme, so without these two lines
-   both follow the operating system while the rest of the roster follows the
+   it follows the operating system while the rest of the roster follows the
    switch -- and since the app's default is explicitly light, a fresh install on
    a dark OS is a normal way to see it.
+   raven.svg once needed the same treatment for the opposite reason: a black bird
+   sits at 1.2:1 on the dark surface and no tone filter can lift it, because it is
+   not one colour to invert. It now carries an opaque plate, which is theme
+   independent, so these two lines no longer decide anything for it.
    Declared on the tile rather than on :root: there it would also hand every
    native scrollbar and form control to the dark palette, which is a change to
    the whole page and not to a mark. */

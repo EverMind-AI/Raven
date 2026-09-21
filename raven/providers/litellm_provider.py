@@ -29,6 +29,7 @@ from raven.providers.base import (
 from raven.providers.first_byte import (
     BOUND_NAME,
     FirstByteTimeoutError,
+    StreamIdleTimeoutError,
     httpx_timeout,
     stream_first_byte_budget,
 )
@@ -891,6 +892,8 @@ class LiteLLMProvider(LLMProvider):
                     yield delta
                 try:
                     chunk = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
+                except TimeoutError as exc:
+                    raise StreamIdleTimeoutError(idle=float(self.generation.stream_idle_timeout)) from exc
                 except StopAsyncIteration:
                     if sdk_stream and (usage := reported_usage()) is not None:
                         yield ChatDelta(content=None, usage=usage, call_record=None if record_sent else record)

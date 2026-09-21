@@ -691,6 +691,7 @@ class AcpAgentBackend:
         mcps: list[str] | None = None,
         allow_mcp_secrets: bool = False,
         session_mcp: bool = True,
+        pool: Any = None,
     ) -> None:
         self.name = name
         self.command = command
@@ -712,6 +713,15 @@ class AcpAgentBackend:
         # is said once per value rather than once per turn.
         self._model_refused: set[str] = set()
         self._registry = registry or get_registry()
+        # Which pool this backend's turns are served from. Almost always the
+        # process-wide one, and held unresolved until it is used so that
+        # ``close_pool`` still means what it says. A caller passes its own when
+        # its turns must not disturb the roster's: the pool keys a connection on
+        # its launch arguments, ``cwd`` among them, and a caller whose workspace
+        # is a throwaway directory therefore never matches a held connection --
+        # so on the shared pool it would retire this agent's live connections
+        # before opening its own. ``ping_agent`` is that caller.
+        self._pool = pool
         self.mcps = mcps
         self.allow_mcp_secrets = allow_mcp_secrets
         self.session_mcp = session_mcp
@@ -723,6 +733,17 @@ class AcpAgentBackend:
         self._event_sink: Any = None
         self._caps_listener: Any = None
         self._unprompted_announce: Any = None
+
+    @property
+    def pool(self) -> Any:
+        """The connection pool this backend's turns are served from.
+
+        Resolved on each read rather than in the constructor: ``close_pool``
+        replaces the process-wide pool with a fresh one, and a backend that had
+        captured the old object would go on acquiring from a closed pool for the
+        rest of its life.
+        """
+        return self._pool if self._pool is not None else get_pool()
 
     def _resident_sinks(self) -> tuple[Any, Any]:
         """The two callables a resident recorder routes through, bound to this backend.
@@ -768,7 +789,7 @@ class AcpAgentBackend:
         never reaches here, so N stays connected.
         """
         try:
-            connections = get_pool().live(self.name)
+            connections = self.pool.live(self.name)
         except Exception:  # noqa: BLE001 - a swap must never fail on a transport that cannot be listed
             return
         if not connections:
@@ -1173,7 +1194,7 @@ class AcpAgentBackend:
                 parent_protocol = str(getattr(provider, "api_protocol", "") or "")
                 if parent_protocol:
                     binding["RAVEN_PARENT_PROTOCOL"] = parent_protocol
-                connection = await get_pool().acquire(
+                connection = await self.pool.acquire(
                     name=self.name,
                     command=self.command,
                     cwd=launch_cwd,
@@ -1495,9 +1516,7 @@ class AcpAgentBackend:
                 # fork, three session opens in a row died on one wedged
                 # process because nothing ever gave up on it. Dropping it here
                 # is what turns the judge's retry into a fresh launch.
-                from raven.acp_client.pool import get_pool
-
-                await get_pool().drop(self.name)
+                await self.pool.drop(self.name)
                 raise AcpTimeoutError(
                     f"acp agent {self.name!r}: {method} timed out after {budget:.0f}s with no turn "
                     f"in flight -- the agent answered nothing the whole wait. Its connection was "

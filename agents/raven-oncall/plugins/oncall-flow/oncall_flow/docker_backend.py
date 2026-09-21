@@ -227,6 +227,13 @@ def _parse_docker_time(value: str) -> float | None:
         return None
 
 
+#: What it takes for a session to be attributable to the key passed with ``-i``:
+#: no config read (so the owner's own IdentityFile lines are out), no agent, and
+#: no provider identities. Read by the guard that measures this through ssh's own
+#: resolver rather than by eye -- see the connection-add suite.
+ISOLATE_IDENTITY = ("-F", "/dev/null", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none")
+
+
 def make_ssh_runner(
     host: str,
     port: int,
@@ -234,7 +241,21 @@ def make_ssh_runner(
     *,
     user: str = "root",
     connect_timeout: int = 15,
+    identities_only: bool = False,
 ) -> CommandRunner:
+    """Run a command over ssh. ``identities_only`` narrows auth to ``key`` alone.
+
+    Off by default, which is how a job reaches its machine: whatever the owner's
+    ssh would use gets to work, an agent included. Turned on only where the
+    session has to prove WHICH key opened it, and it takes all three options in
+    ISOLATE_IDENTITY to get there. ``-i`` is a preference, not a restriction;
+    ``IdentitiesOnly=yes`` is defined as excluding what an agent or provider adds,
+    not what the config names, so the owner's own ``IdentityFile`` lines are still
+    offered beside the candidate. Measured with OpenSSH 9.9p2 against a config
+    carrying two ``IdentityFile`` lines: ``-i cand`` with IdentitiesOnly and no
+    agent resolves to three identities, and only reading no config at all leaves
+    the one. An existing ``-i`` file suppresses the built-in defaults by itself.
+    """
     import subprocess
 
     def run(cmd: str) -> tuple[int, str]:
@@ -250,6 +271,10 @@ def make_ssh_runner(
             f"ConnectTimeout={connect_timeout}",
             "-o",
             "StrictHostKeyChecking=accept-new",
+        ]
+        if identities_only:
+            argv += list(ISOLATE_IDENTITY)
+        argv += [
             f"{user}@{host}",
             cmd,
         ]

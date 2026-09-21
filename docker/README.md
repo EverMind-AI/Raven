@@ -1,9 +1,14 @@
 # Raven in Docker
 
+Build and run the current checkout:
+
 ```bash
 cd docker
-docker compose up
+docker compose up --build
 ```
+
+To run the configured image without rebuilding, use `docker compose up --no-build`.
+Plain `docker compose up` may reuse or pull an image rather than rebuild local changes.
 
 Then open <http://localhost:18793>. The local Compose default signs that browser
 in automatically so Settings > Models is immediately available.
@@ -87,8 +92,27 @@ work on the next turn.
 
 ## Settings
 
-`.env` is committed and holds defaults; `.env.local` sits beside it, is
-git-ignored, is loaded second and wins. Put every credential in `.env.local`.
+`.env` is committed and holds defaults. The service loads the optional,
+git-ignored `.env.local` second for container runtime variables such as provider
+credentials and `RAVEN_AUTO_LOGIN`. Put every credential in `.env.local`.
+
+Compose interpolation is separate: `RAVEN_IMAGE`, `RAVEN_WEB_PORT`,
+`RAVEN_EXTRAS`, `RAVEN_PLUGINS`, and `RAVEN_OFFICE` are resolved before the
+container starts. Setting them only in the service's `.env.local` does not
+override the image, published port, or build arguments. From this directory,
+use shell variables, for example:
+
+```bash
+RAVEN_IMAGE=raven:local RAVEN_WEB_PORT=18893 docker compose up --build
+```
+
+Or, after creating `.env.local`, load it explicitly for interpolation too:
+
+```bash
+docker compose --env-file .env --env-file .env.local up --build
+```
+
+The later file wins; shell environment values override both files.
 
 ## Data
 

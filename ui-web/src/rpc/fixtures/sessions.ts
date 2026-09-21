@@ -27,6 +27,8 @@ interface Fixture {
   run: string | null
   pin?: boolean
   from?: string
+  /** The folder this conversation was started in, when it was pinned to one. */
+  workdir?: string
 }
 
 const MIN = 60000
@@ -43,7 +45,7 @@ const D9 = 9 * DAY
 
 const SESSION_FIXTURES: Fixture[] = [
   { id:'a', ago: H2, title:'GTM agent 市场调研', last:'抓取了三家代表产品的官网，出了对比表', run:'gtm', pin:false },
-  { id:'b', ago: H4, title:'修复登录偶发超时',   last:'3 runs, 0 failures · 已改连接池隔离',   run:'fix', pin:true },
+  { id:'b', ago: H4, workdir:'/home/dev/checkout', title:'修复登录偶发超时',   last:'3 runs, 0 failures · 已改连接池隔离',   run:'fix', pin:true },
   { id:'g', ago: H5, title:'重构支付回调',       last:'出错：找不到模块 stripe',              run:null },
   { id:'c', ago: D1, title:'整理本周迭代进度',   last:'还没开始',                            run:null },
   { id:'h', ago: D1, title:'扫一遍依赖安全告警', last:'运行中 · 已查 12 个包',               run:null },
@@ -108,6 +110,7 @@ export function createSessions(env: FixtureEnv, turn: () => TurnFixture): Sessio
     started_at: Math.floor((env.now() - s.ago - HOUR) / 1000),
     updated_at: Math.floor((env.now() - s.ago) / 1000),
     ...(s.from ? { source: s.from } : {}),
+    ...(s.workdir ? { workdir: s.workdir } : {}),
     pinned: !!s.pin,
   })
 

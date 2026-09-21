@@ -76,6 +76,10 @@ name = "ops_connections"
 factory = "oncall_flow.tools:make_ops_connections"
 
 [[plugin.contributes.tools]]
+name = "ops_connection_add"
+factory = "oncall_flow.tools:make_ops_connection_add"
+
+[[plugin.contributes.tools]]
 name = "ops_declare"
 factory = "oncall_flow.tools:make_ops_declare"
 

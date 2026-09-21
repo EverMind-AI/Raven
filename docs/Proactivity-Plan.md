@@ -84,8 +84,10 @@ the same topic.
 ### ProactivePlanner — periodic reasoner
 
 Wakes on its own interval, reads a single packaged context, and makes one LLM
-call that returns a structured decision. It is a pure function of its inputs:
-it has no side effects and never raises — any failure degrades to `skip`.
+call that returns a structured decision without executing the chosen action.
+Reported LLM errors, missing tool calls, and non-dict tool arguments become
+`skip`. Exceptions propagate to the runner, which first tries a guarded
+high-priority deadline fallback and otherwise returns `skip`.
 
 Its only input is the assembled `PlannerContext`: the user's long-term memory, a
 tail of recent history, currently active sessions, learned routines, calendar
@@ -117,11 +119,12 @@ learns to tighten or loosen from user feedback. See section 5.
 ### ProactiveSpawn — multi-step execution bridge
 
 When a decision is `spawn_agent`, this wraps `SubagentManager.spawn(...)` to run
-a micro-agent for a multi-step task (for example a status check or a digest),
-then routes the result back through the NudgePolicy and the dispatcher. It adds
-no new agent loop — only a thin layer for the proactive source tag, result
-formatting, and a concurrency/timeout bound on top of the subagent's own
-iteration cap.
+a micro-agent for a multi-step task (for example a status check or a digest).
+It checks the shared NudgePolicy before dispatch and records the dispatch in
+that same quota ledger. SubagentManager returns the result through a
+`SUBAGENT`-origin turn in the originating session. The wrapper adds no new
+agent loop, private quota, or end-to-end task timeout; concurrency and dispatch
+rate limits come from SubagentManager.
 
 ### Task discovery — anticipatory menus
 
@@ -245,19 +248,21 @@ result — the agent has already looked, rather than reminding the user to look.
 
 ## 8. Cost
 
-The Planner makes a single bounded LLM call per tick (a small input, a small
-structured output). The default tick interval is 30 minutes, and the
-RoutineLearner uses no LLM. Spawned micro-agents are the only multi-step cost,
-and they are tail-bounded by the subagent iteration cap plus a per-task timeout
-and a concurrency limit. The whole subsystem is off by default
+When fast paths do not handle a tick, the Planner makes a bounded LLM call
+(a small input, a small structured output). The default tick interval is
+30 minutes, and the RoutineLearner uses no LLM. Spawned micro-agents add
+multi-step costs, subject to the selected backend's limits and SubagentManager's
+shared concurrency and dispatch-rate limits. ProactiveSpawn adds no overall
+task timeout; individual model or tool timeouts are not a task-wide deadline.
+The whole subsystem is off by default
 (`sentinel.enabled=false`), so an opt-out user pays nothing.
 
 Tail-risk controls:
 
-- a concurrency cap on proactive micro-agents;
-- a per-task timeout on each;
-- the subagent's own iteration cap;
-- the NudgePolicy rate limit, which indirectly bounds spawn frequency.
+- SubagentManager's shared concurrency and per-session dispatch-rate limits;
+- the built-in `raven-loop` backend's iteration cap;
+- model and tool timeouts where configured by the selected backend;
+- the shared NudgePolicy rate limit, charged when a spawn is dispatched.
 
 ---
 
@@ -279,9 +284,13 @@ Planner model is configurable for users who want a stronger one.
 
 ### Spawn safety
 
-An unattended micro-agent could take a damaging action. Mitigations: proactive
-spawn is off by default; the subagent runs under workspace restriction with no
-messaging or recursive-spawn tools, the iteration cap, and an extra timeout.
+An unattended micro-agent could take a damaging action. Sentinel is off by
+default, but enabling it also wires the spawn path. The built-in `raven-loop`
+backend omits messaging and recursive-spawn tools and has an iteration cap.
+Workspace restriction depends on `tools.restrict_to_workspace` (default
+`false`) and any per-agent override; ProactiveSpawn does not force it on.
+It also adds no overall task timeout. External ACP and CLI agents run as host
+processes and need their own isolation and execution limits.
 
 ### History format drift
 

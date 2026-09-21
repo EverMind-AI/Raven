@@ -31,8 +31,8 @@ import asyncio
 import base64
 import json
 import shlex
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any
 
 from oncall_flow.backend import (
     JobBackend,
@@ -43,6 +43,9 @@ from oncall_flow.backend import (
     JobStatus,
 )
 from oncall_flow.budget import ADDITIVE, SHARED, Budget, accumulate
+
+if TYPE_CHECKING:
+    from oncall_flow.ledger import Ledger
 from oncall_flow.budget import from_meta as budget_from_meta
 
 # How long a job script may take to write its result after the pid it advertised
@@ -201,6 +204,7 @@ class ProcessExecutor(JobBackend):
         checkpoint as confidently as the best.
         """
         self._declared_width: dict[str, float] = {}
+        self._own_jobs: Callable[[], set[str]] | None = None
         self._run = run
         self._remote_dir = remote_dir.rstrip("/")
         self._command = command
@@ -282,6 +286,49 @@ class ProcessExecutor(JobBackend):
 
     # ---- budget ----
 
+    def restrict_spend_to(self, own: Ledger | Iterable[str]) -> None:
+        """Count only this campaign's own jobs when measuring spend.
+
+        Campaigns share a ``remote_dir`` more often than not -- an agent that runs
+        one task in rounds points every round at the same ``runs/`` -- and the spend
+        scan below walks ``{remote_dir}/jobs/*``, which then holds every round's
+        jobs. Measured 2026-09-11: a second-round campaign with a 130-minute budget
+        read 125.6 spent on its first look, of which 34.6 was its own; the rest was
+        the two rounds before it in the same directory. It stopped with 142 real
+        minutes unspent. The job directory names carry no campaign identity (the
+        suffix is a digest of the config), so the only record of ownership is the
+        campaign's ledger, which is what is read here -- live, on every measure, so
+        a job submitted after this call is counted too. Jobs this executor itself
+        submitted are always counted, ledger or not.
+        """
+        # Imported here, not at module scope: the module-level import is under
+        # TYPE_CHECKING, and narrowing the union by isinstance needs the class at
+        # run time. ledger.py imports nothing from this module, so the local
+        # import costs a dict lookup and risks no cycle. isinstance rather than
+        # hasattr because the type checker cannot narrow a union on an attribute
+        # probe, and every caller -- ops, ops_observe, the tests -- hands over a
+        # real Ledger.
+        from oncall_flow.ledger import Ledger as _Ledger
+
+        if isinstance(own, _Ledger):
+            ledger = own
+
+            def _keys() -> set[str]:
+                return {r.idem_key for r in ledger.all()}
+
+        else:
+            fixed = set(own)
+
+            def _keys() -> set[str]:
+                return set(fixed)
+
+        self._own_jobs = _keys
+
+    def _counts_toward_spend(self, key: str) -> bool:
+        if self._own_jobs is None:
+            return True
+        return key in self._own_jobs() or key in self._declared_width
+
     async def spent_minutes(self) -> float:
         """Minutes this campaign has held the device, whatever ended the runs.
 
@@ -343,6 +390,8 @@ class ProcessExecutor(JobBackend):
         exclusive_spans: list[tuple[float, float, float]] = []
         self._unmeasured.clear()
         for key, result_min, alive, started, elapsed, prog_mtime, width, exclusive in rows:
+            if not self._counts_toward_spend(key):
+                continue
             rm, st, el, pm = _num(result_min), _num(started), _num(elapsed), _num(prog_mtime)
             if rm is not None:
                 minutes = rm

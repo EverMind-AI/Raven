@@ -5128,6 +5128,58 @@
       }
     },
     {
+      "name": "fs.dirs",
+      "summary": "List the subdirectories of one absolute directory, for picking a session's working directory.",
+      "params": [
+        {
+          "name": "path",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Absolute directory to list the subdirectories of; the user's home directory when omitted."
+          }
+        }
+      ],
+      "result": {
+        "name": "FsDirsResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "The directory listed, resolved."
+            },
+            "parent": {
+              "type": "string",
+              "description": "One level up; null at the filesystem root."
+            },
+            "home": {
+              "type": "string",
+              "description": "The user's home directory, where the browser starts."
+            },
+            "ok": {
+              "type": "boolean",
+              "description": "Whether the listed directory itself may be a session's working directory."
+            },
+            "entries": {
+              "description": "Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.",
+              "items": {
+                "$ref": "#/components/schemas/FsDirEntry"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "path",
+            "home",
+            "ok",
+            "entries"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "fs.read",
       "summary": "Read one working-directory file, capped.",
       "params": [
@@ -9928,6 +9980,28 @@
         ],
         "type": "object"
       },
+      "FsDirEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "Absolute."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "True when a session may be pinned here; false inside the agent's own data (see raven.agent.workdir)."
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "ok"
+        ],
+        "type": "object"
+      },
       "MemoryItem": {
         "additionalProperties": false,
         "description": "One row, projected card-sized. ``kind`` decides which optional fields\ncarry a value: the four memory types share only ``id`` and ``kind``.",
@@ -10351,6 +10425,10 @@
           "pinned": {
             "type": "boolean",
             "description": "User pinned this session to the top of the picker."
+          },
+          "workdir": {
+            "type": "string",
+            "description": "The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by."
           }
         }
       },
@@ -10633,6 +10711,10 @@
           },
           "has_api_key": {
             "type": "boolean"
+          },
+          "needs_auth": {
+            "type": "boolean",
+            "description": "The agent answered the handshake and then refused to open a session without a credential. Measured by the capability snapshot, not inferred from probe_status, which reads `attention` both for this and for an installed agent nothing has verified -- two rows that need opposite things from the reader. Always false for a kind with no handshake to be refused in."
           },
           "mcps": {
             "type": "array",

@@ -107,49 +107,82 @@ class CompositeHook(AgentHook):
         pass-through (with ``modified_content`` populated if this phase
         supports content chaining and any hook produced a modification).
         """
-        chain_content = phase in _CHAIN_MODIFIED_PHASES
-        chain_tools = phase in _CHAIN_TOOLS_PHASES
-        chain_notes = phase in _CHAIN_NOTE_PHASES
-        last_modified: str | None = None
-        last_tools: list[dict] | None = None
-        notes: list[str] = []
-        trail: list[str] = []
+        # Participant roles are roster-shaped. Seat every adapter before the
+        # chain runs; the last seat asks once with the complete roster and the
+        # earlier seats are no-ops. Nested product composites expose ``axes``.
+        from raven.agent.hook.participant import ParticipantHook
+
+        participant_hooks: list[ParticipantHook] = []
+
+        def collect(hook: AgentHook) -> None:
+            if isinstance(hook, ParticipantHook):
+                participant_hooks.append(hook)
+                return
+            if isinstance(hook, CompositeHook):
+                for child in hook:
+                    collect(child)
+                return
+            try:
+                axes = getattr(hook, "axes", ())
+            except Exception:
+                logger.exception("hook %s axes discovery raised; ignoring its axes", type(hook).__name__)
+                return
+            if isinstance(axes, tuple):
+                for axis in axes:
+                    if isinstance(axis, AgentHook):
+                        collect(axis)
 
         for hook in self._hooks:
-            method = getattr(hook, phase)
-            try:
-                decision = await method(ctx)
-            except Exception:
-                logger.exception(
-                    "hook %s.%s raised; treating as no-op and continuing",
-                    hook.name,
-                    phase,
-                )
-                continue
+            collect(hook)
+        owns_roster = ParticipantHook.prepare_roster(ctx, phase, participant_hooks)
 
-            if decision.short_circuit_result is not None or decision.rollback:
-                return replace(decision, notes=[*trail, *decision.notes])
+        try:
+            chain_content = phase in _CHAIN_MODIFIED_PHASES
+            chain_tools = phase in _CHAIN_TOOLS_PHASES
+            chain_notes = phase in _CHAIN_NOTE_PHASES
+            last_modified: str | None = None
+            last_tools: list[dict] | None = None
+            notes: list[str] = []
+            trail: list[str] = []
 
-            if chain_content and decision.modified_content is not None:
-                # Propagate to next hook in this phase
-                if phase == "before_user_inbound":
-                    ctx.inbound_content = decision.modified_content
-                else:
-                    ctx.outbound_content = decision.modified_content
-                last_modified = decision.modified_content
-            if chain_tools and decision.modified_tools is not None:
-                ctx.tools = decision.modified_tools
-                last_tools = decision.modified_tools
-            if chain_notes and decision.append_note:
-                notes.append(decision.append_note)
-            trail.extend(decision.notes)
+            for hook in self._hooks:
+                method = getattr(hook, phase)
+                try:
+                    decision = await method(ctx)
+                except Exception:
+                    logger.exception(
+                        "hook %s.%s raised; treating as no-op and continuing",
+                        hook.name,
+                        phase,
+                    )
+                    continue
 
-        return HookDecision(
-            modified_content=last_modified,
-            modified_tools=last_tools,
-            append_note="\n\n".join(notes) or None,
-            notes=trail,
-        )
+                if decision.short_circuit_result is not None or decision.rollback:
+                    return replace(decision, notes=[*trail, *decision.notes])
+
+                if chain_content and decision.modified_content is not None:
+                    # Propagate to next hook in this phase
+                    if phase == "before_user_inbound":
+                        ctx.inbound_content = decision.modified_content
+                    else:
+                        ctx.outbound_content = decision.modified_content
+                    last_modified = decision.modified_content
+                if chain_tools and decision.modified_tools is not None:
+                    ctx.tools = decision.modified_tools
+                    last_tools = decision.modified_tools
+                if chain_notes and decision.append_note:
+                    notes.append(decision.append_note)
+                trail.extend(decision.notes)
+
+            return HookDecision(
+                modified_content=last_modified,
+                modified_tools=last_tools,
+                append_note="\n\n".join(notes) or None,
+                notes=trail,
+            )
+        finally:
+            if owns_roster:
+                ParticipantHook.clear_roster(ctx, phase)
 
 
 __all__ = ["CompositeHook"]

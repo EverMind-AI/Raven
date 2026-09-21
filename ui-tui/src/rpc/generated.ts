@@ -584,6 +584,21 @@ export interface FsEntry {
   size: number;
 }
 /**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsDirEntry".
+ */
+export interface FsDirEntry {
+  name: string;
+  /**
+   * Absolute.
+   */
+  path: string;
+  /**
+   * True when a session may be pinned here; false inside the agent's own data (see raven.agent.workdir).
+   */
+  ok: boolean;
+}
+/**
  * One row, projected card-sized. ``kind`` decides which optional fields
  * carry a value: the four memory types share only ``id`` and ``kind``.
  *
@@ -779,6 +794,10 @@ export interface SessionListItem {
    * User pinned this session to the top of the picker.
    */
   pinned?: boolean;
+  /**
+   * The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by.
+   */
+  workdir?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -934,6 +953,10 @@ export interface SubagentRow {
   probe_status: 'ready' | 'attention' | 'missing' | 'unknown';
   probe_detail: string;
   has_api_key: boolean;
+  /**
+   * The agent answered the handshake and then refused to open a session without a credential. Measured by the capability snapshot, not inferred from probe_status, which reads `attention` both for this and for an installed agent nothing has verified -- two rows that need opposite things from the reader. Always false for a kind with no handshake to be refused in.
+   */
+  needs_auth?: boolean;
   mcps: string[];
   allow_mcp_secrets: boolean;
   last_test_ok?: boolean;
@@ -4412,6 +4435,42 @@ export interface FsListResult {
    * Directories first, dotfiles omitted, capped at 500.
    */
   entries: FsEntry[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsDirsParams".
+ */
+export interface FsDirsParams {
+  /**
+   * Absolute directory to list the subdirectories of; the user's home directory when omitted.
+   */
+  path?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsDirsResult".
+ */
+export interface FsDirsResult {
+  /**
+   * The directory listed, resolved.
+   */
+  path: string;
+  /**
+   * One level up; null at the filesystem root.
+   */
+  parent?: string;
+  /**
+   * The user's home directory, where the browser starts.
+   */
+  home: string;
+  /**
+   * Whether the listed directory itself may be a session's working directory.
+   */
+  ok: boolean;
+  /**
+   * Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.
+   */
+  entries: FsDirEntry[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

@@ -34,7 +34,7 @@ const ROSTER: Row[] = [
   { name: 'Raven-Research', kind: 'cli', configured: false, builtin: false, vendored: true,
     enabled: true, group: 'uninstalled', probe_status: 'ready', probe_detail: '', has_api_key: false,
     mcps: [], allow_mcp_secrets: false, test_running: false, last_test_detail: '',
-    own: true, model_source: 'fixed', model_choices: [],
+    own: true, model_source: 'fixed', model_choices: [], needs_auth: false,
     description: 'A product row, discovered under agents/ rather than written into config.' },
   { name: 'Raven-PPT', kind: 'cli', configured: false, builtin: false, vendored: true,
     enabled: false, group: 'uninstalled', probe_status: 'missing',

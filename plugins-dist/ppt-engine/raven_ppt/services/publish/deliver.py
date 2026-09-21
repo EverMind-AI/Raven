@@ -345,29 +345,6 @@ def delivered_decks(state_dir: Path) -> list[Path]:
     return found
 
 
-def published_original(state_dir: Path, copy: Path) -> Path | None:
-    """The published deck ``copy`` is a byte-for-byte copy of, or None.
-
-    A model that wants the deliverable under a title of its own copies the
-    published deck to that name; the copy passes the digest check, but its
-    preview sat beside the original, under the original's stem.
-    """
-    import hashlib
-
-    try:
-        digest = hashlib.sha256(copy.read_bytes()).hexdigest()
-        held = json.loads((state_dir / PUBLISHED_RECORD).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    for entry in held.get("published", []):
-        if not isinstance(entry, dict) or entry.get("sha256") != digest:
-            continue
-        original = Path(str(entry.get("path") or ""))
-        if original.name and original.resolve() != copy.resolve() and original.is_file():
-            return original
-    return None
-
-
 def published_digests(state_dir: Path) -> set[str]:
     """The sha256 of every deck this project has published; empty when none has been."""
     target = state_dir / PUBLISHED_RECORD

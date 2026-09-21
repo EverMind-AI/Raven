@@ -58,6 +58,64 @@ def _round_dir_inside_case(remote_dir: str, staged_case: str) -> tuple[str, str]
     return None
 
 
+def _remote_dir_taken(remote_dir: str, cdir: Path, ops_home: Path) -> str | None:
+    """The sibling campaign already keeping its rounds in ``remote_dir``, or None.
+
+    Two campaigns writing rounds into one directory bill each other: the spend
+    measure walks ``{remote_dir}/jobs/*``, and a directory name carries no campaign
+    identity. The backend now reads only the campaign's own ledger, but a shared
+    directory still mixes the two campaigns' job trees, so it is refused at the
+    declaration, where the fix is one word. Re-declaring this same campaign is
+    not a collision.
+
+    A concluded sibling counts too, as long as it left jobs behind. A job
+    directory is named from a digest of its config and carries no campaign, so
+    two campaigns that run the same trial name the same directory: the newcomer's
+    ledger then records that key as its own, the ownership filter reads the
+    predecessor's minutes as this campaign's, and submit finds the old
+    ``result.json`` and calls the trial already done instead of running it. A
+    concluded sibling that never submitted anything left nothing to adopt and
+    does not stand in the way.
+    """
+    if not remote_dir:
+        return None
+    from oncall_flow.tools.ops import _campaign_meta
+
+    mine = Path(remote_dir).expanduser()
+    try:
+        siblings = sorted(d for d in ops_home.iterdir() if d.is_dir())
+    except OSError:
+        return None
+    for sib in siblings:
+        if sib == cdir:
+            continue
+        theirs = str(_campaign_meta(sib).get("remote_dir") or "")
+        if not theirs or Path(theirs).expanduser() != mine:
+            continue
+        if (sib / "concluded.json").exists() and not _left_jobs_behind(sib):
+            continue
+        return sib.name
+    return None
+
+
+def _left_jobs_behind(sib: Path) -> bool:
+    """Whether a campaign ever recorded a job, read straight off its ledger file.
+
+    Read as plain JSON rather than through ``Ledger``: this is a sibling's file
+    and the question is only whether it holds a record, so a ledger this campaign
+    cannot parse must not raise here. An unreadable one is treated as occupied,
+    which is the safe direction -- the alternative hands the newcomer a directory
+    whose contents nobody could account for.
+    """
+    path = sib / "ledger.json"
+    if not path.exists():
+        return False
+    try:
+        return bool(json.loads(path.read_text(encoding="utf-8")).get("records") or {})
+    except Exception:  # noqa: BLE001 -- see the docstring: unreadable means occupied
+        return True
+
+
 # Commands whose whole job is to put a copy of something somewhere else. Only the
 # first word of a step is checked against this, so a "cp" inside a filename or a
 # message is not one of them.
@@ -853,6 +911,16 @@ class OpsDeclareTool(Tool):
                 f"directory inside it would be linked into the next round, and the case "
                 f"would stop being something you only read. Put rounds beside the case or "
                 f"anywhere else writable. Nothing was written."
+            )
+        taken = _remote_dir_taken(remote_dir, cdir, _ops_home())
+        if taken:
+            return (
+                f"REFUSED: remote_dir {remote_dir!r} is where campaign {taken!r} keeps its rounds, "
+                f"and that campaign has not concluded.\n"
+                f"Two campaigns in one rounds directory cannot tell their jobs apart, so each "
+                f"would bill the other's runs against its own budget. Give this campaign a "
+                f"rounds directory of its own (for example a sibling named after it). "
+                f"Nothing was written."
             )
         # Only what this shape has. An absent metric is what tells every later
         # reader there is no ranking to do -- writing an empty one would leave

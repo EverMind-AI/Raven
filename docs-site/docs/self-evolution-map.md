@@ -10,8 +10,6 @@ which parts are present but unwired.
 `benchmarks/appworld/evolve/**`, locate the SOP clause here; if your
 change alters a correspondence, update this document in the same PR.
 
----
-
 ## 0. The fundamental architectural difference (read first)
 
 The SOP's loop (§3 / §8.3) is **Claude-driven**: no driver program — a human
@@ -25,15 +23,13 @@ the loop.
 The SOP §8.0 division of labor (semantics to the model, deterministic
 arithmetic to code) is preserved unchanged: diagnosis / design / verdict are
 still LLM calls, wrapped in `orchestrator/nodes/semantic.py::SemanticNode`
-(parse failures are fed back for bounded repair retries). Only "who presses
-the next-step button" changed.
+(parsing errors are fed back to the model, with a limited number of repair
+retries). Only "who presses the next-step button" changed.
 
 The SOP itself (§8.3) judges this route: "packaging into one-click tools is a
 large-benchmark task". Raven chose to build the integration now, buying
 cross-window hand-off freedom and mechanized methodology (see §5, "Where we
 exceed the SOP").
-
----
 
 ## 1. SOP §0 general rules -> implementation
 
@@ -54,7 +50,7 @@ exceed the SOP").
 
 | SOP clause | Raven implementation | Evidence |
 |---|---|---|
-| Vanilla train full set x K=3 thick ledger | `backend.cold_start()` must return a non-empty stability ledger; baseline frozen-seeded from the vanilla out-dir | `orchestrator/loop.py` (construction); `benchmarks/appworld/evolve/run.py` (`seed_label="van0"`, `cold_start_k`) |
+| Vanilla train full set x K=3 thick ledger | `backend.cold_start()` must return a non-empty stability ledger; the initial baseline is built from the evaluation results in the vanilla output directory and then frozen. | `orchestrator/loop.py` (construction); `benchmarks/appworld/evolve/run.py` (`seed_label="van0"`, `cold_start_k`) |
 | Failure map covers >= 7 WHY classes | `diagnose_round(min_why_classes=7)` | `orchestrator/nodes/diagnose.py::diagnose_round` |
 | WHY x WHERE taxonomy; inducible for a new bench | `TaxonomySpec` + two-stage `induce_taxonomy`; induction failure raises loudly, never silently borrowing another bench's table | `orchestrator/nodes/taxonomy.py` |
 
@@ -62,17 +58,17 @@ exceed the SOP").
 
 | SOP step | Raven implementation | Evidence |
 |---|---|---|
-| ① Round 1 uses the cold-start map; round 2+ re-diagnoses the child (fired / flipped / still-failing), appending to the living map | `_diagnosed_parents` prevents duplicate diagnosis; `merge_failure_maps` accumulates cross-round and persists; flips recorded in `_flips` with a harm-replay excerpt (how the regressed task actually broke) | `orchestrator/loop.py` (round body); `orchestrator/production.py::outcome_hook` |
+| ① Round 1 uses the cold-start map; round 2+ re-diagnoses the child (fired / flipped / still-failing), appending to the continuously updated failure map | `_diagnosed_parents` prevents duplicate diagnosis; `merge_failure_maps` accumulates cross-round and persists; flips recorded in `_flips` with a harm-replay excerpt showing the regressed task's actual failure | `orchestrator/loop.py` (round body); `orchestrator/production.py::outcome_hook` |
 | ② 1-2 WHYs x 2-3 candidates, budget-capped; env-gated default-off | WHY selection defaults to driver mode (model picks; formula fallback + shadow log); `Budget(max_why_per_round x candidates_per_why)` enforced in code; the appworld line passes per-node `activation_env` | `benchmarks/appworld/evolve/editor.py::driver_select_whys / rerank_whys`; `orchestrator/config.py::Budget`; `benchmarks/appworld/evolve/adapter.py` |
 | ③ Free pruning: beacon_guard + preflight | beacon: the editor rejects python edits without `activation_beacon` (hard); preflight: `make_zero_hit_preflight` zero-hit prune, **off by default** (see §6 ①) | `benchmarks/appworld/evolve/editor.py`; `orchestrator/production.py::make_zero_hit_preflight`; `benchmarks/appworld/evolve/run.py` (`zero_hit_preflight=False`) |
-| ④ Apply, create child node; path_guard shields the kernel; git persistence | edit-then-commit: edits land as a real git child commit of the parent, the live tree untouched, mechanical changed-paths returned | `evolver/tree/git_ops.py::commit_files_as_child`; `evolver/applier/path_guard.py` |
+| ④ Apply, create child node; path_guard shields the kernel; git persistence | edit-then-commit: edits land as a real git child commit of the parent, the working tree remains unchanged, and the program determines and returns the changed file paths | `evolver/tree/git_ops.py::commit_files_as_child`; `evolver/applier/path_guard.py` |
 | ⑤a K=1 anchor generous-pass screen; σ_screen computed; cull at 1.5σ; three tiers | three buckets clear_win / within_band / cull, only cull is blocked; σ formula identical to the SOP, emitted by `select_anchor` from the ledger; the AppWorld line uses a focused-subset Fisher probe variant (also generous-pass: culls only significantly-worse) | `orchestrator/nodes/screen.py::screen_candidate`; `evolver/scheduler/anchor_selection.py::select_anchor / simple_anchor`; `orchestrator/gates/strategies.py::FocusedFisherGate` |
 | ⑤a anchor composition: affinity majority + icebreakers + sentinels, ⊂ train | all three roles implemented; the sentinel guard adds stratification the SOP does not have (stable = mean guard, fragile = Fisher, avoiding noise kills); the affinity data source is unwired (§6 ③) | `evolver/scheduler/anchor_selection.py`; `orchestrator/gates/strategies.py` (sentinel guard) |
 | ⑤ Borrowing (SOP tags [defer]) | module present (byte-identical to upstream), unwired (§6 ②) | `evolver/scheduler/tree_aware_bandit.py` |
 | ⑤b Survivors: full set x K=3 confirm | `k_confirm=3`, confirm runs the full train set | `orchestrator/gates/strategies.py` |
 | ⑥ Three shields in order Gate-f -> Gate-b -> Gate2 | `run_gates` is exactly this order; Gate-b fails OPEN without instrumentation data (never condemns an uninstrumented-but-honest candidate); the reported score always uses the full-set fixed denominator, so a Gate-b subset mean can never masquerade as the score | `orchestrator/gates/pipeline.py::run_gates`; `orchestrator/production.py` (beacon-aware `fired_source`) |
 | Gate-b data chain | write side: the editor forces inline beacons -> per-attempt beacon directories; read side: union over the confirm dir + infra-ladder siblings. Honesty note: attribution is presence-level — Gate-b proves *a* beacon in the candidate's code executed on a task, not that the beacon sat inside the mechanism's trigger condition; an unconditionally-placed beacon degrades Gate-b to a no-op (promotion still requires the full-train win) | `evolver/activation/ledger.py::beacon_workspace / mark_beacons_enabled` (called from `benchmarks/appworld/batch.py`); `evolver/activation/ledger.py::read_fired_tasks` |
-| ⑦ Best of bank becomes parent; all dead -> keep the old parent + fresh diagnosis | `beat_vanilla` patience signal + greedy parent selection | `orchestrator/loop.py` |
+| ⑦ Best of bank becomes parent; if no candidate passes, retain the existing parent and diagnose again | `beat_vanilla` patience signal + greedy parent selection | `orchestrator/loop.py` |
 | Termination: 10 rounds with nobody above vanilla (vs vanilla, not the previous parent) or 20-round cap; never consult test | `TerminationTracker(patience=10, max_rounds=20)`, the signal defined as beating the FIXED vanilla; plus a protection the SOP lacks: errored rounds do not burn patience (`max_consecutive_errors` is a separate backstop) | `orchestrator/termination.py` |
 | Four node statuses | superset: `pruned_inert / pruned_at_screen / pruned_at_confirm / promoted_to_baseline / errored / blocked_l1 / archived-methodology-failure`; inert deaths additionally feed the per-WHY history so the designer learns from them | `evolver/tree/node.py::NodeStatus`; `orchestrator/production.py::inert_hook` |
 | WHERE bound mechanically from the artifact, never by self-declaration | `bind_where` derives the lever from the actually-touched files; the self-declared `patch_where` stays in the ledger for audit and never decides the archive coordinate (4-tier granularity, see §6 ④) | `orchestrator/archive.py::bind_where / cell_of` |
@@ -83,33 +79,33 @@ exceed the SOP").
 |---|---|
 | findings work log | `<work_dir>/findings.md` (one section per round, driver verdict) |
 | Cross-session state | journal (`orchestrator/state/journal.py`, crash-resume replays completed rounds) + `history.json` (per-WHY attempt history) |
-| Box durable artifacts | `failure_map.json` (cross-round living map) / `nodes/<id>.json` (node ledger: identity + git anchor + final status + gate stats) / per-round out-dirs (per-task results) |
+| Box durable artifacts | `failure_map.json` (failure map updated across rounds) / `nodes/<id>.json` (node ledger: identity + git anchor + final status + gate stats) / per-round out-dirs (per-task results) |
 
-The git + node-ledger dual source of truth (SOP §3.1) carries over
-isomorphically: code state lives in git commits (`commit_files_as_child`
-produces real SHAs), tree lineage in `nodes/*.json`, aligned via
-`git_commit_sha`.
+The SOP §3.1 recording scheme is retained: Git commits store code versions
+(`commit_files_as_child` produces commit SHAs), and `nodes/*.json` stores the
+evolution tree structure. The two are linked by `git_commit_sha`.
 
 ## 5. Where we exceed the SOP
 
-- **The sealed-test runner is mechanized.** SOP §8.2/§9.2 books its own
-  sharpest debt: "not building yet; interim relies on discipline; reviewers
-  will challenge it". Raven's `SealedTestRunner` + `assert_no_test_leak` is
-  exactly the mechanism isolation the SOP demands — the upstream's sharpest
-  methodological debt does not exist here.
+- **The sealed-test runner is mechanized.** SOP §8.2/§9.2 identifies its
+  most significant methodological gap: "not building yet; interim relies on
+  discipline; reviewers will challenge it". Raven's `SealedTestRunner` +
+  `assert_no_test_leak` provides the mechanism isolation the SOP demands,
+  closing that methodological gap.
 - **A single candidate's crash cannot sink a round:** the `errored` status +
   errored rounds not burning patience (`max_consecutive_errors` as its own
   backstop); not covered by the SOP.
 - **QD archive and recombination:** a (WHERE x WHY) per-cell elite bank +
   cross-cell recombinant candidates (`orchestrator/archive.py`) — an
-  exploration mechanism beyond the SOP; gates and calibers unchanged.
+  exploration mechanism beyond the SOP; the gates and evaluation criteria
+  remain unchanged.
 - **The inert-death feedback loop** (2026-07): a distinct `pruned_inert`
   status + inert deaths recorded into history + the design prompt
   distinguishing "the trigger never fired" from "the mechanism was rejected"
   + gentle WHY decay for inert deaths (`0.55^n_fail x 0.85^n_inert`).
-- **Harm replay:** when a candidate breaks a task, the regressed task's actual
-  trajectory excerpt under that candidate is fed to the next design attempt;
-  the SOP only requires flip counts.
+- **Harm replay:** when a candidate causes a task to regress, an excerpt of
+  that task's actual execution trajectory under the candidate is provided to
+  the next candidate-design attempt; the SOP only requires flip counts.
 
 ## 6. Deliberate deviations and unwired parts (honest list)
 
@@ -143,9 +139,10 @@ produces real SHAs), tree lineage in `nodes/*.json`, aligned via
 SOP §8.3's "manual orchestration" is superseded by
 `python -m evolver run --config <yaml>`: a single-command state machine
 running cold start -> rounds -> termination -> unseal, resumable after any
-interruption (artifacts are the state: trial files / journal / meta stamps,
-three tiers of truth). Config drift and unseal one-wayness are mechanized in
-`run_meta.json` (the codification of SOP §0's same-regime discipline).
+interruption (artifacts are the state: trial files / journal / metadata markers,
+three types of persisted state records). Config drift and unseal one-wayness
+are mechanized in `run_meta.json` (the codification of SOP §0's same-regime
+discipline).
 Benches plug in via the contract in
 `docs/specs/evolve-bench-contract.md`, kept in the repository beside the code;
 implementation in `evolver/launch/` + `evolver/cli.py`.

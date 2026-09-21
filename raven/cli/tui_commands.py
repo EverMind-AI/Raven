@@ -27,7 +27,7 @@ from typing import Optional, Tuple
 
 import typer
 
-from raven.cli._helpers import report_dropped_memory_writes
+from raven.cli._helpers import report_memory_write_outcome
 from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file
 from raven.i18n import t
 from raven.rpc.cron_events import build_cron_callback_spine, fanout_cron_missed
@@ -616,8 +616,8 @@ async def _run_rpc_server_until_done(
         # Release the embedded index lock so the next process can start.
         if agent_loop is not None and agent_loop.backend is not None:
             try:
-                dropped = await agent_loop.drain_backend_stores()
-                report_dropped_memory_writes(dropped)
+                outcome = await agent_loop.drain_backend_stores()
+                report_memory_write_outcome(outcome)
                 await agent_loop.backend.stop()
             except Exception:
                 from loguru import logger as _logger

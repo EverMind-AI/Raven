@@ -751,6 +751,10 @@
       "en": "Connect",
       "zh": "接入"
     },
+    "gui.agent.connecting": {
+      "en": "Connecting...",
+      "zh": "连接中..."
+    },
     "gui.agent.disconnect": {
       "en": "Disconnect",
       "zh": "断开"
@@ -782,6 +786,14 @@
     "gui.agent.kind_openai": {
       "en": "openai",
       "zh": "openai"
+    },
+    "gui.agent.not_installed": {
+      "en": "Not Installed",
+      "zh": "未安装"
+    },
+    "gui.agent.unauthorized": {
+      "en": "Unauthorized",
+      "zh": "未授权"
     },
     "gui.agent.none": {
       "en": "Nothing connected yet.",
@@ -3823,6 +3835,10 @@
       "en": "Nothing here yet",
       "zh": "暂无会话"
     },
+    "gui.rail.no_workdir": {
+      "en": "No folder",
+      "zh": "无工作区"
+    },
     "gui.rail.pinned": {
       "en": "Pinned",
       "zh": "已固定"
@@ -3830,6 +3846,10 @@
     "gui.rail.recent": {
       "en": "Recent",
       "zh": "最近"
+    },
+    "gui.rail.workdir": {
+      "en": "With a folder",
+      "zh": "有工作区"
     },
     "gui.rail.search_hits": {
       "en": "Results - {n}",
@@ -4234,6 +4254,62 @@
     "gui.upg.working": {
       "en": "Upgrading Raven...",
       "zh": "正在升级 Raven…"
+    },
+    "gui.wd.back": {
+      "en": "Back",
+      "zh": "返回"
+    },
+    "gui.wd.blocked": {
+      "en": "Not a workspace: Raven's own data is here or beneath it. Its folders may still be.",
+      "zh": "这里不能作为工作区：Raven 自己的数据在此处或其下；里面的文件夹可以"
+    },
+    "gui.wd.empty": {
+      "en": "No subfolders",
+      "zh": "没有子文件夹"
+    },
+    "gui.wd.failed": {
+      "en": "Could not read the folder - {detail}",
+      "zh": "读取目录失败 · {detail}"
+    },
+    "gui.wd.home": {
+      "en": "Home",
+      "zh": "主目录"
+    },
+    "gui.wd.locked": {
+      "en": "The workspace is fixed once the conversation starts",
+      "zh": "对话开始后工作区不可更改"
+    },
+    "gui.wd.none": {
+      "en": "No folder",
+      "zh": "无文件夹"
+    },
+    "gui.wd.none_h": {
+      "en": "Work in the default directory",
+      "zh": "在默认目录里工作"
+    },
+    "gui.wd.not_live": {
+      "en": "Browsing folders needs a running gateway",
+      "zh": "离线预览无法浏览文件夹"
+    },
+    "gui.wd.open": {
+      "en": "Open folder...",
+      "zh": "打开文件夹…"
+    },
+    "gui.wd.recent": {
+      "en": "Recent",
+      "zh": "最近"
+    },
+    "gui.wd.title": {
+      "en": "Workspace",
+      "zh": "工作区"
+    },
+    "gui.wd.up": {
+      "en": "Up one level",
+      "zh": "上一级"
+    },
+    "gui.wd.use": {
+      "en": "Use this folder",
+      "zh": "选择此文件夹"
     },
     "gui.workspace": {
       "en": "Workspace",

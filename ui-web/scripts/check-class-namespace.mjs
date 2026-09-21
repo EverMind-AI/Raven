@@ -239,7 +239,7 @@ const LEGACY_LOCAL = {
   /* Up from 13 for `.tag`, the skills page's other reader. */
   /* Up from 14 with the agent hub: `.warn` was shared with the agents page. */
   playbooks: 15,
-  rail: 11,
+  rail: 12,
   settings: 0,
   subagents: 38,
   /* Down from 8: the node panel's inline "still running" line -- a plain

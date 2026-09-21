@@ -27,7 +27,7 @@ _MAX_TAIL = 400
 
 
 def _campaign_backend(campaign: str, ledger: str | None) -> tuple[Any, Any, Path] | str:
-    from oncall_flow.backends import backend_from_meta
+    from oncall_flow.backends import backend_from_meta, billing_only
     from oncall_flow.ledger import Ledger
 
     cdir = _resolve_campaign_dir(campaign, ledger)
@@ -35,7 +35,8 @@ def _campaign_backend(campaign: str, ledger: str | None) -> tuple[Any, Any, Path
     if not ledger_path.exists() or not meta_path.exists():
         return f"No campaign state under {cdir} (need ledger.json + meta.json)."
     meta = _json.loads(meta_path.read_text(encoding="utf-8"))
-    return backend_from_meta(meta), Ledger(ledger_path), cdir
+    ledger = Ledger(ledger_path)
+    return billing_only(backend_from_meta(meta), ledger), ledger, cdir
 
 
 class OpsOutputsTool(Tool):
