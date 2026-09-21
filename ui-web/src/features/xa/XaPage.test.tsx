@@ -595,6 +595,77 @@ describe('xa island', () => {
       expect(acts).toEqual([['toggle', 'claude_code', { enabled: true }]])
     })
 
+    /* The one control on this row whose await IS the work it names. The server
+       proves the agent before it writes anything -- one real prompt through the
+       agent's own backend -- and that held the call for 16s against a live
+       adapter here. Nothing on the row said it had begun, so the reader with
+       nothing to look at pressed again, and the second press reached the server
+       as a second connect for the same agent: the pool retired the first
+       press's connection as a stale launch config and the first press came back
+       refused, naming the agent for a failure raven had caused. The Test button
+       beside it has had this treatment since it was written, for the same
+       reason and one await shorter. */
+    it('sends nothing for a second connect while the first is still in flight', async () => {
+      const calls: string[] = []
+      let release = (): void => {}
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const rows = [row({ configured: false })]
+      install(rows, {
+        act: async (op) => {
+          calls.push(op)
+          await held
+          return rows
+        },
+      })
+      await mount()
+      const button = (): HTMLButtonElement => rowNamed('claude_code').querySelector('.suact button')!
+
+      await click(button())
+      expect(calls).toEqual(['connect'])
+      expect(button().textContent).toBe('gui.agent.connecting')
+      expect(button().disabled).toBe(true)
+
+      await click(button())
+      expect(calls).toEqual(['connect'])
+
+      await act(async () => {
+        release()
+      })
+      expect(button().disabled).toBe(false)
+    })
+
+    /* Two rows whose Connect could only ever fail, and which used to carry one
+       indistinguishable from a working row's. The probe knows both before the
+       reader touches anything -- one from `which`, one from the handshake -- so
+       the page says which it is instead of offering a press that spends a
+       launch to arrive at the same sentence. Neither is pressable: the remedy
+       for both is outside this page (install the binary, sign in to the agent),
+       and the way back is the card's own Test once that is done. */
+    it('names a row whose command is not on this machine instead of offering it', async () => {
+      const { acts } = install([row({ name: 'copilot', kind: 'acp', configured: false, enabled: false, probe_status: 'missing' })])
+      await mount()
+      await expandGroup('gui.agent.g_install')
+      expect(rowActs('copilot')).toEqual(['gui.agent.not_installed'])
+      const button = rowNamed('copilot').querySelector('.suact button') as HTMLButtonElement
+      expect(button.disabled).toBe(true)
+      await click(button)
+      expect(acts).toEqual([])
+    })
+
+    it('names a row the agent itself refused to let in', async () => {
+      const { acts } = install([
+        row({ name: 'grok', kind: 'acp', configured: false, enabled: false, probe_status: 'attention', needs_auth: true }),
+      ])
+      await mount()
+      expect(rowActs('grok')).toEqual(['gui.agent.unauthorized'])
+      const button = rowNamed('grok').querySelector('.suact button') as HTMLButtonElement
+      expect(button.disabled).toBe(true)
+      await click(button)
+      expect(acts).toEqual([])
+    })
+
     /* The one connect this page cannot finish on its own: only the reader has
        the credential. So the row opens the card, where the field is, and writes
        nothing on the way. */

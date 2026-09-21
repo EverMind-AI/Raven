@@ -31,7 +31,7 @@ from raven.contracts.llm_provider import (  # noqa: F401
 from raven.contracts.llm_provider import LLMProvider as _LLMProviderPaper
 from raven.observability import semconv
 from raven.providers import call_record
-from raven.providers.first_byte import FirstByteTimeoutError
+from raven.providers.first_byte import FirstByteTimeoutError, StreamIdleTimeoutError
 from raven.tracing import trace
 
 # Wordings providers use to reject list-type content in a tool message. Each is
@@ -426,6 +426,12 @@ class LLMProvider(_LLMProviderPaper):
         # from a mid-answer stall or a dropped connection.
         if isinstance(exc, FirstByteTimeoutError):
             return ErrorClassification("first_byte_timeout", retryable=True, should_fallback=True)
+        # The mid-stream sibling, for the same reason and one more: its message
+        # carries the configured idle budget, and a budget of 429 or 500 would
+        # otherwise read as a rate limit or a server error in the substring
+        # branches below. Named here, no substring ever sees it.
+        if isinstance(exc, StreamIdleTimeoutError):
+            return ErrorClassification("stream_idle_timeout", retryable=True, should_fallback=True)
 
         # Context-window overflow → compress and retry, NOT fallback (a smaller
         # window won't help; the same model after compaction will). Detected by
@@ -495,7 +501,9 @@ class LLMProvider(_LLMProviderPaper):
 
         # Timeout / connection → retry + fallback. isinstance covers the builtin
         # TimeoutError raised by asyncio.wait_for (its class name "timeouterror"
-        # and empty str() match neither the name set nor the substrings below).
+        # and empty str() match neither the name set nor the substrings below);
+        # the two bounds raven raises itself are named above before any
+        # substring runs, because their messages carry numbers.
         if (
             isinstance(exc, TimeoutError)
             or {"timeout", "apitimeouterror"} & names
