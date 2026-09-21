@@ -61,7 +61,7 @@ export function ImportSyncApp(): JSX.Element | null {
         </button>
         {running ? (
           <button type="button" className="importSync-x" aria-label={t('gui.importSync.stop')} onClick={() => void store.stop()}><Close /></button>
-        ) : v.kind === 'done' && !v.failed ? (
+        ) : v.kind === 'done' ? (
           <button type="button" className="importSync-x" aria-label={t('gui.importSync.dismiss')} onClick={store.dismiss}><Close /></button>
         ) : null}
       </div>

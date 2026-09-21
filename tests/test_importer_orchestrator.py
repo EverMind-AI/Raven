@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from raven.importer import orchestrator
 from raven.importer.orchestrator import ImportSummary, ProgressEvent, run_import
 from raven.importer.state import ImportState
 from raven.importer.types import (
@@ -22,15 +23,30 @@ from raven.importer.types import (
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The retry waits are real seconds in production; tests that care set them."""
+    monkeypatch.setattr(orchestrator, "_STORE_RETRY_BACKOFF_S", (0.0, 0.0, 0.0))
+
+
 class FakeBackend:
     """Records store() calls for assertion."""
 
-    def __init__(self, *, fail_on: set[str] | None = None, drop_on: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_on: set[str] | None = None,
+        drop_on: set[str] | None = None,
+        drop_first: dict[str, int] | None = None,
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.attempts = 0
         self._fail_on = fail_on or set()
         # A backend that reports a dropped write instead of raising: the shape
         # a real EverosBackend takes when the memory service is unavailable.
         self._drop_on = drop_on or set()
+        # Refuse the first n writes of a session, then accept: a transient fault.
+        self._drop_first = dict(drop_first or {})
 
     async def recall(self, query: str, *, user_id: str | None = None, agent_id: str | None = None, top_k: int) -> list:
         return []
@@ -38,9 +54,13 @@ class FakeBackend:
     async def store(
         self, session_id: str, messages: list[dict[str, Any]], *, metadata: dict[str, Any] | None = None
     ) -> bool:
+        self.attempts += 1
         if session_id in self._fail_on:
             raise RuntimeError(f"store failed for {session_id}")
         if session_id in self._drop_on:
+            return False
+        if self._drop_first.get(session_id, 0) > 0:
+            self._drop_first[session_id] -= 1
             return False
         self.calls.append({"session_id": session_id, "messages": messages, "metadata": metadata})
         return True
@@ -247,18 +267,116 @@ class TestErrorIsolation:
         assert state.is_submitted("claude_code", "b")
 
 
+class TestStoreRetry:
+    """A refused batch is sent again, with a wait, before its source is given up on."""
+
+    @staticmethod
+    def _recording_pause(waits: list[float]):
+        async def _pause(seconds: float, cancelled: Any) -> bool:
+            waits.append(seconds)
+            return True
+
+        return _pause
+
+    @pytest.mark.asyncio
+    async def test_a_refused_batch_is_retried_after_each_wait_and_lands(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        waits: list[float] = []
+        monkeypatch.setattr(orchestrator, "_STORE_RETRY_BACKOFF_S", (5.0, 7.0, 9.0))
+        monkeypatch.setattr(orchestrator, "_pause", self._recording_pause(waits))
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend(drop_first={"import-a": 2})
+        scanner = FakeScanner({"a": _session(n_msgs=1, session_id="import-a")})
+
+        summary = await run_import([(scanner, _scan_result("a"))], backend, state)
+
+        assert (summary.submitted, summary.failed) == (1, 0)
+        assert state.is_submitted("claude_code", "a")
+        assert backend.attempts == 3
+        assert len(backend.calls) == 1
+        assert waits == [5.0, 7.0]
+
+    @pytest.mark.asyncio
+    async def test_a_batch_refused_every_time_fails_its_source_after_the_last_wait(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        waits: list[float] = []
+        monkeypatch.setattr(orchestrator, "_STORE_RETRY_BACKOFF_S", (1.0, 2.0, 3.0))
+        monkeypatch.setattr(orchestrator, "_pause", self._recording_pause(waits))
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend(drop_on={"import-a"})
+        scanner = FakeScanner({"a": _session(n_msgs=1, session_id="import-a")})
+
+        summary = await run_import([(scanner, _scan_result("a"))], backend, state)
+
+        assert (summary.submitted, summary.failed) == (0, 1)
+        assert backend.attempts == 4
+        assert waits == [1.0, 2.0, 3.0]
+        assert "after 4 attempts" in summary.errors[0].error
+
+    @pytest.mark.asyncio
+    async def test_a_raised_store_error_is_retried_the_same_way(self, tmp_path: Path) -> None:
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend(fail_on={"import-a"})
+        scanner = FakeScanner({"a": _session(n_msgs=1, session_id="import-a")})
+
+        summary = await run_import([(scanner, _scan_result("a"))], backend, state)
+
+        assert backend.attempts == 4
+        assert summary.errors[0].error.startswith("store failed for import-a for import-a after 4 attempts")
+
+    @pytest.mark.asyncio
+    async def test_a_stop_during_the_wait_ends_the_run_and_leaves_the_source_unmarked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cancel = tmp_path / "cancel"
+
+        async def _stopped_pause(seconds: float, cancelled: Any) -> bool:
+            cancel.touch()
+            return False
+
+        monkeypatch.setattr(orchestrator, "_pause", _stopped_pause)
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend(drop_first={"import-a": 1})
+        scanner = FakeScanner(
+            {"a": _session(n_msgs=1, session_id="import-a"), "b": _session(n_msgs=1, session_id="import-b")}
+        )
+        items = [(scanner, _scan_result("a")), (scanner, _scan_result("b"))]
+
+        summary = await run_import(items, backend, state, cancel_path=cancel)
+
+        assert (summary.submitted, summary.failed) == (0, 0)
+        assert not state.is_submitted("claude_code", "a")
+        assert state.get_progress()["entries"] == {}
+        assert [c["session_id"] for c in backend.calls] == []
+
+    @pytest.mark.asyncio
+    async def test_pause_returns_early_when_the_stop_arrives(self) -> None:
+        seen = 0
+
+        def _cancelled() -> bool:
+            nonlocal seen
+            seen += 1
+            return seen > 1
+
+        assert await orchestrator._pause(0.0, lambda: False) is True
+        assert await orchestrator._pause(30.0, _cancelled) is False
+        assert seen == 2
+
+
 class TestBatching:
     @pytest.mark.asyncio
     async def test_msg_count_limit(self, tmp_path: Path) -> None:
-        """120 messages -> 3 batches (50 + 50 + 20), only the last one final, every one bulk."""
+        """120 messages -> 12 batches of 10, only the last one final, every one bulk."""
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
         scanner = FakeScanner({"k1": _session(n_msgs=120, session_id="s1", content="x")})
 
         await run_import([(scanner, _scan_result("k1"))], backend, state)
 
-        assert [len(c["messages"]) for c in backend.calls] == [50, 50, 20]
-        assert [c["metadata"]["is_final"] for c in backend.calls] == [False, False, True]
+        assert [len(c["messages"]) for c in backend.calls] == [10] * 12
+        assert [c["metadata"]["is_final"] for c in backend.calls] == [False] * 11 + [True]
         assert all(c["metadata"]["bulk"] is True for c in backend.calls)
 
     def test_a_batch_stays_inside_the_zone_everos_extracts_linearly(self) -> None:
@@ -269,7 +387,7 @@ class TestBatching:
         memory-file source it belonged to."""
         from raven.importer.orchestrator import _BATCH_MSG_LIMIT
 
-        assert _BATCH_MSG_LIMIT <= 50
+        assert _BATCH_MSG_LIMIT <= 10
 
     @pytest.mark.asyncio
     async def test_char_limit_fallback(self, tmp_path: Path) -> None:
@@ -288,10 +406,10 @@ class TestBatching:
 
     @pytest.mark.asyncio
     async def test_is_final_only_on_last_batch(self, tmp_path: Path) -> None:
-        """Exactly 50 messages -> 1 batch with is_final=True."""
+        """Exactly 10 messages -> 1 batch with is_final=True."""
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
-        scanner = FakeScanner({"k1": _session(n_msgs=50, session_id="s1", content="x")})
+        scanner = FakeScanner({"k1": _session(n_msgs=10, session_id="s1", content="x")})
 
         await run_import([(scanner, _scan_result("k1"))], backend, state)
 
