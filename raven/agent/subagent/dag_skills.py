@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec
+from raven.agent.subagent.role import WITHHELD_FROM_SUBAGENT
+from raven.memory_engine import filter_by_required_tools
 
 __all__ = ["SECTION_CAP", "SKILLS_DIR", "SKILL_BODY_CAP", "fold_skills", "skills_section"]
 
@@ -127,20 +129,27 @@ def _gated(found: Sequence[SkillLike]) -> tuple[list[SkillLike], list[tuple[str,
     already reported when the catalog lacks it, and a name dropped here without
     a word would read as a skill that silently did nothing.
     """
-    from raven.agent.subagent.role import WITHHELD_FROM_SUBAGENT
-    from raven.memory_engine.skill_local.registry import filter_by_required_tools, requires_list
-
     kept = filter_by_required_tools(list(found), None, denied=WITHHELD_FROM_SUBAGENT)
     keep = {id(entry) for entry in kept}
     withheld = [
-        (
-            entry.name,
-            ", ".join(t for t in requires_list(getattr(entry, "requires", None), "tools") if t in WITHHELD_FROM_SUBAGENT),
-        )
+        (entry.name, ", ".join(t for t in _wanted_tools(entry) if t in WITHHELD_FROM_SUBAGENT))
         for entry in found
         if id(entry) not in keep
     ]
     return kept, withheld
+
+
+def _wanted_tools(entry: SkillLike) -> list[str]:
+    """The tools this skill declares, for the notice that names them.
+
+    Read here only to say *which* tool held a skill back. What is held back is
+    the gate's answer, never this: a second reading of ``requires`` that decided
+    anything would be the per-surface copy the gate exists to prevent.
+    """
+    raw = (getattr(entry, "requires", None) or {}).get("tools")
+    if isinstance(raw, str):
+        return [raw]
+    return [str(tool) for tool in (raw or [])]
 
 
 def _folder_for(entry: SkillLike, source: Path) -> str:
