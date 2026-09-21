@@ -482,6 +482,33 @@ async def test_a_folded_catalog_names_its_connected_servers(workspace) -> None:
     assert unfolded._mcp_tool_notices() == []
 
 
+async def test_the_count_is_what_the_fold_withholds_not_what_the_server_registered(workspace) -> None:
+    """A switched-off tool is not findable, so counting it promises a capability
+    the model cannot reach -- the false metadata this line exists to prevent."""
+    from raven.config.schema import ToolSearchConfig
+
+    one_off = _loop(
+        workspace,
+        {"svc": MCPServerConfig(url="https://svc.test/mcp")},
+        tool_search_config=ToolSearchConfig(enabled=True, compaction_threshold=0),
+        disabled_tools=["mcp_svc_create"],
+    )
+    with patch(_PATCH, new=_fake_connect(["search", "create"])):
+        await one_off._connect_mcp()
+    notes = one_off._mcp_tool_notices()
+    assert len(notes) == 1 and "1 tool(s)" in notes[0], notes
+
+    all_off = _loop(
+        workspace,
+        {"svc": MCPServerConfig(url="https://svc.test/mcp")},
+        tool_search_config=ToolSearchConfig(enabled=True, compaction_threshold=0),
+        disabled_tools=["mcp_svc_search", "mcp_svc_create"],
+    )
+    with patch(_PATCH, new=_fake_connect(["search", "create"])):
+        await all_off._connect_mcp()
+    assert all_off._mcp_tool_notices() == [], "a server with nothing withheld gets no line"
+
+
 async def test_tool_notices_ride_the_runtime_context_block(workspace) -> None:
     from datetime import datetime
 
