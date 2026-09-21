@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 
 import { t } from '../../../i18n/t'
 import * as confirm from '../../../state/confirm'
+import { refreshList } from '../../../state/session/registry'
 import { whenLabel } from '../../rail/source'
 import { Card, Row, Rov, Switch } from '../Fields'
 import * as store from '../store'
@@ -28,6 +29,15 @@ export function Archive(): JSX.Element {
   const rows = s.archived
   const restore = (r: ArchivedSession): void => {
     void store.run(`restore:${r.id}`, () => store.source().restore(r.id).then(() => store.archivedLoad()))
+  }
+  /* The sweep this switch turns on runs inside session.list, so until something
+     lists, turning it on moves nothing: the card kept saying there was nothing
+     archived and the rail kept the stale conversations, until a reload made a
+     pile of them disappear at once. Both reads below issue one, which is what
+     performs the sweep and then shows what it did. */
+  const toggleAuto = (on: boolean): void => {
+    void store.write('sessions.autoArchiveAfterDays', on ? AUTO_ARCHIVE_DAYS : null)
+      .then((applied) => { if (applied) return store.archivedLoad().then(() => refreshList()) })
   }
   const remove = (r: ArchivedSession): void => {
     confirm.ask(
@@ -58,7 +68,7 @@ export function Archive(): JSX.Element {
           <Switch
             on={autoArchiveOn(s.snap.raw)}
             label={t('gui.settings.archive.auto')}
-            onChange={(v) => void store.write('sessions.autoArchiveAfterDays', v ? AUTO_ARCHIVE_DAYS : null)}
+            onChange={toggleAuto}
           />
         </Row>
       </Card>
