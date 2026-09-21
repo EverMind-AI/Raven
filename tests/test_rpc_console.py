@@ -2072,6 +2072,25 @@ async def test_deck_templates_pick_lands_under_uploads_as_fs_upload_answers(tmp_
     assert again["path"] == "uploads/mint_memphis_thesis_defense-1.pptx"
 
 
+async def test_deck_templates_pick_says_why_when_the_copy_cannot_land(tmp_path: Path, monkeypatch) -> None:
+    from raven.rpc import deck_templates
+    from raven.rpc.errors import ConfigValidationError
+
+    home = tmp_path / "home"
+    home.mkdir()
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("mint_memphis_thesis_defense",))
+
+    def full_disk(template, uploads):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(deck_templates, "deposit", full_disk)
+    with pytest.raises(ConfigValidationError, match="cannot place the template under uploads"):
+        await console_module.deck_templates_pick(
+            {"name": "mint_memphis_thesis_defense"}, agent_loop_factory=_loop_factory(None)
+        )
+
+
 async def test_deck_templates_pick_refuses_a_name_that_is_not_a_bundled_template(tmp_path: Path, monkeypatch) -> None:
     from raven.rpc.errors import ConfigValidationError
 
