@@ -62,6 +62,11 @@ uv sync --all-extras                 # source checkout: pulls playwright
 uv run playwright install chromium   # the browser binary
 ```
 
+On Linux add the system libraries Chromium links against, which the install
+above does not bring: `uv run playwright install --with-deps chromium` (or
+`playwright install-deps`). Without them Chromium is present and refuses to
+start, naming a missing `libatk` / `libgtk` / `libnss3`.
+
 On an installed raven: `<raven's python> -m playwright install chromium` (the
 driver prints the exact line when Chromium is missing). Everything else is on
 by default; turn it off with `tools.disabledTools: ["browser_navigate", ...]`.

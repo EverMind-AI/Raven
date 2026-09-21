@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import http.server
 import os
-import pwd
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -66,11 +66,42 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+try:
+    import pwd
+except ImportError:  # pragma: no cover - Windows has no pwd module
+    pwd = None  # type: ignore[assignment]
+
+
+def _playwright_cache(home: str) -> str:
+    """Where ``playwright install`` put the browsers, by platform.
+
+    Playwright picks this directory by OS, and this fixture only has to name
+    the same one: hard-coded to macOS it sent a Linux run looking in
+    ``~/Library/Caches``, which the documented install never writes -- the
+    suite then reported Chromium missing and suggested an install that would
+    write somewhere else again.
+    """
+    if sys.platform == "darwin":
+        return os.path.join(home, "Library", "Caches", "ms-playwright")
+    if sys.platform == "win32":
+        return os.path.join(home, "AppData", "Local", "ms-playwright")
+    return os.path.join(home, ".cache", "ms-playwright")
+
+
 @pytest.fixture(autouse=True)
 def _browsers_from_the_real_home(monkeypatch: pytest.MonkeyPatch) -> None:
-    if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-        real_home = pwd.getpwuid(os.getuid()).pw_dir
-        monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", os.path.join(real_home, "Library", "Caches", "ms-playwright"))
+    """Point Playwright at the human's cache rather than a sandboxed HOME.
+
+    An explicit ``PLAYWRIGHT_BROWSERS_PATH`` always wins, so CI that installs
+    browsers elsewhere is untouched.
+    """
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+    try:
+        home = pwd.getpwuid(os.getuid()).pw_dir if pwd is not None else os.path.expanduser("~")
+    except (KeyError, AttributeError):
+        home = os.path.expanduser("~")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", _playwright_cache(home))
 
 
 @pytest.fixture

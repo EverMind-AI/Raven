@@ -9,7 +9,9 @@ Chromium run belongs in tests/integration/test_browser_tools_real_web.py.
 
 from __future__ import annotations
 
+import gc
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -17,14 +19,18 @@ import pytest
 from raven.agent.tools import browser as tools_mod
 from raven.agent.tools.browser import (
     BROWSER_TOOL_NAMES,
+    SNAPSHOT_TEXT_CHARS,
     BrowserClickTool,
     BrowserNavigateTool,
+    BrowserPressTool,
     BrowserScreenshotTool,
+    BrowserScrollTool,
     BrowserSnapshotTool,
     BrowserTabsTool,
     BrowserTypeTool,
     browser_tools,
     current_owner,
+    render_snapshot,
 )
 from raven.agent.tools.registry import admit_tool
 from raven.browser import driver as driver_module
@@ -45,6 +51,7 @@ class _FakePage:
         self._closed = False
         self._raven_loading = False
         self.front = 0
+        self._handlers: dict[str, list[Any]] = {}
 
     def is_closed(self) -> bool:
         return self._closed
@@ -60,6 +67,16 @@ class _FakePage:
 
     async def evaluate(self, js: str, *args: Any) -> Any:
         return {"url": self.url, "title": self._title, "text": f"text of {self._title}", "refs": []}
+
+    def set_default_timeout(self, ms: int) -> None:
+        pass
+
+    def on(self, event: str, handler: Any) -> None:
+        self._handlers.setdefault(event, []).append(handler)
+
+    def emit_console(self, kind: str, text: str) -> None:
+        for handler in self._handlers.get("console", []):
+            handler(SimpleNamespace(type=kind, text=text))
 
 
 class _FakeContext:
@@ -161,8 +178,189 @@ def test_owner_is_the_run_when_one_is_collecting_else_the_conversation() -> None
     with usage_context.bind("conv-1"):
         assert current_owner() == "session:conv-1"
         with activity.collecting() as run:
-            assert current_owner() == f"run:{id(run):x}"
+            assert current_owner() == f"run:{run.uid}"
     assert current_owner() == "session:default"
+
+
+def test_a_finished_runs_owner_key_is_never_handed_to_the_next_run() -> None:
+    """The driver keeps an owner's tab for ten minutes after the run ends.
+
+    Keyed on ``id(activity)`` that outliving binding was inheritable: CPython
+    hands the address of a collected object straight to the next one, so the
+    third run in a row read the second run's page -- another conversation's,
+    when the runs belonged to different ones.
+    """
+    from raven.agent.subagent import activity
+
+    seen: list[tuple[str, int]] = []
+    for _ in range(5):
+        with activity.collecting() as run:
+            seen.append((current_owner(), id(run)))
+        gc.collect()
+
+    owners = [owner for owner, _ in seen]
+    assert len(set(owners)) == len(owners), "two runs answered to one owner key"
+    # Asserted rather than reproducing a reused address, which is the
+    # allocator's business and not reliably repeatable in one test: what this
+    # guards is that the key does not encode the address at all.
+    for owner, address in seen:
+        assert f"{address:x}" not in owner
+
+
+def test_a_delegated_run_is_not_offered_a_browser_it_cannot_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The raven-loop lane builds its own registry, and it must gate the way
+    the main loop does: a source install without the browser extra offered a
+    sub-agent eight tools whose every call could only report the extra is
+    missing."""
+    from raven.agent.subagent.backends.raven_loop import _withheld_here
+    from raven.agent.tools.registry import ToolRegistry
+
+    tools = ToolRegistry()
+    for tool in browser_tools():
+        tools.register(tool)
+    tools.set_withheld_source(lambda: _withheld_here(tools, None))
+
+    monkeypatch.setattr(driver_module.Browser, "probe", staticmethod(lambda: (True, "")))
+    offered = {d["function"]["name"] for d in tools.get_definitions()}
+    assert BROWSER_TOOL_NAMES <= offered
+
+    monkeypatch.setattr(driver_module.Browser, "probe", staticmethod(lambda: (False, "install chromium")))
+    offered = {d["function"]["name"] for d in tools.get_definitions()}
+    assert not (BROWSER_TOOL_NAMES & offered)
+
+
+async def test_a_snapshot_reports_its_own_pages_console_and_no_others() -> None:
+    """One console buffer for every tab was read back as the current page's.
+
+    Two agents in two tabs then shared each other's failures: the model saw an
+    error its page had not logged and treated it as its own.
+    """
+    b = get_browser()
+    mine, theirs = _FakePage("https://mine.test", "Mine"), _FakePage("https://theirs.test", "Theirs")
+    _running(b, [mine, theirs])
+    # Through the class: _running stubs the instance's _wire away, and wiring
+    # is the thing under test here.
+    Browser._wire(b, mine)
+    Browser._wire(b, theirs)
+    mine.emit_console("error", "mine blew up")
+    theirs.emit_console("error", "theirs blew up")
+
+    snap = await b.snapshot(owner="run:mine")
+
+    assert [c["text"] for c in snap["console"]] == ["mine blew up"]
+
+
+async def test_the_remaining_verbs_reach_the_driver_and_read_the_page_back() -> None:
+    """press and scroll, which the real-browser suite covers and the unit
+    suite did not: both act, both hand back the page afterwards."""
+    b = get_browser()
+    p0 = _FakePage("https://a.test", "A")
+    calls: list[tuple[str, Any]] = []
+    _running(b, [p0])
+    _stub_actions(b, calls, {"url": "https://a.test/", "title": "A", "started": True})
+
+    pressed = await BrowserPressTool().execute(key="Enter")
+    scrolled = await BrowserScrollTool().execute(dy=400, dx=0)
+
+    verbs = {name: kw for name, kw in calls}
+    assert verbs["press"]["key"] == "Enter"
+    assert (verbs["scroll"]["dx"], verbs["scroll"]["dy"]) == (0, 400)
+    assert "url: https://a.test/" in pressed.model_text
+    assert "url: https://a.test/" in scrolled.model_text
+
+
+async def test_a_busy_browser_is_a_retryable_error_rather_than_a_crash() -> None:
+    from raven.browser import BrowserBusyError
+
+    b = get_browser()
+    _running(b, [_FakePage("https://a.test", "A")])
+
+    async def busy(*a: Any, **kw: Any) -> dict[str, Any]:
+        raise BrowserBusyError("tab limit reached (20); close one before opening another")
+
+    b.goto = busy  # type: ignore[method-assign]
+
+    out = await BrowserNavigateTool().execute(url="b.test")
+
+    assert out.ok is False and out.retryable is True
+    assert "tab limit reached" in out.model_text
+
+
+def test_a_call_renders_itself_for_the_transcript() -> None:
+    """The card shows what the call was aimed at, not the tool's name twice."""
+    assert BrowserNavigateTool().display_call({"url": "https://a.test"}) == "https://a.test"
+    assert BrowserNavigateTool().display_call({"action": "back"}) == "back"
+    assert BrowserClickTool().display_call({"ref": "ref_2"}) == "ref_2"
+    assert BrowserClickTool().display_call({"x": 3, "y": 4}) == "(3, 4)"
+    assert BrowserTypeTool().display_call({"text": "short"}) == "short"
+    assert BrowserTypeTool().display_call({"text": "x" * 60}).endswith("...")
+
+
+def test_click_asks_for_a_ref_or_a_point() -> None:
+    assert BrowserClickTool().validate_params({}) == ["ref, or both x and y, is required"]
+    assert BrowserClickTool().validate_params({"x": 1}) == ["ref, or both x and y, is required"]
+    assert BrowserClickTool().validate_params({"x": 1, "y": 2}) == []
+    assert BrowserClickTool().validate_params({"ref": "ref_1"}) == []
+    assert BrowserTabsTool().validate_params({"action": "list"}) == []
+
+
+async def test_a_page_still_loading_and_a_link_say_so_in_the_readback() -> None:
+    """What the model is told beside the refs: the page has not settled, and
+    where a link goes -- both of which aim the next call."""
+    snap = {
+        "url": "https://a.test/",
+        "title": "A",
+        "loading": True,
+        "refs": [{"ref": "ref_1", "role": "link", "name": "Docs", "href": "https://a.test/docs"}],
+        "text": "x" * (SNAPSHOT_TEXT_CHARS + 50),
+    }
+
+    rendered = render_snapshot(snap, text_chars=SNAPSHOT_TEXT_CHARS)
+
+    assert "loading: the page is still loading" in rendered
+    assert "-> https://a.test/docs" in rendered
+    assert "more chars" in rendered
+
+
+async def test_a_failed_snapshot_after_an_act_is_reported_beside_the_state() -> None:
+    b = get_browser()
+    p0 = _FakePage("https://a.test", "A")
+    calls: list[tuple[str, Any]] = []
+    _running(b, [p0])
+    _stub_actions(b, calls, {"url": "https://a.test/", "title": "A", "started": True})
+
+    async def broken_snapshot(**kw: Any) -> dict[str, Any]:
+        return {"url": "https://a.test/", "error": "Execution context was destroyed"}
+
+    b.snapshot = broken_snapshot  # type: ignore[method-assign]
+
+    acted = await BrowserPressTool().execute(key="Enter")
+    read = await BrowserSnapshotTool().execute()
+
+    assert "(snapshot failed: Execution context was destroyed)" in acted.model_text
+    assert read.ok is False and "Execution context was destroyed" in read.model_text
+
+
+async def test_the_headful_switch_survives_a_config_this_build_cannot_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A config that raises must not take navigation down with it."""
+    import raven.config as config_mod
+
+    b = get_browser()
+    p0 = _FakePage("https://a.test", "A")
+    calls: list[tuple[str, Any]] = []
+    _running(b, [p0])
+    _stub_actions(b, calls, {"url": "https://a.test/", "title": "A", "started": True})
+    monkeypatch.setattr(tools_mod, "_headful_attempted", False)
+
+    def explode() -> Any:
+        raise RuntimeError("config is from a newer build")
+
+    monkeypatch.setattr(config_mod, "load_config", explode)
+
+    out = await BrowserNavigateTool().execute(url="a.test")
+
+    assert out.ok is True
+    assert [name for name, _ in calls][0] == "goto"
 
 
 # ── tab ownership in the driver ───────────────────────────────────────
@@ -304,6 +502,8 @@ def _stub_actions(b: Browser, calls: list[tuple[str, dict[str, Any]]], state: di
     b.go = lambda direction, **kw: rec("go", direction=direction, **kw)  # type: ignore[method-assign]
     b.click = lambda **kw: rec("click", **kw)  # type: ignore[method-assign]
     b.type_text = lambda text, **kw: rec("type_text", text=text, **kw)  # type: ignore[method-assign]
+    b.press = lambda key, **kw: rec("press", key=key, **kw)  # type: ignore[method-assign]
+    b.scroll = lambda dx=0, dy=0, **kw: rec("scroll", dx=dx, dy=dy, **kw)  # type: ignore[method-assign]
 
     async def snapshot(**kw: Any) -> dict[str, Any]:
         calls.append(("snapshot", kw))
@@ -464,8 +664,6 @@ async def test_an_unavailable_browser_is_a_non_retryable_error(monkeypatch: pyte
 
 
 def _patch_switch(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
-    from types import SimpleNamespace
-
     import raven.config as config_mod
     from raven.config.schema import BrowserToolConfig
 

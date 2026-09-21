@@ -96,13 +96,17 @@ def current_owner() -> str:
     Checked in that order because a sub-agent's task inherits the parent turn's
     context variables, conversation id included; the run is the finer identity
     and the one that must not share a tab with its parent.
+
+    The run's own ``uid`` rather than ``id(run)``: an address is reused the
+    moment the run before it is collected, and a tab binding outlives a run by
+    ten minutes -- so the next run walked into the last one's page.
     """
     from raven.agent.subagent import activity
     from raven.token_wise import usage_context
 
     run = activity.current()
     if run is not None:
-        return f"run:{id(run):x}"
+        return f"run:{run.uid}"
     cid = usage_context.session_key()
     return f"session:{cid}" if cid else "session:default"
 

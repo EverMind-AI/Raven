@@ -181,7 +181,6 @@ class _State:
     browser: Any = None
     context: Any = None
     page: Any = None
-    console: list[dict[str, Any]] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     cdp: Any = None
     on_frame: Any = None
@@ -369,9 +368,21 @@ class Browser:
         self._s.refused = reason
         await route.abort("blockedbyclient")
 
-    def _on_console(self, msg: Any) -> None:
-        self._s.console.append({"type": msg.type, "text": msg.text[:500]})
-        del self._s.console[:-100]
+    @staticmethod
+    def _on_console(page: Any, msg: Any) -> None:
+        """Keep a page's console on that page.
+
+        One buffer for every tab read as the current page's console, so a
+        snapshot answered an owner with the errors another owner's page had
+        logged -- and a model acted on a failure that was not its page's.
+        """
+        log = page._raven_console
+        log.append({"type": msg.type, "text": msg.text[:500]})
+        del log[:-100]
+
+    @staticmethod
+    def _console_of(page: Any) -> list[dict[str, Any]]:
+        return list(getattr(page, "_raven_console", []) or [])
 
     def _wire(self, page: Any) -> None:
         """Handlers every tab needs, applied once per page.
@@ -382,7 +393,8 @@ class Browser:
         the handler filters to the main frame.
         """
         page.set_default_timeout(ACT_TIMEOUT_MS)
-        page.on("console", self._on_console)
+        page._raven_console: list[dict[str, Any]] = []
+        page.on("console", lambda msg, p=page: self._on_console(p, msg))
         page._raven_loading = False
 
         def _nav(frame: Any) -> None:
@@ -727,7 +739,7 @@ class Browser:
             data = await page.evaluate(_SNAPSHOT_JS, MAX_REFS)
         except Exception as exc:
             return await self._state(error=str(exc), page=page)
-        data["console"] = list(self._s.console[-20:])
+        data["console"] = self._console_of(page)[-20:]
         data["tab"] = self._index_of(page)
         return data
 
