@@ -276,11 +276,16 @@ def merge(project: Path, state_dir: Path, round_index: int) -> list[str]:
     text = document.read_text(encoding="utf-8", errors="replace")
     applied: list[str] = []
     unblock: list[int] = []
+    left: list[dict[str, Any]] = []
     for entry in entries:
         question_id = str(entry.get("id") or "")
         answer = " ".join(str(entry.get("answer") or "").split())
         updated, question = _record(text, question_id, answer, round_index)
         if question is None:
+            # An answer to a question the document does not have -- a typo in
+            # the id, a question filed later -- stays queued rather than
+            # vanishing with the rest, so the next apply or a person finds it.
+            left.append(entry)
             continue
         text = updated
         applied.append(question_id)
@@ -288,7 +293,10 @@ def merge(project: Path, state_dir: Path, round_index: int) -> list[str]:
     if applied:
         document.write_text(text, encoding="utf-8")
         _unblock(project, unblock, round_index)
-    path.unlink(missing_ok=True)
+    if left:
+        path.write_text(json.dumps(left, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    else:
+        path.unlink(missing_ok=True)
     return applied
 
 

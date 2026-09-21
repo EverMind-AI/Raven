@@ -30,6 +30,8 @@ from typing import Any
 
 from loguru import logger
 
+from raven.utils.atomic_io import atomic_replace
+
 __all__ = [
     "HEARTBEAT_EVERY_SEC",
     "RoundRecord",
@@ -448,9 +450,10 @@ class StintStore:
         if record.status not in (RUNNING, INTERRUPTED) and not record.ended_at_ms:
             record.ended_at_ms = int(time.time() * 1000)
         record.touched_at_ms = int(time.time() * 1000)
-        temporary = path.with_suffix(".json.writing")
-        temporary.write_text(json.dumps(record.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        os.replace(temporary, path)
+        # Through the locked, fsynced replace rather than a bare rename: two
+        # processes write this file (a beat, a `stop`, an `answer`), and a
+        # torn file read as "no such stint", which a `stop` could not reach.
+        atomic_replace(path, json.dumps(record.to_dict(), indent=2, ensure_ascii=False) + "\n")
         return path
 
     def read(self, stint_id: str) -> StintRecord | None:

@@ -501,7 +501,7 @@ class StintDriver:
             f"of at most {_budget(spec)}: {checks}"
         )
         if finished.violations:
-            line += f"; {len(finished.violations)} boundary violation(s) undone"
+            line += f"; {len(finished.violations)} finding(s) on the record"
         waiting = [q for q in record.questions if not str(q.get("answer") or "").strip()]
         if waiting:
             line += f"; {len(waiting)} unanswered question(s)"
@@ -1291,7 +1291,9 @@ def _summary(record: StintRecord) -> str:
         f"More rounds on this same tree: `raven playbook stints extend {record.stint_id} --rounds N`.",
     ]
     if violations:
-        lines.append(f"{len(violations)} boundary violation(s) were undone; the stint's record names them.")
+        lines.append(
+            f"{len(violations)} finding(s) are on the stint's record: boundary writes undone, checks left failing, hand-backs spent."
+        )
     if record.questions:
         lines.append(f"{len(record.questions)} question(s) are waiting for a person.")
     if done:
@@ -1308,7 +1310,7 @@ def _reported(marker: str, summary: str) -> str | None:
     but I found three things" would end the stint on the sentence disputing it.
     A whole line saying only the word cannot be an aside.
     """
-    return next((line for line in summary.splitlines() if line.strip() == marker), None)
+    return next((line for line in summary.splitlines() if line.strip() == marker.strip()), None)
 
 
 def isolation_of(spec: PlaybookSpec) -> "Isolation":

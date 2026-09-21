@@ -2104,6 +2104,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.kb.rename_title': 'Rename knowledge base',
     'gui.kb.delete_base': 'Delete Knowledge Base',
     'gui.kb.save': 'Save',
+    'gui.pb.stints_unsupported': 'This engine has no runs surface; update it to see multi-round runs here.',
     'gui.pb.stints_none': 'No multi-round run has been started here.'
   },
   zh: {
@@ -3900,6 +3901,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.kb.rename_title': '重命名知识库',
     'gui.kb.delete_base': '删除知识库',
     'gui.kb.save': '保存',
+    'gui.pb.stints_unsupported': '这个引擎没有运行列表接口；升级后才能在这里看到多轮运行。',
     'gui.pb.stints_none': '这里还没有启动过多轮运行。'
   }
 } as Record<Locale, Record<string, string>>

@@ -49,7 +49,7 @@ from raven.stint.git import HistoryError, ProjectGit
 from raven.stint.journal import JOURNAL, append_entry
 from raven.stint.ownership import Role, Roster
 from raven.stint.record import StintRecord, StintStore
-from raven.stint.verify import CheckResult, CheckSpec, resolve_display, run_checks, start_display
+from raven.stint.verify import CheckResult, CheckSpec, curated_env, resolve_display, run_checks, start_display
 
 __all__ = ["RoundContext", "roster_from"]
 
@@ -321,6 +321,7 @@ class RoundContext:
                 cwd=self.workdir,
                 log_dir=self.artifacts_dir / f"round-{self.index:02d}" / "checks",
                 display=display,
+                env=curated_env(),
             )
         finally:
             if screen is not None:

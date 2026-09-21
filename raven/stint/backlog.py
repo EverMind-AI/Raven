@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from raven.utils.atomic_io import atomic_replace
+
 STINT_DIR = ".stint"
 """Where a project keeps what a multi-round run reads and writes about itself.
 
@@ -281,7 +283,9 @@ def start(project: Path) -> Backlog:
 def save(project: Path, backlog: Backlog) -> Path:
     path = backlog_path(project)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(backlog.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    # Locked and fsynced: the roles are subprocesses, and two `task` verbs in
+    # flight at once used to leave whichever wrote second as the whole backlog.
+    atomic_replace(path, json.dumps(backlog.to_dict(), indent=2, ensure_ascii=False) + "\n")
     return path
 
 

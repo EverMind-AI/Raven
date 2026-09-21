@@ -1160,7 +1160,7 @@ describe('the runs a playbook started', () => {
     install({
       stints: async () => [planRow({ stint_id: 'stint-a' })],
       stint: async () => planDetail(),
-      stopPlan: async () => stopped
+      stopStint: async () => stopped
     })
     await mount()
     fireEvent.click(screen.getByText('gui.pb.tab_plans'))
@@ -1188,7 +1188,7 @@ describe('the runs a playbook started', () => {
     install({
       stints: async () => [interrupted.stint],
       stint: async () => interrupted,
-      resumePlan: async (id: string) => {
+      resumeStint: async (id: string) => {
         resumed.push(id)
         return taken
       }
@@ -1215,7 +1215,7 @@ describe('the runs a playbook started', () => {
     install({
       stints: async () => [planRow({ stint_id: 'stint-a' })],
       stint: async () => planDetail(),
-      pausePlan: async () => paused
+      pauseStint: async () => paused
     })
     await mount()
     fireEvent.click(screen.getByText('gui.pb.tab_plans'))
@@ -1257,7 +1257,7 @@ describe('the runs a playbook started', () => {
     install({
       stints: async () => [planRow({ stint_id: 'stint-a', open_questions: 1 })],
       stint: async () => asked,
-      answerPlan: async (stintId: string, question: number, text: string) => {
+      answerStint: async (stintId: string, question: number, text: string) => {
         sent.push([stintId, question, text])
         return answered
       }

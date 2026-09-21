@@ -60,7 +60,7 @@ The layers that were built first, kept here so the list is the whole contract.
 |---|---|---|
 | 26 | A plan started in the TUI is found, read and extended from a terminal | held -- was broken, see `2026-09-17-session-key-resolution.md` |
 | 27 | The web UI stops a plan the TUI started | open (the handler searches rather than derives, so it should hold; unverified) |
-| 28 | The gateway dies mid-plan: something says the plan is not being advanced | **known gap** -- `adrift()` can tell, and nothing calls it. `plan list` reports a corpse as running |
+| 28 | The gateway dies mid-plan: something says the plan is not being advanced | held -- every read path (`stints list`, `stints get`, the RPC list and get) calls `mark_adrift` first, so a record whose holder is gone reads as interrupted, and `stints sweep` takes those up |
 
 ## Starting from nothing
 

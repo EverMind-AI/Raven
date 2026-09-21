@@ -219,7 +219,7 @@ into one row; only the name it carries is new.
 Add to `tests/test_acp_dialects.py`:
 
 ```python
-def test_the_claude_stint_row_carries_claude_codes_own_name() -> None:
+def test_the_claude_plan_row_carries_claude_codes_own_name() -> None:
     """`TodoWrite` never reaches a tool_call: the adapter's `shouldEmitToolCall`
     excludes it and routes its state to a `plan` frame. The row that frame
     becomes is named for the tool that produced it.

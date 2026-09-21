@@ -1795,7 +1795,7 @@ async def _run_node(
                 status=status,
                 errors=errors,
                 output_paths=output_paths,
-                continuations=continuations if continuations is not None else {},
+                continuations=continuations,
                 node_output=node_output,
                 attempt=attempt,
                 desk=desk,

@@ -67,14 +67,14 @@ export interface PlaybooksSource {
      draw. */
   stints?(): Promise<StintRow[]>
   stint?(stintId: string): Promise<StintDetail>
-  stopPlan?(stintId: string): Promise<StintDetail>
-  /* Optional beside `stopPlan` for the same reason every verb here is:
+  stopStint?(stintId: string): Promise<StintDetail>
+  /* Optional beside `stopStint` for the same reason every verb here is:
      a host may carry an older method set, and the page asks rather than
      assumes. Where it is missing the button is not drawn. */
-  pausePlan?(stintId: string): Promise<StintDetail>
+  pauseStint?(stintId: string): Promise<StintDetail>
   /* Takes a paused or interrupted run up again, in the engine serving this
      page. The detail comes back with the driver's own sentence about what it
      did, because "nothing left to take up" is an answer too. */
-  resumePlan?(stintId: string): Promise<StintDetail & { reply?: string }>
-  answerPlan?(stintId: string, question: number, text: string): Promise<StintDetail>
+  resumeStint?(stintId: string): Promise<StintDetail & { reply?: string }>
+  answerStint?(stintId: string, question: number, text: string): Promise<StintDetail>
 }

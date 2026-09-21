@@ -16,6 +16,7 @@ with it. Such a row carries ``error`` and an empty ``nodes``.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -627,7 +628,7 @@ async def playbooks_run(
 ) -> dict:
     """Run one playbook, through the same entry the model's tool and the CLI use.
 
-    Answers the executor's own stint verbatim -- ``kind`` and ``reply`` -- rather
+    Answers the executor's own plan verbatim -- ``kind`` and ``reply`` -- rather
     than a shape of this layer's devising. A ``dag`` playbook dispatches and the
     reply is the receipt (the run id is in it, and ``_run_id_of`` states why it
     lives in the text rather than in a field of its own); a ``prompt`` one comes
@@ -855,13 +856,23 @@ def _stint_stores() -> list[Any]:
     return [StintStore(root) for root in roots if root.is_dir()]
 
 
+#: The shape `make_stint_id` mints, and what a store file is named after.
+STINT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
 def _stint_row(record: Any) -> dict[str, Any]:
-    stop = (record.spec.get("stop") or {}) if isinstance(record.spec, dict) else {}
+    from raven.playbook.stint_spec import DEFAULT_MAX_ROUNDS
+
+    stop = record.spec.get("stop") if isinstance(record.spec, dict) else None
+    if not isinstance(stop, dict):
+        stop = {}
     return {
         "stint_id": record.stint_id,
         "playbook": record.playbook,
         "round_index": record.round_index,
-        "max_rounds": int(stop.get("maxRounds") or stop.get("max_rounds") or 0),
+        # The budget the driver runs to, which a spec with no `stop:` section
+        # still has: reporting nought there drew "round 3 of 0" on the page.
+        "max_rounds": int(stop.get("maxRounds") or stop.get("max_rounds") or DEFAULT_MAX_ROUNDS),
         "status": record.status,
         "live": record.live,
         "stop_reason": record.stop_reason,
@@ -907,6 +918,10 @@ def _require_stint(params: dict) -> tuple[Any, Any]:
     stint_id = str(params.get("stint_id") or "").strip()
     if not stint_id:
         raise ConfigValidationError("stint_id is required")
+    if not STINT_ID_RE.fullmatch(stint_id):
+        # A stint id names a file under the store; one carrying a separator
+        # reached `path_for`, which refused it as a traceback rather than an answer.
+        raise ConfigValidationError(f"{stint_id!r} is not a stint id")
     stores = _stint_stores()
     mark_adrift(stores)
     for store in stores:
@@ -1058,7 +1073,9 @@ async def playbooks_stints_answer(params: dict) -> dict:
     from raven.rpc.errors import ConfigValidationError
 
     store, record = _require_stint(params)
-    position = int(params.get("question") or 0)
+    if params.get("question") is None:
+        raise ConfigValidationError("question is required: the number `stints get` lists it under")
+    position = int(params.get("question"))
     if not 0 <= position < len(record.questions):
         raise ConfigValidationError(f"{record.stint_id} has no question {position}")
     record.questions[position]["answer"] = str(params.get("text") or "")

@@ -20,6 +20,7 @@ top-level ``app`` via ``app.add_typer(playbook_app, name="playbook")``.
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 import sys
 import time
@@ -701,6 +702,9 @@ def _require_stint(config, stint_id: str):
     """
     from raven.stint.record import mark_adrift
 
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", stint_id):
+        err_console.print(f"[red]{escape(stint_id)} is not a stint id; see `raven playbook stints list`.[/red]")
+        raise typer.Exit(code=1)
     homes = _stint_homes(config)
     mark_adrift([store for _home, store in homes])
     for home, store in homes:

@@ -1490,7 +1490,7 @@ class TestWhereThePageLooks:
         assert opened["stint"]["stint_id"] == "stint-tui"
 
 
-class TestPlans:
+class TestStints:
     """``playbooks.stints.*`` -- the page's view of a multi-round run."""
 
     @pytest.fixture

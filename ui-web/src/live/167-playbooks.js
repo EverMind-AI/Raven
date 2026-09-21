@@ -18,8 +18,8 @@ DS.playbooks = {
      contract answers an object so it can grow a field beside the array. */
   stints: () => rpc.call('playbooks.stints.list', {}).then((r) => (r && r.stints) || []),
   stint: (stint_id) => rpc.call('playbooks.stints.get', { stint_id }),
-  stopPlan: (stint_id) => rpc.call('playbooks.stints.stop', { stint_id }),
-  pausePlan: (stint_id) => rpc.call('playbooks.stints.pause', { stint_id }),
-  resumePlan: (stint_id) => rpc.call('playbooks.stints.resume', { stint_id }),
-  answerPlan: (stint_id, question, text) => rpc.call('playbooks.stints.answer', { stint_id, question, text }),
+  stopStint: (stint_id) => rpc.call('playbooks.stints.stop', { stint_id }),
+  pauseStint: (stint_id) => rpc.call('playbooks.stints.pause', { stint_id }),
+  resumeStint: (stint_id) => rpc.call('playbooks.stints.resume', { stint_id }),
+  answerStint: (stint_id, question, text) => rpc.call('playbooks.stints.answer', { stint_id, question, text }),
 };

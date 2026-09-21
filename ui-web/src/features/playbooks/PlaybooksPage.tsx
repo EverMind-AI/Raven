@@ -79,9 +79,9 @@ function Concept({ row }: { row: PlaybookRow }): JSX.Element {
       </svg>
     )
   }
-  const stint = cardPlan(row.nodes)
-  const at = new Map(stint.cells.map((c) => [c.id, c]))
-  const { W, H } = stint.metric
+  const plan = cardPlan(row.nodes)
+  const at = new Map(plan.cells.map((c) => [c.id, c]))
+  const { W, H } = plan.metric
   return (
     <svg
       className="pbrib"
@@ -91,7 +91,7 @@ function Concept({ row }: { row: PlaybookRow }): JSX.Element {
       preserveAspectRatio="xMidYMid meet"
       aria-hidden="true"
     >
-      <g transform={`translate(${Math.max(0, (268 - stint.width) / 2)} ${(84 - stint.height) / 2})`}>
+      <g transform={`translate(${Math.max(0, (268 - plan.width) / 2)} ${(84 - plan.height) / 2})`}>
         {row.nodes.map((n) =>
           n.depends_on.map((d) => {
             const a = at.get(d)
@@ -100,28 +100,28 @@ function Concept({ row }: { row: PlaybookRow }): JSX.Element {
             return <path key={`${d}-${n.id}`} className="pbedge" d={edge(a.x + W, a.y + H / 2, b.x, b.y + H / 2)} />
           })
         )}
-        {stint.clipAt
-          ? stint.cells
-              .filter((c) => c.x + W + stint.metric.GX >= (stint.clipAt as { x: number }).x)
+        {plan.clipAt
+          ? plan.cells
+              .filter((c) => c.x + W + plan.metric.GX >= (plan.clipAt as { x: number }).x)
               .map((c) => (
                 <path
                   key={'clip' + c.id}
                   className="pbedge cut"
-                  d={edge(c.x + W, c.y + H / 2, (stint.clipAt as { x: number }).x - 4, stint.height / 2)}
+                  d={edge(c.x + W, c.y + H / 2, (plan.clipAt as { x: number }).x - 4, plan.height / 2)}
                 />
               ))
           : null}
-        {stint.cells.map((c) => (
+        {plan.cells.map((c) => (
           <rect key={c.id} className="pbcell" x={c.x} y={c.y} width={W} height={H} rx={4} />
         ))}
-        {stint.rowOverflow.map((o) => (
+        {plan.rowOverflow.map((o) => (
           <text key={'ro' + o.x} className="pbmore" x={o.x + 2} y={o.y + H / 2 + 3.5}>
             {'+' + o.n}
           </text>
         ))}
-        {stint.clipAt && stint.hiddenSteps > 0 ? (
-          <text className="pbmore" x={stint.clipAt.x} y={stint.clipAt.y + 3.5}>
-            {t('gui.pb.more_steps', { n: stint.hiddenSteps })}
+        {plan.clipAt && plan.hiddenSteps > 0 ? (
+          <text className="pbmore" x={plan.clipAt.x} y={plan.clipAt.y + 3.5}>
+            {t('gui.pb.more_steps', { n: plan.hiddenSteps })}
           </text>
         ) : null}
       </g>
@@ -1333,7 +1333,7 @@ function PlanQuestion({
           onSubmit={e => {
             e.preventDefault()
             if (!text.trim()) return
-            void store.answerPlan(stintId, index, text.trim())
+            void store.answerStint(stintId, index, text.trim())
             setText('')
           }}
         >
@@ -1343,7 +1343,7 @@ function PlanQuestion({
             aria-label={t('gui.pb.stint_answer')}
             onChange={e => setText(e.currentTarget.value)}
           />
-          <button className="mini" type="submit" disabled={!text.trim()}>
+          <button className="mini" type="submit" disabled={!text.trim() || store.getState().plansBusy}>
             {t('gui.pb.stint_answer')}
           </button>
         </form>
@@ -1366,13 +1366,13 @@ function Check({ text }: { text: string }): JSX.Element {
   )
 }
 
-function StintDetailView({ detail }: { detail: StintDetail }): JSX.Element {
+function StintDetailView({ detail, busy }: { detail: StintDetail; busy: boolean }): JSX.Element {
   const stint = detail.stint
   const rounds = detail.rounds
   return (
     <>
       <div className="pmhero pnhero">
-        <button className="mini" type="button" onClick={store.closePlan}>
+        <button className="mini" type="button" onClick={store.closeStint}>
           {t('gui.pb.stint_back')}
         </button>
         <Tile name={stint.playbook} />
@@ -1382,17 +1382,17 @@ function StintDetailView({ detail }: { detail: StintDetail }): JSX.Element {
         </div>
         <div className="pnacts">
           {stint.live ? (
-            <button className="mini" type="button" onClick={() => void store.pausePlan(stint.stint_id)}>
+            <button className="mini" type="button" disabled={busy} onClick={() => void store.pauseStint(stint.stint_id)}>
               {t('gui.pb.stint_pause')}
             </button>
           ) : null}
           {stint.live ? (
-            <button className="mini" type="button" onClick={() => void store.stopPlan(stint.stint_id)}>
+            <button className="mini" type="button" disabled={busy} onClick={() => void store.stopStint(stint.stint_id)}>
               {t('gui.pb.stint_stop')}
             </button>
           ) : null}
           {stint.status === 'paused' || stint.status === 'interrupted' ? (
-            <button className="mini gold" type="button" onClick={() => void store.resumePlan(stint.stint_id)}>
+            <button className="mini gold" type="button" disabled={busy} onClick={() => void store.resumeStint(stint.stint_id)}>
               {t('gui.pb.stint_resume')}
             </button>
           ) : null}
@@ -1457,7 +1457,9 @@ function StintDetailView({ detail }: { detail: StintDetail }): JSX.Element {
 
 function Plans(): JSX.Element {
   const s = store.getState()
-  if (s.openStint) return <StintDetailView detail={s.openStint} />
+  if (s.openStint) return <StintDetailView detail={s.openStint} busy={s.plansBusy} />
+  if (s.plansErr === 'unsupported') return <div className="empty-note">{t('gui.pb.stints_unsupported')}</div>
+  if (s.plansErr) return <div className="empty-note">{s.plansErr}</div>
   if (s.stints === null) return <div className="empty-note">{t('gui.pb.reading')}</div>
   if (!s.stints.length) return <div className="empty-note">{t('gui.pb.stints_none')}</div>
   return (

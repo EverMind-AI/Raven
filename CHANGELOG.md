@@ -378,9 +378,10 @@ All notable changes to Raven are documented here.
   as the worktree, so a role that commits a stray write is caught too.
 
   `verify[]` runs real commands -- a build, a test run -- and a failure goes back
-  to the role that caused it with the failure text, up to `maxHandbacks`. A role
-  that never satisfies its checks fails its node, and the question is written into
-  the stint for the next round and for whoever reads it.
+  to the role that caused it with the failure text, up to `maxHandbacks`. Once
+  that budget is spent the round moves on with the failure on the record -- a
+  failed node would skip every role downstream, and a reviewer has to see a
+  failed build -- and the next round's prompt carries it.
 
   A stint runs in a checkout of its own, cut from the project's head, so hours of
   its commits do not collide with the conversation that started it.

@@ -1793,9 +1793,9 @@ judges it. The one signal in a round that is not a model's opinion.
 
 **Handback** (`maxHandbacks`):
 A failed check returned to the role that caused it, with the failure text, up to a budget.
-A role that never satisfies its checks fails its node, and its dependents are skipped -- a node
-that did not do its work is not readable as anyone's input. What the round adds is the record:
-the question goes into the stint, where the next round and a person both find it.
+Once that budget is spent the round moves on with the failure on the record rather than failing
+the node: a failed node skips every role downstream, and a failed build is exactly what the reviewer
+downstream has to see. The record carries it to the next round's prompt and to a person reading the stint.
 
 **Backlog** (`.stint/backlog.json`):
 The one structured thing the roles share: cards moving through a state machine, one transition

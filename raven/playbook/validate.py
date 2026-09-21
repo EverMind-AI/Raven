@@ -20,10 +20,12 @@ Nothing here calls an LLM or touches disk.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from itertools import combinations
 
 from raven.agent.subagent.dag_graph import collect_static_graph_errors
+from raven.playbook.agent_spec import LABEL_RE
 from raven.playbook.params import param_refs
 from raven.playbook.stint_spec import DEFAULT_ISOLATION
 from raven.playbook.types import NodeSpec, PlaybookSpec
@@ -162,6 +164,12 @@ def validate_roles(spec: PlaybookSpec, *, known_agents: Iterable[str] | None = N
     for role in roles:
         if names is not None and role.name not in names:
             errors.append(f"role {role.label!r}: no agent named {role.name!r} on this machine")
+        if not re.fullmatch(LABEL_RE, role.label):
+            # A label becomes part of a node id; one the graph refuses used to
+            # surface when round 1 compiled, after the record and worktree existed.
+            errors.append(
+                f"role {role.label!r}: a label is letters, digits, dots, dashes and underscores, starting with a letter or digit"
+            )
         for ref in param_refs(role.prompt_template):
             if ref not in param_names:
                 errors.append(f"role {role.label!r}: params.{ref} names no declared param")

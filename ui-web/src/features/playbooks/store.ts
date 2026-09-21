@@ -329,16 +329,23 @@ export async function loadStints(): Promise<void> {
   }
 }
 
+let opening = 0
+
 export async function openStint(stintId: string): Promise<void> {
   const read = source().stint
   if (!read) return
+  /* Two quick clicks are two reads in flight; the later click is the one the
+     person means, so an earlier read that lands afterwards is dropped. */
+  const ticket = ++opening
   set({ plansBusy: true })
   try {
-    set({ openStint: await read.call(source(), stintId), plansErr: '' })
+    const detail = await read.call(source(), stintId)
+    if (ticket !== opening) return
+    set({ openStint: detail, plansErr: '' })
   } catch (e) {
-    set({ plansErr: (e as Error)?.message || String(e) })
+    if (ticket === opening) set({ plansErr: (e as Error)?.message || String(e) })
   } finally {
-    set({ plansBusy: false })
+    if (ticket === opening) set({ plansBusy: false })
   }
 }
 
@@ -361,12 +368,12 @@ export async function refreshStints(): Promise<void> {
   }
 }
 
-export function closePlan(): void {
+export function closeStint(): void {
   set({ openStint: null })
 }
 
-export async function stopPlan(stintId: string): Promise<void> {
-  const stop = source().stopPlan
+export async function stopStint(stintId: string): Promise<void> {
+  const stop = source().stopStint
   if (!stop) return
   set({ plansBusy: true })
   try {
@@ -374,7 +381,10 @@ export async function stopPlan(stintId: string): Promise<void> {
     /* The list is patched rather than re-read: a stop changes one row, and
        re-reading would move the reader's place in a list that is sorted by
        when each run started. */
-    set({ openStint: detail, stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
+    /* Only while this run is still the one on screen: a person who pressed
+       Back before the answer landed does not get the detail pushed back open. */
+    const stillOpen = state.openStint?.stint.stint_id === stintId
+    set({ ...(stillOpen ? { openStint: detail } : {}), stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
   } catch (e) {
     toast((e as Error)?.message || String(e))
   } finally {
@@ -382,18 +392,21 @@ export async function stopPlan(stintId: string): Promise<void> {
   }
 }
 
-export async function pausePlan(stintId: string): Promise<void> {
+export async function pauseStint(stintId: string): Promise<void> {
   /* `stop` and this differ in what is left behind, not in what happens now:
      both let the round in flight finish and neither opens another, and only a
      paused stint is one `resume` can take up. The list is patched rather than
-     re-read for the same reason `stopPlan` patches it -- one row changed, and a
+     re-read for the same reason `stopStint` patches it -- one row changed, and a
      re-read would move the reader's place in a list sorted by start time. */
-  const pause = source().pausePlan
+  const pause = source().pauseStint
   if (!pause) return
   set({ plansBusy: true })
   try {
     const detail = await pause.call(source(), stintId)
-    set({ openStint: detail, stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
+    /* Only while this run is still the one on screen: a person who pressed
+       Back before the answer landed does not get the detail pushed back open. */
+    const stillOpen = state.openStint?.stint.stint_id === stintId
+    set({ ...(stillOpen ? { openStint: detail } : {}), stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
   } catch (e) {
     toast((e as Error)?.message || String(e))
   } finally {
@@ -401,17 +414,20 @@ export async function pausePlan(stintId: string): Promise<void> {
   }
 }
 
-export async function resumePlan(stintId: string): Promise<void> {
+export async function resumeStint(stintId: string): Promise<void> {
   /* The verb for a run raven was restarted under, or one somebody paused. The
      round opens in the engine serving this page, so its reports land in the
      conversation that started the run. The driver's sentence is shown as a
      toast: a resume that found nothing to take up says so there. */
-  const resume = source().resumePlan
+  const resume = source().resumeStint
   if (!resume) return
   set({ plansBusy: true })
   try {
     const detail = await resume.call(source(), stintId)
-    set({ openStint: detail, stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
+    /* Only while this run is still the one on screen: a person who pressed
+       Back before the answer landed does not get the detail pushed back open. */
+    const stillOpen = state.openStint?.stint.stint_id === stintId
+    set({ ...(stillOpen ? { openStint: detail } : {}), stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
     if (detail.reply) toast(detail.reply)
   } catch (e) {
     toast((e as Error)?.message || String(e))
@@ -420,13 +436,16 @@ export async function resumePlan(stintId: string): Promise<void> {
   }
 }
 
-export async function answerPlan(stintId: string, question: number, text: string): Promise<void> {
-  const answer = source().answerPlan
+export async function answerStint(stintId: string, question: number, text: string): Promise<void> {
+  const answer = source().answerStint
   if (!answer) return
   set({ plansBusy: true })
   try {
     const detail = await answer.call(source(), stintId, question, text)
-    set({ openStint: detail, stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
+    /* Only while this run is still the one on screen: a person who pressed
+       Back before the answer landed does not get the detail pushed back open. */
+    const stillOpen = state.openStint?.stint.stint_id === stintId
+    set({ ...(stillOpen ? { openStint: detail } : {}), stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
   } catch (e) {
     toast((e as Error)?.message || String(e))
   } finally {

@@ -202,11 +202,29 @@ def start_display(
 
 
 def _tail(path: Path) -> str:
+    """The end of a log, read from the end: a chatty check writes gigabytes."""
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - _TAIL_CHARS * 4))
+            text = handle.read().decode("utf-8", errors="replace")
     except OSError:
         return ""
     return text if len(text) <= _TAIL_CHARS else text[-_TAIL_CHARS:]
+
+
+#: What a check's shell gets to see. The host's own executor hands a command the
+#: same short list rather than the gateway's whole environment, and a check is a
+#: command a playbook file wrote: its output tail lands in a role's prompt and
+#: in the stint's record, so a check that echoed its environment would carry
+#: every host secret into a model's context and into committed state.
+def curated_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
+    from raven.sandbox.direct_executor import baseline_env
+
+    env = baseline_env()
+    env.update(extra or {})
+    return env
 
 
 #: How long a signalled check is given before the next signal. Short: it has
@@ -243,6 +261,13 @@ def _end_group(process: "subprocess.Popen[bytes]", group: int | None) -> None:
     the lesser of the two.
     """
     if group is None:
+        # No group to address (not POSIX, or the leader already gone): the
+        # shell itself is still ended, rather than left to run out its timeout
+        # under nobody's watch.
+        with suppress(ProcessLookupError, OSError):
+            process.kill()
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=_GROUP_GRACE_SEC)
         return
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
