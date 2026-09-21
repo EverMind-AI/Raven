@@ -80,11 +80,58 @@ def port_strict() -> bool:
 
 
 def resolve_ui_dist() -> Optional[Path]:
-    """Locate the built ui page: wheel-packaged copy first, then source tree."""
+    """Locate the built ui page: wheel-packaged copy first, then source tree.
+
+    A source-tree page older than what it is built from is reported here on
+    every resolve, because every path that serves or opens the page resolves
+    it once -- `raven serve`, the gateway's page mount and `raven web` alike --
+    and the terminal is where the rebuild happens.
+    """
     for candidate in (_PACKAGED_UI_DIST, _UI_DIR / "dist"):
         if (candidate / "index.html").exists():
+            if page_behind_sources(candidate):
+                from loguru import logger
+
+                logger.warning(
+                    "the built page is older than ui-web/src or i18n/messages.json; run `make build-ui` to rebuild it"
+                )
             return candidate
     return None
+
+
+_PAGE_SOURCE_SKIP = frozenset({"test", "__snapshots__", "__golden__"})
+_PAGE_BUILD_FILES = ("build.py", "vite.config.ts", "package.json", "package-lock.json", "icon/raven.svg")
+
+
+def page_behind_sources(dist: Optional[Path]) -> bool:
+    """Whether the source-tree page was built before its inputs last changed.
+
+    Only the checkout's own ``ui-web/dist`` can fall behind: the wheel's copy
+    ships beside the code it was built with. Judged by mtime, the way make
+    would -- a pull that touches ``ui-web/src`` or the message catalogue leaves
+    those files newer than ``dist/index.html`` until the next build. The
+    build's own files count too (the assembler, the bundler config, the
+    dependency lock, the icon it copies): a pull that moves only those changes
+    the page as surely as a source edit. Tests, the test harness layer and
+    snapshots are left out: they change without changing the page.
+    """
+    if dist is None or dist != _UI_DIR / "dist":
+        return False
+    try:
+        built = (dist / "index.html").stat().st_mtime
+    except OSError:
+        return False
+    inputs = [_UI_DIR.parent / "i18n" / "messages.json", *(_UI_DIR / name for name in _PAGE_BUILD_FILES)]
+    inputs.extend(
+        path
+        for path in (_UI_DIR / "src").rglob("*")
+        if path.is_file() and ".test." not in path.name and not _PAGE_SOURCE_SKIP.intersection(path.parts)
+    )
+    newest = 0.0
+    for path in inputs:
+        with suppress(OSError):
+            newest = max(newest, path.stat().st_mtime)
+    return newest > built
 
 
 def _state_path() -> Path:
@@ -385,14 +432,16 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     served = _ServedStack(gateway)
     stack = await served.start()
 
+    dist = resolve_ui_dist()
     app = build_app(
         gateway,
-        resolve_ui_dist(),
+        dist,
         # Read per request, not once: a first run assembles its stack after the
         # app is built, and a store captured here would leave that process with
         # no download surface for the rest of its life.
         deliverables=lambda: served.current.deliverables,
         agent_loop_factory=lambda: served.current.agent_loop,
+        page_behind=lambda: page_behind_sources(dist),
     )
     runner = web.AppRunner(app)
     await runner.setup()
@@ -1067,7 +1116,7 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
         return
 
     if resolve_ui_dist() is None:
-        typer.echo("No page is built. Run `python ui-web/build.py`, or install raven from a release wheel.")
+        typer.echo("No page is built. Run `make build-ui`, or install raven from a release wheel.")
         raise typer.Exit(1)
 
     if supervise:

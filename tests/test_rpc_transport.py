@@ -706,3 +706,45 @@ def test_the_frame_ceiling_can_carry_the_largest_upload_the_method_accepts() -> 
     assert envelope + body <= frame_ceiling_for_upload(), (
         "a maximal upload must fit the frame the transport accepts, or the socket closes before fs.upload can refuse it"
     )
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+async def test_a_page_behind_its_sources_says_so_on_the_document_alone(tmp_path: Path, method: str) -> None:
+    """The page reads this through its HEAD probe of ``/`` -- the terminal has
+    already been told, but `raven web` detaches it, so the page is where both
+    launch paths can show it. The header is the caller's judgement, asked per
+    response so a rebuild takes it away without a restart, and it never lands
+    on an asset."""
+    static = tmp_path / "dist"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text("<html>", encoding="utf-8")
+    (static / "assets" / "raven.svg").write_text("<svg/>", encoding="utf-8")
+    behind = True
+
+    client = TestClient(TestServer(build_app(WsGateway(), static, page_behind=lambda: behind)))
+    await client.start_server()
+    try:
+        page = await client.request(method, "/")
+        assert page.status == 200
+        assert page.headers["X-Raven-Page-Behind"] == "sources"
+        assert "X-Raven-Page-Behind" not in (await client.get("/assets/raven.svg")).headers
+
+        behind = False
+        assert "X-Raven-Page-Behind" not in (await client.request(method, "/")).headers
+    finally:
+        await client.close()
+
+
+async def test_a_page_with_no_judgement_of_its_sources_says_nothing(tmp_path: Path) -> None:
+    """The wheel's copy has no sources beside it to be behind, and a caller
+    that passes no judgement gets the header nowhere."""
+    static = tmp_path / "dist"
+    static.mkdir()
+    (static / "index.html").write_text("<html>", encoding="utf-8")
+
+    client = TestClient(TestServer(build_app(WsGateway(), static)))
+    await client.start_server()
+    try:
+        assert "X-Raven-Page-Behind" not in (await client.get("/")).headers
+    finally:
+        await client.close()

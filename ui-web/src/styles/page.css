@@ -1633,8 +1633,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .dtl .act2 button { font: 11px var(--mono); color: var(--sky); padding: 0; }
 .dtl .act2 button:hover { text-decoration: underline; }
 
-/* hot-update notice: dist on disk is newer than the loaded page — a quiet
-   amber row in the rail foot; reloading is always the reader's click */
+/* the update row: something newer exists -- a rebuilt dist, a released
+   version, or sources the served page is behind; a quiet amber row in the rail
+   foot whose action is always the reader's click (app/updates.ts) */
 .upnote {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 7px 10px; margin-bottom: 6px; border-radius: 8px;
