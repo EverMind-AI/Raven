@@ -410,9 +410,10 @@ def make_run_id() -> str:
 def node_live_key(run_id: str, node_id: str) -> str:
     """The live-index key a node's activity is collected under.
 
-    Shared with the reader rather than spelled out on both sides: a spawn keys
-    its activity by the record directory's name, and a node has no such
-    directory, so the two namespaces are kept apart by this prefix.
+    Shared with the reader rather than spelled out on both sides. A spawn keys
+    its activity by its node root plus its id (``history.spawn_live_key``); a
+    node has no root of its own, so it keys by its run plus its id -- and the
+    two prefixes keep one process-wide index's namespaces apart.
     """
     return f"dag:{run_id}:{node_id}"
 
