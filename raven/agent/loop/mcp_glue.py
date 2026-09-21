@@ -189,6 +189,14 @@ class McpGlueMixin:
           ``ToolSearchController.search_visible`` because below the fold those
           tools are in the array and the line would be false.
 
+          Its count is derived from what the fold actually withholds, not from the
+          manager's ``tool_count``: that one counts every wrapper the server
+          registered, including one the operator switched off (``search`` filters
+          it out and ``tool_call`` refuses it, so promising it is the false
+          capability metadata this line exists to prevent) and one named in
+          ``toolSearch.always_visible`` (whose schema is in the array, so it is
+          not hidden at all). A server with nothing withheld gets no line.
+
         Rendered into the runtime-context block, not the system prompt -- the
         set changes turn to turn and must never be cached with the prefix.
         """
@@ -204,6 +212,10 @@ class McpGlueMixin:
         # capability.
         controller = getattr(self, "tool_search_controller", None)
         folded = controller is not None and controller.search_visible()
+        withheld_by_fold: set[str] = set()
+        if folded:
+            shipped = {d["function"]["name"] for d in self.tools.get_definitions()}
+            withheld_by_fold = shipped - controller.visible_names()
         notices = []
         for snap in mgr.status():
             if not snap.get("enabled", True):
@@ -220,12 +232,14 @@ class McpGlueMixin:
                     f"from this turn's definitions and register themselves when the handshake "
                     f"finishes, so they are available from a later turn without anyone acting."
                 )
-            elif folded and snap["connected"] and snap["tool_count"]:
-                notices.append(
-                    f"MCP plugin '{snap['name']}': connected, {snap['tool_count']} tool(s). Their "
-                    f"schemas are not in this turn's definitions because the catalog is folded -- "
-                    f"tool_search finds them by keyword, tool_call invokes them by name."
-                )
+            elif folded and snap["connected"]:
+                hidden = [n for n in self.tools.names_from(snap["name"]) if n in withheld_by_fold]
+                if hidden:
+                    notices.append(
+                        f"MCP plugin '{snap['name']}': connected, {len(hidden)} tool(s). Their "
+                        f"schemas are not in this turn's definitions because the catalog is folded "
+                        f"-- tool_search finds them by keyword, tool_call invokes them by name."
+                    )
         return notices
 
     def prewarm_mcp(self) -> None:
