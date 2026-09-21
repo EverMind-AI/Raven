@@ -29,7 +29,7 @@ const hostModels = vi.hoisted(() => ({
   loads: 0,
 }))
 vi.mock('../model/source', () => ({
-  providers: () => hostModels.providers,
+  defaultProviders: () => hostModels.providers,
   loadDefaultProviders: async () => {
     hostModels.loads += 1
   },
