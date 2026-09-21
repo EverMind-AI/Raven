@@ -447,12 +447,14 @@ class PlaybookRuntime:
             return None
         cid = self._context.get("session_key") or ""
         key = (cid, name)
+        execution_table = None
         if isinstance(spec, UnifiedPlaybookSpec):
             if spec.harness is not None:
                 from raven.agent.subagent.delegate import bind_delegate_for_turn
                 from raven.playbook.agent_generator import build_table
 
-                bind_delegate_for_turn(build_table(spec.harness, {}))
+                execution_table = build_table(spec.harness, {})
+                bind_delegate_for_turn(execution_table)
             executable = spec.as_legacy_workflow()
             if executable is None:
                 self._gap_rounds.pop(key, None)
@@ -462,7 +464,10 @@ class PlaybookRuntime:
                 )
             spec = executable
 
-        plan = await self._executor.execute(spec, params or {}, fills=fills or {}, confirmed=confirmed)
+        from raven.agent.subagent.delegate import delegate_scope
+
+        with delegate_scope(execution_table):
+            plan = await self._executor.execute(spec, params or {}, fills=fills or {}, confirmed=confirmed)
         if plan.kind == "gaps":
             rounds = self._gap_rounds.get(key, 0) + 1
             self._gap_rounds[key] = rounds

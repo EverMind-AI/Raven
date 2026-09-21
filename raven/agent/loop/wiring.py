@@ -1376,10 +1376,10 @@ class WiringMixin:
             # terms once judgement is wired in.
             provider_for=self._verdict_provider,
             binding_for=self._turn_binding,
-            # Stored Playbook nodes already name roster agents and carry their
-            # own prompts. A turn-scoped generated worker with the same label
-            # must not rewrite that persisted graph.
-            worker_table_for=lambda: None,
+            # PlaybookRuntime opens an explicit delegate scope for every stored
+            # graph: its durable Harness table for a v2 composite, or None for a
+            # legacy/workflow-only graph. Reading the scope here lets composites
+            # resolve aliases without exposing them to unrelated stored DAGs.
             control_reachable=self.dag_control_reachable,
             control_advert=self.dag_control_advert,
             verdict_config=self.subagent_dag_config,
