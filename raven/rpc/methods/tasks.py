@@ -124,9 +124,8 @@ def _overlay_live(node: dict[str, Any], live: Any) -> None:
     nothing for the whole of its run. Only what the lane has said so far is
     taken: a lane that has not spoken keeps its null.
     """
-    # A node that is not running has an account of its own on disk (or none),
-    # and the live index is keyed by a record id that is unique per conversation
-    # only: another conversation's run under the same id must not fill it.
+    # A node that is not running has an account of its own on disk (or none);
+    # an entry still in the index for it is a run this reader is not describing.
     if live is None or node["status"] != "running":
         return
     for key in ("tokens_in", "tokens_out"):
