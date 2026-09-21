@@ -23,7 +23,6 @@ export function createMemory(_env: FixtureEnv): MemoryFixture {
         page_size: (p as { page_size?: number }).page_size || 20,
         note: 'no memory engine behind this page',
       }),
-      'memory.delete': () => ({ ok: false, removed: 0 }),
     },
   }
 }

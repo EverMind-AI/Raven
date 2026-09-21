@@ -4734,25 +4734,6 @@ export interface MemoryListResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "MemoryDeleteParams".
- */
-export interface MemoryDeleteParams {
-  kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
-  id: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "MemoryDeleteResult".
- */
-export interface MemoryDeleteResult {
-  ok: boolean;
-  /**
-   * Deleting an episode also drops its derived facts and foresight.
-   */
-  removed: number;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "PlaybooksListParams".
  */
 export interface PlaybooksListParams {}
