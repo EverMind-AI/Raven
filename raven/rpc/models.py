@@ -1023,7 +1023,6 @@ class TaskRow(_Strict):
     task_summary: str | None = None
     status: TaskStatus
     replan: TaskReplan | None = None
-    playbook: str | None = None
     started_at: int | None = None
     ended_at: int | None = None
     agent: str | None = None
