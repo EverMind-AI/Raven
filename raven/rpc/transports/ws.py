@@ -19,6 +19,7 @@ import asyncio
 import json
 import secrets
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -518,6 +519,7 @@ def build_app(
     *,
     deliverables: Any = None,
     agent_loop_factory: Any = None,
+    page_behind: Callable[[], bool] | None = None,
 ) -> web.Application:
     from raven.rpc.transports.deliverables import add_files_routes
 
@@ -558,24 +560,38 @@ def build_app(
         if assets.is_dir():
             app.router.add_static("/assets", assets)
 
-            async def revalidate(_request: web.Request, response: web.StreamResponse) -> None:
-                """Make the browser ask before reusing an asset it already has.
+        async def revalidate(_request: web.Request, response: web.StreamResponse) -> None:
+            """Make the browser ask before reusing a dist file it already has.
 
-                These files are served from one unversioned path each, so a
-                rebuilt icon lands at the URL its predecessor is cached under.
-                Without a directive the browser is free to guess a lifetime from
-                the last-modified date and keep the old drawing for hours -- a
-                provider logo replaced in the bundle went on rendering as the
-                one it replaced.
+            The page and its assets are served from one unversioned path each,
+            so a rebuilt file lands at the URL its predecessor is cached under.
+            Without a directive the browser is free to guess a lifetime from
+            the last-modified date and keep the old copy for hours -- a
+            provider logo replaced in the bundle went on rendering as the one
+            it replaced, and a rebuilt page went on opening as the build
+            before it: the sign-in page at ``/auth`` ends by navigating the
+            tab to ``/``, and a browser answers that navigation from a copy
+            it still guesses fresh.
 
-                ``no-cache`` is not "do not store": the copy is kept and offered
-                back with its etag, so an unchanged file costs a 304 and no
-                bytes. Only the guessing is switched off.
-                """
-                if _request.path.startswith("/assets/"):
-                    response.headers.setdefault("Cache-Control", "no-cache")
+            ``no-cache`` is not "do not store": the copy is kept and offered
+            back with its etag, so an unchanged file costs a 304 and no
+            bytes. Only the guessing is switched off.
 
-            app.on_response_prepare.append(revalidate)
+            The page also says when it is older than the sources it was built
+            from, which only a source checkout can be (``page_behind`` is the
+            caller's judgement of that, asked per response so a rebuild takes
+            the header away without a restart). The page's own HEAD probe of
+            ``/`` reads it and shows the reader how to rebuild: the terminal
+            that resolved the page has already said so, but `raven web`
+            detaches that terminal, and the page is the one place both launch
+            paths can show it.
+            """
+            if _request.path == "/" or _request.path.startswith("/assets/"):
+                response.headers.setdefault("Cache-Control", "no-cache")
+            if _request.path == "/" and page_behind is not None and page_behind():
+                response.headers["X-Raven-Page-Behind"] = "sources"
+
+        app.on_response_prepare.append(revalidate)
     else:
 
         async def placeholder(_request: web.Request) -> web.Response:

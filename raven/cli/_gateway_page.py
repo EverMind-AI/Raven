@@ -102,6 +102,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
         _announce_updates,
         _write_serve_state,
         adopt_stored_cookie,
+        page_behind_sources,
         port_strict,
         resolve_ui_dist,
     )
@@ -135,11 +136,13 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
     stack = await build_rpc_stack(ws_gateway.broadcast, agent_loop=agent_loop)
     ws_gateway.dispatcher = stack.dispatcher
 
+    dist = resolve_ui_dist()
     app = build_app(
         ws_gateway,
-        resolve_ui_dist(),
+        dist,
         deliverables=stack.deliverables,
         agent_loop_factory=lambda: stack.agent_loop,
+        page_behind=lambda: page_behind_sources(dist),
     )
     runner = web.AppRunner(app)
     await runner.setup()
