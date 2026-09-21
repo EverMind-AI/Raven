@@ -257,13 +257,13 @@ raven web
 该命令会在浏览器中打开 WebUI，并让 Raven 在后台持续运行。使用 `raven web --stop` 停止后台服务。
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/5ffb877b-8e53-4079-a0bc-70607e415746"><img src="https://github.com/user-attachments/assets/5ffb877b-8e53-4079-a0bc-70607e415746" alt="Raven WebUI new task page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/28248163-3607-408f-86cf-a1acb621767b"><img src="https://github.com/user-attachments/assets/28248163-3607-408f-86cf-a1acb621767b" alt="Raven WebUI new task page" width="90%"></a>
 </p>
 
 <p align="center"><em>新建任务：一个输入框，技能、剧本、知识库与记忆都在一侧。</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/3821466d-73d4-4544-9b0b-065e4beda2a4"><img src="https://github.com/user-attachments/assets/3821466d-73d4-4544-9b0b-065e4beda2a4" alt="Raven WebUI subagents page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/76bf13ac-763b-4120-b323-0f694c237365"><img src="https://github.com/user-attachments/assets/76bf13ac-763b-4120-b323-0f694c237365" alt="Raven WebUI subagents page" width="90%"></a>
 </p>
 
 <p align="center"><em>子智能体：内置与第三方 Agent 汇总在同一张花名册里。</em></p>
