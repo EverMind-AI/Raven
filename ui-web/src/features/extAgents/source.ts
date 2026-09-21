@@ -120,10 +120,13 @@ export function sectionOf(row: ExtAgentRow): Section {
 /* The onboarding wizard's agents step draws two of the hub's three sections,
    from the same `sectionOf`, and leaves out the rows that are not a first
    run's decision: the built-in loop (always on, nothing to do), an openai
-   endpoint (its connect is a key typed into a sheet the step has not got), and
-   a command this machine has never had (an install is not a wizard step). */
+   endpoint (its connect is a key typed into a sheet the step has not got), a
+   command this machine has never had (an install is not a wizard step), and a
+   build an older gateway still has in flight -- `sectionOf` files that under
+   available, and the row's Connect would flip a switch on an install that is
+   not finished. */
 export function wizardSection(row: ExtAgentRow): Section | null {
-  if (row.builtin || row.kind === 'openai') return null
+  if (row.builtin || row.kind === 'openai' || row.building) return null
   const section = sectionOf(row)
   return section === 'missing' ? null : section
 }

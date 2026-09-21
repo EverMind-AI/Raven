@@ -248,6 +248,10 @@ describe('the wizard step sections', () => {
     /* The hub's third section, not a first run's decision: an install is not a
        wizard step. */
     ['a preset this machine has never had', { kind: 'cli', configured: false, enabled: false, probe_status: 'missing' }, 'missing', null, false],
+    /* An older server's build-in-flight flag: the hub files it under
+       available; the step offers nothing, since its Connect would toggle an
+       install that is not finished. */
+    ['a preset mid-build on an older server', { configured: false, enabled: false, building: true, probe_status: 'ready' }, 'avail', null, false],
     ['a configured agent switched on', { configured: true, enabled: true, probe_status: 'ready' }, 'on', 'on', true],
     ['a configured agent switched off', { configured: true, enabled: false, probe_status: 'ready' }, 'avail', 'avail', true],
     [
