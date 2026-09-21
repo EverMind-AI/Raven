@@ -124,10 +124,9 @@ const ErrorTag = (): JSX.Element => <span className="tkerr">error</span>
 
 /* ── the list ─────────────────────────────────────────────────────────── */
 
-function Row({ row, now, hl, open, onOpen }: {
-  row: TaskRow; now: number; hl: boolean; open: boolean; onOpen: (r: TaskRow) => void
+function Row({ row, now, open, onOpen }: {
+  row: TaskRow; now: number; open: boolean; onOpen: (r: TaskRow) => void
 }): JSX.Element {
-  const key = store.rowKey(row)
   const dur = taskDuration(row, now)
   /* The step fragment only while the task is running -- a settled row's
      ending is already said by the group it sits in and by the products
@@ -139,12 +138,10 @@ function Row({ row, now, hl, open, onOpen }: {
   return (
     <button
       type="button"
-      className={'sarow task' + (hl ? ' hl' : '')}
+      className="sarow task"
       data-st={tdotState(row.status)}
       aria-current={open || undefined}
       onClick={() => onOpen(row)}
-      onMouseEnter={() => store.hover(key)}
-      onMouseLeave={() => store.hover(null)}
     >
       <span className={'dot ' + dotOf(row.status)} />
       <div className="bd">
@@ -159,9 +156,8 @@ function Row({ row, now, hl, open, onOpen }: {
   )
 }
 
-function Group({ label, list, now, hover, openIds, onOpen }: {
-  label: string; list: TaskRow[]; now: number; hover: string | null; openIds: Set<string>
-  onOpen: (r: TaskRow) => void
+function Group({ label, list, now, openIds, onOpen }: {
+  label: string; list: TaskRow[]; now: number; openIds: Set<string>; onOpen: (r: TaskRow) => void
 }): JSX.Element | null {
   if (!list.length) return null
   return (
@@ -169,7 +165,7 @@ function Group({ label, list, now, hover, openIds, onOpen }: {
       <div className="wsgrp">{label}</div>
       {list.map((r) => (
         <Row
-          key={store.rowKey(r)} row={r} now={now} hl={hover === store.rowKey(r)}
+          key={store.rowKey(r)} row={r} now={now}
           open={openIds.has(paneIdOf(r))} onOpen={onOpen}
         />
       ))}
@@ -190,11 +186,11 @@ function List(): JSX.Element {
   return (
     <div className="salist tasks">
       <Group
-        label={t('gui.tasks.running')} list={store.running(s.rows)} now={now} hover={s.hover}
+        label={t('gui.tasks.running')} list={store.running(s.rows)} now={now}
         openIds={openIds} onOpen={desk.openDeskTask}
       />
       <Group
-        label={t('gui.tasks.settled')} list={store.settled(s.rows)} now={now} hover={s.hover}
+        label={t('gui.tasks.settled')} list={store.settled(s.rows)} now={now}
         openIds={openIds} onOpen={desk.openDeskTask}
       />
     </div>
@@ -212,45 +208,30 @@ export function TasksApp(): JSX.Element {
 
 /* ── the strip above the composer ─────────────────────────────────────── */
 
-/* Running rows only, name only, at most three -- a status a reader watching
-   something run wants at a glance, not a second reading of the pane's own
-   step count. */
+/* One reminder, not a list: that work is under way in the background, and how
+   much of it -- the prototype's `taskStrip`. Which tasks, and how far each has
+   got, is what the desk's tasks tab says, and it is not said again over the
+   box the reader types in; so the chip is one door, to that tab, and the names
+   ride along only as its hover title. */
 export function TaskRuns(): JSX.Element | null {
   const s = useSyncExternalStore(store.subscribe, store.get)
-  const deskState = useSyncExternalStore(desk.subscribe, desk.get)
+  /* The whole chip is a t(key), so a language pick has to repaint it -- the
+     dock around it subscribes for its own words, not for this one. */
+  useSyncExternalStore(lang.subscribe, lang.get)
   useEffect(() => { if (!s.loaded) void store.refresh() }, [s.loaded])
   const live = store.running(s.rows)
   if (!live.length) return null
-  const shown = live.slice(0, 3)
-  const overflow = live.length - 3
-  const openIds = new Set(deskState.panes.filter((p) => p.kind === 'task').map((p) => p.id))
   return (
-    <div className="runs">
-      <div className="tkrail">
-        {shown.map((r) => {
-          const key = store.rowKey(r)
-          return (
-            <button
-              key={key}
-              className={'trun' + (s.hover === key ? ' hl' : '')}
-              title={r.task_summary || r.id}
-              data-st={tdotState(r.status)}
-              aria-current={openIds.has(paneIdOf(r)) || undefined}
-              onClick={() => desk.openDeskTask(r)}
-              onMouseEnter={() => store.hover(key)}
-              onMouseLeave={() => store.hover(null)}
-            >
-              <span className={'dot ' + dotOf(r.status)} />
-              <span className="nm">{r.task_summary || r.id}</span>
-            </button>
-          )
-        })}
-        {overflow > 0 ? (
-          <button className="trun" data-more="true" onClick={() => desk.openDeskTab('tasks')}>
-            {t('gui.tasks.overflow_more', { n: overflow })}
-          </button>
-        ) : null}
-      </div>
+    <div className="tkruns">
+      <button
+        type="button"
+        className="tkrunhint"
+        title={live.map((r) => r.task_summary || r.id).join('\n')}
+        onClick={() => desk.openDeskTab('tasks')}
+      >
+        <span className="tkrundot" />
+        <span>{t('gui.tasks.running_n', { n: live.length })}</span>
+      </button>
     </div>
   )
 }

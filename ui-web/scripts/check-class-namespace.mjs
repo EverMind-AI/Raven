@@ -247,8 +247,13 @@ const LEGACY_LOCAL = {
      had -- is gone with the line it lived on (the head already says a
      running node's state). Every remaining `.dot` here is written from
      inside a `className={...}` expression, which `LEGACY_EXPR` already
-     counted. */
-  tasks: 7,
+     counted. Down two more with the composer strip redrawn as one prefixed
+     pill: `.runs` and `.trun` went with the per-task chips. Up one, and
+     nothing was added: `.task` on the list row was built by expression only
+     while the row lit itself from the strip's hover, and is a plain
+     attribute now that the pairing is gone -- it moves here from
+     `LEGACY_EXPR`, which drops it and `.hl`. */
+  tasks: 6,
   /* Up from 74 for `.act`, `.dact` and `.pmdesc`, which the plugins page drew
      the same way the transcript does, and from 77 with the agent hub, where
      `.none` was shared with the agents page. Up three more with the playbooks
@@ -279,7 +284,9 @@ const LEGACY_EXPR = {
   onboard: 0,
   rail: 2,
   settings: 0,
-  tasks: 5,
+  /* Down from 5: `.task` moved to `LEGACY_LOCAL` and `.hl` went, with the
+     hover pairing the composer strip no longer has a side for. */
+  tasks: 3,
   subagents: 6,
   transcript: 24,
   workspace: 7,
