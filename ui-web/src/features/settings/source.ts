@@ -26,7 +26,7 @@ import {
   defaultProvider,
   loadDefaultProviders,
   persistModel,
-  providers,
+  defaultProviders,
   setDefaultPair,
 } from '../model/source'
 import { loadSessions, SESS_CHANNELS } from '../rail/source'
@@ -157,7 +157,7 @@ export const settingsSnapshot = (): SettingsSnapshot => ({
   // Both default-scoped on purpose: the settings page describes what new
   // conversations start on, so pairing the default model with the visible
   // session's provider badged the wrong row whenever the two scopes differ.
-  providers: providers(), curProvider: defaultProvider(), model: defaultModel(),
+  providers: defaultProviders(), curProvider: defaultProvider(), model: defaultModel(),
   tools: extTools(), skills: extSkillRows(), mcp: extMcpRows(),
 }) as SettingsSnapshot
 
@@ -384,7 +384,7 @@ export const keySet = (tool: string, vendor: string, raw: Record<string, unknown
    already has a connected provider and a chat model, and whether its web
    step already has a key on file for either web tool's vendor. */
 export function modelStepDone(): boolean {
-  return providers().some((p) => p.on) && !!defaultModel()
+  return defaultProviders().some((p) => p.on) && !!defaultModel()
 }
 
 export function webStepDone(): boolean {

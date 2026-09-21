@@ -21,6 +21,7 @@ import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
 type ProviderWire = ResultOf<'model.options'>['providers'][number]
 
 let providersLive: Provider[] = []
+let defaultProvidersLive: Provider[] = []
 let defaultModelLive = ''
 let defaultProviderLive = ''
 
@@ -28,7 +29,15 @@ let defaultProviderLive = ''
    the boot in src/app/boot.ts is what learns the answer. */
 export const setupState: { providerConfigured: boolean | null } = { providerConfigured: null }
 
-export const providers = (): Provider[] => providersLive
+/* The rows the settings page reads: the default-scoped answer. Apart from the
+   session-scoped one below because `is_current` is the difference between them
+   -- the backend marks the conversation's provider when the read names a
+   session and `agents.defaults`' when it does not. One array held both, so
+   opening the settings dialog (or any provider write) put the default's answer
+   under the composer's picker: it then opened on the default's column with the
+   conversation's model prepended and ticked there, under a vendor whose key
+   does not serve it. The same split as `defaultModelLive` above, one layer out. */
+export const defaultProviders = (): Provider[] => defaultProvidersLive
 export const defaultModel = (): string => defaultModelLive
 export const defaultProvider = (): string => defaultProviderLive
 
@@ -116,7 +125,7 @@ const rowsOf = (list: ProviderWire[]): Provider[] =>
    coalesced onto the dropped load and showed no provider to connect. */
 export async function loadDefaultProviders(): Promise<void> {
   const mo = await gateway().call('model.options', {})
-  providersLive = rowsOf(mo.providers || [])
+  defaultProvidersLive = rowsOf(mo.providers || [])
 }
 
 export async function loadProviders(sid?: string | null, gen?: number): Promise<void> {
@@ -265,6 +274,7 @@ export function stagedTier(): string | null {
    registered, are both the module's. */
 export function _resetForTests(): void {
   providersLive = []
+  defaultProvidersLive = []
   defaultModelLive = ''
   defaultProviderLive = ''
   paintChip = () => {}
