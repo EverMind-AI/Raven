@@ -145,7 +145,8 @@ four roles point at a vendor raven carries no provider row for.
 | **T6.2** | A16 | yes | Configure rerank against DeepInfra, then make it issue one call. The path it reaches must be the inference endpoint, not the chat one -- the two differ only in the vendor table, so the right one can only come from reading it. | The web path borrows the chat base url, as it does today | effect: the request line, from the recorder or from the vendor's own error text naming the path |
 | **T6.3** | A17 | yes | The rerank slot's candidate list next to the vendor table's `supports`. OpenAI and DeepSeek carry keys and must **not** appear. | The filter still asks only "has a key" | visible: the list; the table row |
 | **T6.4** | A18 | contract | `settings.everos` against a provider with a key and one without: `api_key_set` follows the credential, and no `provider` field carries `deepinfra` / `vllm` / `dashscope` any more. | The field keeps EverOS's rerank protocol under a name that now means a vendor | the two responses |
-| **T6.5** | A18 | yes | The card renders the stored provider without reverse-looking-up a base url -- checked with a provider whose `apiBase` is null, which the old code rendered blank. This case originally asked for a second half, a "key set" indicator on the card that follows the provider's credential; the page renders no such indicator, and A18's own check is the RPC response, not a page element, so that half belongs to T6.4. | The page still guesses the vendor from the address | visible: the rendered provider name |
+| **T6.5** | A18 | yes | The card renders the stored provider without reverse-looking-up a base url -- checked with a provider whose `apiBase` is null, which the old code rendered blank. (This case once asked for a second half on the page, a "key set" indicator; the page renders no such element, so that half moved to T6.6, where it is observable.) | The page still guesses the vendor from the address | visible: the rendered provider name |
+| **T6.6** | A18 | yes | `api_key_set` read off the **live socket** -- `settings.everos` over `ws://127.0.0.1:<page>/rpc` through a running gateway -- before and after the page's own `model.disconnect` on that provider, with no edit to any role. The running server is what computes the flag, so only a live reading can catch it computing the wrong one. The same two readings also show `rerank.provider` holding a vendor and never `deepinfra` / `vllm` / `dashscope`. | The flag reports a field raven no longer stores, or the rerank protocol still travels as `provider` | the two responses off the socket, and the role blocks on disk unchanged between them |
 
 ---
 
@@ -159,7 +160,7 @@ four roles point at a vendor raven carries no provider row for.
 | A4 | T2.2, T2.5 | A15 | T6.1 |
 | A5 | T2.1 | A16 | T6.2 |
 | A6 | T2.3 | A17 | T6.3 |
-| A7 | T3.1 | A18 | T6.4, T6.5 |
+| A7 | T3.1 | A18 | T6.4, T6.5, T6.6 |
 | A8 | T3.2 | A19 | T1.4 |
 | A9 | T3.3 | A20 | T3.5 |
 | A10 | T4.1, T4.4 | A21 | T1.5 |
@@ -168,7 +169,10 @@ four roles point at a vendor raven carries no provider row for.
 Every A has at least one case. Four are `contract`, and they are not equivalent:
 
 - **T2.5** (A4) and **T6.4** (A18) each have a real-host case for the same A, so the A is
-  accepted on the real host and the contract case only shortens the loop.
+  accepted on the real host and the contract case only shortens the loop. For A18 that case
+  is **T6.6**, which reads `api_key_set` off the live socket: T6.5 covers only the rendered
+  provider name, and `Roles.tsx` never reads `api_key_set`, so without T6.6 a running
+  gateway could report the flag wrongly with nothing watching.
 - **T3.5** (A20) and **T2.4** (A22) are exceptions, stated rather than hidden. A20 is a
   static property of the source tree, for which a repository-wide check *is* the owning
   layer. A22 is a defensive branch a running gateway cannot be driven into. Neither is
