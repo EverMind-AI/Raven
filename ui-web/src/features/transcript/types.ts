@@ -190,6 +190,12 @@ export interface AskData {
   v: number
   id: number
   kind: 'ask'
+  /* What opened this turn, when the runtime opened it rather than a person.
+     `origin` is the wire's (`cron`, `sentinel`, `heartbeat`, `subagent`) and
+     `note` is what that origin says about itself where it says anything -- a
+     schedule's own description of when it was set. Absent on a turn somebody
+     typed, which is every other one. */
+  auto?: { origin: string; note: string }
   body: string
   atts: string[]
   when: string

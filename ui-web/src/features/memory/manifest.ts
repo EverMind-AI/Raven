@@ -12,7 +12,11 @@ export const manifest: DomainManifest = {
   domain: 'memory',
   /* `mem*` on 7 of its 13 own classes. */
   cssPrefix: 'mem',
-  page: 'memoryPage',
+  /* A section of the settings dialog rather than a page: #memoryBody is the
+     box src/App.tsx renders inside it, and this island roots itself in that
+     box rather than in this island's tree (features/settings/store.ts's
+     HOSTED says why the root stays its own). */
+  host: 'memoryBody',
   sources: ['memory'],
   root: MemoryApp,
 }

@@ -37,7 +37,7 @@
  * class and the markup of an element that was rendered elsewhere. A store may
  * write the flag on its own region (`data-open`), and that is a dataset write
  * this does not count; setting `textContent` or `innerHTML` on a node React
- * owns is the case rule (a) does not reach, and the twenty-four the tree still
+ * owns is the case rule (a) does not reach, and the twenty-two the tree still
  * holds are counted per file so they can only fall. A file absent from that
  * table may not write at all. features/ is out of this gate's reach, here as
  * above -- CONTRIBUTING section 4.2 says why.
@@ -100,7 +100,6 @@ const PINNED = {
   'state/globalListeners.ts': 3,
   'state/lightbox.ts': 3,
   'state/menu.ts': 1,
-  'state/navfly.ts': 3,
   'state/page.ts': 4,
   'state/perm.ts': 3,
   'state/portals.ts': 3,
@@ -154,7 +153,7 @@ const WRITES = {
   'state/session/registry.ts': 4,
   'state/session/runtime.ts': 1,
   'state/ws.ts': 3,
-  'app/updates.ts': 4,
+  'app/updates.ts': 2,
   'chrome/behaviour/scrollbars.ts': 1,
 }
 

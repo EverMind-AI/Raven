@@ -35,7 +35,7 @@ module imports what it calls, and the direction those imports may run in is
 `scripts/gates/import-direction.test.mjs`. Where the direction forbids the
 import -- `src/state/` calling into a domain -- the call goes through a callback
 the state module declares and the domain fills (`state/page.ts`'s `onShow`,
-`state/navfly.ts`'s `onMark`).
+`state/settings.ts`'s `onEnter`).
 
 ## Adding a domain
 
@@ -144,4 +144,3 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `instance-composer-css` | a sub-agent's composer is the page's composer, one size down |
 | `agents-roster-live` | what the desk's agent list is a list of, on the shipped wiring |
 | `direct-chat-media-live` | the instance composer's send carries its attachments |
-| `playbooks-live` | the page installs a playbook source that speaks the contract |

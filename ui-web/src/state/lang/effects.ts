@@ -35,7 +35,6 @@ import { redraw as redrawTranscript } from '../../features/transcript/mount'
 import { current as sessionCurrent } from '../../lib/session'
 import { draw as drawCtx } from '../ctxChip'
 import * as detail from '../detail'
-import { draw as drawNavRows } from '../navfly'
 import { draw as drawPerm } from '../perm'
 import { isDraft } from '../session/registry'
 import { open as sessionOpen, sess } from '../session/rows'
@@ -50,10 +49,6 @@ export function repaint(): void {
      are keyed on it, so a flip rebuilds each one rather than diffing a tree
      whose words all moved. */
   redrawSettings()
-  /* The rows' own words follow the catalogue on their own (chrome/MoreFly.tsx);
-     what this asks for is the mark on each of them, which is written from
-     outside React and is the one thing a re-render leaves alone. */
-  drawNavRows()
   /* The shared drawer is closed rather than redrawn: it is not on any page, so
      nothing above reaches it, and every one of its five openers would have to
      hand back the subject it was drawn from. Left open it would sit in the old

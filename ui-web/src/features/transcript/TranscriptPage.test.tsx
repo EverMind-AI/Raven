@@ -574,6 +574,64 @@ describe('transcript island, history', () => {
     expect(name!.textContent).toBe('src/app.ts')
   })
 
+  /* A cron turn is the reader's own side of the conversation, and what it says
+     is what the reader asked for: the schedule and the instruction they wrote.
+     The rest of the reminder is wording aimed at the model, and a reader shown
+     that is a reader shown the prompt. */
+  describe('the turn a timer opened', () => {
+    const reminder = [
+      '[Scheduled Task] Timer finished.',
+      '',
+      "Task 'gateway watch' (set at 09:12, cron `*/30 * * * *`) has been triggered.",
+      'Scheduled instruction: check the login gateway 5xx rate',
+      'and pull the error log above one percent',
+      '',
+      'When you reply, mention when the reminder was originally set '
+        + '(e.g. "the reminder you set at 17:05 ...") so the user remembers the context.',
+    ].join('\n')
+
+    const bubble = (): HTMLElement => $('.msg.me[data-auto]') as HTMLElement
+
+    it('says what set it off, and the instruction that fired', () => {
+      act(() => {
+        mount.history([{ role: 'user', text: reminder, timestamp: iso(Date.now() - 60000), origin: 'cron' }])
+      })
+      expect(bubble()).toBeTruthy()
+      expect(bubble().querySelector('.transcript-auto')?.textContent)
+        .toBe('en:gui.deleg.by_cron \u00b7 set at 09:12, cron */30 * * * *')
+      /* The instruction, both of its lines, and not a word of the framing. */
+      const said = bubble().textContent ?? ''
+      expect(said).toContain('check the login gateway 5xx rate')
+      expect(said).toContain('and pull the error log above one percent')
+      expect(said).not.toContain('Scheduled instruction:')
+      expect(said).not.toContain('[Scheduled Task]')
+      expect(said).not.toContain('When you reply')
+    })
+
+    /* Every other origin has a shape of its own that nothing here reads, so
+       guessing at one would put runtime prose on screen -- which is the thing
+       this reads around. */
+    it('leaves the chip standing alone for an origin it cannot read', () => {
+      act(() => {
+        mount.history([
+          { role: 'user', text: 'a sentinel said something', timestamp: iso(Date.now() - 60000), origin: 'sentinel' },
+        ])
+      })
+      expect(bubble().querySelector('.transcript-auto')?.textContent).toBe('en:gui.deleg.by_sentinel')
+      expect(bubble().textContent).not.toContain('a sentinel said something')
+    })
+
+    /* And it is a question's row in every other way: its own side of the
+       thread, and no copy button over an empty body. */
+    it('stands where a question would, with nothing to copy when it says nothing', () => {
+      act(() => {
+        mount.history([{ role: 'user', text: 'not a reminder', timestamp: iso(Date.now() - 60000), origin: 'cron' }])
+      })
+      expect(bubble().closest('.turn.me')).toBeTruthy()
+      expect(bubble().closest('.turn')?.querySelector('.acts button')).toBeNull()
+    })
+  })
+
   it('starts the clock at the runtime entry that opened the turn, not the last question', () => {
     const t0 = Date.now() - 3600000
     act(() => {
@@ -1427,6 +1485,68 @@ describe('a delegated result coming back', () => {
     expect(opened).toEqual(['dag:run-7'])
   })
 
+  /* A graph's receipt is two kinds of text in one string, and the fold draws
+     them as two: the counts block a machine wrote, then one captioned section
+     per terminal node, which is what the sub-agent actually said. Through the
+     markdown reader the `- node [status]` lines fold into a bullet list and
+     lose the alignment that makes them scannable. */
+  it('splits a graph receipt into the machine block and a section per node', () => {
+    wireDelivery()
+    const t0 = Date.now() - 20000
+    const receipt = [
+      'DAG run run-7 finished: 2 completed, 0 failed, 0 cancelled, 0 skipped (of 2).',
+      'Run dir: ~/.raven/dag/run-7',
+      '',
+      'Node output files:',
+      '- read [completed]: nodes/read/.out.md',
+      '- write [completed]: nodes/write/.out.md',
+      '',
+      'Terminal outputs:',
+      '### read',
+      'twelve files, none of them stale',
+      '### write',
+      'the brief is in reports/brief.md',
+    ].join('\n')
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced(receipt), timestamp: iso(t0),
+          delegated: { kind: 'dag', label: 'run-7', status: 'ok', run_id: 'run-7' },
+        },
+      ])
+    })
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+    const body = $('.sdlv .sdbd') as HTMLElement
+    const raw = body.querySelector('.raw')?.textContent ?? ''
+    expect(raw).toContain('2 completed, 0 failed')
+    expect(raw).toContain('- read [completed]: nodes/read/.out.md')
+    /* The node sections are below it, and not inside it. */
+    expect(raw).not.toContain('twelve files')
+    expect([...body.querySelectorAll('.cap')].map((n) => n.textContent))
+      .toEqual(['en:gui.deleg.body_cap', 'read', 'write'])
+    expect([...body.querySelectorAll('.prose')].map((n) => n.textContent))
+      .toEqual(['twelve files, none of them stale', 'the brief is in reports/brief.md'])
+  })
+
+  /* The other thing a graph delivers: one suspended node's report, in its own
+     words. Same `kind: dag`, and nothing about it is a machine block. */
+  it('leaves a suspended node report as prose', () => {
+    wireDelivery()
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced('the log line carries a live credential; say whether to redact it'),
+          timestamp: iso(Date.now() - 20000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'exception', run_id: 'run-7', node_id: 'trace' },
+        },
+      ])
+    })
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+    expect($('.sdlv')?.className).toContain('warn')
+    expect($('.sdlv .sdbd .raw')).toBeNull()
+    expect($('.sdlv .sdbd .prose')?.textContent).toContain('live credential')
+  })
+
   it('replays a spawn delivery with its own label and the framing left out', () => {
     wireDelivery()
     const t0 = Date.now() - 20000
@@ -1463,8 +1583,8 @@ describe('a delegated result coming back', () => {
       ])
     })
     const row = $('.sdlv')!
-    expect(row.classList.contains('err')).toBe(true)
-    expect(row.querySelector('.tx')?.textContent).toBe('en:gui.deleg.delivered_err')
+    expect(row.classList.contains('bad')).toBe(true)
+    expect(row.querySelector('.st')?.textContent).toBe('en:gui.deleg.delivered_err')
   })
 
   it('shows a suspended delivery as waiting on a decision, not as failed', () => {
@@ -1478,9 +1598,9 @@ describe('a delegated result coming back', () => {
       ])
     })
     const row = $('.sdlv')!
-    expect(row.classList.contains('err')).toBe(false)
+    expect(row.classList.contains('bad')).toBe(false)
     expect(row.classList.contains('warn')).toBe(true)
-    expect(row.querySelector('.tx')?.textContent).toBe('en:gui.deleg.delivered_exception')
+    expect(row.querySelector('.st')?.textContent).toBe('en:gui.deleg.delivered_exception')
   })
 
   it('gives a delivery that carried nothing no fold to open', () => {

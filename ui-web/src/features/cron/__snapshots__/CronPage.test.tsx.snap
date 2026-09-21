@@ -1,108 +1,101 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`cron island > keeps its rendered shape, job page 1`] = `
-"div.pmback
-  button.mini.ghost
-div.suhead
-  div.meta
-    div.l1
-      b
-    div.l2
-  button.mini.ghost.sumenu
-div.sustate
-  span.led
-  span
-  span.a
-    button.swi
-div.tabbar
-  button
-  button
-div.ff
-  label
-  input
-div.ff
-  label
-  textarea
-div.ff
-  label
-  div
-    div.seg
-      button
-      button
-      button
-      button
-      button
-    input
-div.ff
-  label
-  div.sustate
-    span
-    span.x
-    span.a
+"div.two-pane
+  div.two-pane-side
+    div.two-pane-find
+      div.two-pane-search
+        svg
+          circle
+          path
+        input
+      button.two-pane-add
+        svg
+          path
+    div.two-pane-list
+      div.two-pane-grp
+      div.two-pane-row
+        button.two-pane-hit
+          span.two-pane-txt
+            span.nm
+            span.ds.bad
+        button.two-pane-swi
+  div.two-pane-main
+    div.two-pane-head
+      div.ttl
+        div.nm
+        div.two-pane-meta
+          span
+          span.st.ok
+      button.two-pane-swi
       button.mini.ghost
-div.sufoot
-  span.n
-  button.mini.key"
+    div.ff
+      label
+      input
+    div.ff
+      label
+      textarea
+    div.ff
+      label
+      div
+        div.seg
+          button
+          button
+          button
+          button
+          button
+        input
+    div.ff
+      label
+      div.sustate
+        span
+        span.x
+        span.a
+          button.mini.ghost
+    div.sufoot
+      span.n
+      button.mini.key
+    div.two-pane-sec
+      div.two-pane-lab
+        span.two-pane-sp
+        button.mini
+      div.cdruns
+        div.empty-note"
 `;
 
 exports[`cron island > keeps its rendered shape, list 1`] = `
-"div.herorow
-  div.pmhero
-    h3
-  button.mini.gold
-div.seg.cronfilter
-  button
-    span.n
-  button
-    span.n
-  button
-    span.n
-div.sulist
-  div.surow.notile.bad
-    div.nm
-      span.led.bad
-      b
-    div.suact
-      button.swi
-      button.mini.ghost
-    div.sufacts.bad
-    div.suextra
-      span
-      span.nx
-    div.sufoot2
-      button.rl
-        span.st.bad
-        span.at
-        span.nt
-        span.chev
-  div.surow.notile
-    div.nm
-      span.led
-      b
-    div.suact
-      button.swi
-      button.mini.ghost
-    div.sufacts
-    div.suextra
-      span
-      span.nx
-    div.sufoot2
-      button.rl
-        span.st.ok
-        span.at
-        span.nt
-        span.chev
-  div.surow.notile
-    div.nm
-      span.led.off
-      b
-    div.suact
-      button.swi
-      button.mini.ghost
-    div.sufacts
-    div.suextra
-      span
-      span.nx
-    div.sufoot2
-      span.never"
+"div.two-pane
+  div.two-pane-side
+    div.two-pane-find
+      div.two-pane-search
+        svg
+          circle
+          path
+        input
+      button.two-pane-add
+        svg
+          path
+    div.two-pane-list
+      div.two-pane-grp
+      div.two-pane-row
+        button.two-pane-hit
+          span.two-pane-txt
+            span.nm
+            span.ds.bad
+        button.two-pane-swi
+      div.two-pane-row
+        button.two-pane-hit
+          span.two-pane-txt
+            span.nm
+            span.ds
+        button.two-pane-swi
+      div.two-pane-grp
+      div.two-pane-row.two-pane-off
+        button.two-pane-hit
+          span.two-pane-txt
+            span.nm
+            span.ds
+        button.two-pane-swi
+  div.two-pane-main
+    div.two-pane-none"
 `;

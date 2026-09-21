@@ -119,14 +119,21 @@ break this today and lets none be added.
 | `host?` | the box that root goes into, when it is not the page's own body |
 | `cssPrefix?` | the prefix its class names carry, when that is not the domain's own name (section 7) |
 
-A page's identity is a different table: `state/pages.ts` holds the seven module
-pages (section id, body id, rail buttons, Escape rank, heading and aria keys),
-and everything that names a page derives from it -- `src/App.tsx`'s sections,
+A page's identity is a different table: `state/pages.ts` holds the module pages
+(section id, body id, rail buttons, Escape rank, heading and aria keys), and
+everything that names a page derives from it -- `src/App.tsx`'s sections,
 `state/page.ts`'s `PageId`, `state/escapeOrder.ts`'s rows, `state/portals.ts`'s
 body order, `chrome/Rail.tsx`'s nav strip, `features/rail/store.ts`'s marks and
 `src/test/regions.test.ts`'s goldens. Two tables, because every one of those
-readers is in `state/` and a single aggregate would pull twenty islands in
+readers is in `state/` and a single aggregate would pull eighteen islands in
 there with it.
+
+A domain that is a **section of the settings dialog** rather than a page
+(channels, schedules, memory) claims no page and names a `host` instead: the
+box `src/App.tsx` renders beside `#spanels`, which `features/settings/store.ts`'s
+`HOSTED` maps its section id to. Its island is its own root, because one inside
+the settings island's tree would be unmounted the moment the reader picked
+another section.
 
 **Enforced by `domain-registration`**: every domain declares itself once into
 `features/manifests.ts` and names itself after its directory; every page a
@@ -181,10 +188,12 @@ effects and the session pipeline all read and write from outside any component.
 
 `state/` does not import `features/` at runtime. Where the page's machinery has
 to ask a domain to do something, the state module declares a slot and the domain
-fills it: `src/app/install.ts` fills `state/page.ts`'s three `onShow` slots, and
-`features/rail/store.ts` fills `state/navfly.ts`'s `onMark` at its own module
-evaluation, because a fold the reader can click carries no guarantee that the
-page's wiring has run. Enforced by `import-direction`.
+fills it: `src/app/install.ts` fills `state/page.ts`'s `onShow` slot and
+`state/settings.ts`'s `onOpen`, and the three domains that are settings sections
+fill that module's `onEnter` and `onLeave` at their own module evaluation --
+the page's wiring would otherwise import three island stores for three lines,
+which is three island graphs it does not otherwise carry. Enforced by
+`import-direction`.
 
 ## 4. Rendering
 
@@ -569,7 +578,7 @@ shrink-only: the way off a list is the fix.
 | `.newrun` and `.tipdn` are written and never styled | `src/chrome/Rail.tsx` puts `.newrun` on the new-session button and no rule defines it; taking it out edits `src/test/__golden__/region-app.txt`. `.tipdn` is the flag `state/tooltip.ts` reads with `classList.contains` to hang the hover pill below its control, named only in the `page.css` comment over those rules. `src/components/SetupSheet.tsx` writes two more from inside an expression (`.badtx`, `.warntx`), where the check cannot tell a class from a comparison operand and so does not read them | `check-class-namespace`'s `UNSTYLED` |
 | `src/lib/prose.ts` writes 13 classes that no class namespace holds | It builds the shell's markdown markup as HTML strings (`.cblk`, `.artf`, `.pth` and ten more), and it is a `lib/` module rather than a domain, the page frame or a shared component -- so the gate reads no prefix rule over it. A `lib` namespace would be a fourth prefix invented for one file; the classes belong with the markdown rules in `page.css` until the prose helpers move behind a component | by review (`check-class-namespace` does not read `src/lib/`) |
 | 26 imperative reaches for an element in the page frame | Not the rule's case: a portal at the body, two popovers filling a served list, the island mount boxes, and `chrome/behaviour/`'s grip drag and overlay scrollbars, which are behaviour rather than rendering and own no component tree. Counted so a third such module cannot appear unnoticed | `state-dom-touch`'s `FRAME` |
-| 24 writes of an element's text, class or markup outside `features/` | Rule (a) is a flag on a store's own region; these set `textContent`, `innerHTML` or the class of a node something else rendered. `state/session/registry.ts` and `app/updates.ts` hold four each, and eight more files the rest. A row goes when the markup says the text instead | `state-dom-touch`'s `WRITES` |
+| 22 writes of an element's text, class or markup outside `features/` | Rule (a) is a flag on a store's own region; these set `textContent`, `innerHTML` or the class of a node something else rendered. `state/session/registry.ts` holds four, `app/updates.ts` two, and eight more files the rest. A row goes when the markup says the text instead | `state-dom-touch`'s `WRITES` |
 | `state/session/registry.ts` reaches four ids and its header names none | It reaches `#stage`, `#flash`, `#title` and `#ta` through the page's own `$`, while its header is about which conversation the page is on. One sentence in that header takes the row off, and the gate then fails until it is deleted | `state-dom-touch`'s `SILENT` |
 | 205 optional contract fields the fixtures never send | Most are one state this canvas is deliberately in; the header names the few a page really draws and this library has never exercised | `fixture-shape`'s `UNSENT` |
 | 18 methods with no offline answer | Each entry says why the offline page has nothing to answer with | `offline-coverage`'s `EXEMPT` |

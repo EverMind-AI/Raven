@@ -14,9 +14,7 @@
 import { onFrameBytes, onFrameJson, browserSource } from '../features/browser/source'
 import { open as approveSheet } from '../features/composer/approve'
 import { connSource } from '../features/connections/source'
-import { closeDialog as closeConnDialog } from '../features/connections/store'
 import { cronSource } from '../features/cron/source'
-import { closeSheet as closeCronSheet } from '../features/cron/store'
 import { openDeskTask } from '../features/desk/store'
 import { AgentsStepBody } from '../features/extAgents/AgentsBody'
 import { extAgentsSource } from '../features/extAgents/source'
@@ -28,7 +26,6 @@ import { memorySource } from '../features/memory/source'
 import { modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
 import { isOpen as onboardOpen, setBodies as setOnboardBodies, subscribe as onOnboard } from '../features/onboard/store'
-import { playbooksSource } from '../features/playbooks/source'
 import { markNew } from '../features/rail/store'
 import { installSessionActions } from '../features/rail/wire'
 import { ModelStepBody, WebStepBody } from '../features/settings/SetupBodies'
@@ -59,6 +56,7 @@ import * as page from '../state/page'
 import { clarifyRequest, dispatch, installPipeline } from '../state/session/pipeline'
 import { reconnect, switchToDraft } from '../state/session/registry'
 import { installComposerActions, installSlashActions } from '../state/session/runtime'
+import * as settingsDialog from '../state/settings'
 import { ds, sources } from '../state/sources'
 import { show as toast } from '../state/toast'
 import { onReset as onWsReset } from '../state/ws'
@@ -154,7 +152,6 @@ export function installSources(): void {
   sources.cron = cronSource
   sources.connections = connSource
   sources.memory = memorySource
-  sources.playbooks = playbooksSource
   sources.onboard = onboardSource
   /* The onboarding wizard draws the owning domains' own bodies for its three
      configured steps -- the settings dialog's model page and web controls,
@@ -352,13 +349,18 @@ export function installActions(): void {
   installSessionActions()
   /* The slash palette's two session verbs, on the rows the dock declares. */
   installSlashActions()
-  /* What a page switch spends on an island: the rail re-marks itself, and the
-     two overlays a single page owns close behind it. Registered here because
-     state/page.ts does not import features/ -- it declares the three slots and
-     the order they run in (state/page.ts's `show`). */
+  /* What a page switch spends on an island: the rail re-marks itself.
+     Registered here because state/page.ts does not import features/ -- it
+     declares the slot and when it runs (state/page.ts's `show`). */
   page.onShow('markNav', markNew)
-  page.onShow('closeConnDialog', closeConnDialog)
-  page.onShow('closeCronSheet', closeCronSheet)
+  /* What raises the settings dialog for the three domains that are sections of
+     it (schedules, channels, memory). Registered here for the same reason the
+     slot above is: state/settings.ts declares it and does not import the island
+     that fills it. What arriving at one of those three sections costs, and what
+     leaving it costs, each domain registers at its own module evaluation --
+     three island stores in the page's wiring for three lines is three island
+     graphs it does not otherwise carry. */
+  settingsDialog.onOpen(() => { void settingsStore.open() })
   /* A different conversation is a different set of tasks: carrying them across
      would attribute one conversation's background work to another, and the
      strip above the composer outlives the switch, so nothing would ask for the
@@ -391,8 +393,10 @@ export function installDevHooks(): void {
   hooks.__clarify = (p: unknown) => clarifyRequest(p || { request_id: 'dev', question: '预览', choices: ['A', 'B'] })
 
   // The update row's version state only appears when a release is actually
-  // newer, which never happens on a dev checkout (window.__upnote('ver', '0.1.11')).
-  hooks.__upnote = (kind: 'ver' | 'ui', latest?: string) => showUpNote(kind || 'ver', latest)
+  // newer, which never happens on a dev checkout (window.__upnote('ver', '0.1.11')),
+  // and its behind-sources state only on a served checkout whose dist is stale
+  // (window.__upnote('behind')).
+  hooks.__upnote = (kind: 'ver' | 'ui' | 'behind', latest?: string) => showUpNote(kind || 'ver', latest)
 
   /* The approval sheet only appears when an engine asks for one, which is too
      long a loop to design a sheet in (window.__approve('rm -rf build/')). */

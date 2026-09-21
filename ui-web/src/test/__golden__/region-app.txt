@@ -25,25 +25,12 @@ div.app
         svg
           path
         span
-      button#playbooksBtn.navi
-        svg
-          circle
-          circle
-          circle
-          path
-        span
       button#agentsBtn.navi
         svg
           rect
           rect
           path
         span
-      div#moreFly.moresub[data-open=false]
-      button#moreBtn.navi.more
-        svg.chev
-          path
-        span.l-more
-        span.l-less
     div#findBox.find
       svg.ic
         circle

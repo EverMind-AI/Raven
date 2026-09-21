@@ -10,7 +10,11 @@ import type { DomainManifest } from '../manifests'
 
 export const manifest: DomainManifest = {
   domain: 'cron',
-  page: 'cronPage',
+  /* A section of the settings dialog rather than a page: #cronBody is the
+     box src/App.tsx renders inside it, and this island roots itself in that
+     box rather than in this island's tree (features/settings/store.ts's
+     HOSTED says why the root stays its own). */
+  host: 'cronBody',
   sources: ['cron'],
   root: CronApp,
 }

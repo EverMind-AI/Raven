@@ -512,24 +512,56 @@
       "zh": "打开这次运行的详情"
     },
     "gui.deleg.delivered": {
-      "en": "finished; its result just joined this conversation",
-      "zh": "已完成，结果已注入本轮对话"
+      "en": "finished",
+      "zh": "已完成"
     },
     "gui.deleg.body": {
       "en": "what came back",
       "zh": "交付内容"
+    },
+    "gui.deleg.body_cap": {
+      "en": "what entered this turn",
+      "zh": "注入本轮对话的内容"
+    },
+    "gui.deleg.body_hide": {
+      "en": "collapse",
+      "zh": "收起"
+    },
+    "gui.deleg.by_cron": {
+      "en": "Scheduled",
+      "zh": "定时触发"
+    },
+    "gui.deleg.by_heartbeat": {
+      "en": "Heartbeat",
+      "zh": "心跳触发"
+    },
+    "gui.deleg.by_sentinel": {
+      "en": "Sentinel",
+      "zh": "哨兵触发"
+    },
+    "gui.deleg.by_subagent": {
+      "en": "Sub-agent report",
+      "zh": "子智能体回报"
+    },
+    "gui.deleg.dlv_partial": {
+      "en": "partly done",
+      "zh": "部分完成"
+    },
+    "gui.deleg.dlv_stopped": {
+      "en": "stopped",
+      "zh": "已停止"
     },
     "gui.deleg.body_aria": {
       "en": "Show what the delegated run delivered",
       "zh": "展开子智能体交付的内容"
     },
     "gui.deleg.delivered_err": {
-      "en": "failed; the error just joined this conversation",
-      "zh": "运行失败，失败详情已注入本轮对话"
+      "en": "failed",
+      "zh": "失败"
     },
     "gui.deleg.delivered_exception": {
-      "en": "hit an exception and is waiting on a decision; its report just joined this conversation",
-      "zh": "遇到异常，等待裁决，报告已注入本轮对话"
+      "en": "waiting on a decision",
+      "zh": "等待裁决"
     },
     "gui.deleg.dag_title": {
       "en": "Task graph",
@@ -1355,6 +1387,22 @@
       "en": "enabled",
       "zh": "启用"
     },
+    "gui.conn.none": {
+      "en": "No channels in the catalogue yet.",
+      "zh": "渠道目录还是空的。"
+    },
+    "gui.conn.none_match": {
+      "en": "No channel matches.",
+      "zh": "没有匹配的渠道。"
+    },
+    "gui.conn.pick": {
+      "en": "Pick a channel on the left",
+      "zh": "在左边选一个渠道"
+    },
+    "gui.conn.search": {
+      "en": "Search channels…",
+      "zh": "搜索渠道…"
+    },
     "gui.conn.g_on": {
       "en": "In service",
       "zh": "已接入"
@@ -1507,6 +1555,22 @@
       "en": "Paused",
       "zh": "已暂停"
     },
+    "gui.cron.g_on": {
+      "en": "On",
+      "zh": "已启用"
+    },
+    "gui.cron.g_off": {
+      "en": "Off",
+      "zh": "已停用"
+    },
+    "gui.cron.pick": {
+      "en": "Pick a schedule on the left",
+      "zh": "在左边选一个任务"
+    },
+    "gui.cron.search": {
+      "en": "Search schedules…",
+      "zh": "搜索任务…"
+    },
     "gui.cron.f_none": {
       "en": "Nothing under this filter.",
       "zh": "这个筛选下没有任务。"
@@ -1592,8 +1656,8 @@
       "zh": "下次 {next}"
     },
     "gui.cron.none": {
-      "en": "No schedules yet. Add one from the top right, e.g. \"summarise yesterday's errors every morning at 8\".",
-      "zh": "还没有定时任务。点右上角新建一个，比如「每天早八点汇总昨天的错误日志」。"
+      "en": "No schedules yet. Say \"every morning at 8...\" in a conversation, or add one here.",
+      "zh": "还没有定时任务。在对话里说「每天早上八点……」，或在这里新建。"
     },
     "gui.cron.ok": {
       "en": "ok",
@@ -2586,6 +2650,10 @@
     "gui.mem.page": {
       "zh": "第 {p} / {n} 页",
       "en": "Page {p} of {n}"
+    },
+    "gui.mem.pick": {
+      "en": "Pick a memory on the left",
+      "zh": "在左边选一条记忆"
     },
     "gui.mem.prev": {
       "zh": "上一页",
@@ -4202,6 +4270,22 @@
     "gui.unpinned_ok": {
       "en": "Unpinned",
       "zh": "已取消固定"
+    },
+    "gui.update.behind": {
+      "en": "Stale page build",
+      "zh": "页面构建落后于源码"
+    },
+    "gui.update.behind_body": {
+      "en": "ui-web/src or i18n/messages.json changed after dist/index.html was built, so this page is older than the code it runs on. In the repository root run make build-ui, then reload this page.",
+      "zh": "ui-web/src 或 i18n/messages.json 在 dist/index.html 构建之后有改动，这个页面比它背后的代码旧。在仓库根目录运行 make build-ui，然后刷新本页。"
+    },
+    "gui.update.behind_how": {
+      "en": "How to rebuild",
+      "zh": "如何重建"
+    },
+    "gui.update.behind_title": {
+      "en": "Rebuild the page",
+      "zh": "重建页面"
     },
     "gui.update.note": {
       "en": "UI updated on disk",
@@ -6419,13 +6503,13 @@
       "en": "Usage",
       "zh": "用量"
     },
-    "gui.settings.nav.model": {
-      "en": "Model settings",
-      "zh": "模型配置"
-    },
     "gui.settings.nav.provider": {
       "en": "Model providers",
       "zh": "模型服务商"
+    },
+    "gui.settings.nav.model": {
+      "en": "Model settings",
+      "zh": "模型配置"
     },
     "gui.settings.nav.skills": {
       "en": "Skills",
@@ -6438,6 +6522,18 @@
     "gui.settings.nav.plugins": {
       "en": "Plugins",
       "zh": "插件"
+    },
+    "gui.settings.nav.channels": {
+      "en": "Channels",
+      "zh": "渠道"
+    },
+    "gui.settings.nav.cron": {
+      "en": "Schedules",
+      "zh": "定时任务"
+    },
+    "gui.settings.nav.memory": {
+      "en": "Memory",
+      "zh": "记忆管理"
     },
     "gui.settings.nav.archive": {
       "en": "Archive",

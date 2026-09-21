@@ -27,11 +27,7 @@
  */
 
 import { busy as turnBusy } from '../features/composer/turn'
-import * as connections from '../features/connections/store'
-import * as cron from '../features/cron/store'
 import * as extAgents from '../features/extAgents/store'
-import * as memory from '../features/memory/store'
-import * as playbooks from '../features/playbooks/store'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
 import { byEscape } from './pages'
@@ -66,21 +62,16 @@ const cancels = (id: string) => (): void => { document.getElementById(id)?.click
    silence. The verb is the domain's; the order is the table's. */
 const CLOSERS: Record<PageId, () => void> = {
   extAgentsPage: () => extAgents.close(),
-  connectionsPage: () => connections.close(),
-  memoryPage: () => memory.close(),
-  playbooksPage: () => playbooks.closePage(),
-  cronPage: () => cron.close(),
 }
 
-/* The five layers Escape reaches before any page: an image, the confirm
-   dialog, the channel dialog raised over the entries page, the shared drawer
-   and the new-job sheet. */
+/* The four layers Escape reaches before any page. Two of them are raised from
+   inside the settings dialog now -- the shared drawer and the new-job sheet --
+   which is why they stand above it: the dialog's own layer is in BELOW, so one
+   Escape takes back what a section raised and a second takes back the
+   dialog. */
 const ABOVE: readonly EscapeLayer[] = [
   { id: '.lightbox', isOpen: imageOpen, close: closeImage },
   { id: '#veil', isOpen: flagged('veil'), close: cancels('cfNo') },
-  /* After the confirm veil, before the page: a dialog raised over the entry
-     list is what Escape should take back first. */
-  { id: '#connVeil', isOpen: flagged('connVeil'), close: () => connections.closeDialog() },
   { id: '#detail', isOpen: flagged('detail'), close: detail.close },
   { id: '#jobVeil', isOpen: flagged('jobVeil'), close: cancels('jobNo') },
 ]
@@ -88,8 +79,8 @@ const ABOVE: readonly EscapeLayer[] = [
 /* The desk's own retreat -- fullscreen, then the picked node, then the open
    pane, then the desk itself -- filled at `features/desk/store.ts`'s own
    module evaluation rather than imported here: `state/` may not reach into
-   `features/` at runtime, the same reason `state/navfly.ts`'s `onMark` is a
-   slot rather than an import of `features/rail/store.ts`. Absent (a test
+   `features/` at runtime, the same reason `state/settings.ts`'s `onOpen` is a
+   slot rather than an import of `features/settings/store.ts`. Absent (a test
    that never loads the desk) answers closed, like every other unfilled slot
    in this table. */
 let deskLayer: EscapeLayer | null = null

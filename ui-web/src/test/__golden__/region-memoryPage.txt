@@ -1,5 +1,0 @@
-section#memoryPage.page[data-open=false]
-  header
-    h2
-  div.work
-    div#memoryBody.wrap

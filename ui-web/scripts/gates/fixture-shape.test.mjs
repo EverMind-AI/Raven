@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { PARAMS, PLAYBOOKS } from '../fixture-params.mjs'
+import { PARAMS } from '../fixture-params.mjs'
 
 const contract = JSON.parse(readFileSync(resolve(process.cwd(), '../rpc-schema/openrpc.json'), 'utf8'))
 const schemas = contract.components.schemas
@@ -144,8 +144,8 @@ function optionals(schema, value, path, declared, sent) {
    five `info` fields, which are what a gateway says about ITSELF. The
    ones worth a second look are the fields a row on the page draws and this
    library has never exercised: `dag.get`'s node_summary and terminal_outputs,
-   `session.resume`'s diff / delegated / notice / origin, `subagents.list`'s
-   stateful and upgrade_to, `ext.list`'s tools[].needs. */
+   `session.resume`'s diff and notice, `subagents.list`'s stateful and
+   upgrade_to, `ext.list`'s tools[].needs. */
 const UNSENT = new Set([
   // browser.close: 7
   'browser.close.can_back', 'browser.close.can_forward', 'browser.close.error', 'browser.close.headful', 'browser.close.loading', 'browser.close.title', 'browser.close.url',
@@ -204,10 +204,6 @@ const UNSENT = new Set([
   'model.save_key.provider.accepts_api_key', 'model.save_key.provider.api_base', 'model.save_key.provider.default_api_base', 'model.save_key.provider.docs', 'model.save_key.provider.key_env', 'model.save_key.provider.platforms', 'model.save_key.provider.protocol_overrides', 'model.save_key.provider.protocols',
   // model.set_protocol: 8
   'model.set_protocol.provider.accepts_api_key', 'model.set_protocol.provider.api_base', 'model.set_protocol.provider.default_api_base', 'model.set_protocol.provider.docs', 'model.set_protocol.provider.key_env', 'model.set_protocol.provider.platforms', 'model.set_protocol.provider.protocol_overrides', 'model.set_protocol.provider.protocols',
-  // playbooks.get: 1
-  'playbooks.get.playbook.mcp_servers',
-  // playbooks.oauth.authorize: 1
-  'playbooks.oauth.authorize.error',
   // plug.auth: 1
   'plug.auth.mcp',
   // plug.install: 2
@@ -226,8 +222,8 @@ const UNSENT = new Set([
   'session.create.info.config_notices', 'session.create.info.endpoint', 'session.create.info.update_available', 'session.create.info.update_command', 'session.create.info.usage.context_estimated',
   // session.list: 1 -- no offline conversation is pinned to a folder; the chip that pins one is not on this tree yet
   'session.list.sessions[].workdir',
-  // session.resume: 14
-  'session.resume.info.config_notices', 'session.resume.info.endpoint', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].delegated', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].origin', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
+  // session.resume: 12
+  'session.resume.info.config_notices', 'session.resume.info.endpoint', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
   // settings.everos: 1
   'settings.everos.note',
   // settings.everosSet: 1 -- the gateway's re-index warning, which only a real embedding move raises
@@ -279,34 +275,15 @@ describe('the offline fixture library', () => {
       if (resultOf.has(method)) await walk(method, PARAMS[method] ?? {})
     }
     /* The rows one call answers differently per argument, so a field sent for
-       the second playbook or the second conversation counts as sent. */
-    for (const session_id of ['a', 'b', 'g']) await walk('session.resume', { session_id })
-    for (const name of PLAYBOOKS) {
-      await walk('playbooks.get', { name })
-      await walk('playbooks.credentials.get', { name })
-    }
+       the second conversation counts as sent. The three `k` rows are the
+       scheduled ones, and the only place the library sends `origin` and
+       `delegated` -- the two entries a reader never types. */
+    for (const session_id of ['a', 'b', 'g', 'k1', 'k2', 'k3']) await walk('session.resume', { session_id })
     const unsent = [...declared].filter((at) => !sent.has(at)).sort()
     expect(unsent.filter((at) => !UNSENT.has(at)), 'send the field, or add it to UNSENT under its method')
       .toEqual([])
     expect([...UNSENT].filter((at) => !unsent.includes(at)), 'the library sends these now, or they are gone: take them off UNSENT')
       .toEqual([])
-  })
-
-  /* Each playbook in turn, not just the first: the library answers `get` from
-     one object per playbook, and a field missing from the seventh is exactly
-     what a single-row walk would let through. */
-  it('answers every playbook the same way', async () => {
-    const transport = await library()
-    const failures = []
-    const listed = await transport.call('playbooks.list', {})
-    expect(listed.playbooks.map((p) => p.name)).toEqual(PLAYBOOKS)
-    for (const name of PLAYBOOKS) {
-      for (const method of ['playbooks.get', 'playbooks.credentials.get']) {
-        const answer = await transport.call(method, { name })
-        check(resultOf.get(method), answer, `${method}(${name})`, failures)
-      }
-    }
-    expect(failures).toEqual([])
   })
 
   /* The two canvases the URL asks for, held to the same contract: they are
