@@ -273,6 +273,72 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  installer:
+    name: installer (${{ matrix.os }}) against the latest release
+    # The two installers are served from main and install the latest published
+    # release, so a script that reaches for something that release does not have
+    # breaks every one-line install the moment it merges -- which is how an
+    # ending on `raven web` shipped against a wheel that had no `web`. This job
+    # runs exactly that combination, piped the way users run it so remote mode
+    # is what gets exercised, and asks the installed raven to answer. Only PRs
+    # that touch an installer pay for it; every push to main runs it.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether an installer changed
+        id: changed
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- install.sh install.ps1 | grep -q .; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Node 22 up front: the script would otherwise fetch a private runtime,
+      # which is its business to get right but not what this job measures.
+      - uses: actions/setup-node@v6
+        if: steps.changed.outputs.run == 'true'
+        with:
+          node-version: "22"
+
+      - name: Install the latest release with install.sh, piped
+        if: steps.changed.outputs.run == 'true' && runner.os != 'Windows'
+        env:
+          RAVEN_MINIMAL: "1"
+          RAVEN_NO_LAUNCH: "1"
+          UV_TOOL_DIR: ${{ runner.temp }}/tools
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}/bin
+          UV_CACHE_DIR: ${{ runner.temp }}/cache
+          RAVEN_HOME: ${{ runner.temp }}/home
+        run: |
+          cat install.sh | sh
+          "$UV_TOOL_BIN_DIR/raven" --version
+
+      - name: Install the latest release with install.ps1, piped
+        if: steps.changed.outputs.run == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RAVEN_MINIMAL: "1"
+          RAVEN_NO_LAUNCH: "1"
+          UV_TOOL_DIR: ${{ runner.temp }}\tools
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}\bin
+          UV_CACHE_DIR: ${{ runner.temp }}\cache
+          RAVEN_HOME: ${{ runner.temp }}\home
+        run: |
+          Get-Content install.ps1 -Raw | Invoke-Expression
+          & "$env:UV_TOOL_BIN_DIR\raven.exe" --version
+
   windows-upgrade:
     name: Windows self-upgrade
     runs-on: windows-latest

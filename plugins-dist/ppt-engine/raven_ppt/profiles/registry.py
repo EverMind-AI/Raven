@@ -20,8 +20,8 @@ from raven_ppt.contracts import Capabilities, Profile, StageSpec
 
 # Fail-closed kind. A claim about the source material that the file itself
 # settles: a page citing one figure while showing another. Everything else warns
-# -- see docs/ppt-raven-design.md D2 for why measurements of the rendered page
-# must not refuse publication.
+# -- a measurement of the rendered page is the renderer's word, not the file's,
+# and must not refuse publication.
 _PROVENANCE = frozenset({"citation"})
 
 # What the deck was agreed to be. Refusals rather than warnings on every route: a

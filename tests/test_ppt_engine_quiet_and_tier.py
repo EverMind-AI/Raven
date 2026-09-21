@@ -1,6 +1,6 @@
 """What a build stops repeating, and what a tier caps.
 
-Six recorded deck runs were read build by build (docs/ppt-raven-design.md D35):
+Six recorded deck runs were read build by build:
 four kinds of finding drove the author round in circles without changing the
 deck, the reader's replies described the wrong page fourteen times, and every
 useful fix was in by the tenth whole-deck build and the third reading.
