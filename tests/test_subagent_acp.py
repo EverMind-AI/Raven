@@ -464,6 +464,46 @@ async def test_a_failed_manual_test_keeps_the_capabilities_the_last_record_measu
     assert (await probe_one(cfg, source="config")).status == "missing", "the verdict itself is on the row"
 
 
+async def test_a_refusal_after_a_success_records_the_new_authentication_verdict(tmp_path: Path, monkeypatch) -> None:
+    """Keeping the previous capabilities must not keep its credential verdict.
+
+    ``needs_auth`` is a fact about this measurement, not a capability the older
+    record still vouches for: an agent that worked and has since been logged
+    out answers the handshake by refusing, and a record that kept the old
+    ``False`` leaves the page offering a Connect the agent will decline. The
+    menu and the statefulness are the previous record's; the verdict, its
+    detail and this flag are the new one's."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    good = await verify_agent(cfg)
+    SnapshotStore(path=path).record(good)
+    assert good.needs_auth is False and good.available_models
+
+    refused = replace(
+        good,
+        status="attention",
+        detail="sign in to the agent first",
+        needs_auth=True,
+        can_resume=False,
+        available_models=(),
+        model_choices=(),
+        measured_at_ms=good.measured_at_ms + 1,
+    )
+
+    async def fake_verify(_cfg: Any) -> CapabilitySnapshot:
+        return refused
+
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+    await run_test(cfg, source="config")
+
+    kept = SnapshotStore(path=path).load([cfg])["a"]
+    assert kept.needs_auth is True, "the refusal the handshake just measured"
+    assert kept.can_resume is True and kept.available_models == good.available_models, (
+        "and the capabilities the older record still vouches for"
+    )
+
+
 async def test_a_failed_test_after_a_config_edit_keeps_the_capabilities_the_roster_was_trusting(
     tmp_path: Path, monkeypatch
 ) -> None:

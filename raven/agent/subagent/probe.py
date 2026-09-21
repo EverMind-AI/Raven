@@ -613,6 +613,13 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
         stale=False,
         status=snapshot.status,
         detail=snapshot.detail,
+        # Travels with the verdict, not with the capabilities, and is the one
+        # flag here that must: a menu measured earlier is still the best account
+        # of what the agent can do, but whether it will open a session without a
+        # credential is a fact about this handshake alone. Kept from `previous`,
+        # an agent that worked and has since been logged out goes on reading as
+        # connectable after the very Test that detected the refusal.
+        needs_auth=snapshot.needs_auth,
         measured_at_ms=snapshot.measured_at_ms,
         elapsed_ms=snapshot.elapsed_ms,
     )
