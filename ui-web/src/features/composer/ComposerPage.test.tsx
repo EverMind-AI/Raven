@@ -302,6 +302,171 @@ describe('composer drafts', () => {
     expect(drafts().a).toBeUndefined()
     expect(drafts().b?.t).toBe('for b')
   })
+
+  /* A staged file is as unsent as the text typed next to it, so the tray
+     follows the same owner: what is in it belongs to one conversation, and the
+     upload that lands late belongs to the one it was staged in. */
+  const stage = async (name: string): Promise<void> => {
+    await act(async () => {
+      store.addFiles([new File(['x'], name, { type: 'text/plain' })])
+      await flush()
+    })
+  }
+
+  const uploader = (): Partial<ComposerSource> => ({
+    upload: (req) => Promise.resolve({ path: `uploads/${req.name}`, size: 4 }),
+  })
+
+  const paths = (): Array<string | null> => store.get().atts.map((a) => a.path)
+
+  it('keeps the staged files of each session with that session', async () => {
+    wire(uploader())
+    const box = mountTray()
+    store.loadDraft('a')
+    await stage('a.txt')
+    expect(box.querySelectorAll('.att').length).toBe(1)
+    expect(go().disabled).toBe(false)
+
+    act(() => { store.loadDraft('b') })
+    expect(store.get().atts).toEqual([])
+    expect(box.hidden).toBe(true)
+    expect(go().disabled).toBe(true)
+
+    act(() => { store.loadDraft('a') })
+    expect(box.querySelectorAll('.att').length).toBe(1)
+    expect(paths()).toEqual(['uploads/a.txt'])
+  })
+
+  it('does not hand one session files staged in another', async () => {
+    const { calls } = wire(uploader())
+    const box = mountTray()
+    store.loadDraft('a')
+    await stage('a.txt')
+
+    act(() => { store.loadDraft('b') })
+    ta().value = 'nothing attached here'
+    act(() => { store.fireSend() })
+    expect(calls.sent).toEqual(['nothing attached here'])
+
+    act(() => { store.loadDraft('a') })
+    expect(box.querySelectorAll('.att').length).toBe(1)
+  })
+
+  it('lands a late upload in the tray it was staged in', async () => {
+    let settle: (r: { path: string; size: number }) => void = () => {}
+    wire({ upload: () => new Promise((r) => { settle = r }) })
+    const box = mountTray()
+    store.loadDraft('a')
+    await stage('slow.bin')
+
+    act(() => { store.loadDraft('b') })
+    await act(async () => {
+      settle({ path: 'uploads/slow.bin', size: 9 })
+      await flush()
+    })
+    expect(store.attsPending()).toBe(0)
+    expect(store.get().atts).toEqual([])
+    expect(box.hidden).toBe(true)
+
+    act(() => { store.loadDraft('a') })
+    expect(store.attsPending()).toBe(0)
+    let taken: string[] = []
+    act(() => { taken = store.takeAtts() })
+    expect(taken).toEqual(['uploads/slow.bin'])
+  })
+
+  /* The other session stages one too: it is what tells a tray that forgot the
+     failed chip apart from one that never held it. */
+  it('drops a failed upload from the tray it was staged in', async () => {
+    let fail: (e: unknown) => void = () => {}
+    const { calls } = wire({
+      upload: (req) => (req.name === 'big.bin'
+        ? new Promise((_r, rej) => { fail = rej })
+        : Promise.resolve({ path: `uploads/${req.name}`, size: 4 })),
+    })
+    mountTray()
+    store.loadDraft('a')
+    await stage('big.bin')
+
+    act(() => { store.loadDraft('b') })
+    await stage('b.txt')
+    await act(async () => {
+      fail({ data: { detail: 'disk full' } })
+      await flush()
+    })
+    expect(calls.notes.length).toBe(1)
+    expect(paths()).toEqual(['uploads/b.txt'])
+
+    act(() => { store.loadDraft('a') })
+    expect(store.get().atts).toEqual([])
+    expect(store.attsPending()).toBe(0)
+  })
+
+  it('files what the new-task page staged under the session that claims it', async () => {
+    wire(uploader())
+    const box = mountTray()
+    store.loadDraft('new')
+    await stage('n.txt')
+    store.claimDraft('created')
+
+    act(() => { store.loadDraft('other') })
+    expect(box.querySelectorAll('.att').length).toBe(0)
+    act(() => { store.loadDraft('created') })
+    expect(paths()).toEqual(['uploads/n.txt'])
+    act(() => { store.loadDraft('new') })
+    expect(box.querySelectorAll('.att').length).toBe(0)
+  })
+
+  it('empties only the tray of the session that sent', async () => {
+    const { calls } = wire(uploader())
+    const box = mountTray()
+    store.loadDraft('a')
+    await stage('a.txt')
+    act(() => { store.loadDraft('b') })
+    await stage('b.txt')
+
+    act(() => { store.loadDraft('a') })
+    act(() => { store.fireSend() })
+    expect(calls.sent[0]).toBe(`\n\n${word('gui.att.note')}\n- uploads/a.txt`)
+    expect(box.querySelectorAll('.att').length).toBe(0)
+
+    act(() => { store.loadDraft('b') })
+    expect(paths()).toEqual(['uploads/b.txt'])
+  })
+
+  it('forgets the files of a dropped session and leaves the others', async () => {
+    wire(uploader())
+    mountTray()
+    store.loadDraft('a')
+    await stage('a.txt')
+    act(() => { store.loadDraft('b') })
+    await stage('b.txt')
+
+    store.dropDraft('a')
+    act(() => { store.loadDraft('a') })
+    expect(store.get().atts).toEqual([])
+    act(() => { store.loadDraft('b') })
+    expect(paths()).toEqual(['uploads/b.txt'])
+  })
+
+  /* A slash command drops the draft it owns without leaving the conversation:
+     the one path that empties a tray with no switch behind it to repaint. */
+  it('clears the open tray when a slash command drops its draft', async () => {
+    const cmd: SlashCmd = { id: 'gui.clear', fn: vi.fn() }
+    wire({ ...uploader(), slash: [cmd] })
+    const box = mountTray()
+    store.loadDraft('a')
+    await stage('a.txt')
+
+    act(() => { store.runSlash(cmd) })
+    expect(cmd.fn).toHaveBeenCalledTimes(1)
+    expect(store.get().atts).toEqual([])
+    expect(box.hidden).toBe(true)
+    expect(go().disabled).toBe(true)
+
+    await stage('later.txt')
+    expect(paths()).toEqual(['uploads/later.txt'])
+  })
 })
 
 describe('the queue rows', () => {
