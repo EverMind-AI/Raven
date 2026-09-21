@@ -108,7 +108,7 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 
 <table>
 <tr>
-<td valign="top"><p align="center"><b>构建 FPS 游戏：选题、实现、评判</b></p></td>
+<td valign="top"><p align="center"><b>用 Godot 4 做的 FPS Boss 竞技场游戏</b></p></td>
 </tr>
 <tr>
 <td valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a></p></td>
@@ -154,7 +154,7 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>六个编排框架横向对比</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>六个智能体编排框架横向对比</b></p></td>
 <td width="50%" valign="top"><p align="center"><b>参数扫描：编写、运行、绘图</b></p></td>
 </tr>
 <tr>
@@ -169,8 +169,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>一组光污染主题海报</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>一个可交互讲解页及其求解器</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>光污染如何偷走野生动物的睡眠</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>GPS 为什么需要四颗卫星</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd"><img src="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd" alt="Task graph: three Raven-Research nodes in parallel into a Raven-Code node; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="83%"></a></p></td>

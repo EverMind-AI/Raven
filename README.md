@@ -108,7 +108,7 @@ orchestration Raven generates for the task; below it is what the run produced.
 
 <table>
 <tr>
-<td valign="top"><p align="center"><b>An FPS game, picked, built and judged</b></p></td>
+<td valign="top"><p align="center"><b>An FPS boss arena game, built in Godot 4</b></p></td>
 </tr>
 <tr>
 <td valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a></p></td>
@@ -154,7 +154,7 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>Six orchestration frameworks, compared</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>Six agent-orchestration frameworks, compared</b></p></td>
 <td width="50%" valign="top"><p align="center"><b>A parameter sweep, written, run and plotted</b></p></td>
 </tr>
 <tr>
@@ -169,8 +169,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>A light-pollution poster campaign</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>An interactive explainer and its solver</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>How light pollution steals wildlife sleep</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>Why GPS needs a fourth satellite</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd"><img src="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd" alt="Task graph: three Raven-Research nodes in parallel into a Raven-Code node; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="83%"></a></p></td>
