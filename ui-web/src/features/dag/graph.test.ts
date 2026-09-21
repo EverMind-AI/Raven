@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import { CARD, GAP_X, GAP_Y, H, PAD, SHEET, W, depths, layout, layers, ordered, shape, summary, took } from './graph'
+import { depths, layout, layers, ordered, shape, summary } from './graph'
 
+import type { Dims } from './graph'
 import type { DagNode, DagRun } from './types'
 
 /* The translator returns its key with the vars appended, so a test asserts
@@ -41,6 +42,8 @@ const run = (nodes: DagNode[], over: Partial<DagRun> = {}): DagRun => ({
   folded: false,
   ...over,
 })
+
+const DIMS: Dims = { W: 184, H: 44, GAP_X: 230, GAP_Y: 60, PAD: 10 }
 
 describe('dag depths', () => {
   it('puts a node in the column after the last thing it waits for', () => {
@@ -95,56 +98,43 @@ describe('the shape of a graph', () => {
 describe('dag layout', () => {
   it('sizes the canvas from the widest column and the deepest path', () => {
     const nodes = [node('a'), node('b', ['a']), node('c', ['a'])]
-    const { width, height } = layout(nodes)
-    expect(width).toBe(PAD * 2 + GAP_X + W)
-    expect(height).toBe(PAD * 2 + 2 * H + (GAP_Y - H))
-  })
-
-  it('sizes from the dims it is handed, not from the sheet it defaults to', () => {
-    /* The transcript's card draws the same graph smaller. Ignoring the argument
-       is silent: the card would lay itself out at the sheet's geometry and run
-       past its own edge, which no other assertion here would notice. */
-    const nodes = [node('a'), node('b', ['a'])]
-    expect(layout(nodes, CARD).width).toBe(CARD.PAD * 2 + CARD.GAP_X + CARD.W)
-    expect(layout(nodes, SHEET).width).toBe(SHEET.PAD * 2 + SHEET.GAP_X + SHEET.W)
-    expect(layout(nodes, CARD).width).toBeLessThan(layout(nodes, SHEET).width)
-    /* And the default is the sheet, which is what every existing caller relies
-       on by passing nothing. */
-    expect(layout(nodes).width).toBe(layout(nodes, SHEET).width)
+    const { width, height } = layout(nodes, DIMS)
+    expect(width).toBe(DIMS.PAD * 2 + DIMS.GAP_X + DIMS.W)
+    expect(height).toBe(DIMS.PAD * 2 + 2 * DIMS.H + (DIMS.GAP_Y - DIMS.H))
   })
 
   it('centres each column on the midline, so a fan-out reads as a diamond', () => {
     const nodes = [node('a'), node('b', ['a']), node('c', ['a']), node('m', ['b', 'c'])]
-    const { at, height } = layout(nodes)
+    const { at, height } = layout(nodes, DIMS)
     /* The two single-node columns sit at the same y, halfway down; the pair
        straddles them. Stacked-from-the-top would have put all three at PAD. */
     expect(at.get('a')!.y).toBe(at.get('m')!.y)
-    expect(at.get('a')!.y).toBe((height - H) / 2)
+    expect(at.get('a')!.y).toBe((height - DIMS.H) / 2)
     expect(at.get('b')!.y).toBeLessThan(at.get('a')!.y)
     expect(at.get('c')!.y).toBeGreaterThan(at.get('a')!.y)
   })
 
   it('steps columns by GAP_X and rows by GAP_Y', () => {
     const nodes = [node('a'), node('b'), node('c', ['a'])]
-    const { at } = layout(nodes)
-    expect(at.get('b')!.y - at.get('a')!.y).toBe(GAP_Y)
-    expect(at.get('c')!.x - at.get('a')!.x).toBe(GAP_X)
+    const { at } = layout(nodes, DIMS)
+    expect(at.get('b')!.y - at.get('a')!.y).toBe(DIMS.GAP_Y)
+    expect(at.get('c')!.x - at.get('a')!.x).toBe(DIMS.GAP_X)
   })
 
   it('keeps the order the server sent inside a column', () => {
     const nodes = [node('second'), node('first')]
-    const { at } = layout(nodes)
+    const { at } = layout(nodes, DIMS)
     expect(at.get('second')!.y).toBeLessThan(at.get('first')!.y)
   })
 
   it('sizes a single node without a negative gap', () => {
-    const { width, height } = layout([node('only')])
-    expect(width).toBe(PAD * 2 + W)
-    expect(height).toBe(PAD * 2 + H)
+    const { width, height } = layout([node('only')], DIMS)
+    expect(width).toBe(DIMS.PAD * 2 + DIMS.W)
+    expect(height).toBe(DIMS.PAD * 2 + DIMS.H)
   })
 
   it('does not fall over on an empty graph', () => {
-    const { width, height, at } = layout([])
+    const { width, height, at } = layout([], DIMS)
     expect(at.size).toBe(0)
     expect(width).toBeTypeOf('number')
     expect(height).toBeTypeOf('number')
@@ -156,17 +146,17 @@ describe('dag layout', () => {
   describe('running downward', () => {
     it('puts a dependent below its upstream and siblings side by side', () => {
       const nodes = [node('a'), node('b', ['a']), node('c', ['a'])]
-      const { at } = layout(nodes, SHEET, 'down')
-      expect(at.get('b')!.y - at.get('a')!.y).toBe(GAP_Y)
+      const { at } = layout(nodes, DIMS, 'down')
+      expect(at.get('b')!.y - at.get('a')!.y).toBe(DIMS.GAP_Y)
       expect(at.get('b')!.y).toBe(at.get('c')!.y)
-      expect(at.get('c')!.x - at.get('b')!.x).toBe(GAP_X)
+      expect(at.get('c')!.x - at.get('b')!.x).toBe(DIMS.GAP_X)
     })
 
     it('centres each layer on the midline, so a fan-out still reads as a diamond', () => {
       const nodes = [node('a'), node('b', ['a']), node('c', ['a']), node('m', ['b', 'c'])]
-      const { at, width } = layout(nodes, SHEET, 'down')
+      const { at, width } = layout(nodes, DIMS, 'down')
       expect(at.get('a')!.x).toBe(at.get('m')!.x)
-      expect(at.get('a')!.x).toBe((width - W) / 2)
+      expect(at.get('a')!.x).toBe((width - DIMS.W) / 2)
       expect(at.get('b')!.x).toBeLessThan(at.get('a')!.x)
       expect(at.get('c')!.x).toBeGreaterThan(at.get('a')!.x)
     })
@@ -176,17 +166,17 @@ describe('dag layout', () => {
        has to shrink to a third of life size before the reader sees it. */
     it('sizes a chain as one box wide and as deep as the chain', () => {
       const chain = [node('a'), node('b', ['a']), node('c', ['b'])]
-      const down = layout(chain, SHEET, 'down')
-      const across = layout(chain, SHEET)
-      expect(down.width).toBe(PAD * 2 + W)
-      expect(down.height).toBe(PAD * 2 + 2 * GAP_Y + H)
+      const down = layout(chain, DIMS, 'down')
+      const across = layout(chain, DIMS)
+      expect(down.width).toBe(DIMS.PAD * 2 + DIMS.W)
+      expect(down.height).toBe(DIMS.PAD * 2 + 2 * DIMS.GAP_Y + DIMS.H)
       expect(down.width).toBeLessThan(across.width)
       expect(down.height).toBeGreaterThan(across.height)
     })
 
     it('leaves the default sideways, which is what every other surface draws', () => {
       const nodes = [node('a'), node('b', ['a'])]
-      expect(layout(nodes, SHEET, 'across')).toEqual(layout(nodes, SHEET))
+      expect(layout(nodes, DIMS, 'across')).toEqual(layout(nodes, DIMS))
     })
   })
 })
@@ -225,21 +215,6 @@ describe('dag sentences', () => {
 
   it('reports a run with no summary at all as none done', () => {
     expect(summary(run([node('a')]))).toBe('gui.dag.done {"n":0,"t":1}')
-  })
-})
-
-describe('dag clock', () => {
-  it('says nothing for a node that has not started', () => {
-    expect(took(node('a'), 10_000)).toBe('')
-  })
-
-  it('measures a running node against now, and a finished one against its end', () => {
-    expect(took(node('a', [], { started_at: 1000, status: 'running' }), 6000)).toBe('5s')
-    expect(took(node('a', [], { started_at: 1000, ended_at: 3000 }), 999_999)).toBe('2s')
-  })
-
-  it('floors at one second, so a node inside a single tick does not read as zero', () => {
-    expect(took(node('a', [], { started_at: 1000, ended_at: 1001 }), 1001)).toBe('1s')
   })
 })
 

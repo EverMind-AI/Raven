@@ -175,10 +175,9 @@
   stroke: color-mix(in oklab, var(--faint) 75%, transparent);
   stroke-width: 1.4;
 }
-/* No brightened edge out of a finished node -- the prototype's own board
-   draws every edge in one colour, and the shared `DagGraph` component's
-   `.flowed` treatment (built for the transcript's own card) is not this
-   surface's behaviour to inherit. */
+/* No brightened edge out of a finished node -- the prototype's own board does
+   not mark flow, so the `flowed` class `DagGraph` writes on such an edge only
+   holds it at the line's soft tone here. */
 .tkfork .daggraph .edge.flowed,
 .tkfork .daggraph .tip.flowed {
   stroke: var(--line-soft);
@@ -687,9 +686,9 @@
   .tkrun { transition: none; }
   .tkfork .nd:hover .tkrun, .tkfork .nd[data-sel="1"] .tkrun { transform: none; }
 }
-/* The page-wide `.daggraph .nd:focus-visible rect` ring has no `rect` to
-   land on here -- this domain's `renderNode` swaps it for this `foreignObject`
-   box -- so the tabbing ring is redrawn on the box that is actually here. */
+/* `page.css`'s `.daggraph .nd { outline: none }` takes the UA ring off the node
+   group, and the only box inside that group is the one this domain hands
+   `DagGraph` through `renderNode` -- so the tabbing ring is drawn there. */
 .tkfork .nd:focus-visible .tkrun {
   border-color: var(--amber);
   outline: 1px solid var(--amber);
@@ -704,17 +703,6 @@
 }
 .tkfork .nd[data-st="pending"] .tkrun { opacity: .62; border-style: dashed; }
 .tkfork .nd[data-st="skipped"] .tkrun { opacity: .45; border-style: dashed; }
-/* The shared dag domain also dims the outer node group itself for cancelled,
-   skipped and interrupted (page.css); layered on top of the two treatments
-   just above that would multiply into a card far fainter than either rule
-   alone intends (a skipped card at .55 x .45, near invisible). Only the box
-   drawn here carries this surface's dimming -- the group it sits in stays at
-   full opacity, whatever the shared rule says. */
-.tkfork .nd[data-st="cancelled"],
-.tkfork .nd[data-st="skipped"],
-.tkfork .nd[data-st="interrupted"] {
-  opacity: 1;
-}
 
 /* The title (`.l1`, proto.css:1503-1506): two lines, clamped, with the right
    margin the status cluster needs (proto.css:1082). */

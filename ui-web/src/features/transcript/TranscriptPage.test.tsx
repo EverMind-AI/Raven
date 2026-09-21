@@ -1,7 +1,5 @@
 // @vitest-environment happy-dom
 import { act } from '@testing-library/react'
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
@@ -13,7 +11,6 @@ import { hold as holdHost } from '../../state/session/hosts'
 import { resetSources, setSources, sources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import { installWsPane } from '../../test/wsPaneHarness'
-import { CARD as dagCARD } from '../dag/graph'
 import { markMissing as markDeliveryMissing } from '../workspace/deliveries'
 import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
 import * as mount from './mount'
@@ -2318,13 +2315,6 @@ describe('transcript island, the delegation verbs', () => {
     return row.nextElementSibling as HTMLElement
   }
 
-  const nodeStates = (card: HTMLElement): string[] =>
-    [...card.querySelectorAll<HTMLElement>('.nd')].map((n) => n.dataset.st!)
-
-  const pickNode = (card: HTMLElement, i: number): void => {
-    card.querySelectorAll('.nd')[i]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-  }
-
   it('sends a spawn row to the agents panel when nothing else will take it', () => {
     const went: string[] = []
     wire()
@@ -2338,16 +2328,16 @@ describe('transcript island, the delegation verbs', () => {
      without one they stay as seeded. */
   it('hydrates a restored dag card from dagRows', async () => {
     wire({ dagRun: () => Promise.resolve({ files: [{ node: 'alpha', status: 'completed' }, { node: 'beta', status: 'failed' }] }) })
-    const card = dagCard()
+    dagCard()
     await act(async () => { await Promise.resolve() })
-    expect(nodeStates(card)).toEqual(['completed', 'failed'])
+    expect(store._dagCallsForTests()[0]!.nodes.map((n) => n.status)).toEqual(['completed', 'failed'])
   })
 
   it('leaves the nodes as seeded when no reader is installed', async () => {
     wire()
-    const card = dagCard()
+    dagCard()
     await act(async () => { await Promise.resolve() })
-    expect(nodeStates(card)).toEqual(['pending', 'pending'])
+    expect(store._dagCallsForTests()[0]!.nodes.map((n) => n.status)).toEqual(['pending', 'pending'])
   })
 
   /* The shape a *stored* result actually has. Every tool result is persisted
@@ -2381,62 +2371,20 @@ describe('transcript island, the delegation verbs', () => {
     act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
-    const card = row.nextElementSibling as HTMLElement
     await act(async () => { await Promise.resolve() })
     expect(asked).toEqual(['run-7'])
-    expect(nodeStates(card)).toEqual(['completed', 'failed'])
+    expect(store._dagCallsForTests()[0]!.nodes.map((n) => n.status)).toEqual(['completed', 'failed'])
   })
 
-  /* The node panel's own control, not the node: clicking a node selects it, so
-     that the run's transcript is a separate intention from reading the request. */
-  it('opens a node through the source, with the run id it recovered', () => {
-    const opened: Array<[string, string]> = []
-    wire({ openDagNode: (runId, nodeId) => opened.push([runId, nodeId]) })
-    const card = dagCard()
-    /* Dispatched rather than `.click()`: a node box is an SVG <g>, and
-       SVGElement has no click() in jsdom. */
-    act(() => { pickNode(card, 0) })
-    act(() => { card.querySelector<HTMLElement>('.npanel .orun')!.click() })
-    expect(opened).toEqual([['run-7', 'alpha']])
-  })
-
-  /* The cascade, which no DOM test here can see: happy-dom renders the markup
-     with no stylesheet attached, so a class that collides with a global rule
-     looks fine in every other test in this file and is wrong only on screen.
-     The collision that prompted this dressed the run link in `.go`, which is
-     the composer's send button -- a 30px circle with grid centring -- and the
-     label was clipped to two characters however wide the panel got. */
-  it('dresses the node panel in no class the page sizes globally', () => {
-    const css = readFileSync('src/styles/page.css', 'utf8') as string
-    /* Bare single-class rules only: those are the ones that apply to any element
-       wearing the name, wherever it is. A scoped rule (`.dagc .nhd .nm`) cannot
-       reach into another feature and is not what this is about. */
-    const boxed = new Set<string>()
-    for (const rule of css.matchAll(/(?:^|\n)\.([a-z][\w-]*)\s*\{([^}]*)\}/g)) {
-      if (/(?:^|;|\s)(?:width|height)\s*:/.test(rule[2] as string)) boxed.add(rule[1] as string)
-    }
-    /* The guard is only worth anything if the stylesheet actually has such
-       rules to collide with. */
-    expect(boxed.size).toBeGreaterThan(0)
-
-    const card = dagCard()
-    act(() => { pickNode(card, 0) })
-    const worn = new Set<string>()
-    card.querySelectorAll('.npanel, .npanel *').forEach((el) => {
-      el.classList.forEach((name) => worn.add(name))
-    })
-    expect([...worn].filter((name) => boxed.has(name))).toEqual([])
-    expect(worn.has('orun')).toBe(true)
-  })
-
-  /* Called directly, not through the chip: React swallows an exception thrown
+  /* Called directly, not through the door: React swallows an exception thrown
      inside an event handler, so a click can never witness this. There is no
      matching case for an ABSENT opener -- optional chaining makes that
-     unfalsifiable, and the case above already proves the call happens when a
-     verb is there, which is the only observable difference. */
-  it('survives a node opener that throws', () => {
-    wire({ openDagNode: () => { throw new Error('no such run') } })
-    expect(() => store.openDagNode('run-7', 'alpha')).not.toThrow()
+     unfalsifiable, and the door cases in "delegated calls" already prove the
+     call happens when a verb is there, which is the only observable
+     difference. */
+  it('survives an opener that throws', () => {
+    wire({ openDagRun: () => { throw new Error('no such run') } })
+    expect(() => store.openDagRun('run-7')).not.toThrow()
   })
 })
 
@@ -3525,12 +3473,75 @@ describe('transcript island, delegated calls', () => {
     return dtl
   }
 
-  it('draws a playbook load the same graph, from the run that started', () => {
-    /* A dag call the model makes carries `nodes`, so the graph comes from the
-       arguments. The load of a `mode: dag` playbook carries `{name, params}` and
-       the graph exists only once the engine assembled it -- which is the
-       run-started payload. Same card either way: which source the nodes came from
-       is not something the reader should be able to see. */
+  /* The value beside a named key in the field grid, which is a flat run of
+     alternating `.k` / `.v` cells rather than a row per pair. */
+  const dagField = (card: HTMLElement, key: string): string | null => {
+    const cells = [...card.querySelectorAll<HTMLElement>('.dgr > *')]
+    const at = cells.findIndex((c) => c.classList.contains('k') && c.textContent?.endsWith(key))
+    return at < 0 ? null : (cells[at + 1]?.textContent ?? null)
+  }
+
+  /* The door, not a fact at rest: `gov` on the task cell is what makes it
+     clickable, keyboard-reachable and titled, the same shape `DelegRow`'s own
+     task cell already wears. */
+  it('makes the task cell a door once the run has an id, wired to openDagRun', () => {
+    const opened: string[] = []
+    wire({ openDagRun: (runId) => opened.push(runId) })
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        task_summary: 'a graph',
+        nodes: [{ id: 'a', subagent: 'Raven', node_summary: 'step', depends_on: [] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r1', nodes: [{ id: 'a', subagent: 'Raven', depends_on: [] }] })
+    })
+    const card = openDagCard()
+    const door = card.querySelector('.dgr .v.gov') as HTMLElement
+    expect(door).not.toBeNull()
+    expect(door.getAttribute('role')).toBe('button')
+    expect(door.getAttribute('title')).toBe('en:gui.deleg.open_hint')
+    act(() => { door.click() })
+    expect(opened).toEqual(['r1'])
+  })
+
+  it('opens the same door on Enter', () => {
+    const opened: string[] = []
+    wire({ openDagRun: (runId) => opened.push(runId) })
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        task_summary: 'a graph',
+        nodes: [{ id: 'a', subagent: 'Raven', node_summary: 'step', depends_on: [] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r1', nodes: [{ id: 'a', subagent: 'Raven', depends_on: [] }] })
+    })
+    const card = openDagCard()
+    const door = card.querySelector('.dgr .v.gov') as HTMLElement
+    act(() => { door.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+    expect(opened).toEqual(['r1'])
+  })
+
+  /* Nowhere to send a click yet: a run with no id has no task pane to open,
+     so the cell reads as a fact rather than as a promise it cannot keep. */
+  it('leaves the task cell inert when the run has no id yet', () => {
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        task_summary: 'a graph',
+        nodes: [{ id: 'a', subagent: 'Raven', node_summary: 'step', depends_on: [] }],
+      })
+    })
+    const card = openDagCard()
+    expect(dagField(card, 'gui.deleg.d_task')).toBe('a graph')
+    expect(card.querySelector('.dgr .v.gov')).toBeNull()
+  })
+
+  /* The door has to exist before `dag.get` ever answers: a playbook load has
+     no `task_summary` on its own arguments, and `dag.run_started` is the only
+     thing that names the run before the read lands. Gating the door on the
+     title the way the cell's text falls back to it would leave this run with
+     no way in until a read this test never lets finish. */
+  it('gives a playbook load the door as soon as dag.run_started names the run, before dag.get supplies a title', () => {
     act(() => {
       const st = mount.step()
       st.tool('load_playbook', { name: 'topic-briefing', params: { topic: 'crows' } })
@@ -3541,56 +3552,33 @@ describe('transcript island, delegated calls', () => {
           { id: 'tb-brief', subagent: 'writer', depends_on: ['tb-scan'] },
         ],
       })
-      mount.dagFeed('dag.node_updated', { run_id: 'r1', node: 'tb-scan', status: 'completed' })
     })
     const card = openDagCard()
-    const nodes = [...card.querySelectorAll<HTMLElement>('.nd')]
-    expect(nodes).toHaveLength(2)
-    expect(nodes.map((n) => n.dataset.st)).toEqual(['completed', 'pending'])
-    /* The dependency the event carried is drawn as an edge, which is the whole
-       difference between a graph and a list. */
-    expect(card.querySelectorAll('.edge')).toHaveLength(1)
-    /* The label the load produced survives: overwriting it in the dag branch
-       left the row unable to say which playbook was loaded. */
-    expect($('.wk')?.textContent).toContain('topic-briefing')
+    const door = card.querySelector('.dgr .v.gov') as HTMLElement
+    expect(door).not.toBeNull()
+    expect(door.getAttribute('role')).toBe('button')
+    /* The generic word until the read lands, not the playbook's name: that has
+       its own row, and a card that spelt `topic-briefing` twice over would be
+       saying nothing twice. */
+    expect(dagField(card, 'gui.deleg.d_task')).toBe('en:gui.deleg.dag_title')
+    expect(dagField(card, 'gui.dag.playbook')).toBe('topic-briefing')
   })
 
-  /* A node id is not a name a reader picked. A playbook namespaces every node
-     with its own name and a run tag, so the ids across one graph share their
-     first twenty-odd characters and the part that tells them apart is at the
-     end -- exactly where a box runs out of room. The line the model was
-     required to write is what the header shows now. */
-  it('heads a node panel with what the step is for, keeping its id as a field', () => {
+  it('opens the same door on Space', () => {
+    const opened: string[] = []
+    wire({ openDagRun: (runId) => opened.push(runId) })
     act(() => {
       const st = mount.step()
       st.tool('run_subagent_dag', {
-        task_summary: 'compile the daily ai digest',
-        nodes: [
-          {
-            id: 'daily-ai-digest-36e275-scan-news',
-            subagent: 'Raven-Research',
-            node_summary: 'scan today AI news',
-            depends_on: [],
-          },
-          {
-            id: 'daily-ai-digest-36e275-compile-digest',
-            subagent: 'Raven',
-            node_summary: 'compile the findings into a digest',
-            depends_on: ['daily-ai-digest-36e275-scan-news'],
-          },
-        ],
+        task_summary: 'a graph',
+        nodes: [{ id: 'a', subagent: 'Raven', node_summary: 'step', depends_on: [] }],
       })
+      mount.dagFeed('dag.run_started', { run_id: 'r1', nodes: [{ id: 'a', subagent: 'Raven', depends_on: [] }] })
     })
     const card = openDagCard()
-    const box = card.querySelector<HTMLElement>('.nd')
-    expect(box).not.toBeNull()
-    act(() => { box!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    const panel = card.querySelector('.npanel') as HTMLElement
-
-    expect(panel.querySelector('.nhd .nm')!.textContent).toBe('scan today AI news')
-    /* Kept, not dropped: a dependency names a node by its id, and so does the
-       run dir it is stored under. */
-    expect(panel.querySelector('.rows .nid')!.textContent).toBe('daily-ai-digest-36e275-scan-news')
+    const door = card.querySelector('.dgr .v.gov') as HTMLElement
+    act(() => { door.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true })) })
+    expect(opened).toEqual(['r1'])
   })
 
   it('titles a graph row by what it dispatched, whatever else is on the arguments', () => {
@@ -3705,17 +3693,6 @@ describe('transcript island, delegated calls', () => {
     expect(shown).not.toMatch(/(?<!\d)0s\b/)
   })
 
-  /* The value beside a named key in the field grid, which is a flat run of
-     alternating `.k` / `.v` cells rather than a row per pair. */
-  const dagField = (card: HTMLElement, key: string): string | null => {
-    const cells = [...card.querySelectorAll<HTMLElement>('.dgr > *')]
-    const at = cells.findIndex((c) => c.classList.contains('k') && c.textContent?.endsWith(key))
-    return at < 0 ? null : (cells[at + 1]?.textContent ?? null)
-  }
-
-  const dagNodeStates = (card: HTMLElement): string[] =>
-    [...card.querySelectorAll<HTMLElement>('.nd')].map((n) => n.dataset.st as string)
-
   it('binds a graph that announced itself before its tool row', () => {
     /* The two do not travel together. The dag tool publishes its progress on its
        own channel rather than through the delivery hub (raven/rpc/spine.py), so
@@ -3739,7 +3716,7 @@ describe('transcript island, delegated calls', () => {
     })
     const card = openDagCard()
 
-    expect(dagNodeStates(card)).toEqual(['completed', 'pending'])
+    expect(store._dagCallsForTests()[0]!.nodes.map((n) => n.status)).toEqual(['completed', 'pending'])
     /* And the run has an identity while it is still running, rather than only
        once the call returns and the id can be read back out of its result. */
     expect(dagField(card, 'gui.dag.run_id')).toBe('r-early')
@@ -3771,10 +3748,11 @@ describe('transcript island, delegated calls', () => {
     })
     act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
     const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
+    const calls = store._dagCallsForTests()
 
     expect(cards.map((c) => dagField(c, 'gui.dag.run_id'))).toEqual(['r-1', 'r-2'])
-    expect(dagNodeStates(cards[0] as HTMLElement)).toEqual(['failed', 'pending'])
-    expect(dagNodeStates(cards[1] as HTMLElement)).toEqual(['pending', 'pending'])
+    expect(calls[0]!.nodes.map((n) => n.status)).toEqual(['failed', 'pending'])
+    expect(calls[1]!.nodes.map((n) => n.status)).toEqual(['pending', 'pending'])
   })
 
   it('does not let a claimed card be claimed again by the next graph', () => {
@@ -3810,7 +3788,7 @@ describe('transcript island, delegated calls', () => {
     const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
 
     expect(cards.map((c) => dagField(c, 'gui.dag.run_id'))).toEqual(['r-1', 'r-2'])
-    expect(cards.map((c) => [...c.querySelectorAll<HTMLElement>('.nd')].map((n) => n.dataset.node)))
+    expect(store._dagCallsForTests().map((c) => c.nodes.map((n) => n.id)))
       .toEqual([['alpha', 'alpha2'], ['beta', 'beta2']])
   })
 
@@ -3860,12 +3838,14 @@ describe('transcript island, delegated calls', () => {
       st.tool('run_subagent_dag', { nodes: [{ id: 'alpha' }, { id: 'beta' }] }, null, 'call-1')
       st.seal()
     })
-    const card = openDagCard()
+    openDagCard()
 
-    expect(dagNodeStates(card)).toEqual(['completed', 'pending'])
+    const nodes = store._dagCallsForTests()[0]!.nodes
+    expect(nodes.map((n) => n.status)).toEqual(['completed', 'pending'])
     /* And with its own clock, which is the part the completion event could not
        have put back. */
-    expect(card.querySelector('.nd .tm')?.textContent).toBe(store.durText(20_000))
+    const alpha = nodes.find((n) => n.id === 'alpha')!
+    expect(alpha.ended_at! - alpha.started_at!).toBe(20_000)
   })
 
   it('carries the graph line into the fields, in full, where the row cannot show it', () => {
@@ -3911,42 +3891,6 @@ describe('transcript island, delegated calls', () => {
     expect(dagField(card, 'gui.deleg.d_cost')).toBeNull()
   })
 
-  it('draws the graph at the card dims rather than the sheet ones', () => {
-    /* The card sits in a 744px reading column and the sheet has the chat's whole
-       width; drawing at the sheet's geometry would run the graph past the card's
-       edge, and nothing about the picture would look wrong enough to notice. */
-    act(() => {
-      const st = mount.step()
-      st.tool('run_subagent_dag', {
-        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
-      })
-    })
-    const card = openDagCard()
-    const svg = card.querySelector('.canvas svg') as SVGElement
-    expect(svg.getAttribute('width')).toBe(String(dagCARD.PAD * 2 + dagCARD.GAP_X + dagCARD.W))
-  })
-
-  it('marks the node whose detail is open, including the failure it opened unasked', () => {
-    /* A failure is the one thing worth opening unasked -- the same rule the
-       step's own fold follows. Derived rather than stored, because the node states
-       arrive after the card was built; so the graph has to be told which node the
-       panel is showing rather than reading the stored selection, which is empty. */
-    act(() => {
-      const st = mount.step()
-      st.tool('run_subagent_dag', {
-        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
-      })
-      mount.dagFeed('dag.run_started', { run_id: 'r2', nodes: [{ id: 'scan' }, { id: 'brief' }] })
-      mount.dagFeed('dag.node_updated', { run_id: 'r2', node: 'scan', status: 'completed' })
-      mount.dagFeed('dag.node_updated', { run_id: 'r2', node: 'brief', status: 'failed' })
-    })
-    const card = openDagCard()
-    expect(card.querySelector('.npanel .nm')!.textContent).toBe('brief')
-    const marked = [...card.querySelectorAll<HTMLElement>('.nd')].filter((g) => g.dataset.sel === '1')
-    expect(marked).toHaveLength(1)
-    expect(marked[0]!.querySelector('.id')!.textContent).toBe('brief')
-  })
-
   it('counts a cancelled node, and does not count it as done', () => {
     /* `cancelled` is one of the six the wire sends (`DagNodeStatus`), and it was
        the one `DOT_OF` had no entry for. A node stopped by the user therefore
@@ -3964,7 +3908,7 @@ describe('transcript island, delegated calls', () => {
       h.done(true, 'stopped', 40)
       st.seal()
     })
-    const state = ([...openDagCard().querySelectorAll('.dgr > .v')][1] as HTMLElement).textContent || ''
+    const state = dagField(openDagCard(), 'gui.deleg.d_state') || ''
     expect(state).toContain('gui.deleg.dag_done {"ok":"1"}')
     /* Its own word, not the failures'. `dag_bad` reads "failed" / "失败" in both
        locales, and the runner keeps `cancelled` distinct from `failed` on purpose
@@ -3972,42 +3916,6 @@ describe('transcript island, delegated calls', () => {
        that vanished for a node that lies. */
     expect(state).toContain('gui.deleg.dag_stopped {"n":"1"}')
     expect(state).not.toContain('gui.deleg.dag_bad')
-  })
-
-  it('draws a cancelled node differently from one that finished', () => {
-    /* The status reaches the DOM either way -- `data-st` is written from the raw
-       word -- but with no rule for `cancelled` the box was styled exactly like an
-       untouched one, so a stopped graph looked like a graph still waiting. */
-    act(() => {
-      const st = mount.step()
-      st.tool('run_subagent_dag', {
-        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
-      })
-      mount.dagFeed('dag.run_started', { run_id: 'r10', nodes: [{ id: 'scan' }, { id: 'brief' }] })
-      mount.dagFeed('dag.node_updated', { run_id: 'r10', node: 'brief', status: 'cancelled' })
-      st.seal()
-    })
-    const card = openDagCard()
-    const sts = [...card.querySelectorAll<HTMLElement>('.nd')].map((n) => n.dataset.st)
-    expect(sts).toContain('cancelled')
-    /* The MARKER, not just the box. `Mark` reads `MARKS[status]` and falls back to
-       the pending circle for a word it does not know, so styling the border alone
-       put a "still waiting" glyph inside a stopped-looking box -- two signals
-       saying opposite things. Asserted on what was rendered rather than on the
-       stylesheet text, which cannot see that. */
-    const marks = [...card.querySelectorAll<HTMLElement>('.nd')].map((n) => {
-      const m = n.querySelector('.mk')
-      return m ? `${m.tagName.toLowerCase()}:${m.getAttribute('class')}` : 'none'
-    })
-    /* The cancelled one wears the stop glyph; the untouched one still wears the
-       pending circle, which is what makes this an assertion about telling them
-       apart rather than about the graph as a whole. */
-    expect(marks).toEqual(['circle:mk wait', 'path:mk stop'])
-    /* And the stylesheet has rules for both, which is what the classes are for.
-       The CSS gate cannot see an absent selector, so the assertion is here. */
-    const css = readFileSync('src/styles/page.css', 'utf8') as string
-    expect(css).toMatch(/\.nd\[data-st="cancelled"\]/)
-    expect(css).toMatch(/\.mk\.stop/)
   })
 
   it('keeps the failure reason on a run the nodes cannot explain', () => {
@@ -4027,80 +3935,11 @@ describe('transcript island, delegated calls', () => {
       h.done(false, 'Error running DAG r4: backend write failed: disk full', 40)
       st.seal()
     })
-    const state = [...openDagCard().querySelectorAll('.dgr > .v')][1] as HTMLElement
-    expect(state.textContent).toContain('disk full')
+    const state = dagField(openDagCard(), 'gui.deleg.d_state')
+    expect(state).toContain('disk full')
     /* The tally stays beside it: "1 done" is not the same fact as the cause, and
        it is the only word on what did get through before the run stopped. */
-    expect(state.textContent).toContain('gui.deleg.dag_done')
-  })
-
-  it('closes the panel it opened unasked, and leaves it closed', () => {
-    /* The unasked open is stored rather than derived. Derived, `null` meant both
-       "nobody picked one" and "the reader closed it": the first click on the
-       failed node was a no-op and the second reopened it, so the panel could
-       never be shut -- on the one run where a reader most wants the graph back
-       unobstructed. */
-    act(() => {
-      const st = mount.step()
-      st.tool('run_subagent_dag', {
-        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
-      })
-      mount.dagFeed('dag.run_started', { run_id: 'r5', nodes: [{ id: 'scan' }, { id: 'brief' }] })
-      mount.dagFeed('dag.node_updated', { run_id: 'r5', node: 'brief', status: 'failed' })
-    })
-    const card = openDagCard()
-    const at = (i: number): Element => card.querySelectorAll('.nd')[i] as Element
-    expect(card.querySelector('.npanel .nm')!.textContent).toBe('brief')
-
-    act(() => { at(1).dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    expect(card.querySelector('.npanel')).toBeNull()
-
-    /* And a later failure does not reopen what the reader shut -- the unasked
-       open happens once, like the step's own fold. */
-    act(() => { mount.dagFeed('dag.node_updated', { run_id: 'r5', node: 'scan', status: 'failed' }) })
-    expect(card.querySelector('.npanel')).toBeNull()
-
-    /* Still a working toggle, so the reader can bring it back. */
-    act(() => { at(0).dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    expect(card.querySelector('.npanel .nm')!.textContent).toBe('scan')
-  })
-
-  it('gives a playbook load the same node detail a model-made call gets', async () => {
-    /* The point of the read: a playbook's arguments never carried the graph, so
-       without `dag.get` its card can show who ran and in what order and nothing
-       about what any step was asked -- while the identical card for a model-made
-       call shows all of it from its own arguments. */
-    wire({
-      dagRun: async () => ({ files: [
-        { node: 'tb-scan', status: 'completed', subagent: 'scout', depends_on: [] },
-        {
-          node: 'tb-brief',
-          status: 'running',
-          subagent: 'writer',
-          depends_on: ['tb-scan'],
-          prompt_template: 'write up {{ tb-scan.output }} in the house voice',
-          inputs: { voice: { file: 'docs/voice.md' } },
-        },
-      ] }),
-    })
-    await act(async () => {
-      const st = mount.step()
-      st.tool('load_playbook', { name: 'topic-briefing' })
-        .done(true, "DAG r9: started 'topic-briefing' (2 steps); results will be delivered when the run completes.", 5)
-      st.seal()
-    })
-    const card = openDagCard()
-    await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    const nodes = [...card.querySelectorAll<HTMLElement>('.nd')]
-    expect(nodes.map((n) => n.dataset.st)).toEqual(['completed', 'running'])
-    act(() => { nodes[1]!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    const panel = card.querySelector('.npanel') as HTMLElement
-    expect(panel.querySelector('.dep')!.textContent).toBe('tb-scan')
-    expect(panel.querySelector('.ins')!.textContent).toContain('docs/voice.md')
-    expect(panel.querySelector('.tpl')!.textContent).toContain('in the house voice')
-    /* The placeholder is marked up rather than left as text: it is the part that
-       says where this step's material comes from. */
-    expect(panel.querySelector('.tpl .ph')!.textContent).toBe('{{ tb-scan.output }}')
+    expect(state).toContain('gui.deleg.dag_done')
   })
 
   it('names the run that took over, before the old one is done', () => {
@@ -4147,7 +3986,7 @@ describe('transcript island, delegated calls', () => {
     })
     const card = openDagCard()
     expect(dagField(card, 'gui.dag.replanned_into')).toBe('r2')
-    expect(dagNodeStates(card)).toEqual(['completed', 'completed'])
+    expect(store._dagCallsForTests()[0]!.nodes.map((n) => n.status)).toEqual(['completed', 'completed'])
   })
 })
 

@@ -8,7 +8,6 @@ import { useTick } from '../../lib/tick'
 import * as lightbox from '../../state/lightbox'
 import { open as openChip } from '../../state/proseChips'
 import { ds } from '../../state/sources'
-import { DagGraph } from '../dag/DagGraph'
 import * as dag from '../dag/graph'
 import { getVersion as deliveriesVersion, humanSize, subscribe as deliveriesSubscribe } from '../workspace/deliveries'
 import {
@@ -18,7 +17,6 @@ import { releaseUpward } from './overscroll'
 import * as store from './store'
 import * as tail from './tail'
 
-import type { DagNode } from '../dag/types'
 import type { DeliveryRow } from '../workspace/types'
 import type {
   AnswerData, ArtifactRow, ArtsData, AskData, CallData, DeliveredData, FoldData, Lane,
@@ -679,113 +677,17 @@ function SpawnStream({ c, live }: { c: CallData; live: boolean }): ReactElement 
    fields of it in a flat strip of chips, which is the structure thrown away and
    the arguments' remaining half never read at all.
 
-   Three layers, and the split between the second and third is the point: the
-   graph says what the orchestration *is*, the node panel says what one step was
-   *asked*, and the run's own transcript -- one explicit click away, in the panel
-   that already renders delegated work -- says what actually *happened*. Putting
-   the third inside the card would be a second renderer for the same thing.
+   One grid, and a door: the grid says what the orchestration *is*, and the
+   `task` row is the field that leads somewhere else -- the run's own detail,
+   node by node and step by step, is the desk's task pane (`store.openDagRun`),
+   which already renders every run reached from the tasks tab. Drawing that a
+   second time inside the card, the way the graph and its node panel used to,
+   would be a second renderer for the same thing.
 
    Identical for a `load_playbook` call in dag mode. The graph is assembled by the
    engine there rather than written by the model, so it arrives from the event and
    `dag.get` instead of from the arguments -- which is a difference in where the
    nodes come from (features/dag/nodes.ts) and in nothing that is drawn. */
-
-/* One of a node's inputs, and where it came from. The three sources read
-   differently on purpose: a literal is the words themselves, the other two name
-   something to go and read. */
-function InputRow({ k, v }: { k: string; v: unknown }): ReactElement {
-  const obj = v && typeof v === 'object' ? (v as Record<string, unknown>) : null
-  const file = obj && typeof obj.file === 'string' ? obj.file : null
-  const node = obj && typeof obj.node === 'string' ? obj.node : null
-  const kind = node ? 'node' : file ? 'file' : 'literal'
-  return (
-    <>
-      <span className="key">{k}</span>
-      <span className="src" data-k={kind}>{t('gui.dag.src_' + kind)}</span>
-      <span className="val">{node || file || (typeof v === 'string' ? `"${v}"` : JSON.stringify(v))}</span>
-    </>
-  )
-}
-
-/* When the template needs a "show all of it". Length OR a line break: the clamp
-   itself is four lines of CSS, and a template written across several short lines
-   is clipped long before 150 characters -- while a single line of latin text that
-   long is still two lines and needs no control. */
-const TPL_CLAMP = 150
-const tplIsLong = (tpl: string): boolean => tpl.length > TPL_CLAMP || tpl.includes('\n')
-
-function DagNodePanel({ lane, c, n }: { lane: Lane; c: CallData; n: DagNode }): ReactElement {
-  const rows: ReactNode[] = []
-  const kv = (key: string, label: string, v: ReactNode): void => {
-    rows.push(<div key={key + 'k'} className="k">{label}</div>)
-    rows.push(<div key={key + 'v'} className="v">{v}</div>)
-  }
-  const shared = n.instance && c.nodes.filter((x) => x.instance === n.instance).length > 1
-  /* Only once the header stopped being it. The id is what a dependency names,
-     what the run dir is keyed by and what a reader types into a search -- it did
-     not stop mattering when it stopped being the title. */
-  if (n.node_summary) kv('nid', t('gui.dag.node_id'), <span className="nid">{n.id}</span>)
-  kv('agent', t('gui.deleg.d_agent'), (
-    <>
-      {n.subagent + (n.instance ? ' @' + n.instance : '')}
-      {n.instance ? <span className="hold">{t(shared ? 'gui.dag.held_shared' : 'gui.dag.held_own')}</span> : null}
-    </>
-  ))
-  kv('deps', t('gui.dag.deps'), n.depends_on.length ? (
-    <>
-      {n.depends_on.map((pid: string) => (
-        <button key={pid} type="button" className="dep"
-          onClick={(e) => { e.stopPropagation(); store.pickDagNode(lane, c, pid) }}>{pid}</button>
-      ))}
-    </>
-  ) : <span className="none">{t('gui.dag.deps_none')}</span>)
-  const keys = Object.keys(n.inputs || {})
-  kv('inputs', t('gui.dag.inputs'), keys.length ? (
-    <div className="ins">
-      {keys.map((k) => <InputRow key={k} k={k} v={(n.inputs as Record<string, unknown>)[k]} />)}
-    </div>
-  ) : <span className="none">{t('gui.dag.inputs_none')}</span>)
-  if (n.prompt_template) {
-    const long = tplIsLong(n.prompt_template)
-    kv('tpl', t('gui.dag.tpl'), (
-      <>
-        <pre className={'tpl' + (long && !c.selFull ? ' clip' : '')}>
-          {/* The placeholders are the part a reader is looking for: they are what
-              ties this step to the ones before it. */}
-          {n.prompt_template.split(/(\{\{[^}]*\}\})/).map((part: string, i: number) => (
-            /^\{\{/.test(part) ? <span key={i} className="ph">{part}</span> : <Fragment key={i}>{part}</Fragment>
-          ))}
-        </pre>
-        {long ? (
-          <button type="button" className="more"
-            onClick={(e) => { e.stopPropagation(); store.toggleDagFull(lane, c) }}>
-            {t(c.selFull ? 'gui.dag.tpl_less' : 'gui.dag.tpl_more')}
-          </button>
-        ) : null}
-      </>
-    ))
-  }
-  const st = String(n.status)
-  return (
-    <div className="npanel">
-      <div className="nhd">
-        {/* What the node was dispatched to do, which the model is required to
-            write. The id stays -- it is what a dependency names and what the run
-            dir is keyed by -- but one row down, among the machine-readable
-            fields, rather than standing in for a title it never was. */}
-        <span className="nm">{n.node_summary || n.id}</span>
-        <span className="st">{t('gui.dag.st_' + st, undefined, st)}{n.started_at ? ' · ' + dag.took(n, Date.now()) : ''}</span>
-        {c.runId ? (
-          <button type="button" className="orun"
-            onClick={(e) => { e.stopPropagation(); store.openDagNode(c.runId as string, n.id, n.node_summary) }}>
-            {t('gui.dag.open_run')}
-          </button>
-        ) : null}
-      </div>
-      <div className="rows">{rows}</div>
-    </div>
-  )
-}
 
 const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }): ReactElement {
   useSeg(lane, c)
@@ -830,20 +732,23 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
     if (tally.skip) bits.push(t('gui.deleg.dag_skip', { n: String(tally.skip) }))
   }
   const extra = bits.join(' · ')
-  /* The graph is the picture; a single node is not one, and one box on its own
-     reads worse than the line above it. */
-  const drawn = nodes.length > 1
-  /* One source for what the panel shows. The unasked open on a failure is done by
-     the store, when the failure arrives -- derived here instead, it made `null`
-     mean both "nobody picked one" and "the reader closed it", so the panel it
-     opened swallowed the click meant to close it and reopened on the next. */
-  const selId = c.sel
-  const sel = selId ? nodes.find((n) => n.id === selId) : undefined
   const agents = [...new Set(nodes.map((n) => n.subagent).filter(Boolean))]
+  const openTask = (): void => store.openDagRun(c.runId as string)
   const grid: ReactNode[] = []
-  const kv = (key: string, label: string, v: ReactNode): void => {
+  const kv = (key: string, label: string, v: ReactNode, gov?: boolean): void => {
     grid.push(<div key={key + 'k'} className="k">{label}</div>)
-    grid.push(<div key={key + 'v'} className={key === 'state' && state === 'bad' ? 'v err' : 'v'}>{v}</div>)
+    grid.push(gov ? (
+      /* The text in a box of its own, so the cell's standing mark stays in view:
+         a flex item made of bare text cannot shrink below its own width, and a
+         long summary pushed everything after it out past the cell's clip. */
+      <div key={key + 'v'} className="v gov" role="button" tabIndex={0} title={t('gui.deleg.open_hint')}
+        onClick={(e) => { e.stopPropagation(); openTask() }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openTask() }
+        }}><span>{v}</span></div>
+    ) : (
+      <div key={key + 'v'} className={key === 'state' && state === 'bad' ? 'v err' : 'v'}>{v}</div>
+    ))
   }
   const shape = nodes.length ? dag.shape(nodes) : ''
   /* The line the graph was dispatched with, and nothing else. The shape used to
@@ -856,12 +761,15 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
      the playbook's directory name, and the graph's own line is what running it
      dispatched. They are the same string for a model-composed graph. */
   const rowLabel = c.runTitle || c.label || shape || t('gui.deleg.dag_title')
-  /* In full, because the row above truncates it. `.wrow .ar` is a one-line
-     ellipsis with no `title` attribute, so a summary longer than the row is
-     readable nowhere else on the card. Unguarded on purpose: the row IS
-     `c.runTitle` whenever there is one, so any comparison against it is
-     vacuous, and the duplication is the point -- one copy is legible. */
-  if (c.runTitle) kv('task', t('gui.deleg.d_task'), c.runTitle)
+  /* In full, because the row above -- `.wrow .ar`, a one-line ellipsis with no
+     `title` attribute -- truncates it; and open as a door the moment there is a
+     run to send it to, rather than only once there is a title for it. A
+     playbook load names its run before `dag.get` returns a title, and a run
+     from before `task_summary` was required never gets one at all, so gating
+     on `c.runTitle` would leave both without a way onto the desk. The generic
+     word stands in until then, not `c.label`: for a playbook load that is the
+     playbook's name, which has its own row two lines down. */
+  if (c.runTitle || c.runId) kv('task', t('gui.deleg.d_task'), c.runTitle || t('gui.deleg.dag_title'), !!c.runId)
   kv('scale', t('gui.deleg.d_scale'),
     [shape, ...(agents.length ? [agents.join(' · ')] : [])].filter(Boolean).join(' · ')
     || c.runTitle || c.label || t('gui.deleg.dag_title'))
@@ -870,7 +778,7 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
      re-run -- so it is worth being able to read; what it is not is a
      description of what running it dispatched, which is what the row says. */
   if (c.name === 'load_playbook' && c.label && c.label !== c.runTitle) {
-    kv('book', t('gui.dag.playbook'), <span className="nid">{c.label}</span>)
+    kv('book', t('gui.dag.playbook'), c.label)
   }
   /* The receipt whenever the call failed, and the tally beside it. They are not
      two renderings of one fact: `okOf` calls a dag result bad only when its first
@@ -890,13 +798,13 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
   /* The run's own id, which is what `dag.get` is keyed by, what a node's record
      lives under and what a later graph names to depend on this one. Near the
      end, because it is the one field here nobody reads unless they went looking. */
-  if (c.runId) kv('run', t('gui.dag.run_id'), <span className="nid">{c.runId}</span>)
+  if (c.runId) kv('run', t('gui.dag.run_id'), c.runId)
   /* Set only once `dag.run_replanned` names a successor -- a decision swapped
      this run's remaining nodes into a fresh run rather than abandoning it, so
      the row can appear even while `state` above still reads unfinished: this
      run's own outcome and where its remaining work went are different facts. */
   if (c.replannedInto) {
-    kv('replanned', t('gui.dag.replanned_into'), <span className="nid">{c.replannedInto}</span>)
+    kv('replanned', t('gui.dag.replanned_into'), c.replannedInto)
   }
   return (
     <>
@@ -913,10 +821,6 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
       <div className="dtl dlg dagc" hidden={!c.open}>
         <div className="bd">
           <div className="dgr">{grid}</div>
-          {drawn ? <DagGraph dims={dag.CARD} nodes={c.nodes} now={Date.now()}
-            surface="card" selectedId={selId} stopPropagation
-            onPick={(n) => store.pickDagNode(lane, c, n.id)} /> : null}
-          {sel ? <DagNodePanel lane={lane} c={c} n={sel} /> : null}
         </div>
       </div>
     </>

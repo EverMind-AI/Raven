@@ -172,8 +172,8 @@ const SHARED = new Set([
 // counted is not.
 const LEGACY_SHARED = {
   a: 4, body: 2, btn: 3, cap: 2, chev: 2, chgs: 2, cmd: 2, ct: 2, d: 4, foot: 2,
-  gap: 2, 'ghost-ic': 3, h: 2, hd: 2, k: 3, key: 4, lb: 3, n: 3, rm: 2, row: 2,
-  shot: 3, sk: 2, skel: 2, step: 2, sz: 2, tipdn: 2, tm: 2, v: 3, w: 3, wkg: 3,
+  gap: 2, 'ghost-ic': 3, h: 2, hd: 2, k: 3, key: 3, lb: 3, n: 3, rm: 2, row: 2,
+  shot: 3, sk: 2, skel: 2, step: 2, sz: 2, tipdn: 2, v: 3, w: 3, wkg: 3,
   wsnote: 2,
 }
 
@@ -218,8 +218,12 @@ const LEGACY_LOCAL = {
 
      Down one from 13 with the graph sheet: `.dsheet` was this domain's, and
      the sheet is the only thing that wrote it. Up two with the playbooks page
-     gone: `.ag` and `.mk` were shared with it and are this domain's alone. */
-  dag: 14,
+     gone: `.ag` and `.mk` were shared with it and are this domain's alone.
+
+     Down to 7 with the default node box gone: `.ag`, `.mk`, `.wait`, `.lbl`,
+     `.ln`, `.dagcap` and `.workv` were that box's own classes, and every
+     caller now hands DagGraph a `renderNode` of its own. */
+  dag: 7,
   desk: 5,
   /* Was none with the agent hub: every class the page writes carries its
      prefix, and its rules live in features/extAgents/styles.css. Up to three
@@ -257,8 +261,17 @@ const LEGACY_LOCAL = {
   /* Up from 74 for `.act`, `.dact` and `.pmdesc`, which the plugins page drew
      the same way the transcript does, and from 77 with the agent hub, where
      `.none` was shared with the agents page. Up three more with the playbooks
-     page gone: `.ph`, `.sheet` and `.val` were shared with it. */
-  transcript: 81,
+     page gone: `.ph`, `.sheet` and `.val` were shared with it.
+
+     Down to 70 with the node panel: `.npanel`, `.nhd`, `.orun`, `.rows`,
+     `.dep`, `.hold`, `.ins`, `.src`, `.val` and `.ph` left with it, and
+     `.nid`, whose one rule was scoped to that panel, went from the card's
+     grid.
+
+     Up to 71 with the dag renderer's default node box gone: `.tm` was
+     shared with it, and the timestamp on a folded turn's own head is this
+     domain's alone now. */
+  transcript: 71,
   /* Up from 37 with the playbooks page gone: `.t` was shared with it. */
   workspace: 38,
 }
@@ -274,7 +287,10 @@ const LEGACY_EXPR = {
   composer: 3,
   connections: 2,
   cron: 0,
-  dag: 3,
+  /* Down from 3 with the default node box gone: `.id`, written only inside
+     the ternary that chose its class by whether a node carried a summary,
+     left with it. */
+  dag: 2,
   desk: 2,
   extAgents: 0,
   importSync: 0,
@@ -288,7 +304,9 @@ const LEGACY_EXPR = {
      hover pairing the composer strip no longer has a side for. */
   tasks: 3,
   subagents: 6,
-  transcript: 24,
+  /* Down from 24 with the node panel: `.tpl`, written only from inside a
+     `className={...}` expression, left with it. */
+  transcript: 23,
   workspace: 7,
 }
 

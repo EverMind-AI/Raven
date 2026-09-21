@@ -1,67 +1,95 @@
 // @vitest-environment happy-dom
-/* The transcript source's delegation verbs: opening a graph, a graph node and
- * a spawn record.
+/* The transcript source's delegation verbs: opening a graph's task pane and a
+ * spawn record.
  *
- * What the two openers must NOT do is the point: `wsPick`/`setWs` route to
+ * What the spawn opener must NOT do is the point: `wsPick`/`setWs` route to
  * `openDeskTab` in desk mode, whose whole job is to open the little desk, so a
- * node opened from the trail's card or from the sheet popped the palette beside
- * the window the reader had actually asked for.
+ * spawn record opened from the trail's card popped the palette beside the
+ * window the reader had actually asked for.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
+import { fakeGateway, loadPart } from '../../../scripts/module-harness.mjs'
 
 import type { Sources } from '../../state/sources'
 
-/* `sources.transcript.openDagRun` is one of the verbs the page's wiring puts
-   onto the transcript source it builds, so the seam is where it is read back. */
-async function opener(calls: unknown[][], run: unknown) {
-  /* This feature's source is imported first and the part that wires it after,
-     which is the order that keeps one module graph: the fakes are installed
-     around the module under test. */
-  const wiring = await loadPart(async () => {
-    await import('./source')
-    return import('../../app/install')
-  }, {
+/* `openDagRun` is read straight off the module under test, not through
+   `app/install`'s wiring: `installSources()` builds its own `sources.tasks`
+   (from `tasks/store.ts`'s `byKey`), which would overwrite whatever `openRun`
+   / `one` a case installs here before this function ever ran. */
+async function opener(over: {
+  openRun?: (runId: string) => boolean
+  one?: (kind: string, id: string) => Promise<unknown>
+} = {}) {
+  const deskCalls: unknown[][] = []
+  const wiring = await loadPart(() => import('./source'), {
     fakes: {
-      'src/state/wsPane': {
-        pane: () => ({ setOpen: (...args: unknown[]) => calls.push(['fallback', ...args]) }),
-      },
-      'src/state/sheetRack': {
-        session: () => 'a',
-      },
-      'src/lib/dom': {
-        $: looseQuery(),
-      },
-      'src/lib/session': { current: () => 'a' },
-      'src/features/dag/open': {
-        dagOpenNode: (runId: string, node: { id: string }) => calls.push(['node', runId, node.id]),
-      },
-      'src/features/dag/mount': {
-        run: (key: string) => (key === 'a' ? run : null),
+      'src/features/desk/store': {
+        openDeskTask: (row: { id: string }) => deskCalls.push(['openDeskTask', row.id]),
+        openDeskTab: (tab: string) => deskCalls.push(['openDeskTab', tab]),
       },
     },
   })
-  const { setSources, sources } = await import('../../state/sources')
-  setSources({ transcript: {}, composer: {}, rail: {} } as unknown as Partial<Sources>)
-  wiring.installSources()
-  if (!sources.transcript!.openDagRun) throw new Error('openDagRun is absent from the page wiring')
-  return sources.transcript!.openDagRun
+  const { setSources } = await import('../../state/sources')
+  setSources({
+    tasks: {
+      openRun: over.openRun ?? (() => false),
+      one: over.one ?? (async () => null),
+    },
+  } as unknown as Partial<Sources>)
+  return { openDagRun: wiring.openDagRun as (runId: string) => void, deskCalls }
 }
 
 describe('the live DAG opener', () => {
-  it('opens the island run last node and keeps the agents fallback', async () => {
-    const calls: unknown[][] = []
-    const open = await opener(calls, { run_id: 'r1', order: ['first', 'last'] })
+  it('answers through the tasks store alone, once openRun hits', async () => {
+    const opened: string[] = []
+    const { openDagRun, deskCalls } = await opener({ openRun: (id) => { opened.push(id); return true } })
 
-    open('r1')
-    open('missing')
+    openDagRun('r1')
 
-    expect(calls).toEqual([
-      ['node', 'r1', 'last'],
-      ['fallback', true, 'agents'],
-    ])
+    expect(opened).toEqual(['r1'])
+    expect(deskCalls).toEqual([])
+  })
+
+  it('opens the row a one-shot read finds, once openRun misses', async () => {
+    const { openDagRun, deskCalls } = await opener({
+      openRun: () => false,
+      one: async () => ({ kind: 'dag', id: 'r1' }),
+    })
+
+    openDagRun('r1')
+    await Promise.resolve()
+
+    expect(deskCalls).toEqual([['openDeskTask', 'r1']])
+  })
+
+  /* A branched conversation replays its parent's delivered row: the run it
+     names was dispatched by a session whose `tasks.list` this page never
+     reads, so `openRun` and the one-shot read both come up empty and the tab
+     is where it lands. */
+  it('falls back to the tasks tab when the one-shot read finds no row either', async () => {
+    const { openDagRun, deskCalls } = await opener({ openRun: () => false, one: async () => null })
+
+    openDagRun('r1')
+    await Promise.resolve()
+
+    expect(deskCalls).toEqual([['openDeskTab', 'tasks']])
+  })
+
+  it('falls back to the tasks tab when the one-shot read fails', async () => {
+    const { openDagRun, deskCalls } = await opener({
+      openRun: () => false,
+      one: async () => { throw new Error('gone') },
+    })
+
+    openDagRun('r1')
+    /* One more tick than the row-found case: the rejection has to pass through
+       the `.then()` it skips before the `.catch()` after it runs. */
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(deskCalls).toEqual([['openDeskTab', 'tasks']])
   })
 })
 
@@ -95,7 +123,6 @@ async function nodeHarness({
       'src/lib/session': { current: () => 's1' },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
       'src/features/subagents/store': {
-        openDagNode: (run: string, node: { id: string }) => calls.push(['openDagNode', run, node.id]),
         rows: () => rows,
         openRow: (row: SpawnRow) => calls.push(['openRow', row.label]),
         refresh: () => calls.push(['refresh']),
@@ -113,8 +140,7 @@ async function nodeHarness({
   const { setSources, sources } = await import('../../state/sources')
   setSources({ transcript: {}, composer: {} } as unknown as Partial<Sources>)
   wiring.installSources()
-  const { dagOpenNode } = await import('../dag/open')
-  return { dagOpenNode, sources, calls }
+  return { sources, calls }
 }
 
 afterEach(() => {
@@ -122,35 +148,7 @@ afterEach(() => {
   deskReady(false)
 })
 
-describe('opening a graph node from the transcript source', () => {
-  it('raises the node window alone while the floating desk is up', async () => {
-    deskReady(true)
-    const { dagOpenNode, calls } = await nodeHarness()
-
-    dagOpenNode('r1', { id: 'brief' })
-
-    expect(calls).toEqual([['openDagNode', 'r1', 'brief']])
-    /* Named explicitly, because these are what popped the palette: either one
-       reaches `openDeskTab` in desk mode. */
-    expect(calls.some(([verb]) => verb === 'wsPick' || verb === 'setWs')).toBe(false)
-  })
-
-  it('still selects the panel view where there are no windows', async () => {
-    /* The pre-desk panel, where picking the agents view was how the instance
-       got on screen at all. */
-    deskReady(false)
-    const { dagOpenNode, calls } = await nodeHarness()
-
-    dagOpenNode('r1', { id: 'brief' })
-
-    expect(calls).toEqual([
-      ['openDagNode', 'r1', 'brief'],
-      ['setWs', true, null],
-      ['wsPick', 'agents'],
-      ['drawWs'],
-    ])
-  })
-
+describe('opening a spawn record from the transcript source', () => {
   it('opens a spawn record without the palette either', async () => {
     deskReady(true)
     const { sources, calls } = await nodeHarness()

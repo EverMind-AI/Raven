@@ -164,14 +164,6 @@ const STAGE: Record<string, number> = {
 }
 
 const stage = (status: string): number => STAGE[status] ?? 0
-const TERMINAL_STAGE = 3
-
-/* Whether a node has stopped. Read off the same table the merge ranks by, so
-   "this node is over" has one answer in this domain rather than a set of names
-   kept in step by hand. `exception` ranks above `running` but below this
-   threshold, so it reads as open -- the node is suspended, waiting on the
-   caller's verdict, not finished. */
-export const settled = (status: string): boolean => stage(status) >= TERMINAL_STAGE
 
 /* Later facts on top of earlier ones, per node, without either source erasing
  * what it does not know.

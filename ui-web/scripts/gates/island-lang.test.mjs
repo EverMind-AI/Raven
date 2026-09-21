@@ -35,9 +35,9 @@ const NO_ROOT = {
     'the dock is chrome (src/chrome/Dock.tsx), which subscribes there; what this '
     + 'domain owns are the sheets a turn raises, each rendered inside it',
   dag:
-    'no island of its own: the run is state (features/dag/mount.ts), and the two '
-    + 'surfaces that draw it -- the transcript card and the task pane board -- '
-    + 'subscribe from their own domains',
+    'no island of its own: the run is state (features/dag/mount.ts), and the one '
+    + 'surface that draws it -- the desk\'s task pane board -- subscribes from '
+    + 'its own domain',
   installed:
     'no island at all: one shared read of ext.list that the two capability tabs '
     + 'and the settings dialog draw from',

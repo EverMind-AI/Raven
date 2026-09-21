@@ -1,46 +1,22 @@
-/* The graph, as geometry and as sentences -- everything the dag panel decides
- * before it draws anything.
+/* The graph, as geometry and as sentences -- what a caller decides before it
+ * draws anything: the layout the desk's task board places its nodes with, and
+ * the one-line sentences about a run, of which the transcript's dag card
+ * prints the graph's shape.
  *
- * Pure on purpose. Depth-by-longest-path, the column centring and the two
- * one-line summaries carry every edge case in this domain (a cycle the server
- * should never send, a fan-out that has to read as a diamond, a run whose
- * summary counts more nodes than the graph holds), and none of it was reachable
- * from a test while it lived inside the renderer in the live layer.
+ * Pure on purpose. Depth-by-longest-path, the column centring and the
+ * sentences carry every edge case in this domain (a cycle the server should
+ * never send, a fan-out that has to read as a diamond, a run whose summary
+ * counts more nodes than the graph holds), and none of it was reachable from a
+ * test while it lived inside the renderer in the live layer.
  */
 
 import { t } from '../../i18n/t'
-import { formatDuration } from '../../lib/duration'
-import { settled } from './nodes'
 
 import type { DagNode, DagRun, DagLayout } from './types'
 
-/* Wider and taller than the first pass: the box carries a status mark as well
-   as the node's name, the agent under it and a clock, and 108x38 had them
-   touching each other. GAP_X leaves 46px of edge between columns, which is
-   enough for a curve to read as a curve rather than as a kink.
-
-   Widened again when the name became the node's summary rather than its id. A
-   summary is a sentence -- "research the current hot topics and pick two" --
-   and the 65px the label had left over from a 136px box cut every one of them
-   to four characters, which says less than the id it replaced.
-
-   Then narrowed by 52px, because a box wide enough to hold a whole summary is
-   the wrong thing to optimise for: the summary is one line of a sentence
-   either way, the box that tries to hold it reads as a slab rather than as a
-   node, and the tail it buys is the least informative part of the line. What
-   the graph is for is its shape. The full text is one hover away in the title,
-   and one click away in the node panel. */
-export const GAP_X = 230
-export const GAP_Y = 60
-export const W = 184
-export const H = 44
-export const PAD = 10
-
 /* Everything the layout reads of a node: which one it is, and what it waits
-   for. Declared structurally rather than as `DagNode` because a playbook's
-   stored graph is the same shape before any run exists -- and a second copy of
-   depth-by-longest-path is how two surfaces start disagreeing about what a
-   diamond looks like. */
+   for. Declared structurally rather than as `DagNode`, so the layout can only
+   ever depend on these two fields. */
 export interface Placed {
   id: string
   depends_on: string[]
@@ -53,15 +29,6 @@ export interface Dims {
   GAP_Y: number
   PAD: number
 }
-
-/* The sheet above the composer has the width of the chat column to spend. */
-export const SHEET: Dims = { W, H, GAP_X, GAP_Y, PAD }
-
-/* The card inside the transcript does not, so the same graph is drawn smaller.
-   A second set of constants rather than a scale factor: the box holds text at a
-   fixed size, so what has to change is how much room the text gets, not how big
-   everything is. */
-export const CARD: Dims = { W: 160, H: 38, GAP_X: 194, GAP_Y: 50, PAD: 10 }
 
 /* Depth by longest path, which is what puts a node in the column after the last
    thing it waits for. Memoised, and guarded against a cycle it should never
@@ -93,15 +60,14 @@ export function depths(nodes: Placed[]): Map<string, number> {
   return depth
 }
 
-/* Which way the run reads. The composer sheet and the transcript card lay a
-   graph out left to right, which is the shape a wide strip above a conversation
-   has room for. A task's board runs top to bottom instead: it is read in a
+/* Which way the run reads. The task board runs top to bottom: it is read in a
    docked pane whose height is the dimension it has to spare, and a fan-out laid
    sideways there is a graph zoomed to a third of life size before the reader
-   has done anything.
+   has done anything. Across is the layout's other axis, kept as the default.
    One layout either way. The two differ only in which axis the depth counts
-   along, and a second implementation of depth-by-longest-path is how two
-   surfaces start disagreeing about what a diamond looks like. */
+   along, and a second implementation of depth-by-longest-path is how a second
+   caller would start disagreeing with this one about what a diamond looks
+   like. */
 export type Flow = 'across' | 'down'
 
 /* Layer along the flow, spread across it, and the sizes that follow. Each layer
@@ -109,7 +75,7 @@ export type Flow = 'across' | 'down'
    fan-out into three and a fan-in back to one then reads as the diamond it is,
    instead of a staircase whose single nodes sit against the wall with their
    edges cutting diagonally across. */
-export function layout(nodes: Placed[], dims: Dims = SHEET, flow: Flow = 'across'): DagLayout {
+export function layout(nodes: Placed[], dims: Dims, flow: Flow = 'across'): DagLayout {
   const { W, H, GAP_X, GAP_Y, PAD } = dims
   const down = flow === 'down'
   const depth = depths(nodes)
@@ -139,27 +105,6 @@ export function layout(nodes: Placed[], dims: Dims = SHEET, flow: Flow = 'across
     })
   })
   return { at, width: down ? across : along, height: down ? along : across }
-}
-
-/* The one mark a node wears, as geometry rather than as a drawn element: the
-   sheet builds SVG imperatively and the card builds it through React, and the
-   two used to keep their own copies of these paths. `running` is deliberately
-   absent -- it is the same three-bar glyph the turn's own row wears, which each
-   surface already has, and duplicating it here would be a second answer to what
-   "work in progress" looks like.
-
-   Centre-relative so a caller places it without knowing the box. */
-export const MARKS: Record<string, { d: string; cls: string }> = {
-  completed: { d: 'M-5 0l3.6 3.8 6.4 -7.6', cls: 'ok' },
-  failed: { d: 'M-4 -4l8 8M4 -4l-8 8', cls: 'bad' },
-  /* A square, which is the stop glyph everywhere else. Its own entry and not the
-     skipped dash: a word missing here falls through to the pending circle in
-     `Mark`, so a cancelled node wore a "still waiting" marker inside a stopped
-     border -- two signals saying opposite things. */
-  cancelled: { d: 'M-3.4 -3.4h6.8v6.8h-6.8z', cls: 'stop' },
-  skipped: { d: 'M-4.5 0h9', cls: 'skip' },
-  interrupted: { d: 'M-4.5 0h9', cls: 'skip' },
-  exception: { d: 'M0 -4.5v6M0 3.6v.01', cls: 'warn' },
 }
 
 /* One row per layer, deepest last: what the card's own sentence counts and what
@@ -201,23 +146,4 @@ export function summary(d: DagRun): string {
   if (s.failed) bits.push(t('gui.dag.failed', { n: s.failed }))
   if (s.skipped) bits.push(t('gui.dag.skipped', { n: s.skipped }))
   return bits.join(' · ')
-}
-
-/* How long a node has been at it. A node that has not started shows nothing;
-   one still running is measured against now, which is what the panel's clock
-   re-reads every second. Floored at a second so a node that starts and ends
-   inside one tick does not report 0.0s.
-
-   A node that has stopped without saying when shows nothing either, rather than
-   being measured against now. Two endings arrive that way -- a cancel carries
-   neither stamp, and a run's completion reports each node's final status without
-   repeating its clock -- and measuring those against now is a number that grows
-   for as long as the page stays open. It is the same rule the trail's card
-   already applies to the graph's own span: blank beats a made-up number, and one
-   reload reads the manifest, which carries the real stamps. */
-export function took(n: DagNode, now: number): string {
-  if (!n.started_at) return ''
-  if (!n.ended_at && settled(String(n.status))) return ''
-  const end = n.ended_at || now
-  return formatDuration(Math.max(end - n.started_at, 1000))
 }

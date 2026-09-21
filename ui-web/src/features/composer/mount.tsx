@@ -129,25 +129,6 @@ export function setLiveAnchor(ms: number): void {
   store.setLiveAnchor(ms)
 }
 
-/* Its svg twin, for a node drawn inside a graph. Same three dots, same shared
-   keyframes; only the element type differs. `y` is the baseline the bars used to stand on, so the dots are
-   centred a glyph-height above it and the call sites keep the coordinates they
-   already pass. */
-export function workGlyphSvg(x: number, y: number): SVGGElement {
-  const ns = 'http://www.w3.org/2000/svg'
-  const g = document.createElementNS(ns, 'g')
-  g.setAttribute('class', 'workv')
-  g.setAttribute('aria-hidden', 'true')
-  for (const dx of [0, 4, 8]) {
-    const c = document.createElementNS(ns, 'circle')
-    c.setAttribute('cx', String(x + dx + 1))
-    c.setAttribute('cy', String(y - 4.5))
-    c.setAttribute('r', '1.5')
-    g.appendChild(c)
-  }
-  return g
-}
-
 /* ── the dock's wiring ────────────────────────────────────────────────── */
 
 let picker: HTMLInputElement | null = null
