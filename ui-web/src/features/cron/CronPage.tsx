@@ -1,8 +1,11 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { SetupRow } from '../../components/SetupRow'
-import { SheetFoot, SheetHead, StateLine } from '../../components/SetupSheet'
+import { SheetFoot } from '../../components/SetupSheet'
+import {
+  TwoPane, TwoPaneFind, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow, TwoPaneSection,
+  TwoPaneSwitch,
+} from '../../components/TwoPane'
 import { t } from '../../i18n/t'
 import { ask as confirmAsk } from '../../state/confirm'
 import * as lang from '../../state/lang'
@@ -75,10 +78,11 @@ export function CronApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). The detail
-     view also refetches its run history on it -- run stamps arrive
-     language-baked from the source, so a flip has to ask again, while the
-     plain redraws the island's own controls ask for must not. */
+     also refetches its run history on it -- run stamps arrive language-baked
+     from the source, so a flip has to ask again, while the plain redraws the
+     island's own controls ask for must not. */
   const { lang: pageLang } = useSyncExternalStore(lang.subscribe, lang.get)
+  const [q, setQ] = useState('')
   const job = s.viewId ? s.rows.find((x) => x.id === s.viewId) : undefined
   useEffect(() => {
     if (s.viewId && !job) store.backToList()
@@ -86,141 +90,93 @@ export function CronApp(): JSX.Element {
   const draft = job && s.draft && s.draft.id === job.id ? s.draft : null
   return (
     <>
-      {job && draft ? (
-        <CronDetail key={`${job.id}:${s.epoch}`} job={job} draft={draft} rev={s.rev} lang={pageLang} />
-      ) : s.loaded || s.rows.length ? (
-        <CronList rows={s.rows} />
-      ) : null}
+      <TwoPane side={<CronSide rows={s.rows} loaded={s.loaded} q={q} onQ={setQ} viewId={s.viewId} />}>
+        {job && draft ? (
+          <CronDetail key={`${job.id}:${s.epoch}`} job={job} draft={draft} rev={s.rev} lang={pageLang} />
+        ) : (
+          /* "Nothing here yet" is the list's line, not this one: said in both
+             columns it reads as two separate emptinesses. */
+          <TwoPaneNone>{t('gui.cron.pick')}</TwoPaneNone>
+        )}
+      </TwoPane>
       {s.sheet ? <JobSheet key={`sheet:${s.epoch}`} draft={s.sheet} /> : null}
     </>
   )
 }
 
-/* Which subset the list is showing. Three chips with counts, because the
-   question a reader arrives with is "did anything break" -- the banner that
-   used to answer it could only ever say yes or nothing, and had no way to show
-   the paused jobs at all. */
-type CronFilter = 'all' | 'fail' | 'paused'
 const failing = (j: CronJob): boolean => j.on && !!j.runs[0] && !j.runs[0].ok
 
-function CronList({ rows }: { rows: CronJob[] }): JSX.Element {
-  const [filter, setFilter] = useState<CronFilter>('all')
-  const fail = rows.filter(failing)
-  const paused = rows.filter((j) => !j.on)
-  const shown = filter === 'fail' ? fail : filter === 'paused' ? paused : rows
-  const chip = (id: CronFilter, label: string, n: number): JSX.Element => (
-    <button key={id} aria-pressed={filter === id} onClick={() => setFilter(id)}>
-      {label}
-      <span className="n">{String(n)}</span>
-    </button>
-  )
+/* The left column: the search, the button that adds one, and the jobs in two
+   runs -- the ones that are on, then the ones that are not. Two groups rather
+   than three filter chips: what a reader arrives asking is "did anything
+   break", and a job whose last run failed says so on its own second line, in
+   the colour, where a chip could only ever say how many. */
+function CronSide({ rows, loaded, q, onQ, viewId }: {
+  rows: CronJob[]
+  loaded: boolean
+  q: string
+  onQ(v: string): void
+  viewId: string | null
+}): JSX.Element {
+  const term = q.trim().toLowerCase()
+  const hit = (j: CronJob): boolean =>
+    !term || j.name.toLowerCase().includes(term) || j.what.toLowerCase().includes(term)
+  const shown = rows.filter(hit)
+  const on = shown.filter((j) => j.on)
+  const off = shown.filter((j) => !j.on)
+  const row = (j: CronJob): JSX.Element => {
+    const last = j.runs[0]
+    const broke = failing(j)
+    return (
+      <TwoPaneRow
+        key={j.id}
+        current={j.id === viewId}
+        off={!j.on}
+        name={j.name}
+        sub={broke && last ? `${t('gui.cron.failed')} · ${last.at}` : cronWhen(j)}
+        {...(broke ? { tone: 'bad' as const } : {})}
+        onOpen={() => store.openDetail(j)}
+        trailing={
+          <TwoPaneSwitch
+            on={j.on}
+            label={t('gui.caps.toggle_aria', { name: j.name })}
+            onChange={() => void store.source().toggle(j).then(() => store.refresh())}
+          />
+        }
+      />
+    )
+  }
   return (
     <>
-      <div className="herorow">
-        <div className="pmhero">
-          <h3>{t('gui.cron.hero')}</h3>
-        </div>
-        <button className="mini gold" onClick={() => store.openSheet()}>
-          {t('gui.cron_new')}
-        </button>
-      </div>
-      {rows.length === 0 ? (
-        <div className="empty-note">{t('gui.cron.none')}</div>
-      ) : (
-        <>
-          <div className="seg cronfilter">
-            {chip('all', t('gui.cron.f_all'), rows.length)}
-            {chip('fail', t('gui.cron.f_fail'), fail.length)}
-            {chip('paused', t('gui.cron.f_paused'), paused.length)}
-          </div>
-          {shown.length === 0 ? (
-            <div className="empty-note">{t('gui.cron.f_none')}</div>
-          ) : (
-            <div className="sulist">
-              {shown.map((j) => (
-                <CronRow key={j.id} j={j} />
-              ))}
-            </div>
-          )}
-        </>
-      )}
+      <TwoPaneFind
+        value={q}
+        onChange={onQ}
+        placeholder={t('gui.cron.search')}
+        onAdd={() => store.openSheet()}
+        addLabel={t('gui.cron_new')}
+      />
+      <TwoPaneList>
+        {!loaded && !rows.length ? null : shown.length === 0 ? (
+          <div className="empty-note">{t(rows.length ? 'gui.cron.f_none' : 'gui.cron.none')}</div>
+        ) : (
+          <>
+            {on.length ? <TwoPaneGroup>{t('gui.cron.g_on')}</TwoPaneGroup> : null}
+            {on.map(row)}
+            {off.length ? <TwoPaneGroup>{t('gui.cron.g_off')}</TwoPaneGroup> : null}
+            {off.map(row)}
+          </>
+        )}
+      </TwoPaneList>
     </>
   )
 }
 
-/* One job, one row: what it does, when it runs, how it went last time, and the
-   switch. Everything else -- run now, duplicate, delete -- is one level in,
-   which is what keeps a destructive verb from being repeated down the page. */
-function CronRow({ j }: { j: CronJob }): JSX.Element {
-  const last = j.runs[0]
-  const state = failing(j)
-    ? { cls: 'bad', text: j.what }
-    : { cls: j.on ? 'ok' : 'off', text: j.what }
-  return (
-    <SetupRow
-      tile={false}
-      name={j.name}
-      state={state}
-      onOpen={() => store.openDetail(j)}
-      extra={
-        <>
-          <span>{cronWhen(j)}</span>
-          <span className="nx">{j.on ? t('gui.cron.next_only', { next: j.next }) : t('gui.cron.paused')}</span>
-        </>
-      }
-      foot={
-        last ? (
-          /* The whole line is the link, because what the reader wants from a
-             result is the session it wrote. */
-          <button className="rl" onClick={() => void store.source().openRun(j, last)}>
-            <span className={'st ' + (last.ok ? 'ok' : 'bad')}>
-              {t(last.ok ? 'gui.cron.ok' : 'gui.cron.failed')}
-            </span>
-            <span className="at">{last.at}</span>
-            <span className="nt">{last.note}</span>
-            <span className="chev">&rsaquo;</span>
-          </button>
-        ) : (
-          <span className="never">{t('gui.cron.never')}</span>
-        )
-      }
-      act={
-        <>
-          <button
-            className="swi"
-            role="switch"
-            aria-checked={j.on}
-            aria-label={t('gui.caps.toggle_aria', { name: j.name })}
-            onClick={() => void store.source().toggle(j).then(() => store.refresh())}
-          />
-          <button
-            className="mini ghost"
-            aria-label={t('gui.cron.menu_aria', { name: j.name })}
-            onClick={(e) => {
-              const b = e.currentTarget.getBoundingClientRect()
-              menuAt(b.right - 150, b.bottom + 6, [
-                { label: t('gui.cron.run_now'), fn: () => void store.source().runNow(j).then(() => store.refresh()) },
-                { label: t('gui.cron.open_session'), fn: () => void store.source().openRun(j) },
-                '-',
-                { label: t('gui.cron.delete'), bad: true, fn: () => removeThenList(j) },
-              ])
-            }}
-          >
-            &#8943;
-          </button>
-        </>
-      }
-    />
-  )
-}
-
-/* The job's own page. One row opens one place, and that place has two tabs:
-   what it is set to do, and what it has done. They used to be two cards
-   stacked down one scroll, which meant editing a schedule with a run log
-   underfoot and a delete button between them. */
+/* The job itself, in the right column: what it is set to do, and what it has
+   done. One scroll rather than two tabs -- beside its own list the form is
+   half the width it used to be and the history fits under it, and the delete
+   that used to sit between them is in the header's menu. */
 function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft; rev: number; lang: string }): JSX.Element {
   const [runs, setRuns] = useState<CronRun[] | null>(null)
-  const [tab, setTab] = useState<'cfg' | 'runs'>('cfg')
   const [running, setRunning] = useState(false)
   /* Keyed on rev and on the page's language, not just on the job. `rev` is
      what the live cron.finished handler bumps through refresh(), precisely so
@@ -267,53 +223,50 @@ function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft;
   }
   return (
     <>
-      <div className="pmback">
-        <button className="mini ghost" onClick={() => store.backToList()}>
-          {'\u2190 ' + t('gui.cron.back')}
-        </button>
-      </div>
-      <SheetHead
+      <TwoPaneHead
         name={job.name}
-        facts={cronWhen(job)}
-        menu={[
-          { label: t('gui.cron.duplicate'), fn: () => store.openSheet(job) },
-          { label: t('gui.cron.delete'), bad: true, fn: () => removeThenList(job) },
-        ]}
-      />
-      <StateLine
-        cls={job.on ? 'ok' : 'off'}
-        text={job.on ? t('gui.cron.next_only', { next: job.next }) : t('gui.cron.paused')}
-        act={
-          <button
-            className="swi"
-            role="switch"
-            aria-checked={job.on}
-            aria-label={t('gui.caps.toggle_aria', { name: job.name })}
-            onClick={() => void store.source().toggle(job).then(() => store.refresh())}
-          />
+        meta={
+          <>
+            <span>{cronWhen(job)}</span>
+            <span className={job.on ? 'st ok' : 'st'}>
+              {job.on ? t('gui.cron.next_only', { next: job.next }) : t('gui.cron.paused')}
+            </span>
+          </>
+        }
+        aside={
+          <>
+            <TwoPaneSwitch
+              on={job.on}
+              label={t('gui.caps.toggle_aria', { name: job.name })}
+              onChange={() => void store.source().toggle(job).then(() => store.refresh())}
+            />
+            <button
+              className="mini ghost"
+              aria-label={t('gui.cron.menu_aria', { name: job.name })}
+              onClick={(e) => {
+                const b = e.currentTarget.getBoundingClientRect()
+                menuAt(b.right - 150, b.bottom + 6, [
+                  { label: t('gui.cron.duplicate'), fn: () => store.openSheet(job) },
+                  { label: t('gui.cron.delete'), bad: true, fn: () => removeThenList(job) },
+                ])
+              }}
+            >
+              &#8943;
+            </button>
+          </>
         }
       />
-      <div className="tabbar" role="tablist">
-        <button role="tab" aria-selected={tab === 'cfg'} onClick={() => setTab('cfg')}>
-          {t('gui.cron.tab_cfg')}
-        </button>
-        <button role="tab" aria-selected={tab === 'runs'} onClick={() => setTab('runs')}>
-          {t('gui.cron.tab_runs')}
-          {runs !== null && runs.length > 0 ? <span className="n">{String(runs.length)}</span> : null}
-        </button>
-      </div>
-      {tab === 'cfg' ? (
-        <>
-          <JobForm draft={draft} />
-          <SheetFoot label={t('gui.cron.save')} onSave={save} />
-        </>
-      ) : (
+      <JobForm draft={draft} />
+      <SheetFoot label={t('gui.cron.save')} onSave={save} />
+      <TwoPaneSection
+        label={t('gui.cron.tab_runs')}
+        act={
+          <button className="mini" disabled={running} onClick={runNow}>
+            {t(running ? 'gui.cron.running_now' : 'gui.cron.run_now')}
+          </button>
+        }
+      >
         <div className="cdruns">
-          <div className="runhead">
-            <button className="mini" disabled={running} onClick={runNow}>
-              {t(running ? 'gui.cron.running_now' : 'gui.cron.run_now')}
-            </button>
-          </div>
           {runs === null ? null : runs.length === 0 ? (
             <div className="empty-note">{t('gui.cron.hist_none')}</div>
           ) : (
@@ -327,7 +280,7 @@ function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft;
             ))
           )}
         </div>
-      )}
+      </TwoPaneSection>
     </>
   )
 }
@@ -472,14 +425,16 @@ function JobForm({ draft }: { draft: CronDraft }): JSX.Element {
           payload has never carried a per-job destination (`jobToSave` does not
           read it, and every row comes back as `app`), so the selector that
           stood here promised a choice the write threw away. It states the
-          effective setting and points at the one place that can change it. */}
+          effective setting and points at the one place that can change it --
+          the channels section, because what a result can be delivered TO is
+          whichever channel is in service. */}
       <div className="ff">
         <label>{t('gui.job.deliver')}</label>
         <div className="sustate" style={{ marginTop: 0 }}>
           <span>{t(DELIVER[draft.deliver] || DELIVER.app!)}</span>
           <span className="x">{t('gui.job.deliver_global')}</span>
           <span className="a">
-            <button className="mini ghost" onClick={() => settingsDialog.open()}>
+            <button className="mini ghost" onClick={() => settingsDialog.openSection('channels')}>
               {t('gui.job.deliver_open')}
             </button>
           </span>

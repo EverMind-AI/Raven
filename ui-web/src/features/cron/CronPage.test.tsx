@@ -1,11 +1,10 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as lang from '../../state/lang'
-import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import { mountPageRoot } from '../../test/pageRoot'
@@ -53,32 +52,38 @@ function install(rows: CronJob[], over: Partial<CronSource> = {}) {
     openRun: async () => calls.push('openRun'),
     ...over,
   }
-  const shellCalls: Array<[string, unknown]> = []
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
-  vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
   setSources({ cron: source })
   document.body.innerHTML =
-    '<section id="cronPage"><div id="cronBody"></div></section>' +
+    '<div id="cronBody"></div>' +
     '<div class="veil" id="jobVeil" data-open="false"></div>' +
     '<div id="menu" data-open="false"></div>'
-  return { source, calls, shellCalls }
+  return { source, calls }
 }
 
+/* The section as the dialog hosts it: the island in its own box, and the fetch
+   arriving at the section costs (features/cron/store.ts's `enter`, which
+   state/settings.ts spends -- here it is called by hand, because the dialog is
+   not what this file is about). */
 async function mount() {
   const view = render(<CronApp />, { container: document.getElementById('cronBody')! })
   await act(async () => {
-    store.open()
+    store.backToList()
+    await store.refresh()
   })
   return view
 }
 
-
+/* Scoped to the list: the picked job carries the same name in its own header,
+   so an unscoped query answers two elements once a row is open. */
+const side = (): HTMLElement => document.querySelector('.two-pane-side') as HTMLElement
+const rowText = (name: string): HTMLElement => within(side()).getByText(name)
 const rowNamed = (name: string): HTMLElement =>
-  [...document.querySelectorAll<HTMLElement>('.surow')].find((r) => r.querySelector('.nm b')!.textContent === name)!
-const chipCount = (label: string): string | null =>
-  [...document.querySelectorAll<HTMLElement>('.cronfilter button')].find((b) => b.textContent!.startsWith(label))!
-    .querySelector('.n')!.textContent
+  [...document.querySelectorAll<HTMLElement>('.two-pane-row')]
+    .find((r) => r.querySelector('.nm')!.textContent === name)!
+const listNames = (): Array<string | null> =>
+  [...side().querySelectorAll('.two-pane-row .nm')].map((b) => b.textContent)
 
 /* The overflow menu of whichever host drew it, through the shared #menu the page
    keeps -- the same host production uses. */
@@ -90,12 +95,6 @@ async function pickMenu(open: HTMLElement, label: string): Promise<void> {
   expect(item, `menu item ${label}`).toBeTruthy()
   await act(async () => {
     item!.click()
-  })
-}
-
-async function tab(name: string): Promise<void> {
-  await act(async () => {
-    ;[...document.querySelectorAll<HTMLElement>('.tabbar button')].find((b) => b.textContent!.startsWith(name))!.click()
   })
 }
 
@@ -113,12 +112,13 @@ afterEach(() => {
 })
 
 describe('cron island', () => {
-  it('shows every row the source answers, through the hero', async () => {
+  it('shows every row the source answers, grouped by whether it is on', async () => {
     install([job(), job({ id: 'j2', name: 'weekly report', on: false })])
     await mount()
     expect(await screen.findByText('morning digest')).toBeTruthy()
     expect(screen.getByText('weekly report')).toBeTruthy()
-    expect(screen.getByText('gui.cron.hero')).toBeTruthy()
+    expect(screen.getByText('gui.cron.g_on')).toBeTruthy()
+    expect(screen.getByText('gui.cron.g_off')).toBeTruthy()
   })
 
   it('shows the empty note when the source has nothing', async () => {
@@ -127,10 +127,11 @@ describe('cron island', () => {
     expect(await screen.findByText('gui.cron.none')).toBeTruthy()
   })
 
-  /* Three chips with counts, and they filter. The banner they replace could
-     only say "something failed" -- it had no way to show the paused jobs, and
-     no way to narrow the list to the failures it was pointing at. */
-  it('counts and filters by state', async () => {
+  /* Two groups and a search, which is what the three filter chips became: the
+     question a reader arrives with is "did anything break", and a job whose
+     last run failed says so on its own second line rather than behind a chip
+     that could only ever say how many. */
+  it('groups by whether the job is on, and says which one broke', async () => {
     install([
       job({ runs: [{ at: 'today', ok: false, note: 'boom' }] }),
       job({ id: 'b', name: 'weekly report', runs: [{ at: 'today', ok: true, note: 'fine' }] }),
@@ -138,45 +139,32 @@ describe('cron island', () => {
     ])
     await mount()
     expect(await screen.findByText('morning digest')).toBeTruthy()
-    expect(chipCount('gui.cron.f_all')).toBe('3')
-    expect(chipCount('gui.cron.f_fail')).toBe('1')
-    expect(chipCount('gui.cron.f_paused')).toBe('1')
-    await act(async () => {
-      ;[...document.querySelectorAll<HTMLElement>('.cronfilter button')][1]!.click()
-    })
-    expect([...document.querySelectorAll('.surow .nm b')].map((b) => b.textContent)).toEqual(['morning digest'])
-    await act(async () => {
-      ;[...document.querySelectorAll<HTMLElement>('.cronfilter button')][2]!.click()
-    })
-    expect([...document.querySelectorAll('.surow .nm b')].map((b) => b.textContent)).toEqual(['paused one'])
+    expect(listNames()).toEqual(['morning digest', 'weekly report', 'paused one'])
+    expect(rowNamed('morning digest').querySelector('.ds')!.className).toContain('bad')
+    expect(rowNamed('weekly report').querySelector('.ds')!.className).not.toContain('bad')
+    expect(rowNamed('paused one').className).toContain('two-pane-off')
   })
 
-  /* The last result is the row's third line, and the whole line opens the
-     session that run wrote -- without opening the job page underneath it. */
-  it('opens the run session from the row without opening the job', async () => {
-    const { calls } = install([job({ runs: [{ at: 'today 08:00', ok: false, note: 'boom' }] })])
+  it('narrows the list by what is typed in the search', async () => {
+    install([job(), job({ id: 'b', name: 'weekly report' })])
     await mount()
-    const line = rowNamed('morning digest').querySelector('.sufoot2 .rl') as HTMLElement
-    expect(line.textContent).toContain('gui.cron.failed')
-    expect(line.textContent).toContain('boom')
+    await screen.findByText('morning digest')
+    const box = side().querySelector('input') as HTMLInputElement
     await act(async () => {
-      line.click()
+      fireEvent.change(box, { target: { value: 'weekly' } })
     })
-    expect(calls).toContain('openRun')
-    expect(screen.queryByText('← gui.cron.back')).toBeNull()
+    expect(listNames()).toEqual(['weekly report'])
   })
 
-  it('opens the job page from a row and comes back to the list', async () => {
+  it('opens the job beside the list, and says to pick one until it is', async () => {
     install([job()])
     await mount()
+    expect(await screen.findByText('gui.cron.pick')).toBeTruthy()
     await act(async () => {
-      ;(await screen.findByText('morning digest')).click()
+      rowText('morning digest').click()
     })
-    const back = await screen.findByText('← gui.cron.back')
-    await act(async () => {
-      back.click()
-    })
-    expect(await screen.findByText('gui.cron.hero')).toBeTruthy()
+    expect(screen.queryByText('gui.cron.pick')).toBeNull()
+    expect(screen.getByText('gui.cron.save')).toBeTruthy()
   })
 
   it('lands a refused save under the schedule control', async () => {
@@ -187,7 +175,7 @@ describe('cron island', () => {
     })
     await mount()
     await act(async () => {
-      ;(await screen.findByText('morning digest')).click()
+      rowText('morning digest').click()
     })
     await act(async () => {
       ;(await screen.findByText('gui.cron.save')).click()
@@ -199,7 +187,7 @@ describe('cron island', () => {
     install([])
     await mount()
     await act(async () => {
-      ;(await screen.findByText('gui.cron_new')).click()
+      screen.getByLabelText('gui.cron_new').click()
     })
     await act(async () => {
       ;(await screen.findByText('gui.save')).click()
@@ -214,12 +202,12 @@ describe('cron island', () => {
     })
     await mount()
     await act(async () => {
-      ;(await screen.findByText('morning digest')).click()
+      rowText('morning digest').click()
     })
     await act(async () => {
       ;(await screen.findByText('gui.cron.save')).click()
     })
-    expect(await screen.findByText('← gui.cron.back')).toBeTruthy()
+    expect(screen.getByText('gui.cron.save')).toBeTruthy()
   })
 
   it('refetches the run history when the shell refreshes the page', async () => {
@@ -227,9 +215,8 @@ describe('cron island', () => {
     install([job()], { runs: async () => [...history] })
     await mount()
     await act(async () => {
-      ;(await screen.findByText('morning digest')).click()
+      rowText('morning digest').click()
     })
-    await tab('gui.cron.tab_runs')
     expect(await screen.findByText('first')).toBeTruthy()
     history.push({ at: 'today 09:00', ok: false, note: 'landed later' })
     await act(async () => {
@@ -243,9 +230,8 @@ describe('cron island', () => {
     install([job()], { runs })
     await mount()
     await act(async () => {
-      ;(await screen.findByText('morning digest')).click()
+      rowText('morning digest').click()
     })
-    await tab('gui.cron.tab_runs')
     await screen.findByText('stamped')
     const before = runs.mock.calls.length
     /* A real pick, which is the only thing that moves the page's language. */
@@ -269,10 +255,11 @@ describe('cron island', () => {
     })
     await mount()
     await act(async () => {
-      ;(await screen.findByText('morning digest')).click()
+      rowText('morning digest').click()
     })
-    await pickMenu(document.querySelector('.sumenu') as HTMLElement, 'gui.cron.delete')
-    expect(await screen.findByText('← gui.cron.back')).toBeTruthy()
+    await pickMenu(
+      document.querySelector('.two-pane-head button.mini.ghost') as HTMLElement, 'gui.cron.delete')
+    expect(screen.getByText('gui.cron.save')).toBeTruthy()
   })
 
   /* Destructive verbs are not row verbs and not page-face verbs: the list row
@@ -283,9 +270,9 @@ describe('cron island', () => {
     expect([...rowNamed('morning digest').querySelectorAll('button')].map((b) => b.textContent))
       .not.toContain('gui.cron.delete')
     await act(async () => {
-      ;(await screen.findByText('morning digest')).click()
+      rowText('morning digest').click()
     })
-    const face = [...document.querySelectorAll('#cronBody button')].map((b) => b.textContent)
+    const face = [...document.querySelectorAll('.two-pane-main button')].map((b) => b.textContent)
     expect(face.length).toBeGreaterThan(0)
     expect(face).not.toContain('gui.cron.delete')
   })
@@ -302,7 +289,7 @@ describe('cron island', () => {
     })
     await mount()
     await act(async () => {
-      ;(await screen.findByText('morning digest')).click()
+      rowText('morning digest').click()
     })
     const n = document.querySelector<HTMLInputElement>('.everyn input')!
     expect(n.value).toBe('1')
@@ -323,10 +310,10 @@ describe('cron island', () => {
     install([job()])
     await mount()
     await act(async () => {
-      ;(await screen.findByText('morning digest')).click()
+      rowText('morning digest').click()
     })
     expect(screen.getByText('gui.job.deliver_global')).toBeTruthy()
-    expect(document.querySelector('#cronBody select')).toBeNull()
+    expect(document.querySelector('.two-pane-main select')).toBeNull()
   })
 
   it('asks the source to toggle and refreshes from it', async () => {
@@ -356,7 +343,7 @@ describe('cron island', () => {
     install([job({ runs: [{ at: 'today 08:00', ok: false, note: 'boom' }] })])
     await mount()
     await act(async () => {
-      ;(await screen.findByText('morning digest')).click()
+      rowText('morning digest').click()
     })
     expect(domSnapshot(document.getElementById('cronBody')!)).toMatchSnapshot()
   })

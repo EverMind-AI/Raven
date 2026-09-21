@@ -100,7 +100,6 @@ const PINNED = {
   'state/globalListeners.ts': 3,
   'state/lightbox.ts': 3,
   'state/menu.ts': 1,
-  'state/navfly.ts': 3,
   'state/page.ts': 4,
   'state/perm.ts': 3,
   'state/portals.ts': 3,

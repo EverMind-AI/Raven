@@ -2,16 +2,16 @@
 /* A golden per top-level region of the page, taken from the markup that ships
  * today.
  *
- * Every one of these nineteen regions moved out of src/page.html and into
- * App.tsx, one step at a time. The promise was that the DOM does not move:
+ * Every one of these regions moved out of src/page.html and into App.tsx, one
+ * step at a time. The promise was that the DOM does not move:
  * an element's tag, id, classes, data-* attributes and the order of its children
  * all stay as they are. So the golden was written once, here, off page.html --
  * and each step changed only where the test got the markup from, never the
  * golden text. A region whose owner changed and whose shape changed with it
  * fails on the region it broke, by name.
  *
- * Sixteen of the nineteen are App.tsx's now; page.html carries the two
- * pre-JavaScript shells and the onboarding host. The markup is read and parsed
+ * All but three are App.tsx's now; page.html carries the two pre-JavaScript
+ * shells and the onboarding host. The markup is read and parsed
  * rather than booted: no script runs, so what is pinned is the skeleton the
  * document is served with, before any island or writer has touched it -- plus
  * the page's own root, which renders synchronously in main.tsx and is the rest
@@ -32,10 +32,10 @@ import { App } from '../App'
 import { PAGES } from '../state/pages'
 import { bodySiblings, elementSnapshot } from './domSnapshot'
 
-/* The nineteen regions, in document order, keyed the way their golden files
-   are: by id, or by class for the one region that has no id (`div.app`). The
-   seven module pages are the table that declares them (state/pages.ts), in its
-   order, so a page added there has a golden here rather than none. */
+/* The regions, in document order, keyed the way their golden files are: by id,
+   or by class for the one region that has no id (`div.app`). The module pages
+   are the table that declares them (state/pages.ts), in its order, so a page
+   added there has a golden here rather than none. */
 const REGIONS = [
   'splash',
   'onb',
@@ -43,11 +43,10 @@ const REGIONS = [
   'app',
   'railShow',
   ...PAGES.map((page) => page.id),
-  'jobVeil',
   'detail',
   'setVeil',
+  'jobVeil',
   'veil',
-  'connVeil',
   'menu',
   'toasts',
 ]
@@ -101,7 +100,7 @@ const keyOf = (el: Element): string =>
   el.id || (el.getAttribute('class') ?? '').trim().split(/\s+/)[0] || el.tagName.toLowerCase()
 
 describe('the page skeleton', () => {
-  it('has exactly the nineteen top-level regions, in order', () => {
+  it('has exactly the top-level regions the table names, in order', () => {
     const doc = render()
     const keys = Array.from(doc.body.children).map(keyOf)
     expect(keys).toEqual([...REGIONS])

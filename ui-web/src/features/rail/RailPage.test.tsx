@@ -69,9 +69,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
   } as unknown as RailSource })
   document.body.innerHTML =
     '<div class="app" data-page="off">' +
-    '<button id="newBtn"></button><button id="playbooksBtn"></button>' +
-    '<button id="agentsBtn"></button><button id="moreBtn"></button>' +
-    '<div id="moreFly" data-open="false"></div>' +
+    '<button id="newBtn"></button><button id="agentsBtn"></button>' +
     PAGES.map(p => `<div id="${p}" data-open="false"></div>`).join('') +
     '<div id="list"></div><h1 id="title">t</h1><button id="renameBtn"></button></div>'
   return { state, calls, toasts }
@@ -81,16 +79,11 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
 const src = (): RailSource => sources.rail as RailSource
 
 /* The nav the assembled page hands over (state/page.ts's navState, off the
-   page table): every module page, the rail button each one lights up, and the
-   More group's rows in their drawn order. The default fake above hands over an
-   empty one, which is the whole page shut. */
-const PAGES = ['playbooksPage', 'extAgentsPage', 'connectionsPage', 'memoryPage', 'cronPage']
+   page table): every module page and the rail button each one lights up. The
+   default fake above hands over an empty one, which is the whole page shut. */
+const PAGES = ['extAgentsPage']
 const BTN_OF: Record<string, string> = {
-  playbooksPage: 'playbooksBtn',
   extAgentsPage: 'agentsBtn',
-  connectionsPage: 'moreBtn',
-  memoryPage: 'moreBtn',
-  cronPage: 'moreBtn'
 }
 
 function navUp(open: string): void {
@@ -672,34 +665,10 @@ describe('rail island', () => {
     /* Nothing covering the chat and no session: the draft row is current. */
     act(() => store.markNew())
     expect(current('newBtn')).toBe('true')
-    navUp('playbooksPage')
-    act(() => store.markNew())
-    expect(current('playbooksBtn')).toBe('true')
-    expect(current('newBtn')).toBe('false')
-    /* And the mark moves with the page, rather than two rows carrying it. */
     navUp('extAgentsPage')
     act(() => store.markNew())
     expect(current('agentsBtn')).toBe('true')
-    expect(current('playbooksBtn')).toBe('false')
-  })
-
-  it('hands the mark to the More row while the group is open, and takes it back when folded', () => {
-    install({ cur: 'a' })
-    mount()
-    const fly = document.getElementById('moreFly')!
-    fly.innerHTML = '<button class="navi"></button><button class="navi"></button><button class="navi"></button>'
-    navUp('cronPage')
-    fly.dataset.open = 'true'
-    act(() => store.markNew())
-    const rows = [...fly.querySelectorAll('.navi')].map(b => b.getAttribute('aria-current'))
-    /* morePages is [extAgents, connections, cron]: the third row is the page
-       that is up. */
-    expect(rows).toEqual(['true', 'false', 'false'])
-    expect(current('moreBtn')).toBe('false')
-    /* Folded, the group has to stand in for the page it hides. */
-    fly.dataset.open = 'false'
-    act(() => store.markNew())
-    expect(current('moreBtn')).toBe('true')
+    expect(current('newBtn')).toBe('false')
   })
 
   it('caps the recent group and expands the tail behind one row', () => {

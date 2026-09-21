@@ -1,17 +1,18 @@
 import { t } from '../../i18n/t'
-import * as page from '../../state/page'
+import * as settingsDialog from '../../state/settings'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 
 import type { CronDraft, CronJob, CronSource } from './types'
 
-/* Page state, outside React on purpose: the callers that drive this page are
- * not React. The rail's flyout and the nav open it (state/navfly.ts), the
- * Escape order closes it (state/escapeOrder.ts), the boot prefetches it
- * (app/boot.ts) and the page's own teardown shuts its sheet
- * (app/install.ts) -- so the state lives in a plain store those four can
- * call, and the component subscribes.
+/* Section state, outside React on purpose: the callers that drive this
+ * section are not React. Schedules is a section of the settings dialog rather
+ * than a page of its own, so `open` below raises that dialog on this section
+ * and the dialog's own Escape takes it back; the boot prefetches the rows
+ * (app/boot.ts) and the page's own teardown shuts the sheet
+ * (app/install.ts) -- so the state lives in a plain store those callers can
+ * reach, and the component subscribes.
  */
 
 export interface CronState {
@@ -63,14 +64,21 @@ export function warm(): Promise<void> {
 }
 
 export function open(): void {
-  set({ viewId: null, draft: null })
-  page.show('cronPage')
-  void refresh()
+  settingsDialog.openSection('cron')
 }
 
-export function close(): void {
-  page.show(null)
+/* What arriving at this section of the settings dialog costs: the list, from
+   the top -- so a reader who picks the row in the dialog's own nav gets the
+   same fetch the opener above does. Registered at this module's own evaluation
+   rather than by the page's wiring, the same shape features/desk/store.ts fills
+   state/escapeOrder.ts's slot with: the alternative is src/app/install.ts
+   importing three island stores for three lines, which is three island graphs
+   in the page's own wiring. */
+function enter(): void {
+  set({ viewId: null, draft: null })
+  void refresh()
 }
+settingsDialog.onEnter('cron', enter)
 
 export function openDetail(j: CronJob): void {
   set({ viewId: j.id, draft: { ...j }, epoch: get().epoch + 1 })
@@ -109,6 +117,9 @@ export function openSheet(j?: CronDraft): void {
 export function closeSheet(): void {
   set({ sheet: null })
 }
+/* And what leaving the section costs: a half-written job would come back over
+   whatever section the reader opens next. */
+settingsDialog.onLeave('closeCronSheet', closeSheet)
 
 /* A language flip changes nothing in this state, but every visible string
    comes from t(), so a re-render is the whole redraw. The island's own controls

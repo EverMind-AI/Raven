@@ -1053,8 +1053,28 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
             ) : null}
         </div>
       ) : null}
-      {seg.body.trim() ? (
-        <div ref={bRef} className={'msg me' + (showClip ? ' clip' : '')}>{seg.body}</div>
+      {/* A turn nothing typed is the reader's own side of the conversation --
+          that is whose turn it opened -- outlined rather than filled because
+          nobody typed it, and headed by what set it off. What is under the chip
+          is the reader's own sentence and nothing else: the rest of the entry
+          is wording for the model (features/transcript/store.ts's
+          `cronReminder`, raven/agent/loop/_shared.py from the other end), and
+          an origin whose shape nothing reads leaves the chip standing alone. */}
+      {seg.auto || seg.body.trim() ? (
+        <div
+          ref={bRef}
+          className={'msg me' + (showClip ? ' clip' : '')}
+          {...(seg.auto ? { 'data-auto': 'true' } : {})}
+        >
+          {seg.auto ? (
+            <span className="transcript-auto">
+              <Ico d={ACT_ICO.clock as string} />
+              {t('gui.deleg.by_' + seg.auto.origin, undefined, seg.auto.origin)}
+              {seg.auto.note ? ` \u00b7 ${seg.auto.note}` : ''}
+            </span>
+          ) : null}
+          {seg.body}
+        </div>
       ) : null}
       {seg.body.trim() && seg.clipped ? (
         <button className="qfold" aria-expanded={String(seg.clipOpen) as 'true' | 'false'}
@@ -1066,8 +1086,10 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
       ) : null}
       <div className="ansfoot">
         <div className="acts">
-          <TipButton label={t('gui.answer.copy')} icon={COPY_ICO}
-            flashWord={t('gui.answer.copied')} onClick={() => store.copyText(seg.body)} />
+          {seg.body.trim() ? (
+            <TipButton label={t('gui.answer.copy')} icon={COPY_ICO}
+              flashWord={t('gui.answer.copied')} onClick={() => store.copyText(seg.body)} />
+          ) : null}
         </div>
         <span className="turnmeta">{seg.when}</span>
       </div>
@@ -1192,9 +1214,75 @@ const StatusView = memo(function StatusView({ lane, seg }: { lane: Lane; seg: St
    status added to the wire without an entry here is a type error, not a row
    that silently reads as `ok`. */
 const DELIVERED: Record<DeliveredData['status'], { cls: string; key: string }> = {
-  ok: { cls: '', key: 'gui.deleg.delivered' },
-  error: { cls: ' err', key: 'gui.deleg.delivered_err' },
+  ok: { cls: ' good', key: 'gui.deleg.delivered' },
+  error: { cls: ' bad', key: 'gui.deleg.delivered_err' },
   exception: { cls: ' warn', key: 'gui.deleg.delivered_exception' },
+}
+
+/* The counts a graph's own receipt ends with. A graph's `status` is always ok
+   -- the manager reports where the work was placed, not how it went -- so the
+   word on the row has to come out of this line instead, or every failed graph
+   would read as "finished". */
+const DAG_COUNTS = /(\d+) completed, (\d+) failed, (\d+) cancelled, (\d+) skipped/
+
+/* What the row says came back. The status for a spawn; for a graph, whichever
+   of the four counts is the honest word: stopped, failed, partly done, done. */
+function deliveredVerdict(seg: DeliveredData): { cls: string; key: string } {
+  const plain = DELIVERED[seg.status]
+  if (!seg.isDag) return plain
+  const m = DAG_COUNTS.exec(seg.body)
+  if (!m) return plain
+  const [done, failed, cancelled] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  if (cancelled && !failed) return { cls: ' dim', key: 'gui.deleg.dlv_stopped' }
+  if (failed && !done) return { cls: ' bad', key: 'gui.deleg.delivered_err' }
+  if (failed) return { cls: ' warn', key: 'gui.deleg.dlv_partial' }
+  return plain
+}
+
+/* What the fold holds, which is prose unless it is a graph's finished-summary.
+ *
+ * That one is two kinds of text in one string (`DagTool`): the counts line,
+ * the run directory and one line per node's output file -- machine lines,
+ * aligned, and read as a block -- then a section per terminal node, which is
+ * what the sub-agent actually said. Drawn as the two things they are rather
+ * than run through the markdown reader, which folds the `- node [status]`
+ * lines into a bullet list and loses the alignment that makes them scannable.
+ *
+ * Keyed on the summary's own opening rather than on `isDag`, because the other
+ * thing a graph delivers is a suspended node's report (`announce_dag_exception`)
+ * -- one paragraph in the node's own words, and setting that in the mono face
+ * would dress a sentence as machine output. */
+function DeliveredBody({ seg }: { seg: DeliveredData }): ReactElement {
+  const caption = <div className="cap">{t('gui.deleg.body_cap')}</div>
+  if (!seg.isDag || !DAG_COUNTS.test(seg.body)) {
+    return (
+      <>
+        {caption}
+        <div className="prose" dangerouslySetInnerHTML={{ __html: store.mdHtml(seg.body) }} />
+      </>
+    )
+  }
+  const lines = seg.body.split('\n')
+  const at = lines.findIndex((line) => /^Terminal outputs:/.test(line))
+  const head = (at < 0 ? lines : lines.slice(0, at)).join('\n').trimEnd()
+  const nodes: Array<{ cap: string; said: string[] }> = []
+  for (const line of at < 0 ? [] : lines.slice(at + 1)) {
+    const heading = /^### (.+)$/.exec(line)
+    if (heading) { nodes.push({ cap: heading[1] as string, said: [] }); continue }
+    nodes[nodes.length - 1]?.said.push(line)
+  }
+  return (
+    <>
+      {caption}
+      {head ? <pre className="raw">{head}</pre> : null}
+      {nodes.map((node) => (
+        <Fragment key={node.cap}>
+          <div className="cap">{node.cap}</div>
+          <div className="prose" dangerouslySetInnerHTML={{ __html: store.mdHtml(node.said.join('\n')) }} />
+        </Fragment>
+      ))}
+    </>
+  )
 }
 
 const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; seg: DeliveredData }): ReactElement {
@@ -1205,25 +1293,28 @@ const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; s
      be checked against, and it is the sub-agent's words rather than Raven's. */
   const headRef = useRef<HTMLButtonElement | null>(null)
   const flip = (): void => pinRow(headRef.current, () => store.toggleDelivered(lane, seg))
-  const { cls, key } = DELIVERED[seg.status]
+  const { cls, key } = deliveredVerdict(seg)
+  const name = seg.isDag ? t('gui.deleg.dag_title') : seg.label
   return (
     <div className={'sdlv' + cls + (seg.shown ? ' open' : '')}>
       <div className="sdhd">
         <Ico d={SDLV_ICO} cls="ic" />
-        <button className="nm" onClick={seg.open}>{seg.isDag ? t('gui.deleg.dag_title') : seg.label}</button>
-        <span className="tx">{t(key)}</span>
+        {/* The whole name, in the tooltip: a long task sentence must not push
+            the word that says how it went out of sight. */}
+        <button className="nm" title={name} onClick={seg.open}>{name}</button>
+        <span className="st"><i className="dot" />{t(key)}</span>
         {seg.body ? (
           <button ref={headRef} className="sdcv" onClick={flip}
             aria-label={t('gui.deleg.body_aria')}
             aria-expanded={String(seg.shown) as 'true' | 'false'}>
-            <span className="lb">{t('gui.deleg.body')}</span>
+            <span className="lb">{t(seg.shown ? 'gui.deleg.body_hide' : 'gui.deleg.body')}</span>
             <Chev />
           </button>
         ) : null}
       </div>
       {seg.body ? (
         <div className="sdbd" hidden={!seg.shown}>
-          <div className="prose" dangerouslySetInnerHTML={{ __html: store.mdHtml(seg.body) }} />
+          <DeliveredBody seg={seg} />
         </div>
       ) : null}
     </div>

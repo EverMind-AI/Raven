@@ -119,14 +119,21 @@ break this today and lets none be added.
 | `host?` | the box that root goes into, when it is not the page's own body |
 | `cssPrefix?` | the prefix its class names carry, when that is not the domain's own name (section 7) |
 
-A page's identity is a different table: `state/pages.ts` holds the seven module
-pages (section id, body id, rail buttons, Escape rank, heading and aria keys),
-and everything that names a page derives from it -- `src/App.tsx`'s sections,
+A page's identity is a different table: `state/pages.ts` holds the module pages
+(section id, body id, rail buttons, Escape rank, heading and aria keys), and
+everything that names a page derives from it -- `src/App.tsx`'s sections,
 `state/page.ts`'s `PageId`, `state/escapeOrder.ts`'s rows, `state/portals.ts`'s
 body order, `chrome/Rail.tsx`'s nav strip, `features/rail/store.ts`'s marks and
 `src/test/regions.test.ts`'s goldens. Two tables, because every one of those
-readers is in `state/` and a single aggregate would pull twenty islands in
+readers is in `state/` and a single aggregate would pull eighteen islands in
 there with it.
+
+A domain that is a **section of the settings dialog** rather than a page
+(channels, schedules, memory) claims no page and names a `host` instead: the
+box `src/App.tsx` renders beside `#spanels`, which `features/settings/store.ts`'s
+`HOSTED` maps its section id to. Its island is its own root, because one inside
+the settings island's tree would be unmounted the moment the reader picked
+another section.
 
 **Enforced by `domain-registration`**: every domain declares itself once into
 `features/manifests.ts` and names itself after its directory; every page a
@@ -181,10 +188,12 @@ effects and the session pipeline all read and write from outside any component.
 
 `state/` does not import `features/` at runtime. Where the page's machinery has
 to ask a domain to do something, the state module declares a slot and the domain
-fills it: `src/app/install.ts` fills `state/page.ts`'s three `onShow` slots, and
-`features/rail/store.ts` fills `state/navfly.ts`'s `onMark` at its own module
-evaluation, because a fold the reader can click carries no guarantee that the
-page's wiring has run. Enforced by `import-direction`.
+fills it: `src/app/install.ts` fills `state/page.ts`'s `onShow` slot and
+`state/settings.ts`'s `onOpen`, and the three domains that are settings sections
+fill that module's `onEnter` and `onLeave` at their own module evaluation --
+the page's wiring would otherwise import three island stores for three lines,
+which is three island graphs it does not otherwise carry. Enforced by
+`import-direction`.
 
 ## 4. Rendering
 

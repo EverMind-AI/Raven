@@ -1,14 +1,14 @@
-import * as detail from '../../state/detail'
-import * as page from '../../state/page'
+import * as settingsDialog from '../../state/settings'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 
 import type { MemItem, MemKind, MemStats, MemorySource } from './types'
 
-/* Page state, outside React on purpose: the caller that closes this page is
- * not React -- the Escape order asks the domain's own verb for it
- * (state/escapeOrder.ts) -- so the state lives in a plain store it can call,
- * and the component subscribes.
+/* Section state, outside React on purpose: the callers that drive this section
+ * are not React. Memory is a section of the settings dialog rather than a page
+ * of its own, so the dialog's own nav is what opens it and the dialog's own
+ * Escape takes it back -- the state lives in a plain store those callers can
+ * reach, and the component subscribes.
  */
 
 export const MEM_PAGE_SIZE = 20
@@ -78,22 +78,25 @@ export async function load(): Promise<void> {
   }
 }
 
-function refreshStats(): Promise<void> {
+export function refreshStats(): Promise<void> {
   return source()
     .stats()
     .then((stats) => set({ stats, note: (stats && stats.note) || get().note }))
     .catch(() => set({ stats: null }))
 }
 
-export function open(): void {
-  page.show('memoryPage')
+/* What arriving at this section of the settings dialog costs: the counters and
+   the first page -- so a reader who picks the row in the dialog's own nav gets
+   the same two reads the opener above does. Registered at this module's own
+   evaluation rather than by the page's wiring, the same shape
+   features/desk/store.ts fills state/escapeOrder.ts's slot with: the
+   alternative is src/app/install.ts importing three island stores for three
+   lines, which is three island graphs in the page's own wiring. */
+function enter(): void {
   void refreshStats()
   void load()
 }
-
-export function close(): void {
-  page.show(null)
-}
+settingsDialog.onEnter('memory', enter)
 
 export function setKind(kind: MemKind): void {
   if (get().kind === kind) return
@@ -119,34 +122,16 @@ export function pageBy(delta: number): void {
   void load()
 }
 
-/** Where the card renders: the host the shared drawer keeps for this island. */
-export function detailHost(): HTMLDivElement {
-  return detail.host('memory')
-}
-
+/* Which memory the right column is showing. It used to be the shared drawer's
+   card, with an onClose registration and a fade to wait out; beside its own
+   list it is one field, and a pick replaces it. */
 export function openDetail(it: MemItem): void {
-  detail.open('memory')
   set({ detail: it })
 }
 
 function closeDetail(): void {
-  detail.close()
+  set({ detail: null })
 }
-
-/* What this island does when the drawer closes, whoever closed it (Esc, the
-   close button, a click outside, a page switch): drop the card -- but not until
-   the drawer has finished fading, or the card is gone from inside a panel that
-   is still on screen. `gen` is which open the drop belongs to: the item cannot
-   answer that, because reopening the same row hands back the same object. */
-function detailDismissed(): void {
-  if (!get().detail) return
-  const gen = detail.get().gen
-  detail.dropAfterFade(
-    () => set({ detail: null }),
-    () => detail.get().gen !== gen,
-  )
-}
-detail.onClose('memory', detailDismissed)
 
 export function remove(it: MemItem): void {
   if (busy) return

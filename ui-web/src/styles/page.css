@@ -1293,40 +1293,79 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    value looked like a link would say nothing about which one goes somewhere. */
 .dlg .dgr .v.gov { cursor: pointer; }
 .dlg .dgr .v.gov:hover { text-decoration: underline; text-underline-offset: 3px; }
-/* The delivery seam: where a delegated run's result re-entered the flow. Quiet
-   like a tool row (this is plumbing, not an answer), but distinct from one --
-   the return arrow and the amber-tinted name say something came BACK, and the
-   reply right under it is that something retold. */
-.sdlv { margin: 10px 0 2px; min-width: 0; font-size: 11.5px; color: var(--faint); }
-.sdlv .sdhd { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.sdlv .ic { width: 13px; height: 13px; flex: none; stroke: var(--amber); }
+/* The delivery seam: where a delegated run's result re-entered the flow. Two
+   things on the row and no more: which task, and how it went. The name is the
+   reading size rather than a mono label -- it is a sentence somebody wrote, not
+   an identifier -- and the verdict is a dot and one word, the same vocabulary a
+   task row uses, so "did it work" is answerable without reading either. */
+.sdlv { margin: 12px 0 2px; min-width: 0; font-size: 12px; color: var(--faint); }
+.sdlv .sdhd { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 22px; }
+.sdlv .ic { width: 13px; height: 13px; flex: none; stroke: var(--faint); }
+/* Capped, with the whole of it in the tooltip: a long task sentence must not
+   push the verdict out of sight. */
 .sdlv .nm {
-  font-family: var(--mono); font-size: 11px; color: var(--muted);
-  padding: 0; border: 0; background: none; cursor: pointer;
-  max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: inherit; font-size: 12.5px; color: var(--text);
+  padding: 0; border: 0; background: none; cursor: pointer; border-radius: 4px;
+  min-width: 0; max-width: min(340px, 60%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.sdlv .nm:hover { color: var(--amber); text-decoration: underline; text-underline-offset: 2px; }
-.sdlv .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sdlv.err .ic { stroke: var(--clay); }
-.sdlv.err .tx { color: var(--clay); }
-.sdlv.warn .ic { stroke: var(--gold); }
-.sdlv.warn .tx { color: var(--gold); }
-/* What came back, folded. It is the sub-agent's words, not Raven's, so it is
-   set apart from the answer below it by a rule rather than a card: a card would
-   compete with the retelling the reader is meant to read first. */
+.sdlv .nm:hover {
+  color: var(--amber); text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklab, var(--amber) 55%, transparent);
+}
+.sdlv .st { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--muted); }
+.sdlv .st .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
+.sdlv.good .st .dot { background: var(--moss); }
+.sdlv.bad .st { color: var(--clay); }
+.sdlv.bad .st .dot { background: var(--clay); }
+.sdlv.warn .st { color: var(--gold); }
+.sdlv.warn .st .dot { background: var(--gold); }
+.sdlv.dim .st { color: var(--faint); }
+/* What came back, folded. It is the sub-agent's words, not Raven's, so the
+   fold sets them apart as a block of their own -- and the caption inside says
+   what they are, which is the text that entered the turn rather than a
+   retelling of it. */
 .sdlv .sdcv {
-  display: flex; align-items: center; gap: 4px; flex: none; margin-left: auto;
-  color: var(--faint); padding: 1px 5px; border-radius: 6px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 1px; flex: none; margin-left: auto;
+  font: inherit; font-size: 11.5px; color: var(--faint);
+  padding: 2px 3px 2px 9px; border-radius: 999px; cursor: pointer;
 }
-.sdlv .sdcv:hover { color: var(--muted); background: var(--surface); }
-.sdlv .sdcv .lb { font-family: var(--mono); font-size: 10.5px; }
-.sdlv .sdcv .cv { width: 11px; height: 11px; transition: transform .15s; }
+.sdlv .sdcv:hover { color: var(--muted); background: var(--hover); }
+.sdlv .sdcv .cv { width: 12px; height: 12px; transition: transform .15s; }
 .sdlv.open .sdcv .cv { transform: rotate(90deg); }
 .sdlv .sdbd {
-  margin: 6px 0 4px; padding: 0 0 0 11px; border-left: 1px solid var(--line);
+  margin: 8px 0 4px 21px; padding: 10px 14px 12px; border-radius: 10px;
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--ring);
   min-width: 0; overflow-x: auto;
 }
-.sdlv .sdbd .prose { font-size: 13px; color: var(--muted); }
+.sdlv .sdbd .cap {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 12px 0 4px;
+}
+.sdlv .sdbd .cap:first-child { margin-top: 0; }
+.sdlv .sdbd .raw {
+  margin: 0; font-family: var(--mono); font-size: 11px; line-height: 1.6;
+  color: var(--muted); white-space: pre-wrap; word-break: break-word;
+}
+.sdlv .sdbd .prose { font-size: 13px; color: var(--text); line-height: 1.7; }
+.sdlv .sdbd .prose p { margin: 0 0 6px; }
+.sdlv .sdbd .prose p:last-child { margin-bottom: 0; }
+
+/* A turn the runtime opened, on the reader's own side: outlined rather than
+   filled, because nobody typed it. Under the chip is the reader's own sentence
+   and nothing else -- the rest of the entry is wording for the model
+   (raven/agent/loop/_shared.py) -- and an origin whose reminder nothing reads
+   leaves the chip standing alone. */
+.msg.me[data-auto] {
+  background: transparent; color: var(--text); box-shadow: none; border: 1px dashed var(--line);
+}
+/* Its own line above the sentence, sized to its words: the bubble is a bubble
+   again, and the chip is what heads it. */
+.transcript-auto {
+  display: flex; width: max-content; align-items: center; gap: 6px; margin-bottom: 6px;
+  padding: 3px 9px; border-radius: 8px; background: var(--surface); color: var(--muted);
+  font-size: 12px; font-weight: 500;
+}
+.transcript-auto svg { width: 12px; height: 12px; flex: none; color: var(--amber); }
 @media (prefers-reduced-motion: reduce) { .sdlv .sdcv .cv { transition: none; } }
 
 /* ── the turn's products ──────────────────────────────────────────────
@@ -2998,16 +3037,18 @@ textarea:focus, textarea:focus-visible,
 .fview .vnote-run { flex: none; }
 
 /* ── switch ────────────────────────────────────────────────────────── */
-.swi {
+.swi, .two-pane-swi {
   flex: none; width: 32px; height: 18px; border-radius: 10px; background: var(--line);
   position: relative; transition: background .16s;
 }
-.swi::after {
+.swi::after, .two-pane-swi::after {
   content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
   border-radius: 50%; background: var(--faint); transition: transform .16s, background .16s;
 }
-.swi[aria-checked="true"] { background: var(--amber-dp); }
-.swi[aria-checked="true"]::after { transform: translateX(14px); background: var(--amber); }
+.swi[aria-checked="true"], .two-pane-swi[aria-checked="true"] { background: var(--amber-dp); }
+.swi[aria-checked="true"]::after,
+.two-pane-swi[aria-checked="true"]::after { transform: translateX(14px); background: var(--amber); }
+.two-pane-swi:disabled { opacity: .45; }
 
 .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line-soft);
   border: 1px solid var(--line-soft); border-radius: 9px; overflow: hidden; }
@@ -3812,6 +3853,112 @@ details[open] summary { margin-bottom: 8px; }
 .shd .sub { font-size: 12.5px; color: var(--muted); margin: 3px 0 0; line-height: 1.5; }
 .spanels { overflow-y: auto; min-height: 0; padding: 18px 20px 26px; }
 
+/* Three sections are another domain's island, rooted in a box of its own
+   beside #spanels rather than inside it (src/App.tsx renders all four, and
+   features/settings/store.ts's HOSTED says why the roots stay separate). One
+   of the four is on screen, and the section the dialog stands on is what picks
+   it -- `data-section` on the veil, written by the settings island on every
+   draw. Rows: .sbody is a two-row grid, and `display: none` takes the other
+   three out of it rather than leaving three empty tracks. */
+.sbody > .spanels[data-for] { display: none; }
+.setveil[data-section="channels"] .spanels[data-for="channels"],
+.setveil[data-section="cron"] .spanels[data-for="cron"],
+.setveil[data-section="memory"] .spanels[data-for="memory"] { display: block; }
+.setveil[data-section="channels"] #spanels,
+.setveil[data-section="cron"] #spanels,
+.setveil[data-section="memory"] #spanels { display: none; }
+
+/* ── the two-pane section frame ─────────────────────────────────────────
+   Three sections are a list and what the picked row is: channels, schedules
+   and memory. The frame is src/components/TwoPane.tsx, which owns these names
+   and is why all three read as one dialog rather than three pages that
+   happened to move. Beside the dialog's own rules, not in a domain's sheet,
+   because no one domain owns it.
+
+   The hosted panel does not scroll: the two columns inside it do, each on its
+   own, so a long channel list never carries the form on the right down with
+   it. */
+.setveil[data-section="channels"] .spanels[data-for="channels"],
+.setveil[data-section="cron"] .spanels[data-for="cron"],
+.setveil[data-section="memory"] .spanels[data-for="memory"] {
+  display: grid; grid-template-rows: minmax(0, 1fr); overflow: hidden;
+}
+.two-pane {
+  display: grid; grid-template-columns: 276px minmax(0, 1fr);
+  border: 1px solid var(--line); border-radius: 10px; background: var(--paper);
+  overflow: hidden; min-height: 0;
+}
+.two-pane-side {
+  border-right: 1px solid var(--line-soft); padding: 12px;
+  display: flex; flex-direction: column; gap: 9px; min-width: 0; min-height: 0; overflow: hidden;
+}
+.two-pane-find { display: flex; gap: 8px; align-items: center; }
+.two-pane-search {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--paper); padding: 7px 11px;
+}
+.two-pane-search svg { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--faint); stroke-width: 1.7; stroke-linecap: round; }
+.two-pane-search input { flex: 1; min-width: 0; font: inherit; font-size: 13px; border: 0; background: none; color: var(--text); outline: none; }
+.two-pane-add {
+  flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
+  border: 1px solid var(--line); background: var(--paper); color: var(--muted);
+}
+.two-pane-add:hover { background: var(--raised); color: var(--text); }
+.two-pane-add svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.two-pane-list {
+  display: flex; flex-direction: column; gap: 1px; flex: 1; min-height: 0;
+  overflow-y: auto; margin: 0 -5px; padding: 0 5px 2px;
+}
+.two-pane-grp {
+  font-size: 11px; font-weight: 500; color: var(--faint); padding: 14px 9px 5px; letter-spacing: .04em;
+}
+.two-pane-list > .two-pane-grp:first-child { padding-top: 4px; }
+.two-pane-row { display: flex; align-items: center; gap: 4px; min-width: 0; border-radius: 8px; }
+.two-pane-row:hover { background: var(--surface); }
+.two-pane-row[aria-current="true"] { background: var(--raised); }
+.two-pane-hit {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
+  font: inherit; text-align: left; padding: 8px 9px; border-radius: 8px; color: var(--text);
+}
+.two-pane-hit:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.two-pane-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.two-pane-txt .nm { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.two-pane-row[aria-current="true"] .two-pane-txt .nm { font-weight: 500; }
+.two-pane-txt .ds { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.two-pane-txt .ds.warn { color: var(--gold); }
+.two-pane-txt .ds.live { color: var(--moss); }
+.two-pane-txt .ds.bad { color: var(--clay); }
+.two-pane-when {
+  font-family: var(--mono); font-size: 11px; color: var(--faint);
+  flex: none; align-self: flex-start; margin-top: 3px;
+}
+.two-pane-off .two-pane-txt .nm { color: var(--muted); }
+.two-pane-row > .two-pane-swi { margin-right: 8px; transform: scale(.88); }
+.two-pane-main { padding: 16px 20px 20px; min-width: 0; min-height: 0; overflow-y: auto; }
+.two-pane-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 15px; }
+.two-pane-head .ttl { flex: 1; min-width: 0; }
+.two-pane-head .ttl .nm { font-size: 16px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.two-pane-meta {
+  font-size: 12.5px; color: var(--muted); margin-top: 5px;
+  display: flex; flex-wrap: wrap; gap: 4px 9px; align-items: center;
+}
+/* The one fact under the name: a dot and a word. What the row's own second
+   line says, said once more for the thing that is open. */
+.two-pane-meta .st { display: inline-flex; align-items: center; gap: 5px; color: var(--faint); }
+.two-pane-meta .st::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.two-pane-meta .st.ok { color: var(--moss); }
+.two-pane-meta .st.bad { color: var(--clay); }
+.two-pane-meta .st.warn { color: var(--gold); }
+.two-pane-sec { margin-top: 18px; }
+.two-pane-head + .two-pane-sec { margin-top: 3px; }
+.two-pane-lab { display: flex; align-items: center; gap: 10px; font-size: 13.5px; font-weight: 600; margin-bottom: 8px; }
+.two-pane-sp { flex: 1; }
+/* A credential form in the right column. The sheet it used to be drawn in gave
+   it its rhythm (`.sheet > .subody`); here the column does. */
+.two-pane-main > .subody { display: grid; gap: 15px; align-content: start; color: var(--muted); font-size: 13.5px; }
+.two-pane-main > .subody > * { margin-top: 0; }
+.two-pane-none { display: grid; place-items: center; padding: 60px 20px; color: var(--faint); font-size: 13px; text-align: center; }
+
 /* ── settings building blocks ───────────────────────────────────────────
    A module is a few cards, not a table: the card is what carries a heading,
    a purpose and, when the value cannot be written from here, one honest note
@@ -4092,40 +4239,28 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 }
 
 /* ── data & memory: stat-tab band + rows + kv profile ───────────────── */
-.memstats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 0 14px; }
+/* The kind switch. Four cards down the width of a page became four segments
+   down the width of a column: same buttons, same counts, no room for the
+   sentence under each -- which is one line under the switch now, for whichever
+   kind is picked. */
+.memstats {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; margin: 0;
+  padding: 2px; background: var(--surface); border-radius: 9px;
+}
 .mstat {
-  text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--ink);
-  box-shadow: var(--elev); padding: 12px 14px 11px; min-width: 0;
-  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+  text-align: center; border-radius: 7px; padding: 5px 2px 4px; min-width: 0;
+  transition: background .15s ease;
 }
-.mstat:hover { border-color: var(--faint); box-shadow: var(--elev-up); }
-.mstat[aria-pressed="true"] {
-  border-color: color-mix(in oklab, var(--amber) 50%, transparent);
-  background: color-mix(in oklab, var(--amber) 6%, var(--ink));
-}
-.mstat .k { font-family: var(--mono); font-size: 11px; color: var(--muted); }
-.mstat .v { font-family: var(--mono); font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 3px 0 1px; }
+.mstat:hover { background: var(--raised); }
+.mstat[aria-pressed="true"] { background: var(--paper); box-shadow: inset 0 0 0 1px var(--line-soft); }
+.mstat .k { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mstat[aria-pressed="true"] .k { color: var(--text); }
+.mstat .v { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--faint); }
 .mstat[aria-pressed="true"] .v { color: var(--amber); }
-.mstat .h { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.memtools { display: flex; gap: 10px; align-items: center; margin: 0 0 14px; }
-.memtools .cfind { max-width: 420px; }
-.memtools .n { font-family: var(--mono); font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
-.memlist { display: grid; gap: 10px; }
-.memrow {
-  text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--ink);
-  box-shadow: var(--elev); padding: 12px 15px 11px; display: grid; gap: 4px; cursor: pointer;
-  transition: border-color .15s ease, box-shadow .15s ease;
-}
-.memrow:hover { border-color: var(--faint); box-shadow: var(--elev-up); }
-.memrow:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
-.memrow .t { display: flex; gap: 9px; align-items: baseline; min-width: 0; }
-.memrow .t b { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.memrow .t .when { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--faint); flex: none; font-variant-numeric: tabular-nums; }
-.memrow .s {
-  font-size: 12.5px; color: var(--muted); line-height: 1.65;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.memrow .meta { display: flex; gap: 8px; align-items: center; margin-top: 3px; flex-wrap: wrap; }
+/* The line under the switch, and the count under the list. */
+.two-pane-side > .memnote { margin: -3px 2px 0; }
+.two-pane-side > .hubpage { margin: 4px 0 0; }
+.two-pane-side .errline-lite { margin: 4px 0; }
 .mmeter { width: 76px; height: 4px; border-radius: 999px; background: var(--raised); overflow: hidden; flex: none; }
 .mmeter i { display: block; height: 100%; background: var(--amber); border-radius: 999px; }
 .memkv {

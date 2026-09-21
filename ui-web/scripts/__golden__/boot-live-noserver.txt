@@ -26,25 +26,12 @@ div.app[data-rail=on]
         svg
           path
         span
-      button#playbooksBtn.navi
-        svg
-          circle
-          circle
-          circle
-          path
-        span
       button#agentsBtn.navi
         svg
           rect
           rect
           path
         span
-      div#moreFly.moresub[data-open=false]
-      button#moreBtn.navi.more
-        svg.chev
-          path
-        span.l-more
-        span.l-less
     div#findBox.find
       svg.ic
         circle
@@ -194,27 +181,6 @@ section#extAgentsPage.page[data-open=false]
     h2
   div.work
     div#extAgentsBody.wrap
-section#connectionsPage.page[data-open=false]
-  header
-    h2
-  div.work
-    div#connectionsBody.wrap
-section#memoryPage.page[data-open=false]
-  header
-    h2
-  div.work
-    div#memoryBody.wrap
-section#playbooksPage.page[data-open=false]
-  header
-    h2
-  div.work
-    div#playbooksBody.wrap
-section#cronPage.page[data-open=false]
-  header
-    h2
-  div.work
-    div#cronBody.wrap
-div#jobVeil.veil[data-open=false]
 aside#detail.detail[data-open=false]
   div.dpanel
     header
@@ -223,7 +189,7 @@ aside#detail.detail[data-open=false]
         svg
           path
     div#dBody.body
-div#setVeil.veil.setveil[data-open=false]
+div#setVeil.veil.setveil[data-open=false][data-section=usage]
   div#setModal.smodal
     nav#snav.snav
       div.brandrow
@@ -238,6 +204,21 @@ div#setVeil.veil.setveil[data-open=false]
           svg
             path
       div#spanels.spanels
+      div#connectionsBody.spanels[data-for=channels]
+        div.two-pane
+          div.two-pane-side
+            div.two-pane-find
+              div.two-pane-search
+                svg
+                  circle
+                  path
+                input
+            div.two-pane-list
+          div.two-pane-main
+            div.two-pane-none
+      div#cronBody.spanels[data-for=cron]
+      div#memoryBody.spanels[data-for=memory]
+div#jobVeil.veil[data-open=false]
 div#veil.veil[data-open=false]
   div.sheet
     header#cfTitle
@@ -245,7 +226,6 @@ div#veil.veil[data-open=false]
     footer
       button#cfNo.btn
       button#cfYes.btn.bad
-div#connVeil.veil[data-open=false]
 div#menu.menu[data-open=false]
 div#toasts.toasts
 div.sbars

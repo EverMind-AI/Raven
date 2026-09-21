@@ -7,11 +7,11 @@
 import { t } from '../../i18n/t'
 import { setCurrent as sessionSet } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
+import { close as closeSettings } from '../../state/settings'
 import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { draw as drawSessions } from '../rail/store'
 import { cronExprHuman } from './humanize'
-import { close as closeCronPage } from './store'
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { CronJob, CronDraft, CronRun, CronSource } from './types'
@@ -129,7 +129,9 @@ export const cronSource: CronSource = {
     .then(() => toast(t('gui.cron.triggered_x', { name: j.name })))
     .catch((e) => toast(t('gui.op.trigger_failed', { detail: e.message || e }))),
   openRun: async (j) => {
-    closeCronPage()
+    /* The run opens in the conversation behind the dialog, so the dialog this
+       section is in comes down with it. */
+    closeSettings()
     const rail = ds('rail')
     const s = { id: `cron:${j.id}`, title: j.name, last: '', when: '',
       at: Math.floor(Date.now() / 1000), run: null, live: true, from: 'cron' }
