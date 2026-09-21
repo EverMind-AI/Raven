@@ -88,10 +88,13 @@ ProgressSink = Callable[[str, str, dict], Awaitable[None]]
 # reaches the main agent; the host supplies ``SubagentManager.announce_dag_result``.
 DagAnnouncer = Callable[[str, str, dict], Awaitable[None]]
 
-# (run_id, task, session_key) -> None. Hands a backgrounded run to the host's
-# sub-agent lifecycle, so `/stop` and the shutdown sweep reach its CLI children;
-# the host supplies ``SubagentManager.adopt_background_run``.
-TaskAdopter = Callable[[str, "asyncio.Task", str | None], None]
+# (run_id, task, session_key) -> refusal text, or None once adopted. Hands a run
+# to the host's sub-agent lifecycle, so `/stop` and the shutdown sweep reach its
+# CLI children; the host supplies ``SubagentManager.adopt_background_run``. A
+# host retiring its sub-agents refuses by cancelling the task it was handed, and
+# says so: the task is adopted in the step that created it, so that cancel lands
+# before its first tick and its body -- cancel handling included -- never runs.
+TaskAdopter = Callable[[str, "asyncio.Task", str | None], "str | None"]
 
 # (session_key) -> refusal text, or None to proceed. Charges this run to the
 # shared sub-agent dispatch budget; the host supplies
@@ -1185,8 +1188,19 @@ class SubAgentDagTool(Tool):
             self._outboxes.pop(run_id, None)
 
         task.add_done_callback(_retire)
-        if self._adopt is not None:
-            self._adopt(run_id, task, origin.conversation)
+        if self._adopt is not None and (refusal := self._adopt(run_id, task, origin.conversation)) is not None:
+            # The host is retiring its sub-agents and cancelled the task it was
+            # handed. That task has not had its first tick, so the cancel never
+            # enters `_run_detached`, whose CancelledError handler is what stops
+            # the outbox -- the taker below would park on a tray nothing will
+            # fill. Stopped here instead, and retired now rather than a tick
+            # later, as a finished run is below. The refusal is the result in
+            # both modes: a "started in the background" here would name a run
+            # `dag_status` cannot find, with no announce to follow.
+            if outbox is not None:
+                outbox.stop()
+            _retire(task)
+            return refusal
         if outbox is not None:
             # Registered before the task's first tick: create_task only schedules
             # it, and take() parks its taker before yielding, so the run cannot
