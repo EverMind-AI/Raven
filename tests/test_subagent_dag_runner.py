@@ -1560,6 +1560,69 @@ class TestBackgroundRun:
         # A run torn down under the user's feet has nothing to report back.
         assert announces.calls == []
 
+    @pytest.mark.parametrize("background", [False, True], ids=["blocking", "background"])
+    async def test_a_graph_submitted_after_the_shutdown_sweep_is_refused_in_both_modes(
+        self, tmp_path: Path, monkeypatch, background: bool
+    ) -> None:
+        """The manager closes admission at shutdown and refuses at adoption by
+        cancelling the task it is handed. `_dispatch` creates that task and
+        adopts it with no await between, so the cancel lands before its first
+        tick and never reaches `_run_detached`'s own handler -- the one that
+        stops the outbox. Unhandled, a blocking call parked on `outbox.take()`
+        for good, and a backgrounded one told the model its run had started
+        when nothing was running and no announce was coming. Both modes now
+        return the refusal, and the tray is stopped the way a real cancellation
+        stops it. The charge door is left unwired on purpose: wired, it refuses
+        first, and this test is about the door behind it."""
+        from raven.agent.subagent import dag_tool as dag_tool_mod
+        from raven.agent.subagent.dag_adjudication import Outbox, Stopped
+        from raven.agent.subagent.manager import SubagentManager
+
+        class _Provider:
+            def get_default_model(self) -> str:
+                return "m"
+
+        trays: list[Outbox] = []
+
+        class _RecordingOutbox(Outbox):
+            def __init__(self, *a: Any, **k: Any) -> None:
+                super().__init__(*a, **k)
+                trays.append(self)
+
+        monkeypatch.setattr(dag_tool_mod, "Outbox", _RecordingOutbox)
+        mgr = SubagentManager(provider=_Provider(), workspace=tmp_path)
+        announces = _Announces()
+        tool = SubAgentDagTool(
+            workspace=tmp_path,
+            agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+            announce=announces,
+            gate=mgr.dispatch_gate,
+            adopt=mgr.adopt_background_run,
+        )
+        tool.set_context("web", "default", "web:sess1")
+        await mgr.cancel_all()
+
+        out = await asyncio.wait_for(
+            tool.execute(
+                task_summary="a graph submitted while the host shuts down",
+                nodes=[{"id": "a", "subagent": "echo", "node_summary": "node a", "prompt_template": "hi"}],
+                background=background,
+            ),
+            timeout=5,
+        )
+
+        text = str(getattr(out, "model_text", out))
+        assert "shutting down" in text
+        assert "in the background" not in text
+        assert tool.active_run_ids() == []
+        assert mgr.get_running_count() == 0
+        assert announces.calls == []
+        if background:
+            assert trays == []
+        else:
+            (tray,) = trays
+            assert isinstance(await asyncio.wait_for(tray.take(), 1), Stopped)
+
     async def test_a_stopped_run_announces_nothing(self, tmp_path: Path) -> None:
         """`run_dag` returns normally on a stop, with everything skipped. Turning
         that into an announcement would spend a turn narrating what the user just

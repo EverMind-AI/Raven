@@ -21,7 +21,10 @@ These commands are intended for development and troubleshooting (poking at a stu
 
 ## 1. Prerequisites
 
-The debug socket is only created when an `raven` process is running with `sandbox.debug.enabled = true`. Add this to your `config.json` / `config.yaml`:
+The debug socket is only created when a `raven` process is running with
+`tools.sandbox.debug.enabled = true` and a backend other than `"none"`.
+Add this to your `config.json`. The loader accepts JSON, not YAML; invalid JSON
+produces a warning and falls back to defaults with sandboxing and debugging disabled:
 
 ```json
 {

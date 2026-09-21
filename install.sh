@@ -7,7 +7,8 @@
 # A piped run always installs the published release wheel, even from inside a
 # clone. Set RAVEN_LOCAL_SRC=<dir> to force an editable install of a checkout.
 # Set RAVEN_MINIMAL=1 to skip the chromium download and the LibreOffice offer;
-# the wheel install itself is unchanged.
+# the wheel install itself is unchanged. Set RAVEN_NO_LAUNCH=1 to skip the
+# closing `raven web` (CI, Dockerfiles), so the script returns.
 #
 # Goal: a clean machine ends up able to run `raven` / `raven tui` from any
 # directory with no manual steps. The script is idempotent -- it detects what
@@ -21,6 +22,11 @@
 # It then ends in the product: `raven web` opens the page in a browser and holds
 # this terminal, so the install finishes on something running rather than on a
 # hint to go and start it.
+#
+# Probe rule: this script is served from main and installs the latest release,
+# which can predate a subcommand main already knows about. Every `raven <sub>`
+# call below is preceded by `raven <sub> --help`; when the probe fails, the
+# script finishes on the one command every release has.
 #
 # POSIX sh on purpose (runs under dash/ash, not just bash).
 set -eu
@@ -373,23 +379,16 @@ install_raven() {
     # install from git here -- the TUI bundle is a gitignored build artifact,
     # so a git install would yield a raven whose `raven tui` cannot start.
     # Override RAVEN_WHEEL_URL to pin a specific wheel.
+    #
+    # One discovery step, no GitHub API: the release page redirect names the
+    # latest stable tag, and everything else is derived from it, because the
+    # wheel, the locked constraints and the plugin list sit in one release
+    # directory. The API caps unauthenticated callers at 60 requests/hour per
+    # IP, which a shared egress exhausts, and its JSON was only ever grepped
+    # for file names.
     wheel_url="${RAVEN_WHEEL_URL:-}"
     if [ -z "$wheel_url" ]; then
       info "Resolving the latest raven release from GitHub..."
-      release_json="$(curl -fsSL "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" 2>/dev/null)"
-      wheel_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1)"
-      # The everos memory plugin ships as a sibling wheel from the same
-      # release; older releases carry none, and its absence only means the
-      # default memory backend degrades loudly at boot.
-      everos_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/everos_memory-[^"]*\.whl' | head -n1)"
-      design_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/design_engine-[^"]*\.whl' | head -n1)"
-      ppt_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/ppt_engine-[^"]*\.whl' | head -n1)"
-    fi
-    if [ -z "$wheel_url" ]; then
-      # The GitHub API caps unauthenticated callers at 60 requests/hour per IP, so a
-      # shared egress can exhaust it. The release page carries no API quota: its
-      # redirect names the latest stable tag, and the wheel URL is derived from it.
-      warn "GitHub API returned no release wheel; falling back to the release page."
       tag="$(curl -fsS -o /dev/null -w '%{redirect_url}' \
         "https://github.com/EverMind-AI/Raven/releases/latest")" || tag=""
       # Same shape the CLI and install.ps1 enforce: the redirect must land on this
@@ -418,67 +417,72 @@ install_raven() {
       fi
     fi
     [ -n "$wheel_url" ] || die "Could not resolve the latest raven release wheel from GitHub. Retry later, or set RAVEN_WHEEL_URL to a wheel URL."
-    # Derive the locked-constraints URL from the wheel URL (same release dir) so
-    # the constraints always match the wheel being installed, including when
-    # RAVEN_WHEEL_URL pins an older wheel. Missing asset / download failure ->
-    # install without pinning rather than fail.
-    constraints_url="${RAVEN_CONSTRAINTS_URL:-}"
-    if [ -z "$constraints_url" ]; then
-      case "$wheel_url" in
-        *.whl) constraints_url="${wheel_url%/*}/raven-constraints.txt" ;;
-      esac
-    fi
+    release_dir="${wheel_url%/*}"
+    # The locked constraints from the same release directory, so they always
+    # match the wheel being installed, including when RAVEN_WHEEL_URL pins an
+    # older wheel. Missing asset / download failure -> install without pinning
+    # rather than fail.
+    constraints="$(mktemp)"
     c_args=""
-    if [ -n "$constraints_url" ]; then
-      constraints="$(mktemp)"
-      if curl -fsSL "$constraints_url" -o "$constraints" 2>/dev/null; then
-        c_args="-c $constraints"
-      else
-        warn "Could not download locked constraints; installing without version pinning."
+    if curl -fsSL "${RAVEN_CONSTRAINTS_URL:-$release_dir/raven-constraints.txt}" -o "$constraints" 2>/dev/null; then
+      c_args="-c $constraints"
+    else
+      warn "Could not download locked constraints; installing without version pinning."
+    fi
+    # The plugin list: the wheels this release ships beside raven, one
+    # `name @ url` line each, written by the release workflow from what it
+    # built. What a complete install is made of lives there, not here, and
+    # `raven upgrade` installs from the same file. A release without one
+    # (0.1.13 and older) installs raven alone, as it always did.
+    plugins="$(mktemp)"
+    memory_only="$(mktemp)"
+    p_args=""
+    m_args=""
+    if curl -fsSL "$release_dir/raven-plugins.txt" -o "$plugins" 2>/dev/null && grep -q '[^[:space:]]' "$plugins"; then
+      info "  with the release's plugins:"
+      sed 's/^/    /' "$plugins"
+      # Both option pairs expand unquoted below and must stay two words each;
+      # mktemp paths carry no spaces.
+      p_args="--with-requirements $plugins"
+      grep '^everos-memory ' "$plugins" > "$memory_only" || true
+      if [ -s "$memory_only" ] && ! cmp -s "$plugins" "$memory_only"; then
+        m_args="--with-requirements $memory_only"
       fi
+    else
+      warn "This release carries no plugin list; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
     fi
     info "  installing $wheel_url"
-    # shellcheck disable=SC2086  # $c_args is an intentional word-split option pair.
-    p_args=""
-    if [ -n "${everos_url:-}" ]; then
-      # No spaces in the requirement: unquoted expansion must yield exactly
-      # "--with" plus one argument, or uv rejects the extra words.
-      p_args="--with everos-memory@$everos_url"
-      info "  with memory plugin $everos_url"
+    # shellcheck disable=SC2086  # $c_args and $1 are intentional word-split option pairs.
+    install_rung() {
+      uv tool install --force $c_args $1 "$2"
+    }
+    # Two independent things can fail: the channel extras, and the plugins
+    # (the engines' native builds first, the memory plugin after). A failed
+    # attempt does not say which, so the rungs walk both axes and stop at the
+    # first that lands -- the largest install this machine can build -- and
+    # warn about exactly what that rung lacks:
+    #   1 channels + all plugins      4 base + memory plugin
+    #   2 base + all plugins          5 channels, no plugins
+    #   3 channels + memory plugin    6 base, no plugins
+    lost_channels="Channel dependencies failed to install; some channels stay unavailable (see: raven channels list)."
+    lost_engines="A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
+    lost_plugins="No plugin could be installed; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
+    if install_rung "$p_args" "raven[channels] @ $wheel_url"; then
+      :
+    elif install_rung "$p_args" "$wheel_url"; then
+      warn "$lost_channels"
+    elif [ -n "$m_args" ] && install_rung "$m_args" "raven[channels] @ $wheel_url"; then
+      warn "$lost_engines"
+    elif [ -n "$m_args" ] && install_rung "$m_args" "$wheel_url"; then
+      warn "$lost_engines"
+      warn "$lost_channels"
+    elif [ -n "$p_args" ] && install_rung "" "raven[channels] @ $wheel_url"; then
+      warn "$lost_plugins"
+    elif [ -n "$p_args" ] && install_rung "" "$wheel_url"; then
+      warn "$lost_plugins"
+      warn "$lost_channels"
     else
-      warn "This release carries no EverOS memory plugin wheel; long-term memory stays off (raven doctor explains)."
-    fi
-    # Same shape for the product engines the roster gates Raven-Design and
-    # Raven-PPT on. Absent wheels are a warning, not a failure: the release
-    # still installs, and the two rows stay disabled the way discovery
-    # already reports them.
-    # Kept in their own variable, not appended to the memory plugin's: the
-    # ladder below drops the engines one rung before the memory plugin, and a
-    # shared scalar would take everos-memory down with the first engine that
-    # cannot resolve or build.
-    e_args=""
-    if [ -n "${design_url:-}" ]; then
-      e_args="$e_args --with design-engine@$design_url"
-      info "  with design engine $design_url"
-    else
-      warn "This release carries no design-engine wheel; Raven-Design stays disabled (raven doctor explains)."
-    fi
-    if [ -n "${ppt_url:-}" ]; then
-      e_args="$e_args --with ppt-engine@$ppt_url"
-      info "  with deck engine $ppt_url"
-    else
-      warn "This release carries no ppt-engine wheel; Raven-PPT stays disabled (raven doctor explains)."
-    fi
-    # shellcheck disable=SC2086  # $c_args / $p_args / $e_args are intentional word-split option pairs.
-    if ! uv tool install --force $c_args $p_args $e_args "raven[channels] @ $wheel_url"; then
-      warn "Channel dependencies failed to install; retrying with base raven. Some channels stay unavailable (see: raven channels list)."
-      if ! uv tool install --force $c_args $p_args $e_args "$wheel_url"; then
-        warn "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
-        if ! uv tool install --force $c_args $p_args "$wheel_url"; then
-          warn "EverOS memory plugin failed to install; long-term memory stays off (raven doctor explains)."
-          uv tool install --force $c_args "$wheel_url"
-        fi
-      fi
+      die "Raven install failed."
     fi
   fi
   # Ensure ~/.local/bin (uv tool bin dir) is on PATH for future shells.
@@ -581,13 +585,23 @@ launch_web() {
   bin="$(uv tool dir --bin 2>/dev/null || true)/raven"
   [ -x "$bin" ] || bin="$HOME/.local/bin/raven"
   [ -x "$bin" ] || {
-    warn "raven is not where this script looked for it; open a new terminal and run: raven web"
+    warn "raven is not where this script looked for it; open a new terminal and run: raven"
     return 0
   }
+  # The release this script just installed may predate `raven web` (0.1.13
+  # does). Ask before calling, and end on the command every release has.
+  if ! "$bin" web --help >/dev/null 2>&1; then
+    printf '\n'
+    ok "Raven installed. Open a new terminal (or source your shell profile), then run: raven"
+    return 0
+  fi
   printf '\n'
   ok "Starting Raven -- your browser will open in a moment. Ctrl-C here stops it."
   printf '\n'
-  "$bin" web --stop >/dev/null && "$bin" web --foreground
+  "$bin" web --stop >/dev/null 2>&1 || warn "could not stop a previous gateway; continuing"
+  # The page's exit code is not the install's: Ctrl-C is how a foreground page
+  # ends, and the install above it already succeeded.
+  "$bin" web --foreground || warn "the page ended with exit code $?; start it again with: raven web"
 }
 
 # --- main ------------------------------------------------------------------
@@ -601,7 +615,14 @@ main() {
   [ -n "${RAVEN_MINIMAL:-}" ] || install_browser
   [ -n "${RAVEN_MINIMAL:-}" ] || install_office
 
-  launch_web
+  # Before the launch, not after: the page holds this terminal until Ctrl-C,
+  # and `uv tool update-shell` only reaches future shells.
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) warn "Your current PATH does not include ~/.local/bin yet -- open a new terminal, or run: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+  esac
+
+  [ -n "${RAVEN_NO_LAUNCH:-}" ] || launch_web
 }
 
 main "$@"

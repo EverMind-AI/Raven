@@ -13,11 +13,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from raven.agent.subagent.backends.routing import HOST_PREFIX, RouteTarget, RoutingBackend
+from raven.agent.subagent.attachments import turn_attachments
+from raven.agent.subagent.backends.routing import HOST_PREFIX, RouteTarget, RoutingBackend, handed_files
 from raven.agent.subagent.mode_tiers import turn_tier, turn_tier_in_force
 from raven.agent.subagent.registry import AgentRegistry
 from raven.agent.subagent.vendored_agents import _read_route_notes as read_route_notes
 from raven.config.schema import ThirdPartyAcpSubagentConfig
+from raven.spine.message import Media
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -63,10 +65,19 @@ class _Router:
         return self.answer
 
 
-#: What the shipped deck route declares; the default for an entry under test,
-#: so a case about the gate does not have to restate why the gate applies.
+#: What the shipped deck route declares (``NEEDS``, ``NEEDS_FILE``) and the tier
+#: floor the gate also knows how to read (``MIN_TIER``; the shipped route no
+#: longer declares one). The entry under test defaults to the credentials and
+#: the floor, so a case about the tier gate does not have to restate why the
+#: gate applies; a case about the file gate names ``needs_file`` itself.
 NEEDS = ("image_generation", "image_search")
 MIN_TIER = "max"
+NEEDS_FILE = ".pptx"
+TEMPLATE = "/home/u/.raven/uploads/brand.pptx"
+
+
+def _media(path: str) -> Media:
+    return Media(path=path, mime="application/octet-stream", kind="file")
 
 
 def _entry(
@@ -78,12 +89,13 @@ def _entry(
     note: str = NOTE,
     needs: tuple[str, ...] = NEEDS,
     min_tier: str = MIN_TIER,
+    needs_file: str = "",
 ) -> tuple[RoutingBackend, _Backend, _Backend]:
     design, deck = _Backend("Design"), _Backend("Deck")
     entry = RoutingBackend(
         "Design",
         design,
-        [RouteTarget("Deck", "builds a .pptx", deck, owes, note, needs, min_tier)],
+        [RouteTarget("Deck", "builds a .pptx", deck, owes, note, needs, min_tier, needs_file)],
         instances=instances or _Instances(),
         target_ready=target_ready,
     )
@@ -354,7 +366,7 @@ class TestTheTierAndTheCredentialsDecideWhichLaneBuilds:
             assert run["authored_task"] == f"a deck of the report{HOST_PREFIX}{NOTE}", tier
 
     async def test_the_top_tier_routes_to_the_target_with_the_task_untouched(self) -> None:
-        """Max is the template lane, and it is told nothing it did not already know."""
+        """At the floor the target runs, and it is told nothing it did not already know."""
         entry, design, deck = _entry(_Router("Deck"))
 
         with turn_tier("max"):
@@ -553,6 +565,147 @@ class TestADirectChatIsGatedByItsOwnMode:
         assert router.asked == [] and deck.runs[0]["task"] == "apply the notes"
 
 
+class TestATemplateOpensTheRoute:
+    """A target that builds on a file the user supplies opens on that file.
+
+    What counts as handed over is read from where the host holds the turn's
+    attachments, never from the task text alone: a direct chat carries them as
+    ``media``; a spawn or a DAG node carries none, so the turn's attachments are
+    read and one counts when the task names it. The text does not settle it by
+    itself -- every deck brief names the deck's destination in the same spelling
+    as a template.
+    """
+
+    async def test_without_an_attachment_the_work_stays_here_at_every_tier_and_on_a_chat(self) -> None:
+        for tier in ("medium", "high", "max"):
+            entry, design, deck = _entry(_Router("Deck"), min_tier="", needs_file=NEEDS_FILE)
+            with turn_tier(tier):
+                assert await _run(entry, "a deck about tennis", authored_task="a tennis deck") == "Design did it"
+            assert deck.runs == [], tier
+            assert design.runs[0]["task"] == f"a deck about tennis{HOST_PREFIX}{NOTE}", tier
+            assert design.runs[0]["authored_task"] == f"a tennis deck{HOST_PREFIX}{NOTE}", tier
+        entry, design, deck = _entry(_Router("Deck"), min_tier="", needs_file=NEEDS_FILE)
+        assert await _run(entry, "a deck", instance="h1", mode="max") == "Design did it"
+        assert deck.runs == [] and design.runs[0]["task"] == f"a deck{HOST_PREFIX}{NOTE}"
+
+    async def test_a_chats_attached_template_opens_the_route_and_travels_with_the_task(self) -> None:
+        """The direct-chat lane: the file arrives as ``media``, which the gate
+        reads and the target still receives -- whether or not the text names it."""
+        entry, design, deck = _entry(_Router("Deck"), min_tier="", needs_file=NEEDS_FILE)
+        media = (_media(TEMPLATE),)
+        assert await _run(entry, "a deck on this", media=media) == "Deck did it"
+        assert design.runs == []
+        assert deck.runs[0]["task"] == "a deck on this" and deck.runs[0]["media"] == media
+
+    async def test_a_turns_attachment_opens_the_route_when_the_task_names_it(self) -> None:
+        """The spawn and DAG lane: no ``media`` crosses; the dispatching model
+        passes the file on by writing its path into the task, in whichever of
+        the two texts it wrote and however it punctuates around it."""
+        for kwargs in (
+            {"task": f"Build the deck on {TEMPLATE}, 20 pages."},
+            {"task": "Build the deck.", "authored_task": f"deck on {TEMPLATE}"},
+            {"task": f"template: ({TEMPLATE})"},
+            # Full-width punctuation right after the path, as a Chinese request
+            # and the model writing one both put it.
+            {"task": f"\u7528 {TEMPLATE}\uff0c\u505a 20 \u9875"},
+            {"task": f"\u6a21\u677f\uff1a{TEMPLATE}\u3002"},
+            {"task": f"\u6a21\u677f\uff08{TEMPLATE}\uff09"},
+            # The name alone, as a model that read the host's relative note writes it.
+            {"task": f"use the attached {Path(TEMPLATE).name} as the template"},
+            {"task": f"\u9644\u4ef6\uff1auploads/{Path(TEMPLATE).name}"},
+            # ASCII marks right after the name: the full stop that ends an
+            # English sentence, an ellipsis, and the rest of the keyboard.
+            {"task": f"Build the deck on the attached template {TEMPLATE}."},
+            {"task": f"template {Path(TEMPLATE).name}..."},
+            {"task": f"use {Path(TEMPLATE).name}!"},
+            {"task": f'the template is "{Path(TEMPLATE).name}"; 20 pages'},
+        ):
+            entry, design, deck = _entry(_Router("Deck"), min_tier="", needs_file=NEEDS_FILE)
+            task = kwargs.pop("task")
+            with turn_tier("medium"), turn_attachments([_media(TEMPLATE)]):
+                assert await _run(entry, task, **kwargs) == "Deck did it", task
+            assert design.runs == [] and deck.runs[0]["task"] == task, task
+
+    async def test_a_pptx_in_the_text_that_is_not_an_attachment_does_not_open_it(self) -> None:
+        """What the dispatching model writes into every deck brief: the deck's
+        destination, its format, and now and then a stray file it saw in the
+        working directory. None of them was handed over."""
+        briefs = (
+            "Save the deck as /home/u/.raven/tmp/tui/tennis_history.pptx, 20 pages.",
+            "\u6700\u7ec8\u4ea4\u4ed8\u53ef\u7528\u7684 PPT \u6587\u4ef6\uff08.pptx\uff09\uff0c\u4fdd\u5b58\u5230\u5f53\u524d\u5de5\u4f5c\u76ee\u5f55",
+            "\u5b58\u4e3a /home/u/.raven/tmp/tui/\u7f51\u7403\u5386\u53f2\u4ecb\u7ecd.pptx",
+            "The working directory already holds an older tennis_history.pptx from yesterday; that is not yours.",
+            "any *.pptx will do; the format is .pptx",
+            f"a deck like {TEMPLATE}.bak",
+            "Ignore the attachment; save the new deck as /home/u/.raven/tmp/tui/new_brand.pptx",
+            "the old my-brand.pptx and rebrand.pptx in the folder are not yours",
+            "a brand.pptx-based look, a brand.pptx_copy on disk, and brand.pptxx as a typo",
+            f"keep {TEMPLATE}.bak, it is last year's",
+        )
+        for brief in briefs:
+            for attached in ((), (_media(TEMPLATE),)):
+                entry, design, deck = _entry(_Router("Deck"), min_tier="", needs_file=NEEDS_FILE)
+                with turn_tier("max"), turn_attachments(list(attached)):
+                    assert await _run(entry, brief) == "Design did it", (brief, attached)
+                assert deck.runs == [], (brief, attached)
+
+    async def test_an_attachment_the_task_does_not_name_was_not_handed_over(self) -> None:
+        """The user attached a template and then told the model to ignore it; the
+        model's brief names no file, and the work stays here."""
+        entry, design, deck = _entry(_Router("Deck"), min_tier="", needs_file=NEEDS_FILE)
+        with turn_tier("max"), turn_attachments([_media(TEMPLATE)]):
+            assert await _run(entry, "a fresh tennis deck, design it from scratch") == "Design did it"
+        assert deck.runs == []
+
+    async def test_only_an_attachment_of_the_declared_kind_counts(self) -> None:
+        for attached in (
+            "/home/u/.raven/uploads/notes.md",
+            "/home/u/.raven/uploads/brand.pptx.bak",
+            "/home/u/.raven/uploads/logo.png",
+        ):
+            entry, design, deck = _entry(_Router("Deck"), min_tier="", needs_file=NEEDS_FILE)
+            with turn_tier("max"), turn_attachments([_media(attached)]):
+                assert await _run(entry, f"a deck from {attached}") == "Design did it", attached
+            assert deck.runs == [], attached
+        entry, design, deck = _entry(_Router("Deck"), min_tier="", needs_file=NEEDS_FILE)
+        with turn_tier("max"), turn_attachments([_media("/home/u/.raven/uploads/notes.md"), _media(TEMPLATE)]):
+            assert await _run(entry, f"a deck from notes.md on {TEMPLATE}") == "Deck did it"
+
+    async def test_a_chats_media_outranks_the_turns_attachments(self) -> None:
+        """Both present -- a direct chat is answered inside a host turn in some
+        surfaces -- and the chat's own ``media`` is what was handed to it."""
+        entry, design, deck = _entry(_Router("Deck"), min_tier="", needs_file=NEEDS_FILE)
+        with turn_tier("max"), turn_attachments([_media(TEMPLATE)]):
+            assert await _run(entry, f"a deck on {TEMPLATE}", media=(_media("/x/notes.md"),)) == "Design did it"
+        assert deck.runs == []
+
+    async def test_the_credentials_close_the_route_with_the_file_in_hand(self) -> None:
+        """The flat condition comes first: a template lane that cannot buy a
+        picture is not the lane, however good the template."""
+        entry, design, deck = _entry(
+            _Router("Deck"), target_ready=lambda _t, _n: False, min_tier="", needs_file=NEEDS_FILE
+        )
+        assert await _run(entry, f"a deck on {TEMPLATE}", media=(_media(TEMPLATE),)) == "Design did it"
+        assert deck.runs == [] and design.runs[0]["task"] == f"a deck on {TEMPLATE}{HOST_PREFIX}{NOTE}"
+
+    async def test_the_file_and_the_floor_both_have_to_hold_when_both_are_declared(self) -> None:
+        entry, design, deck = _entry(_Router("Deck"), min_tier="high", needs_file=NEEDS_FILE)
+        with turn_tier("medium"), turn_attachments([_media(TEMPLATE)]):
+            assert await _run(entry, f"a deck on {TEMPLATE}") == "Design did it"
+        entry, design, deck = _entry(_Router("Deck"), min_tier="high", needs_file=NEEDS_FILE)
+        with turn_tier("high"), turn_attachments([_media(TEMPLATE)]):
+            assert await _run(entry, f"a deck on {TEMPLATE}") == "Deck did it"
+
+    async def test_odd_inputs_do_not_raise(self) -> None:
+        """A media row without a path, an empty text, a None text, an attachment
+        that is a plain string: the gate answers, it does not fail the dispatch."""
+        entry, design, deck = _entry(_Router("Deck"), min_tier="", needs_file=NEEDS_FILE)
+        with turn_tier("max"), turn_attachments([_media(""), _media(TEMPLATE)]):
+            assert await _run(entry, "", authored_task=None) == "Design did it"
+            assert await _run(entry, "on " + TEMPLATE, authored_task=None) == "Deck did it"
+        assert handed_files("x", None, media=("/a/b.pptx", object())) == ("/a/b.pptx",)
+
+
 class TestTheShippedManifestsRoute:
     """The real roster lines, through the real entry."""
 
@@ -575,33 +728,38 @@ class TestTheShippedManifestsRoute:
         registry.apply(rows)
         return registry
 
-    async def test_a_deck_request_reaches_the_deck_engine_through_the_classifier(self) -> None:
+    async def test_a_deck_request_with_a_template_reaches_the_deck_engine_through_the_classifier(self) -> None:
         entry = self._table().backend("Raven-Design")
         assert isinstance(entry, RoutingBackend)
         router = _Router("Raven-PPT")
         entry.set_router(router)
-
         for task in (
-            "Build a 10-slide deck from /data/report.md",
+            f"Build a 10-slide deck from /data/report.md on {TEMPLATE}",
             "Make a PPT about Shanghai's city plan",
             "Turn these notes into a presentation for Friday",
             "{{ inputs.source }}\nExport the summary as a .pptx",
         ):
-            assert (await entry.pick(task, session_key="s1", instance=None))[0] == "Raven-PPT", task
+            picked = await entry.pick(task, session_key="s1", instance=None, handed=(TEMPLATE,))
+            assert picked[0] == "Raven-PPT", task
         assert len(router.asked) == 4
 
-    async def test_below_the_top_tier_the_shipped_row_keeps_the_deck_and_carries_its_own_words(self) -> None:
-        """The real rows, through the real entry: the deck does not vanish below
-        max, it changes which lane designs it and travels with what the manifest
-        declares -- verbatim, under the host marker, and nothing else."""
+    async def test_without_a_template_the_shipped_row_keeps_the_deck_at_every_tier(self) -> None:
+        """The real rows, through the real entry: a deck with no template is this
+        row's own at max as much as at medium -- the tier buys thinking, not a
+        different product -- and it travels with what the manifest declares:
+        verbatim, under the host marker, and nothing else."""
         entry = self._table().backend("Raven-Design")
         entry.set_router(_Router("Raven-PPT"))
 
+        for tier in ("medium", "high", "max"):
+            with turn_tier(tier):
+                picked = await entry.pick("Make a PPT about Shanghai's city plan", session_key="s1", instance=None)
+            assert picked.name == "Raven-Design", tier
+            assert picked.note == f"{HOST_PREFIX}{_declared_note()}", tier
+        # And no tier below max keeps it closed once the template is there.
         with turn_tier("medium"):
-            picked = await entry.pick("Make a PPT about Shanghai's city plan", session_key="s1", instance=None)
-
-        assert picked.name == "Raven-Design"
-        assert picked.note == f"{HOST_PREFIX}{_declared_note()}"
+            picked = await entry.pick("Make a PPT on it", session_key="s1", instance=None, handed=(TEMPLATE,))
+        assert picked.name == "Raven-PPT" and picked.note == ""
 
     async def test_the_classifier_reads_the_deck_engines_line_and_never_the_entrys_own(self) -> None:
         registry = self._table()
@@ -778,6 +936,25 @@ class TestOnlyARouteThatDeclaresTheRequirementIsGated:
         with turn_tier("max"):
             assert await _run(entry, "a deck") == "Deck did it", "min_tier alone must not consult the probe"
         assert asked == []
+
+    async def test_a_declared_file_is_the_third_declaration_and_independent_of_the_other_two(self) -> None:
+        """A route asking for a file is not thereby probed, and not thereby
+        tiered; and a route naming a rung or a credential is not thereby asking
+        for a file."""
+        asked: list[Any] = []
+        entry, design, deck = _entry(
+            _Router("Deck"),
+            target_ready=lambda t, n: asked.append((t, n)) or False,
+            needs=(),
+            min_tier="",
+            needs_file=NEEDS_FILE,
+        )
+        with turn_tier("medium"), turn_attachments([_media(TEMPLATE)]):
+            assert await _run(entry, f"a deck on {TEMPLATE}") == "Deck did it"
+        assert asked == [], "needs_file alone must not consult the probe"
+        entry, design, deck = _entry(_Router("Deck"), target_ready=lambda _t, _n: True, needs=NEEDS, min_tier="max")
+        with turn_tier("max"):
+            assert await _run(entry, "a deck, no file anywhere") == "Deck did it", "no needs_file, no file asked for"
 
     async def test_a_declared_tier_is_a_floor_and_not_the_top_rung(self) -> None:
         """The rung is read off the declaration, so a route may open at a middle

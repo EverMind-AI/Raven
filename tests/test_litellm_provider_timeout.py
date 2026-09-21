@@ -147,10 +147,13 @@ async def test_chat_stream_idle_cap_raises_timeout(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("raven.providers.litellm_provider.acompletion", one_then_hang)
     provider = _make_provider(timeout=999.0, stream_idle_timeout=0.05)
     seen: list[ChatDelta] = []
-    with pytest.raises(TimeoutError):
+    with pytest.raises(TimeoutError) as caught:
         async for delta in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
             seen.append(delta)
     assert [d.content for d in seen] == ["a"]
+    # asyncio's own TimeoutError has an empty str(); the one that reaches a
+    # client has to say what stalled and which bound decided it.
+    assert "stream_idle_timeout" in str(caught.value) and "0.05" in str(caught.value)
 
 
 @pytest.mark.asyncio

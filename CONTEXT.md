@@ -372,8 +372,12 @@ lines and the entry itself, and any other answer keeps the task on the entry. A 
 targets (readiness kind `route`): a missing, unready or switched-off target disables the row
 with the reason on it. A route is admitted the way everything else at a boundary is
 (**Admission**): it declares what its target's pipeline spends (`needs`, from the closed
-`ROUTE_REQUIREMENTS` vocabulary) and the lowest tier it may open at (`minTier`), and the
-entry checks only what was declared -- a route declaring neither is dispatched as routes
+`ROUTE_REQUIREMENTS` vocabulary), a file the dispatch must hand over for the target to have
+anything to build on (`needsFile`, a suffix; read off the files the user attached -- a direct
+chat's media, or an attachment of the turn that the spawn task names -- and never off the task
+text alone, since every deck brief spells the deck's destination like a template), and the
+lowest tier it may open at (`minTier`),
+and the entry checks only what was declared -- a route declaring none is dispatched as routes
 were before the gate, since an empty declaration is verbatim pass-through. The readiness
 probe answers for the *routed target's* lane, reading that product folder's own settings
 first and falling back to what its launcher would inherit from the host; the host's own

@@ -184,6 +184,20 @@ def test_a_first_byte_timeout_is_retryable_and_named() -> None:
     assert verdict.should_compress is False
 
 
+@pytest.mark.parametrize("idle", [180.0, 429.0, 500.0])
+def test_a_stream_idle_timeout_is_named_whatever_budget_its_message_carries(idle: float) -> None:
+    """The message embeds the configured idle budget. Classified by substring it
+    would read as a rate limit at 429 and a server error at 500 -- the same
+    wrong-cause report the error exists to remove -- so it is named by type
+    before any substring runs, like the first-byte bound beside it."""
+    from raven.providers.first_byte import StreamIdleTimeoutError
+
+    verdict = LLMProvider.classify_error(StreamIdleTimeoutError(idle=idle))
+    assert verdict.category == "stream_idle_timeout"
+    assert verdict.retryable is True
+    assert verdict.should_fallback is True
+
+
 def test_the_first_byte_error_content_names_the_bound_and_the_wait() -> None:
     """Half the 2026-09-10 defect was that nothing was recorded. The content the
     provider hands back is what the loop logs and what the llm.output artefact

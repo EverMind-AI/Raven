@@ -56,6 +56,11 @@
           "title": "Needs",
           "type": "array"
         },
+        "needsFile": {
+          "default": "",
+          "title": "Needsfile",
+          "type": "string"
+        },
         "note": {
           "default": "",
           "title": "Note",

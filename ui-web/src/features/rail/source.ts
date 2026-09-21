@@ -71,6 +71,7 @@ interface ListedSession {
   started_at?: number
   updated_at?: number
   pinned?: boolean
+  workdir?: string | null
 }
 
 export function rowFrom(it: ListedSession): SessRow {
@@ -97,6 +98,7 @@ export function rowFrom(it: ListedSession): SessRow {
       : t('gui.sess.n_messages', { n: it.message_count }),
     when, at, run: null, live: true, from: cron ? 'cron' : undefined,
     pin: !!it.pinned, persisted: true,
+    workdir: it.workdir || null,
   }
 }
 

@@ -757,6 +757,100 @@ async def test_ping_hands_the_backend_the_same_bound_it_waits_for(monkeypatch: p
     assert seen["ready_timeout_ms"] == 4000
 
 
+async def test_ping_runs_on_a_connection_pool_of_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ping must not reach the pool the running roster dispatches on.
+
+    The pool keys a connection on its launch arguments, and ``cwd`` falls back
+    to the caller's workspace -- which for a ping is a fresh temporary directory
+    every time. So a ping on the shared pool always computes a launch key no
+    held connection matches, and ``acquire`` retires every connection of that
+    agent before launching its own. Two consequences, both measured against a
+    live adapter on 2026-09-20: a second Connect pressed while the first was
+    still running killed the first one's connection, and the first came back
+    "did not answer a test message" for a failure raven had caused; and a ping
+    fired while that agent was serving a real run would have taken that run's
+    connection down with it.
+
+    This half asserts what ``ping_agent`` asks the factory for. The other half
+    is ``test_the_factory_honours_the_pool_its_caller_overrides``.
+    """
+    from raven.acp_client.pool import AcpConnectionPool, get_pool
+
+    seen: dict = {}
+
+    class _Answers:
+        async def run(self, prompt, **kwargs):
+            return "PONG"
+
+    def _capture(cfg, **kw):
+        seen.update(kw)
+        return _Answers()
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", _capture)
+
+    await probe_mod.ping_agent(ThirdPartyAcpSubagentConfig(name="ping-acp", kind="acp", command="fake-agent acp"))
+
+    assert isinstance(seen["pool"], AcpConnectionPool)
+    assert seen["pool"] is not get_pool()
+
+
+async def test_ping_closes_the_pool_it_opened(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Or every press leaks the agent process it launched.
+
+    The private pool above is per-ping, so nothing else will ever close it: a
+    pool left open holds a live child process for the rest of the gateway's
+    life, and the roster would accumulate one per Connect pressed.
+    """
+    import raven.acp_client.pool as pool_mod
+
+    closed: list[int] = []
+
+    class _Counting(pool_mod.AcpConnectionPool):
+        async def close_all(self) -> None:
+            closed.append(1)
+            await super().close_all()
+
+    monkeypatch.setattr(pool_mod, "AcpConnectionPool", _Counting)
+
+    class _Answers:
+        async def run(self, prompt, **kwargs):
+            return "PONG"
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Answers())
+
+    await probe_mod.ping_agent(ThirdPartyAcpSubagentConfig(name="ping-acp", kind="acp", command="fake-agent acp"))
+    assert closed == [1]
+
+    # And on the failing path too, which is the one that runs when an agent is
+    # the reason the press is happening at all.
+    class _Refuses:
+        async def run(self, prompt, **kwargs):
+            raise RuntimeError("Internal error: You need to sign in to use this model.")
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Refuses())
+
+    result = await probe_mod.ping_agent(
+        ThirdPartyAcpSubagentConfig(name="ping-acp", kind="acp", command="fake-agent acp")
+    )
+    assert result.ok is False
+    assert closed == [1, 1]
+
+
+def test_the_factory_honours_the_pool_its_caller_overrides() -> None:
+    """Read off a real build, for the reason the bounds test states: a request
+    recorded by a replaced builder proves nothing about what the backend then
+    dispatches on."""
+    from raven.acp_client.pool import AcpConnectionPool, get_pool
+    from raven.agent.subagent.backends import build_third_party_backend
+
+    cfg = ThirdPartyAcpSubagentConfig(name="factory-pool", kind="acp", command="fake-agent acp")
+    private = AcpConnectionPool()
+
+    assert build_third_party_backend(cfg, pool=private).pool is private
+    # Omitted, and a dispatch goes where every other dispatch goes.
+    assert build_third_party_backend(cfg).pool is get_pool()
+
+
 def test_the_factory_honours_the_bounds_its_caller_overrides() -> None:
     """Both overrides exist for one caller, so both are read off a real build.
 
@@ -831,6 +925,10 @@ class TestAutomaticSnapshotVerification:
             "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: recorded.append(getattr(s, "status")))})(),
         )
+        # This one pins the registry half. The preset half reads the machine's
+        # own PATH, so leaving it live would make the assertions below depend on
+        # which agents happen to be installed here.
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         manager = _FakeManager([fresh, missing, stale], with_refresh=True)
@@ -879,6 +977,7 @@ class TestAutomaticSnapshotVerification:
                 },
             )(),
         )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         task = schedule_snapshot_verification(_FakeManager([row]))
@@ -915,12 +1014,130 @@ class TestAutomaticSnapshotVerification:
             "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         task = schedule_snapshot_verification(_FakeManager([row]))
         await task
 
         assert recorded == []
+
+    async def test_a_credential_refusal_is_recorded_and_not_only_a_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Recording only ``ready`` meant the one verdict worth remembering was
+        the one thrown away.
+
+        An agent that answers the handshake and then refuses to open a session
+        without a credential has told us something durable about itself, and the
+        agents page reads exactly that to say `Unauthorized` instead of offering
+        a Connect that spends a launch to be refused again. Every other failure
+        stays unrecorded, deliberately: a timeout or a crashed adapter is a fact
+        about this minute, and freezing it into a snapshot would label a working
+        agent broken until someone pressed Test.
+        """
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        recorded: list[str] = []
+        verdicts = {
+            "refused": type("S", (), {"status": "attention", "needs_auth": True})(),
+            "wedged": type("S", (), {"status": "unknown", "needs_auth": False})(),
+            "fine": type("S", (), {"status": "ready", "needs_auth": False})(),
+        }
+
+        async def fake_verify(cfg: object) -> object:
+            return verdicts[cfg.name]
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: recorded.append(s.status))})(),
+        )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([_FakeRow("refused"), _FakeRow("wedged"), _FakeRow("fine")]))
+        assert sorted(recorded) == ["attention", "ready"]
+
+    async def test_a_preset_nobody_has_configured_is_verified_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Or the page can never say `Unauthorized` before the first press.
+
+        The rows this backfill was written for come off the registry, which
+        holds configured agents only -- so an agent the reader has not connected
+        yet is exactly the one it never reached, and exactly the one whose
+        Connect button is about to lie to them.
+        """
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        seen: list[str] = []
+
+        async def fake_verify(cfg: object) -> object:
+            seen.append(cfg.name)
+            return type("S", (), {"status": "ready", "needs_auth": False})()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        monkeypatch.setattr(
+            probe_mod,
+            "_unconfigured_acp_preset_rows",
+            lambda configured, path=None: [_FakeRow("a-preset")] if configured else [],
+        )
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([_FakeRow("configured")]))
+        assert seen == ["configured", "a-preset"], "the configured rows first: they are the ones a run can dispatch to"
+
+    async def test_a_recorded_credential_refusal_is_measured_again(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The one recorded verdict a restart must not take on trust.
+
+        Every other snapshot is skipped while it is fresh, and rightly: a `ready`
+        agent that has not been relaunched is still ready, and re-proving it
+        would spend a process per row per boot. A credential refusal is the
+        opposite kind of fact -- it is a state the user is expected to go and
+        fix, and nothing about fixing it touches the launch config, so the
+        snapshot never goes stale and the row would keep saying "Unauthorized"
+        across every restart after the sign-in that cured it.
+        """
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            status: str = "ready"
+            stale: bool = False
+            needs_auth: bool = False
+
+        fine, refused = _FakeRow("fine"), _FakeRow("refused")
+        verified: list[str] = []
+
+        def fake_snapshot_for(cfg: object) -> Snap:
+            return {
+                id(fine.config): Snap(),
+                id(refused.config): Snap(status="attention", needs_auth=True),
+            }[id(cfg)]
+
+        async def fake_verify(cfg: object) -> Snap:
+            verified.append(cfg.name)
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", fake_snapshot_for)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        # This one pins the registry half. The preset half reads the machine's
+        # own PATH, so leaving it live would make the assertions below depend on
+        # which agents happen to be installed here.
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([fine, refused]))
+        assert verified == ["refused"], "a fresh pass is still trusted; a fresh refusal is not"
 
     async def test_failed_verification_does_not_stop_the_rest(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.agent.subagent.probe import schedule_snapshot_verification
@@ -944,6 +1161,10 @@ class TestAutomaticSnapshotVerification:
             "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
+        # This one pins the registry half. The preset half reads the machine's
+        # own PATH, so leaving it live would make the assertions below depend on
+        # which agents happen to be installed here.
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         task = schedule_snapshot_verification(_FakeManager([make("boom"), make("after")]))
@@ -999,6 +1220,10 @@ class TestAutomaticSnapshotVerification:
             "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
+        # This one pins the registry half. The preset half reads the machine's
+        # own PATH, so leaving it live would make the assertions below depend on
+        # which agents happen to be installed here.
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         rows = [
@@ -1010,3 +1235,78 @@ class TestAutomaticSnapshotVerification:
         await task
 
         assert called == ["on"]
+
+
+def test_a_preset_the_table_cannot_be_read_from_offers_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three ways the shipped table can fail to answer, and none may reach the boot.
+
+    This runs at startup, before anything a user did: a packaging fault here is
+    not their typo to see, and taking the gateway down over it would trade a
+    stale row for no gateway. Each branch answers with the rows it could build,
+    which for these inputs is none.
+    """
+    # A command no shell could split. `shlex` raises rather than returning, and
+    # the entry is simply not a candidate.
+    monkeypatch.setattr(
+        probe_mod,
+        "third_party_subagent_presets",
+        lambda: [{"name": "Torn", "preset": "claude_code", "kind": "acp", "command": 'x "unclosed'}],
+    )
+    assert probe_mod._unconfigured_acp_preset_rows(set(), path=None) == []
+
+    # Nothing on this machine resolves, so there is nothing to hand back and the
+    # schema is never asked.
+    monkeypatch.setattr(
+        probe_mod,
+        "third_party_subagent_presets",
+        lambda: [{"name": "Gone", "preset": "codex", "kind": "acp", "command": "absent-agent acp"}],
+    )
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    assert probe_mod._unconfigured_acp_preset_rows(set(), path=None) == []
+
+    # And a table the schema refuses: logged, and the boot goes on without it.
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/bin/x")
+    monkeypatch.setattr(
+        probe_mod,
+        "third_party_subagent_presets",
+        lambda: [{"name": "Bad", "preset": "codex", "kind": "acp", "command": "x acp", "readyTimeoutMs": "soon"}],
+    )
+    assert probe_mod._unconfigured_acp_preset_rows(set(), path=None) == []
+
+
+def test_only_resolvable_unconfigured_acp_presets_are_offered_for_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three filters, each for its own reason.
+
+    Already configured: the registry half of the backfill has it. Not acp: there
+    is no handshake to record. Not on PATH: launching it is how you learn it is
+    not there, and the free probe answered that for nothing.
+    """
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+    # Real preset keys: the schema checks `preset` against the shipped table, so
+    # a made-up one would fail validation rather than the filter under test.
+    presets = [
+        {"name": "Here", "preset": "claude_code", "kind": "acp", "command": "present-agent acp"},
+        {"name": "Gone", "preset": "codex", "kind": "acp", "command": "absent-agent acp"},
+        {"name": "Mine", "preset": "opencode", "kind": "acp", "command": "present-agent acp"},
+        {"name": "Http", "preset": "mirothinker", "kind": "openai", "baseUrl": "https://x/v1", "model": "m"},
+    ]
+    seen_paths: list[str | None] = []
+
+    def fake_which(exe: str, path: str | None = None) -> str | None:
+        seen_paths.append(path)
+        return "/bin/x" if exe == "present-agent" else None
+
+    monkeypatch.setattr(probe_mod, "third_party_subagent_presets", lambda: presets)
+    monkeypatch.setattr(probe_mod.shutil, "which", fake_which)
+
+    rows = probe_mod._unconfigured_acp_preset_rows({"Mine"}, path="/login/shell/bin")
+
+    assert [row.name for row in rows] == ["Here"]
+    assert isinstance(rows[0].config, ThirdPartyAcpSubagentConfig)
+    # Resolved against the caller's PATH, not this process's. `_probe_acp` answers
+    # the row on screen from the login shell's, so reading a different one here
+    # would skip an agent the page is reporting as installed.
+    assert set(seen_paths) == {"/login/shell/bin"}

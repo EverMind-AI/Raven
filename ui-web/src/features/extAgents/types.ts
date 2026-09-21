@@ -51,6 +51,10 @@ export interface ExtAgentRow {
   probe_status: ExtAgentProbe | string
   probe_detail: string
   has_api_key: boolean
+  /* The agent answered the handshake and refused to open a session without a
+     credential it names. Only an acp row carries it; absent from a server
+     that predates it, which reads as "not refused". */
+  needs_auth?: boolean
   description: string
   test_running: boolean
   last_test_ok: boolean | null

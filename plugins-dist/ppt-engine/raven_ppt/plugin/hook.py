@@ -43,8 +43,6 @@ later turn, or an operator's in-place edit, is never overwritten.
 from __future__ import annotations
 
 import logging
-import os
-import uuid
 from importlib.resources import files as pkg_files
 from pathlib import Path
 
@@ -59,7 +57,6 @@ from raven_ppt.services.publish.deliver import (
     delivered_decks,
     last_refusal,
     published_digests,
-    published_original,
     unrecorded_deliveries,
 )
 
@@ -481,11 +478,9 @@ class PptParticipant(AgentParticipant):
             if deck.name in text or self._delivered_nudged:
                 return Accept()
             self._delivered_nudged = True
-            pdf = deck.with_suffix(".pdf")
-            paths = str(deck) + (f" (and its PDF preview {pdf})" if pdf.is_file() else "")
             return Resample(
                 "reply ends the turn without naming the deck it published",
-                inject=[{"role": "user", "content": DELIVERED_NUDGE.format(paths=paths)}],
+                inject=[{"role": "user", "content": DELIVERED_NUDGE.format(paths=str(deck))}],
                 note="ppt_engine: reply ending a turn without naming the deck it published rolled back (1/1)",
             )
         if _hands_back(text):
@@ -547,13 +542,12 @@ class PptParticipant(AgentParticipant):
                     "presentation carrying slides."
                 )
             return None
-        announced = f"\n\nPublished a {slides}-slide deck.\nDeck: {deck}\nMEDIA: {deck}"
-        preview = deck.with_suffix(".pdf")
-        if not _preview_of(deck, preview):
-            _preview_beside_copy(Path(bound) / "deck" / "state", deck, preview)
-        if _preview_of(deck, preview):
-            announced += f"\nPreview (the same deck as a PDF, for viewing): {preview}\nMEDIA: {preview}"
-        return reply + announced
+        # The deck alone. The render under out/ is the engine's own preview, and
+        # the web surface renders a deck it is shown by itself; a PDF copied beside
+        # the deck and announced as a second MEDIA line was a second deliverable
+        # the user never asked for, and the one place left that still wrote one
+        # after the build stage stopped.
+        return reply + f"\n\nPublished a {slides}-slide deck.\nDeck: {deck}\nMEDIA: {deck}"
 
 
 def ppt_hook(home: Path | None = None, *, deck_per_session: bool = True) -> ParticipantHook:
@@ -604,39 +598,6 @@ def _standing_decks(root: Path) -> list[Path]:
     disagreeing.
     """
     return materials.published_decks(root / OUT_DIRNAME, published_digests(root / "deck" / "state"))
-
-
-def _preview_beside_copy(state_dir: Path, deck: Path, preview: Path) -> None:
-    """Give a renamed copy of the published deck the original's PDF, under its own stem.
-
-    The reply named a copy the model made of the published deck -- the digest check
-    let it through -- and the PDF the publish wrote sits beside the original, so the
-    copy would go out with no preview. Copied fresh rather than with its timestamps,
-    because the copy of the deck is newer than the render and `_preview_of` reads the
-    timestamps.
-    """
-    import shutil
-
-    original = published_original(state_dir, deck)
-    if original is None:
-        return
-    rendered = original.with_suffix(".pdf")
-    if not _preview_of(original, rendered):
-        return
-    try:
-        temporary = preview.parent / f".{preview.name}.{uuid.uuid4().hex}.tmp"
-        shutil.copyfile(rendered, temporary)
-        os.replace(temporary, preview)
-    except OSError as exc:
-        logger.warning("ppt-engine: the preview could not be put beside %s: %s", deck.name, exc)
-
-
-def _preview_of(deck: Path, preview: Path) -> bool:
-    """Whether `preview` is a picture of this very deck rather than an earlier one."""
-    try:
-        return preview.is_file() and preview.stat().st_mtime_ns >= deck.stat().st_mtime_ns
-    except OSError:
-        return False
 
 
 def _refused_because(state_dir: Path) -> str:

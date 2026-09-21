@@ -1,0 +1,14 @@
+/* The rail domain's own rules.
+ *
+ * One file per domain, imported by RailPage.tsx and collected by Vite into the
+ * one CSS asset build.py inlines after page.css; ui-web/build.py checks both
+ * directions (features/extAgents/styles.css says how). The rail's older
+ * classes still live in page.css under check-class-namespace's pinned
+ * allowance; a class the domain introduces goes here, prefixed.
+ */
+
+/* The folder a conversation was pinned to, beside its title: the name only,
+   the full path on hover. A quiet tag, since the group heading above it has
+   already said these rows have one. */
+.rail-wdt { flex: none; max-width: 38%; font-family: var(--mono); font-size: 9.5px; font-weight: 400;
+  color: var(--faint); border: 1px solid var(--line-soft); border-radius: 5px; padding: 0 5px; line-height: 1.5; }

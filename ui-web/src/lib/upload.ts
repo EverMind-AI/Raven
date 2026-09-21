@@ -14,7 +14,7 @@
 
 import { t } from '../i18n/t'
 
-const UPLOAD_MAX_BYTES = 25 * 1024 * 1024
+const UPLOAD_MAX_BYTES = 100 * 1024 * 1024
 
 /* Two entries because the two callers hold the file in different forms, and
    asking for the wrong one costs the reader real time: a caller with the `File`

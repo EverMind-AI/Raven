@@ -684,7 +684,7 @@ async def test_the_socket_carries_a_frame_larger_than_aiohttp_would_allow_by_def
 def test_the_frame_ceiling_can_carry_the_largest_upload_the_method_accepts() -> None:
     """The two limits are one limit, and this is what keeps them that way.
 
-    Sized arithmetically rather than by building a 25 MB payload: the envelope
+    Sized arithmetically rather than by building a maximal payload: the envelope
     is what has to fit around a maximal base64 body, and materialising one to
     learn its length would cost the suite a second to answer a question about
     two integers.
