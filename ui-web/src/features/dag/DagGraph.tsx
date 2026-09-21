@@ -167,8 +167,15 @@ export function DagGraph({
           if (!p) return null
           const handle = n.instance && (held.get(n.instance) || 0) > 1 ? ' @' + n.instance : ''
           const pick = (): void => onPick(n)
+          /* The node's place is written on each shape rather than as a
+             `transform` on the group. WebKit paints a `foreignObject` without
+             its ancestor group's transform -- the box is hit-tested where the
+             layout put it but drawn at the SVG's origin -- so on Safari every
+             card in the task board landed on the first node's spot and the
+             arrows pointed at empty canvas. Absolute x/y on the shapes
+             themselves is honoured by every engine. */
           return (
-            <g key={n.id} transform={`translate(${p.x} ${p.y})`} role="button" tabIndex={0} className="nd"
+            <g key={n.id} role="button" tabIndex={0} className="nd"
               data-st={n.status || 'pending'} data-node={n.id}
               {...(selectedId === n.id ? { 'data-sel': '1' } : {})}
               onClick={(e) => { if (stopPropagation) e.stopPropagation(); pick() }}
@@ -180,20 +187,20 @@ export function DagGraph({
               }}>
               {renderNode
                 ? (
-                  <foreignObject x={0} y={0} width={dims.W} height={dims.H}>
+                  <foreignObject x={p.x} y={p.y} width={dims.W} height={dims.H}>
                     {renderNode(n, now)}
                   </foreignObject>
                 )
                 : (
                   <>
-                    <rect width={dims.W} height={dims.H} rx={9} />
-                    <Mark status={n.status} x={markX} y={dims.H / 2} />
+                    <rect x={p.x} y={p.y} width={dims.W} height={dims.H} rx={9} />
+                    <Mark status={n.status} x={p.x + markX} y={p.y + dims.H / 2} />
                     {/* Laid out as HTML inside the box rather than as SVG text
                         beside it: a line that is longer than its node then ends
                         where the node ends, at whatever width the box is and
                         whenever the font finally arrives, instead of at a
                         length something measured once and wrote down. */}
-                    <foreignObject x={labelX} y={0} width={room} height={dims.H}>
+                    <foreignObject x={p.x + labelX} y={p.y} width={room} height={dims.H}>
                       <div className="lbl">
                         <div className="ln">
                           <span className={n.node_summary ? 'id prose' : 'id'}>{labels[i]}</span>
