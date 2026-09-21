@@ -417,11 +417,12 @@ is a repaint and not a remount.
 
 **Task strip**:
 `TaskRuns` in `src/features/tasks/TasksPage.tsx`, rendered by
-`src/chrome/Dock.tsx` directly below the Sheet rack -- one chip per running
-task, name only, at most three. This is where a delegated run is named while it
-runs, whether it was spawned or dispatched as a graph; the chip opens that
-task's own pane on the Desk, which is where the graph itself is drawn and
-panned. Nothing about a run docks in the rack: a graph there was the whole of
+`src/chrome/Dock.tsx` directly below the Sheet rack -- one chip saying how many
+tasks are running, their names as its hover title. It is a reminder that
+delegated work is under way, whether spawned or dispatched as a graph, not a
+list of it: the chip opens the Desk's tasks tab, whose rows name each run and
+open its pane, which is where the graph itself is drawn and panned. Nothing
+about a run docks in the rack: a graph there was the whole of
 itself between the transcript and the box you type in, for as long as the run
 lasted.
 _Avoid_: "dag sheet" -- there is no longer one. The run's durable record in the

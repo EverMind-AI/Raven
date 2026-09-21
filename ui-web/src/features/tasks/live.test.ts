@@ -196,6 +196,20 @@ describe('applySubagentStatus', () => {
     expect(running.rows[0]).toMatchObject({ id: 'n1', handle: 'named' })
   })
 
+  it('folds the pending row into the record row a list read brought in under call_id', () => {
+    const pending = applySubagentStatus([], { task_id: 't1', agent: 'raven', label: 'x', status: 'pending' }).rows
+    /* The list answered while the pending row stood, so the same spawn is on
+       the list under its record id as well. */
+    const listed: TaskRow = {
+      ...pending[0]!, id: 'n1', handle: 'named', nodes: [node({ node_id: 'n1', status: 'running', instance: 'named' })],
+    }
+    const running = applySubagentStatus([listed, ...pending], {
+      task_id: 't1', call_id: 'n1', agent: 'raven', label: 'x', status: 'running', instance: 'named',
+    })
+    expect(running.rows.map((r) => r.id)).toEqual(['n1'])
+    expect(running.rows[0]).toMatchObject({ handle: 'named', status: 'running' })
+  })
+
   it('drops a row that went from pending straight to cancelled -- it never got a disk record', () => {
     const pending = applySubagentStatus([], { task_id: 't1', agent: 'raven', label: 'x', status: 'pending' }).rows
     const cancelled = applySubagentStatus(pending, { task_id: 't1', agent: 'raven', label: 'x', status: 'cancelled' })
