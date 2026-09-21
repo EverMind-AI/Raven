@@ -883,36 +883,6 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .pop .prow[aria-checked="true"] { background: color-mix(in oklab, var(--text) 9%, transparent); }
 .pop .prow .tick { flex: none; width: 13px; height: 13px; color: var(--amber); margin-top: 2px; }
 .pop .note { padding: 7px 9px 4px; font-size: 10.5px; line-height: 1.5; color: var(--faint); }
-.pop .note.err { color: var(--clay); }
-/* The working-directory chip and its panel (shell/workdir.ts). A folder that
-   was picked reads in the text colour so the row shows the choice was made;
-   once the conversation exists the chip is disabled and only reports, so it
-   drops the hover affordance without dropping the name. */
-.chip.set { color: var(--muted); }
-.chip:disabled { cursor: default; }
-.chip:disabled:hover { background: none; color: var(--faint); }
-.chip.set:disabled:hover { color: var(--muted); }
-.pop.wd { width: 340px; }
-.pop .sec { padding: 8px 9px 2px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em;
-  text-transform: uppercase; color: var(--faint); }
-.pop .rulel { height: 1px; margin: 5px 4px; background: var(--line-soft); }
-/* A folder that cannot itself be the workspace, but can be entered. */
-.pop .prow.off .txt { color: var(--faint); }
-.pop .prow.off .pic { opacity: .55; }
-/* The browser: where we are, then what is here, then the two ways out. The path
-   is drawn from its tail because the tail is the part that changes as one
-   descends and the part that names the folder. */
-.wdpath { display: flex; align-items: center; gap: 4px; padding: 4px 6px 6px; }
-.wdpath .icb { flex: none; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none;
-  color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
-.wdpath .icb svg { width: 14px; height: 14px; }
-.wdpath .icb:hover:not(:disabled) { background: var(--raised); color: var(--text); }
-.wdpath .icb:disabled { opacity: .35; cursor: default; }
-.wdpath .p { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
-.wdlist { max-height: 260px; overflow-y: auto; }
-.wdlist .prow { padding: 6px 9px; }
-.wdfoot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 8px 6px 2px; }
 
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
 /* Bottom inset tracks the floating composer (--lift is the card's height plus

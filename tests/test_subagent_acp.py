@@ -492,9 +492,10 @@ async def test_a_failed_test_after_a_config_edit_keeps_the_capabilities_the_rost
 
 async def test_the_connect_records_what_a_test_would(tmp_path: Path, monkeypatch) -> None:
     """``record_capabilities`` is the writer the manual test and the connect
-    share, and ``capabilities_wanted`` is the boot backfill's own three cases:
-    no record, a record for a launch config that changed, a record from before
-    the menu was measured. A complete record is not re-measured."""
+    share, and ``capabilities_wanted`` is the boot backfill's own cases: no
+    record, a record for a launch config that changed, a record from before
+    the menu was measured, a recorded credential refusal. A complete record
+    is not re-measured."""
     path = tmp_path / "caps.json"
     monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
     cfg = stub_config("a")
@@ -506,6 +507,9 @@ async def test_the_connect_records_what_a_test_would(tmp_path: Path, monkeypatch
     kept = SnapshotStore(path=path).load([cfg])["a"]
     assert kept.can_resume is True and kept.model_menu_measured is True
     assert capabilities_wanted(cfg) is False
+    SnapshotStore(path=path).record(replace(kept, needs_auth=True))
+    assert capabilities_wanted(cfg) is True, "a recorded credential refusal is re-measured"
+    SnapshotStore(path=path).record(kept)
     assert capabilities_wanted(stub_config("a", ready_timeout_ms=999)) is True, "an edited launch is re-measured"
     raw = json.loads(path.read_text(encoding="utf-8"))
     for row in raw["snapshots"]:

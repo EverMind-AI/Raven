@@ -713,8 +713,9 @@ async def test_fs_list_asks_for_the_named_session(tmp_path: Path) -> None:
 
 
 def _agent_home(monkeypatch, home: Path):
-    """Point ``_upload_root`` at ``home``. Patched on the loader module because
-    the handler imports the name inside the function."""
+    """Point the handlers that read the agent home (``fs.upload``, ``fs.dirs``,
+    the deck templates) at ``home``. Patched on the loader module because
+    each handler imports the name inside the function."""
     from raven.config import loader as config_loader
 
     monkeypatch.setattr(config_loader, "load_config", lambda: SimpleNamespace(workspace_path=home))

@@ -575,13 +575,20 @@ async def record_capabilities(cfg: Any) -> Any:
 def capabilities_wanted(cfg: Any) -> bool:
     """Does this acp entry lack a fresh, complete capability record?
 
-    The same three cases the boot backfill re-measures: no snapshot, one whose
-    launch config has changed, or one written before the model menu was
-    recorded. A row with a complete record keeps it -- a connect must not spend
-    a handshake re-measuring what is already known.
+    The same cases the boot backfill re-measures: no snapshot, one whose
+    launch config has changed, one written before the model menu was
+    recorded, or one that recorded a credential refusal -- signing in moves
+    none of the launch fields, so that record never goes stale on its own.
+    A row with a complete record keeps it -- a connect must not spend a
+    handshake re-measuring what is already known.
     """
     snapshot = acp_snapshot_for(cfg)
-    return snapshot is None or snapshot.stale or not getattr(snapshot, "model_menu_measured", True)
+    return (
+        snapshot is None
+        or snapshot.stale
+        or not getattr(snapshot, "model_menu_measured", True)
+        or getattr(snapshot, "needs_auth", False)
+    )
 
 
 def _test_record(snapshot: Any, previous: Any) -> Any:
@@ -755,11 +762,12 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
                 and has_model_menu is not None
                 and not has_model_menu(getattr(row, "name", "") or "")
             )
-            # A fresh snapshot is taken on trust, with one exception. Staleness
-            # asks whether the launch config moved, and signing in does not move
-            # it -- so a recorded credential refusal never goes stale, and the
-            # row it came from would go on saying "Unauthorized" across every
-            # restart after the sign-in that cured it.
+            # A fresh snapshot is taken on trust, with two exceptions: a record
+            # from before the model menu (above), and a credential refusal.
+            # Staleness asks whether the launch config moved, and signing in does
+            # not move it -- so a recorded refusal never goes stale, and the row
+            # it came from would go on saying "Unauthorized" across every restart
+            # after the sign-in that cured it.
             refused = getattr(snapshot, "needs_auth", False)
             if snapshot is not None and not snapshot.stale and not outdated_menu and not refused:
                 continue

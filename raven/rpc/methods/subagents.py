@@ -308,6 +308,9 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 result = replace(result, status="attention")
         last = result.last_test
         task = _RUNNING.get(cfg.name)
+        # One store read per acp row, handed to `agent_meta` so it is not read
+        # twice. Not cached across rows or listings: a cache is what keeps
+        # serving a stale verdict after a verify has already fixed it.
         snapshot = acp_snapshot_for(cfg) if cfg.kind == "acp" else None
         meta = agent_meta(cfg, snapshot=snapshot)
         # One of raven's own, whichever way this install registered it: the

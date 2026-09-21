@@ -525,6 +525,14 @@ describe('the sheet', () => {
     expect(buttonOf('codex')!.disabled).toBe(true)
     await click(buttonOf('codex'))
     expect(acts).toEqual([])
+    /* The sheet says the same, and offers the one press that can take it
+       back: a Test re-measures the handshake. */
+    await openSheet('codex')
+    expect(sheetActs()).toEqual(['gui.agent.unauthorized', 'gui.agent.test_label'])
+    const [named, test] = [...sheet()!.querySelectorAll<HTMLButtonElement>('.extAgents-act button')]
+    expect(named!.disabled).toBe(true)
+    await click(test)
+    expect(acts.map((a) => a.slice(0, 2))).toEqual([['test', 'codex']])
   })
 
   it('keeps its rendered shape, list', async () => {
