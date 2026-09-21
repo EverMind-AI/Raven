@@ -163,7 +163,7 @@ export const coreCommands: SlashCommand[] = [
           })
           .then(r =>
             ctx.transcript.sys(
-              `${isDefault ? 'default permission mode' : 'permission mode'}: ${r?.config?.['permissions.mode'] ?? 'ask'} (${usage})`
+              `${isDefault ? 'default permission mode' : 'permission mode'}: ${r?.config?.['permissions.mode'] ?? 'smart'} (${usage})`
             )
           )
           .catch(ctx.guardedErr)
