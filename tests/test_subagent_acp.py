@@ -40,7 +40,7 @@ from raven.acp_client.protocol import AcpRemoteError
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, third_party_agent_meta
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.manager import SubagentManager
-from raven.agent.subagent.probe import probe_one, run_test
+from raven.agent.subagent.probe import capabilities_wanted, probe_one, record_capabilities, run_test
 from raven.agent.subagent.probe_state import fingerprint
 from raven.agent.subagent.registry import _row_for
 from raven.config.schema import SubagentsConfig, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
@@ -392,6 +392,30 @@ async def test_a_failed_test_after_a_config_edit_keeps_the_capabilities_the_rost
     kept = SnapshotStore(path=path).load([edited])["a"]
     assert (kept.status, kept.stale, kept.can_resume) == ("missing", False, True)
     assert kept.fingerprint == snapshot_fingerprint(edited)
+
+
+async def test_the_connect_records_what_a_test_would(tmp_path: Path, monkeypatch) -> None:
+    """``record_capabilities`` is the writer the manual test and the connect
+    share, and ``capabilities_wanted`` is the boot backfill's own three cases:
+    no record, a record for a launch config that changed, a record from before
+    the menu was measured. A complete record is not re-measured."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    assert capabilities_wanted(cfg) is True
+
+    snapshot = await record_capabilities(cfg)
+
+    assert snapshot.usable is True
+    kept = SnapshotStore(path=path).load([cfg])["a"]
+    assert kept.can_resume is True and kept.model_menu_measured is True
+    assert capabilities_wanted(cfg) is False
+    assert capabilities_wanted(stub_config("a", ready_timeout_ms=999)) is True, "an edited launch is re-measured"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    for row in raw["snapshots"]:
+        row.pop("modelChoices", None)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert capabilities_wanted(cfg) is True, "a record from before the menu is re-measured"
 
 
 async def test_a_first_test_that_fails_is_recorded_as_it_is(tmp_path: Path, monkeypatch) -> None:

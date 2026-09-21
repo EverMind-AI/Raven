@@ -441,6 +441,68 @@ async def test_add_proves_a_preset_of_a_pinged_kind_and_lands_it_enabled(
     assert seen[0].command == entry["command"], "the gate must prove the entry this add assembled"
 
 
+async def test_add_records_the_capabilities_of_an_acp_row_that_answered(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row that answered the ping can be measured, so it is, on the spot.
+
+    Before this the connect proved the agent and recorded nothing: the row it
+    landed read "capabilities not recorded -- run a test", stateless (no
+    instance, no direct chat) and menuless (no model pill) until someone
+    pressed Test or the gateway restarted into the boot backfill.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+
+    recorded = []
+
+    async def _record(cfg):
+        recorded.append(cfg)
+        return None
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _pings_ok)
+    monkeypatch.setattr(subagents_mod, "capabilities_wanted", lambda cfg: True)
+    monkeypatch.setattr(subagents_mod, "record_capabilities", _record)
+
+    assert await subagents_add({"preset": "opencode"}) == {"added": True, "name": "OpenCode"}
+    assert [c.name for c in recorded] == ["OpenCode"]
+
+
+async def test_add_does_not_re_measure_a_row_whose_record_is_complete(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import raven.rpc.methods.subagents as subagents_mod
+
+    recorded = []
+
+    async def _record(cfg):
+        recorded.append(cfg)
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _pings_ok)
+    monkeypatch.setattr(subagents_mod, "capabilities_wanted", lambda cfg: False)
+    monkeypatch.setattr(subagents_mod, "record_capabilities", _record)
+
+    await subagents_add({"preset": "opencode"})
+    assert recorded == []
+
+
+async def test_add_stands_on_the_ping_when_the_capability_record_fails(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The agent already proved itself; a handshake that fails afterwards is
+    logged, not a reason to refuse the connect."""
+    import raven.rpc.methods.subagents as subagents_mod
+
+    async def _boom(cfg):
+        raise RuntimeError("handshake fell over")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _pings_ok)
+    monkeypatch.setattr(subagents_mod, "capabilities_wanted", lambda cfg: True)
+    monkeypatch.setattr(subagents_mod, "record_capabilities", _boom)
+
+    assert await subagents_add({"preset": "opencode"}) == {"added": True, "name": "OpenCode"}
+    assert next(e for e in _stored(config_path) if e["name"] == "OpenCode")["enabled"] is True
+
+
 async def test_add_proves_a_cli_preset_the_same_way(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     template = _as_a_cli_preset(monkeypatch)
 

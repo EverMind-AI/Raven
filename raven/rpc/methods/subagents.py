@@ -30,7 +30,14 @@ from raven.agent.subagent.presets import (
     third_party_subagent_preset,
     third_party_subagent_presets,
 )
-from raven.agent.subagent.probe import ProbeResult, ping_agent, probe_all, run_test
+from raven.agent.subagent.probe import (
+    ProbeResult,
+    capabilities_wanted,
+    ping_agent,
+    probe_all,
+    record_capabilities,
+    run_test,
+)
 from raven.agent.subagent.probe_state import TestStateStore
 from raven.config.loader import get_config_path
 from raven.config.schema import SubagentsConfig
@@ -753,6 +760,16 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
         return
     result = await ping_agent(cfg)
     if result.ok:
+        if getattr(cfg, "kind", None) == "acp" and capabilities_wanted(cfg):
+            # It answered, so it can be measured: the record its statefulness,
+            # menu and modes are read from is written now rather than left to
+            # the Test button or the next restart. Best effort -- the agent has
+            # already proved itself, and a handshake that fails afterwards is
+            # not a reason to refuse the connect.
+            try:
+                await record_capabilities(cfg)
+            except Exception as exc:  # noqa: BLE001 - the connect stands on the ping
+                logger.warning("subagents: {!r} answered but its capabilities could not be recorded: {}", name, exc)
         return
     # `detail` is repeated inside `data` deliberately: the dispatcher fills
     # `data` from `detail` only when a handler passed no `data` of its own, so a

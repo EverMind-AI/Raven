@@ -524,17 +524,45 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     """
     # Function-level on purpose: the acp client family is future shelf cargo,
     # and this module must not name it at import time (binding-time debt).
+    from raven.acp_client.capabilities import verify_agent
+
+    # Presets are templates, not entries: recording a snapshot for one would
+    # key it to a name no config claims, and the roster would then read
+    # capabilities off a preset the user never installed.
+    snapshot = await record_capabilities(cfg) if source != "preset" else await verify_agent(cfg)
+    reply = ", ".join(snapshot.available_models[:5]) or None
+    return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
+
+
+async def record_capabilities(cfg: Any) -> Any:
+    """Measure an acp entry's capabilities live and write them down; the snapshot.
+
+    The one writer the manual test and the connect share. A connect proves the
+    agent answers (``ping_agent``) but records nothing, so until now a row
+    connected from the page stayed "capabilities not recorded -- run a test",
+    stateless and menuless, until someone pressed Test or the gateway restarted
+    into the boot backfill: no ``instance`` for it, no model pill, an attention
+    dot on an agent that had just replied. The handshake this records costs no
+    tokens, so the connect can afford it.
+    """
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
     snapshot = await verify_agent(cfg)
-    if source != "preset":
-        # Presets are templates, not entries: recording a snapshot for one would
-        # key it to a name no config claims, and the roster would then read
-        # capabilities off a preset the user never installed.
-        store = SnapshotStore()
-        store.record(_test_record(snapshot, store.load([cfg], allow_stale=True).get(cfg.name)))
-    reply = ", ".join(snapshot.available_models[:5]) or None
-    return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
+    store = SnapshotStore()
+    store.record(_test_record(snapshot, store.load([cfg], allow_stale=True).get(cfg.name)))
+    return snapshot
+
+
+def capabilities_wanted(cfg: Any) -> bool:
+    """Does this acp entry lack a fresh, complete capability record?
+
+    The same three cases the boot backfill re-measures: no snapshot, one whose
+    launch config has changed, or one written before the model menu was
+    recorded. A row with a complete record keeps it -- a connect must not spend
+    a handshake re-measuring what is already known.
+    """
+    snapshot = acp_snapshot_for(cfg)
+    return snapshot is None or snapshot.stale or not getattr(snapshot, "model_menu_measured", True)
 
 
 def _test_record(snapshot: Any, previous: Any) -> Any:
@@ -657,6 +685,8 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
 
 
 __all__ = [
+    "capabilities_wanted",
+    "record_capabilities",
     "PROBE_PROMPT",
     "PingResult",
     "ProbeResult",
