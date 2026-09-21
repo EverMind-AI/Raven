@@ -79,3 +79,18 @@ def test_node_modules_is_still_refused(tmp_path: Path) -> None:
 
     with pytest.raises(PublishError, match="node_modules leaked"):
         _verify_wheel(_wheel(tmp_path, names))
+
+
+def test_the_plugin_list_names_each_wheel_by_its_distribution(tmp_path: Path) -> None:
+    """The upgrade helper installs `name @ url` lines; the name is derived from
+    the wheel filename so the list can only name what was built."""
+    from scripts.publish_beta import _plugin_list
+
+    wheels = [tmp_path / "everos_memory-1.2.0-py3-none-any.whl", tmp_path / "ppt_engine-0.2.0-py3-none-any.whl"]
+
+    text = _plugin_list(wheels, "https://gitlab.example/generic/raven/0.1.4b1")
+
+    assert text == (
+        "everos-memory @ https://gitlab.example/generic/raven/0.1.4b1/everos_memory-1.2.0-py3-none-any.whl\n"
+        "ppt-engine @ https://gitlab.example/generic/raven/0.1.4b1/ppt_engine-0.2.0-py3-none-any.whl\n"
+    )
