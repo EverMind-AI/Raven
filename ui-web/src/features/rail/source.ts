@@ -124,6 +124,13 @@ export async function loadSessions(): Promise<void> {
   await loadCronNames()
   const r = await gateway().call('session.list', { channels: SESS_CHANNELS })
   sessionReplace((r.sessions || []).map(rowFrom).sort((a, b) => (b.at || 0) - (a.at || 0)))
+  /* Replacing the rows is not showing them, which every other writer here
+     already knew: leave.ts and the registry both draw after their replace. A
+     restore from the archive page reaches the rail only through this function,
+     so without the draw the row came back on the server and on disk and stayed
+     off the screen until the page was reloaded. At boot the rail is still held,
+     where a draw is the skeleton and `releaseRail` paints the rows. */
+  sessionDraw()
 }
 
 /* ── the two writes a row makes for itself ───────────────────────────────── */

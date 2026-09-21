@@ -238,10 +238,11 @@ async function refreshHarness({
     },
   })
   const registry = await import('../../state/session/registry')
+  const rail = await import('./source')
   await fakeGateway(async () => answer)
   const { setSources } = await import('../../state/sources')
   setSources({ composer: {}, rail: {}, transcript: {} } as unknown as Partial<Sources>)
-  return { registry, log }
+  return { registry, rail, log }
 }
 
 describe('re-reading the session list', () => {
@@ -273,6 +274,22 @@ describe('re-reading the session list', () => {
     expect(h.log).toContainEqual(['leaveDeleted', 'a'])
     /* The leave draws for itself; this path does not. */
     expect(h.log.filter((c) => c[0] === 'sessionDraw')).toEqual([])
+  })
+
+  it('a plain re-read draws the rows it just replaced', async () => {
+    /* Replacing the rows is not showing them. The archive page's restore
+       reaches the rail only through this function, so without the draw the
+       restored conversation came back on the server and on disk and stayed off
+       the screen until the page was reloaded. */
+    const h = await refreshHarness({
+      rows: [{ id: 'a' }],
+      answer: { sessions: [{ id: 'a', started_at: 1 }, { id: 'b', started_at: 2 }] },
+    })
+
+    await h.rail.loadSessions()
+
+    expect(h.log).toContainEqual(['sessionReplace', ['b', 'a']])
+    expect(h.log).toContainEqual(['sessionDraw'])
   })
 
   it('keeps the stale list when the read fails', async () => {
