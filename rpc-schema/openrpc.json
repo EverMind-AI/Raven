@@ -8833,6 +8833,22 @@
                 }
               }
             },
+            "current": {
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "required": [
+                "platform",
+                "source_key",
+                "sent",
+                "total"
+              ],
+              "properties": {
+                "platform": { "type": "string" },
+                "source_key": { "type": "string" },
+                "sent": { "type": "integer" },
+                "total": { "type": "integer" }
+              }
+            },
             "phase": {
               "type": ["object", "null"],
               "additionalProperties": false,

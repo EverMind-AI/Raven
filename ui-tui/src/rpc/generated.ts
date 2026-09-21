@@ -6124,6 +6124,12 @@ export interface ImportStatusResult {
       failed: number;
     };
   };
+  current?: {
+    platform: string;
+    source_key: string;
+    sent: number;
+    total: number;
+  } | null;
   phase?: {
     kind: 'profile' | 'skills';
     current: number;
