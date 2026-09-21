@@ -362,9 +362,9 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "test_running": task is not None and not task.done(),
                 "model": getattr(cfg, "model", None),
                 "model_choices": [{"value": c.value, "name": c.name, "group": c.group} for c in meta.model_choices],
-                # The kind's editing rule, not ownership: what `subagents.update`
+                # The row's editing rule, not ownership: what `subagents.update`
                 # accepts for `model` on this row. `own` is the ownership mark.
-                "model_source": "raven" if cfg.kind == "builtin" else "agent" if cfg.kind == "acp" else "fixed",
+                "model_source": _model_rule(cfg, snapshot, meta),
             }
         )
     return rows
@@ -504,6 +504,32 @@ def _factory_description(name: str, preset_name: str | None) -> str:
     return (getattr(discovered, "description", "") or "") if discovered is not None else ""
 
 
+def _model_rule(cfg: Any, snapshot: Any, meta: Any) -> str:
+    """What ``subagents.update`` accepts for ``model`` on this row.
+
+    Defined once and read by both the listing and the write, so the menu the
+    page draws is the vocabulary the write then checks against -- two
+    expressions of it are two places for the pair to drift apart.
+
+    The rule is the row's, not its kind's: an acp row picks from the choices its
+    handshake advertised, except when it is one of raven's own and advertised
+    none. Those run on raven's own provider catalogue -- a product installed
+    beside this raven inherits its providers -- so an empty menu there is a
+    handshake that predates the catalogue rather than an agent with nothing to
+    offer, and falling back to raven's own ids gives the reader the same menu
+    the built-in row gets. A third party that advertised none is taken at its
+    word: its own credentials decide what it can run, and raven's ids would be
+    refused by the agent itself.
+    """
+    if cfg.kind == "builtin":
+        return "raven"
+    if cfg.kind != "acp":
+        return "fixed"
+    if meta.model_choices:
+        return "agent"
+    return "raven" if getattr(snapshot, "agent_name", "") == "raven" else "agent"
+
+
 def _host_pair(model: str) -> str | None:
     """The id a built-in row stores for ``model``, or ``None`` when no provider
     of raven's can serve it.
@@ -629,20 +655,23 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
         target["allowMcpSecrets"] = params["allow_mcp_secrets"]
     if params.get("clear_model") or params.get("model") is not None:
         cfg_for_meta = _as_configs([target])[0]
-        if cfg_for_meta.kind not in ("acp", "builtin"):
+        snapshot = acp_snapshot_for(cfg_for_meta) if cfg_for_meta.kind == "acp" else None
+        meta = agent_meta(cfg_for_meta, snapshot=snapshot)
+        rule = _model_rule(cfg_for_meta, snapshot, meta)
+        if rule == "fixed":
             raise ConfigFieldReadonlyError(
                 f"model is not editable for kind {cfg_for_meta.kind!r}: it has no menu this call can pick from",
                 data={"field": "model", "name": name},
             )
         if params.get("clear_model"):
             target["model"] = None
-        elif cfg_for_meta.kind == "acp":
+        elif rule == "agent":
             # Mirrors ``SubagentManager.set_instance_model``'s own message: the
             # values are opaque provider-qualified ids, so a refusal names how
             # many the agent offers rather than leaving a reader to guess at
             # the vocabulary.
             proposed = str(params["model"])
-            choices = [c.value for c in agent_meta(cfg_for_meta).model_choices]
+            choices = [c.value for c in meta.model_choices]
             if proposed not in choices:
                 raise ConfigValidationError(
                     f"{name!r} has no model {proposed!r}"

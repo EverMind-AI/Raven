@@ -85,9 +85,11 @@ async def test_update_rejects_a_model_the_acp_row_does_not_advertise(
     assert "model" not in entry or entry["model"] is None
 
 
-async def test_update_rejects_any_model_when_the_acp_row_advertises_none(
+async def test_update_rejects_any_model_when_a_third_party_acp_row_advertises_none(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Hermes is nobody's own -- no snapshot names raven -- so an empty menu is
+    the whole vocabulary: raven's own ids would be refused by the agent."""
     monkeypatch.setattr("raven.rpc.methods.subagents.agent_meta", _fake_agent_meta(()))
     with pytest.raises(ConfigValidationError, match="offers none"):
         await subagents_update({"name": "Hermes Agent", "model": "vendor/a"})
@@ -211,6 +213,89 @@ async def test_update_stores_a_builtin_model_naming_the_provider_it_was_picked_u
     await subagents_update({"name": "Raven", "model": "gpt-5", "provider": "openrouter"})
     entry = next(e for e in _stored(config_path) if e["name"] == "Raven")
     assert entry["model"] == "openrouter/gpt-5"
+
+
+@pytest.fixture
+def store_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The capability store the handlers read, instead of the real ``~/.raven``."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    return path
+
+
+def _acp_row_with_snapshot(
+    config_path: Path, store_path: Path, name: str, *, agent_name: str, menu: tuple = ()
+) -> None:
+    """Add an acp row and record the handshake it would have measured.
+
+    Written through the real store under the real fingerprint rather than by
+    stubbing ``agent_meta``: the rule under test reads the snapshot the way the
+    roster reads it, and a stub would take that reading out of the test.
+    """
+    from raven.acp_client.capabilities import AcpModelChoice, CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
+    from raven.config.schema import SubagentsConfig
+
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"].append(
+        {"name": name, "kind": "acp", "command": f"{name.lower()} acp", "description": "d", "enabled": True}
+    )
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    cfg = next(c for c in SubagentsConfig(agents=raw["subagents"]["agents"]).agents if c.name == name)
+    SnapshotStore(path=store_path).record(
+        CapabilitySnapshot(
+            agent=name,
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=1,
+            agent_name=agent_name,
+            model_choices=tuple(AcpModelChoice(value=v, name=v, group="V") for v in menu),
+        )
+    )
+
+
+async def test_update_lets_one_of_ravens_own_acp_rows_with_no_menu_pick_from_ravens_providers(
+    config_path: Path, store_path: Path
+) -> None:
+    """A product raven installed beside itself inherits raven's providers, so a
+    handshake that advertised nothing leaves the row on raven's own catalogue --
+    the alternative is a row nothing can ever set a model on."""
+    _with_providers(config_path, {"openai": {"apiKey": "sk-test"}})
+    _acp_row_with_snapshot(config_path, store_path, "Raven-PPT", agent_name="raven")
+
+    await subagents_update({"name": "Raven-PPT", "model": "gpt-5", "provider": "openai"})
+
+    entry = next(e for e in _stored(config_path) if e["name"] == "Raven-PPT")
+    assert entry["model"] == "openai/gpt-5"
+
+
+async def test_update_refuses_an_own_acp_row_a_model_no_provider_of_ravens_serves(
+    config_path: Path, store_path: Path
+) -> None:
+    """Falling back to raven's catalogue means its refusal too: the row is
+    checked against the pairing the dispatch would make, not against a menu."""
+    _acp_row_with_snapshot(config_path, store_path, "Raven-PPT", agent_name="raven")
+
+    with pytest.raises(ConfigValidationError, match="runs on raven's own providers"):
+        await subagents_update({"name": "Raven-PPT", "model": "nonsense-model-xyz"})
+    entry = next(e for e in _stored(config_path) if e["name"] == "Raven-PPT")
+    assert entry.get("model") is None
+
+
+async def test_update_checks_an_own_acp_row_that_did_advertise_a_menu_against_that_menu(
+    config_path: Path, store_path: Path
+) -> None:
+    """Ownership is the fallback, never the rule: a row that advertised choices
+    is held to them, host credentials or not."""
+    _with_providers(config_path, {"openai": {"apiKey": "sk-test"}})
+    _acp_row_with_snapshot(config_path, store_path, "Raven-Code", agent_name="raven", menu=("vendor/a",))
+
+    with pytest.raises(ConfigValidationError, match="offers 1"):
+        await subagents_update({"name": "Raven-Code", "model": "openai/gpt-5"})
+    await subagents_update({"name": "Raven-Code", "model": "vendor/a"})
+
+    entry = next(e for e in _stored(config_path) if e["name"] == "Raven-Code")
+    assert entry["model"] == "vendor/a"
 
 
 async def test_update_edits_a_builtin_override_stored_under_the_legacy_spelling_in_place(config_path: Path) -> None:

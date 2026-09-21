@@ -2275,13 +2275,21 @@ async def test_list_marks_a_config_row_whose_handshake_named_raven_as_ravens_own
     raw = json.loads(config_path.read_text())
     raw["subagents"]["agents"] += [
         {"name": "Raven-Code", "kind": "acp", "command": "raven acp", "description": "d", "enabled": True},
+        {"name": "Raven-PPT", "kind": "acp", "command": "raven-ppt acp", "description": "d", "enabled": True},
         {"name": "Other", "kind": "acp", "command": "other acp", "description": "d", "enabled": True},
+        {"name": "Other-Quiet", "kind": "acp", "command": "quiet acp", "description": "d", "enabled": True},
     ]
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     store_path = tmp_path / "caps.json"
     monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: store_path)
     cfgs = {c.name: c for c in SubagentsConfig(agents=raw["subagents"]["agents"]).agents}
-    for name, agent_name in (("Raven-Code", "raven"), ("Other", "other-agent")):
+    menu = (AcpModelChoice(value="v/m", name="M", group="V"),)
+    for name, agent_name, choices in (
+        ("Raven-Code", "raven", menu),
+        ("Raven-PPT", "raven", ()),
+        ("Other", "other-agent", menu),
+        ("Other-Quiet", "other-agent", ()),
+    ):
         SnapshotStore(path=store_path).record(
             CapabilitySnapshot(
                 agent=name,
@@ -2290,7 +2298,7 @@ async def test_list_marks_a_config_row_whose_handshake_named_raven_as_ravens_own
                 detail="",
                 measured_at_ms=1,
                 agent_name=agent_name,
-                model_choices=(AcpModelChoice(value="v/m", name="M", group="V"),),
+                model_choices=choices,
             )
         )
 
@@ -2301,6 +2309,11 @@ async def test_list_marks_a_config_row_whose_handshake_named_raven_as_ravens_own
     assert rows["Raven-Code"]["own"] is True and rows["Raven-Code"]["model_source"] == "agent"
     assert rows["Other"]["own"] is False and rows["Other"]["model_source"] == "agent"
     assert rows["Other"]["model_choices"] == [{"value": "v/m", "name": "M", "group": "V"}]
+    # The same agent with nothing to advertise: raven's own falls back to
+    # raven's own catalogue, a third party is taken at its word.
+    assert rows["Raven-PPT"]["own"] is True and rows["Raven-PPT"]["model_source"] == "raven"
+    assert rows["Raven-PPT"]["model_choices"] == []
+    assert rows["Other-Quiet"]["own"] is False and rows["Other-Quiet"]["model_source"] == "agent"
 
 
 async def test_test_can_target_a_discovered_product(
