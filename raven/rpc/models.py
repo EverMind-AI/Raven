@@ -147,6 +147,16 @@ class SubagentRow(_Strict):
             "not offer a switch, a test or a delete for it."
         ),
     )
+    own: bool = Field(
+        default=False,
+        description=(
+            "One of raven's own agents, whichever way this install registered it: the built-in row, a "
+            "product discovered under `agents/`, or a config row whose acp handshake named raven (the "
+            "shipped installer writes a product as a plain config row). The row a client draws with "
+            "raven's own mark, and whose unset model reads as following the main Raven. Absent from a "
+            "server that predates it, which reads as 'not raven's'."
+        ),
+    )
     group: Literal["builtin", "installed", "uninstalled"]
     upgrade_to: str | None = Field(
         default=None,
@@ -164,6 +174,22 @@ class SubagentRow(_Strict):
     last_test_detail: str | None = None
     last_test_at_ms: int | None = None
     test_running: bool
+    model: str | None = Field(
+        default=None, description="The model this row sends, or null to use the agent's own default."
+    )
+    model_choices: list["SubagentModelChoice"] = Field(
+        default_factory=list, description="The models this row's agent advertised, empty when it advertised none."
+    )
+    model_source: Literal["raven", "agent", "fixed"] = Field(
+        default="agent",
+        description=(
+            "What `subagents.update` accepts for `model` on this row, by kind -- not ownership, which is "
+            "`own`: 'raven' for the built-in row, picking from raven's own provider catalogue; 'agent' for "
+            "an acp row, raven's own or not, picking from the choices its handshake advertised "
+            "(`model_choices`); 'fixed' for an openai row, whose model is a plain config value, and for a "
+            "cli row, which has no menu at all."
+        ),
+    )
 
 
 class DirectTarget(_Strict):
@@ -2335,6 +2361,19 @@ class SubagentsUpdateParams(_Strict):
     api_key: str | None = None
     mcps: list[str] | None = None
     allow_mcp_secrets: bool | None = None
+    model: str | None = None
+    provider: str | None = Field(
+        default=None,
+        description=(
+            "The provider whose credential serves `model`, for the built-in row: the id is stored naming it, "
+            "the way `config.set model` stores the host's. Ignored for an acp row, whose values are the "
+            "agent's own."
+        ),
+    )
+    clear_model: bool = Field(
+        default=False,
+        description="Drop the row's own model, reverting to the agent's default. Wins over `model` when both are sent.",
+    )
 
 
 class SubagentsUpdateResult(_Strict):
@@ -2384,7 +2423,7 @@ class SubagentsProbeResult(_Strict):
 
 class SubagentsTestParams(_Strict):
     name: str
-    source: Literal["config", "preset"] = "config"
+    source: Literal["config", "preset", "vendored"] = "config"
 
 
 class SubagentsTestResult(_Strict):

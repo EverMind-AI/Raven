@@ -132,6 +132,7 @@ function DetailPanel(): JSX.Element {
       className="detail"
       id="detail"
       data-open="false"
+      data-owner={s.owner ?? undefined}
       role="dialog"
       aria-modal="true"
       aria-label={lang.attr('gui.cap_detail')}

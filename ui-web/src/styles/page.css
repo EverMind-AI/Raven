@@ -3327,25 +3327,6 @@ details[open] summary { margin-bottom: 8px; }
 .pmperm .pmdot { background: var(--gold); position: relative; top: -2px; }
 .pmdesc { font-size: 12.5px; color: var(--muted); line-height: 1.7; white-space: pre-wrap; }
 
-/* A card fact the reader owns. Unpressed it is the text itself and nothing else
-   -- no box, no pencil, no second colour: the card's job is to be read, and a
-   control drawn around every editable line is five things to look at again. The
-   hover tint is the whole of the affordance, and the title says what it does. */
-.xaedit {
-  font: inherit; color: inherit; text-align: left; width: 100%;
-  background: none; border: 0; border-radius: 6px; padding: 1px 5px; margin: -1px -5px;
-  cursor: text; white-space: pre-wrap;
-}
-.xaedit:hover { background: var(--surface); }
-.xaedit .none { color: var(--faint); }
-/* Once pressed it is a field, and looks like one: the reader is typing and needs
-   to see where the text ends. */
-.xaedit.on {
-  background: var(--ink); border: 1px solid var(--line); cursor: text;
-  padding: 1px 5px; resize: vertical; outline: none;
-}
-.xaedit.on:focus { border-color: var(--line-strong, var(--line)); }
-
 /* The pictures a generate call produced, in the card the call opens. The shelf's
    own `.pic` chrome, so a generated image and a delivered one are the same
    object to look at -- they are the same file, one of them handed over. */
@@ -3696,6 +3677,10 @@ details[open] summary { margin-bottom: 8px; }
   transition: transform .3s cubic-bezier(.22, .61, .36, 1);
 }
 .detail[data-open="true"] .dpanel { transform: none; }
+/* The agents sheet is a fixed box the domain fills to its edges: the panel takes
+   its size from the owner, and the body's padding is the sheet's to spend. */
+.detail[data-owner="extAgents"] .dpanel { width: 520px; height: min(500px, 78vh); }
+.detail[data-owner="extAgents"] .body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* A card whose body is fetched when it opens gets a settled box instead of one
    that sizes to its content: it went 63px (a line of loading text) -> 640px
    (the card), and a skeleton of any fixed height only moves that jump
@@ -3714,25 +3699,6 @@ details[open] summary { margin-bottom: 8px; }
 .detail header:has(b:empty) { position: absolute; top: 12px; right: 12px; padding: 0; z-index: 1; }
 .detail header:has(b:empty) b { display: none; }
 .detail .body { overflow-y: auto; padding: 18px 22px 24px; display: grid; gap: 18px; min-height: 0; }
-/* A credential and the button that spends it, on one line: the only field the
-   agent card has, and only for the agents whose way in is a key. Its own
-   class, not the provider cards' `.keyrow`: that one is a grid item of
-   `.pcard` and reusing the name had this card's input styles landing on the
-   settings page's provider rows. */
-/* The verdict and the button that renews it, on one line -- the same shape as
-   `.sukey` above and for the same reason: the section is one fact and one
-   control, and stacking them made the card scroll for no reading gained. The
-   verdict takes the slack so the buttons stay together on the right. */
-.sutest { display: flex; align-items: center; gap: 9px; font-size: 12.5px; }
-.sutest .vd { flex: 1; min-width: 0; color: var(--muted); }
-.sutest + .pmdesc { margin-top: 8px; }
-.sukey { display: flex; align-items: center; gap: 9px; }
-.sukey input {
-  flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--line);
-  border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 12.5px;
-  color: var(--text); outline: 0;
-}
-.sukey input:focus { border-color: var(--amber); background: var(--ink); }
 .dx {
   width: 30px; height: 30px; border-radius: 999px; flex: none;
   display: grid; place-items: center; color: var(--muted);
@@ -4171,11 +4137,12 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
    Each of those layouts sized the input directly, so the wrapper is told to
    take the same room. */
 .keyfield { position: relative; display: block; min-width: 0; }
-.keyrow .keyfield, .sukey .keyfield, .tkrow .keyfield { flex: 1 1 auto; }
+.keyrow .keyfield, .tkrow .keyfield { flex: 1 1 auto; }
 .mrole .ff .keyfield { width: 100%; }
 /* `[type]` only to outrank the container rules that set the input's padding --
-   `.sukey input` and `.ob-in` are as specific as a bare `.keyfield > input`,
-   and the gutter has to win or the eye sits on top of the text. */
+   `.ob-in`, and a domain's own field rule, are as specific as a bare
+   `.keyfield > input`, and the gutter has to win or the eye sits on top of the
+   text. */
 .keyfield > input[type] { width: 100%; padding-right: 32px; }
 .keyfield .peek {
   position: absolute; top: 50%; right: 6px; transform: translateY(-50%);

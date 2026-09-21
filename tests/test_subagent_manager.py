@@ -4136,6 +4136,47 @@ def test_an_agent_with_no_menu_offers_no_model(monkeypatch) -> None:
         mgr.set_instance_model("s1", "Researcher", "h1", "anything")
 
 
+# ---- session_model_for (the DAG lane's own resolver) -----------------------
+
+
+def test_session_model_for_reads_the_acp_row_s_own_model() -> None:
+    """The single implementation a DAG node's dispatch resolves through, on
+    the same terms a spawn's inline expression already reads."""
+    mgr = _make_manager(max_concurrent=1)
+    mgr.apply_agents([ThirdPartyAcpSubagentConfig(name="Hermes", command="acp-agent", model="vendor/row")])
+
+    assert mgr.session_model_for(None, "Hermes", None) == "vendor/row"
+    assert mgr.session_model_for(None, "Hermes", "h1") == "vendor/row", "no override yet, so the row wins"
+
+
+def test_session_model_for_prefers_an_instance_override(monkeypatch) -> None:
+    mgr = _make_manager(max_concurrent=1)
+    mgr.apply_agents([ThirdPartyAcpSubagentConfig(name="Hermes", command="acp-agent", model="vendor/row")])
+    monkeypatch.setattr(mgr, "instance_model", lambda session_key, agent, handle: "vendor/override")
+
+    assert mgr.session_model_for(None, "Hermes", "h1") == "vendor/override"
+
+
+def test_session_model_for_is_none_without_an_instance_to_check() -> None:
+    """No ``instance`` named is no override to find, the same gate
+    ``resolve_mode`` applies -- it must not call ``instance_model`` with a
+    blank handle and read whatever happens to be stored there."""
+    mgr = _make_manager(max_concurrent=1)
+    mgr.apply_agents([ThirdPartyAcpSubagentConfig(name="Hermes", command="acp-agent", model="vendor/row")])
+
+    assert mgr.session_model_for(None, "Hermes", None) == "vendor/row"
+
+
+def test_session_model_for_is_none_for_a_builtin_or_cli_row() -> None:
+    """A builtin row's model is a pin its own backend pairs with a credential,
+    and a cli row has no menu this session picks between -- both read ``None``."""
+    mgr = _make_manager(max_concurrent=1)
+    mgr.apply_agents([ThirdPartyCliSubagentConfig(name="Coder", command="claude -p {prompt}")])
+
+    assert mgr.session_model_for(None, GENERIC_AGENT, None) is None
+    assert mgr.session_model_for(None, "Coder", None) is None
+
+
 def test_file_change_counts_fall_back_to_the_contents_when_the_tool_kept_no_diff() -> None:
     from types import SimpleNamespace
 
@@ -4147,3 +4188,187 @@ def test_file_change_counts_fall_back_to_the_contents_when_the_tool_kept_no_diff
     assert _file_change_counts(rewritten, None) == (1, 2)
     with_diff = SimpleNamespace(path="a.md", before="x", after="y")
     assert _file_change_counts(with_diff, "--- a\n+++ b\n@@\n-x\n+y\n") == (1, 1)
+
+
+# ---- a built-in row's own model ---------------------------------------------
+
+
+class _NamedProvider(LLMProvider):
+    """Answers at once and remembers which model each call asked for."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(api_key="test")
+        self.name = name
+        self.models: list[str | None] = []
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        self.models.append(model)
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_a_builtin_backend_runs_on_its_rows_pinned_pair_over_the_dispatchs(tmp_path) -> None:
+    """The row's own model comes with its own credential, and both win over the
+    pair the dispatch brought: a per-agent model is a fact about this agent,
+    and the turn's binding is the fallback."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.providers.binding import ModelBinding
+
+    pinned, turn = _NamedProvider("pinned"), _NamedProvider("turn")
+    backend = RavenLoopBackend(
+        provider=_NamedProvider("built-with"),
+        model="built/model",
+        agent_home=tmp_path,
+        pin=lambda: ModelBinding(pinned, "vendor/pinned"),
+    )
+
+    await backend.run("do it", task_id="n1", workspace=tmp_path, executor=None, provider=turn, model="turn/model")
+
+    assert pinned.models == ["vendor/pinned"]
+    assert turn.models == []
+
+
+async def test_a_builtin_backend_without_a_usable_pin_runs_on_the_dispatchs_pair(tmp_path) -> None:
+    """The dispatch's pair, not the construction-time one: this backend is
+    cached across bindings, so what it was built with is whatever the manager
+    happened to be on the first time the row was dispatched. Withholding the
+    model once ran a switched conversation's key against that stale model."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    built, turn = _NamedProvider("built-with"), _NamedProvider("turn")
+    backend = RavenLoopBackend(provider=built, model="built/model", agent_home=tmp_path, pin=lambda: None)
+
+    await backend.run("do it", task_id="n1", workspace=tmp_path, executor=None, provider=turn, model="turn/model")
+
+    assert turn.models == ["turn/model"]
+    assert built.models == []
+
+
+def test_the_manager_pairs_a_builtin_rows_model_through_the_pool() -> None:
+    """``build_builtin_backend`` hands the backend the row's model as a pin
+    resolved through the pool, so at dispatch the row's ``model`` is a
+    (credential, model) pair and never a bare id sent on the conversation's key."""
+    from raven.providers.binding import ModelBinding
+
+    asked: list[tuple[str | None, str | None]] = []
+    served = _NamedProvider("pool")
+
+    class _Pool:
+        def bind_pin(self, model, provider_name=None):
+            asked.append((model, provider_name))
+            return ModelBinding(served, model)
+
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        agents=[BuiltinAgentConfig(name=GENERIC_AGENT, model="vendor/pinned")],
+        provider_pool=_Pool(),
+    )
+    backend = mgr.registry.backend(GENERIC_AGENT)
+
+    binding = backend._pin()
+    assert (binding.provider, binding.model) == (served, "vendor/pinned")
+    assert asked == [("vendor/pinned", "vendor")]
+    assert backend.model == mgr.model, "nothing of the row's is baked into the backend itself"
+
+
+def test_a_builtin_row_with_no_pool_follows_the_conversation() -> None:
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        agents=[BuiltinAgentConfig(name=GENERIC_AGENT, model="vendor/pinned")],
+    )
+    assert mgr.registry.backend(GENERIC_AGENT)._pin() is None
+
+
+def test_a_builtin_row_with_no_model_asks_the_pool_nothing() -> None:
+    class _Pool:
+        def bind_pin(self, model, provider_name=None):  # pragma: no cover - must not be reached
+            raise AssertionError("a row with no model has no pin to bind")
+
+    mgr = SubagentManager(provider=_StubProvider(), workspace=Path("/tmp"), provider_pool=_Pool())
+    assert mgr.registry.backend(GENERIC_AGENT)._pin() is None
+
+
+def test_a_builtin_rows_pin_names_the_provider_its_stored_id_carries() -> None:
+    """The pair, not the id: handed the id alone the pool lets a configured
+    gateway take the pin, which is not the credential the reader picked."""
+    from raven.providers.binding import ModelBinding
+
+    asked: list[tuple[str | None, str | None]] = []
+
+    class _Pool:
+        def bind_pin(self, model, provider_name=None):
+            asked.append((model, provider_name))
+            return ModelBinding(_NamedProvider("pool"), model)
+
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        agents=[BuiltinAgentConfig(name=GENERIC_AGENT, model="openai/gpt-5")],
+        provider_pool=_Pool(),
+    )
+    mgr.registry.backend(GENERIC_AGENT)._pin()
+
+    assert asked == [("openai/gpt-5", "openai")]
+
+
+def test_a_builtin_rows_pin_under_a_section_no_spec_matches_names_that_section() -> None:
+    """``subagents.update`` stores a passthrough vendor's pick as
+    ``<section>/<id>``. Handed ``None`` for the provider, the pool would derive
+    one -- a configured gateway, or nothing -- and the stored pair would never
+    run; the section the id names is the credential the reader picked."""
+    from raven.providers.binding import ModelBinding
+
+    asked: list[tuple[str | None, str | None]] = []
+
+    class _Pool:
+        def bind_pin(self, model, provider_name=None):
+            asked.append((model, provider_name))
+            return ModelBinding(_NamedProvider("pool"), model)
+
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        agents=[BuiltinAgentConfig(name=GENERIC_AGENT, model="custom/my-local-model")],
+        provider_pool=_Pool(),
+    )
+    mgr.registry.backend(GENERIC_AGENT)._pin()
+
+    assert asked == [("custom/my-local-model", "custom")]
+
+
+def test_a_prefix_that_names_no_section_is_left_to_the_pool_to_derive() -> None:
+    """``deepseek-ai/DeepSeek-V3`` written by hand before ids carried their
+    provider: the head is a vendor path segment, not a section, and reading it
+    as a provider would drop a pin a configured gateway serves. Handed no
+    provider, the pool takes its gateway branch, where such an id always ran."""
+    from raven.config.schema import Config
+    from raven.providers.binding import ModelBinding
+
+    asked: list[tuple[str | None, str | None]] = []
+
+    class _Pool:
+        config = Config.model_validate(
+            {"providers": {"mylocal": {"apiKey": "k", "apiBase": "http://127.0.0.1:1/v1", "models": ["m"]}}}
+        )
+
+        def bind_pin(self, model, provider_name=None):
+            asked.append((model, provider_name))
+            return ModelBinding(_NamedProvider("pool"), model)
+
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        agents=[
+            BuiltinAgentConfig(name=GENERIC_AGENT, model="deepseek-ai/DeepSeek-V3"),
+            BuiltinAgentConfig(name="local", model="mylocal/m"),
+        ],
+        provider_pool=_Pool(),
+    )
+    mgr.registry.backend(GENERIC_AGENT)._pin()
+    mgr.registry.backend("local")._pin()
+
+    assert asked == [("deepseek-ai/DeepSeek-V3", None), ("mylocal/m", "mylocal")]

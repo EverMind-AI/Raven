@@ -269,6 +269,7 @@ async def run_dag(
     auto_instances: frozenset[str] = frozenset(),
     memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
+    model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     desk: AdjudicationDesk | None = None,
     adjudication_timeout_s: float = 600.0,
@@ -620,6 +621,7 @@ async def run_dag(
                         state_for=state_for,
                         memory_for=memory_for,
                         mode_for=mode_for,
+                        model_for=model_for,
                         capabilities=capabilities,
                         session_key=session_key,
                         subagents_root=subagents_root,
@@ -1334,6 +1336,7 @@ async def _run_group(
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
+    model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
@@ -1385,6 +1388,7 @@ async def _run_group(
                 state_for=state_for,
                 memory_for=memory_for,
                 mode_for=mode_for,
+                model_for=model_for,
                 capabilities=capabilities,
                 progress_publisher=progress_publisher,
                 session_key=session_key,
@@ -1524,6 +1528,7 @@ async def _run_node(
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
+    model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
@@ -1611,6 +1616,15 @@ async def _run_node(
             # agent's own default only when there is no tier to inherit -- rather
             # than each lane deciding again.
             node_mode = mode_for(session_key or "", node.subagent, node.instance) if mode_for is not None else None
+            # A third-party acp row's own model, on the same terms: an instance
+            # override if the node names one and one is set, else the row's own
+            # configured `model`. `optional_keyword` below is what keeps this
+            # off a backend that declares no such parameter -- a builtin node's
+            # `RavenLoopBackend` among them, whose own model is a pin the
+            # backend pairs with its credential itself (see `manager.build_builtin_backend`).
+            node_session_model = (
+                model_for(session_key or "", node.subagent, node.instance) if model_for is not None else None
+            )
             # Collected around the dispatch, exactly as a spawn does it: the
             # backend publishes into whatever is open, so a node gets the same
             # account of its tool calls and token cost that a spawned call gets,
@@ -1679,6 +1693,11 @@ async def _run_node(
                             # backend built for a test may take no such keywords.
                             **({"provider": provider} if provider is not None else {}),
                             **({"model": model} if model else {}),
+                            # The row's own acp model choice, not the parent
+                            # binding above: this is what the session itself
+                            # answers with, pushed over `session/set_config_option`
+                            # the same way a spawn's does (`manager.row_default_model`).
+                            **optional_keyword(agent_backend, "session_model", node_session_model),
                             **state_kwargs,
                         )
                     finally:

@@ -70,6 +70,25 @@ def _caller(catalogue=None, *, error: Exception | None = None):
 
 
 class TestTheOffer:
+    async def test_the_catalogue_is_asked_about_the_session_whose_value_this_is(self):
+        """The model is per session, so ``currentValue`` has to be that session's.
+
+        Asked without a session id the catalogue answers with the configured
+        default, which a session that switched has already left behind.
+        """
+        call, calls = _caller()
+
+        await model_option(call, session_id="acp:s1")
+
+        assert calls == [("model.options", {"session_id": "acp:s1"})]
+
+    async def test_without_a_session_the_catalogue_is_asked_for_the_default(self):
+        call, calls = _caller()
+
+        await model_option(call)
+
+        assert calls == [("model.options", {})]
+
     async def test_it_is_a_model_categorised_select_and_matches_the_schema(self):
         call, _ = _caller()
 

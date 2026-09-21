@@ -749,7 +749,7 @@
     },
     "gui.agent.connect": {
       "en": "Connect",
-      "zh": "连接"
+      "zh": "接入"
     },
     "gui.agent.disconnect": {
       "en": "Disconnect",
@@ -762,18 +762,6 @@
     "gui.agent.g_on": {
       "en": "Connected",
       "zh": "已接入"
-    },
-    "gui.agent.g_switch": {
-      "en": "Ready to enable",
-      "zh": "待启用"
-    },
-    "gui.agent.g_setup": {
-      "en": "Needs setup",
-      "zh": "待配置"
-    },
-    "gui.agent.g_install": {
-      "en": "Needs installing",
-      "zh": "待安装"
     },
     "gui.agent.key": {
       "en": "API key",
@@ -798,10 +786,6 @@
     "gui.agent.none": {
       "en": "Nothing connected yet.",
       "zh": "还没有连接任何智能体。"
-    },
-    "gui.agent.probe": {
-      "en": "Re-check",
-      "zh": "重新检查"
     },
     "gui.agent.save": {
       "en": "Save",
@@ -3012,8 +2996,8 @@
       "zh": "{n} 失败"
     },
     "gui.nav.agents": {
-      "en": "Subagents",
-      "zh": "子智能体"
+      "en": "Agent Hub",
+      "zh": "智能体连接"
     },
     "gui.nav.conn": {
       "en": "Channels",
@@ -3248,8 +3232,8 @@
       "zh": "新任务"
     },
     "gui.page.agents": {
-      "en": "Subagents",
-      "zh": "子智能体"
+      "en": "Agents",
+      "zh": "智能体"
     },
     "gui.page.conn": {
       "en": "Channels",
@@ -4735,14 +4719,6 @@
       "en": "User ID",
       "zh": "账号 User ID"
     },
-    "gui.agent.installing": {
-      "en": "Installing...",
-      "zh": "正在安装…"
-    },
-    "gui.agent.install_note": {
-      "en": "Downloads this build's dependencies (a few hundred MB) and takes a few minutes. It keeps running if you leave this page.",
-      "zh": "会下载这个构建的依赖（几百 MB），要几分钟。离开这个页面也会继续跑。"
-    },
     "gui.agent.kind_builtin": {
       "en": "built-in",
       "zh": "内置"
@@ -4843,53 +4819,193 @@
       "en": "The preset for {name} now reaches it over {to}. The entry is removed and added back from that preset, so handles from runs already in flight stop resolving.",
       "zh": "{name} 的预设改成走 {to} 了 · 会先移除再按新预设装回来，已经在跑的会话句柄会失效"
     },
-    "gui.agent.rename": {
-      "en": "Rename this agent",
-      "zh": "重命名这个智能体"
-    },
-    "gui.agent.redescribe": {
-      "en": "Edit what this agent is for",
-      "zh": "编辑这个智能体的用途说明"
-    },
-    "gui.agent.about_none": {
-      "en": "No description yet",
-      "zh": "还没有说明"
-    },
-    "gui.agent.sec_test": {
-      "en": "Check it works",
-      "zh": "检查是否可用"
-    },
-    "gui.agent.test_do": {
-      "en": "Run a test",
-      "zh": "测试一次"
-    },
-    "gui.agent.test_running": {
-      "en": "Testing...",
-      "zh": "正在测试…"
-    },
-    "gui.agent.test_stop": {
-      "en": "Stop",
-      "zh": "停止"
-    },
-    "gui.agent.test_note": {
-      "en": "Dispatches the agent once for real, which spends its own quota.",
-      "zh": "会真的派它跑一次，消耗它自己的额度。"
-    },
-    "gui.agent.test_ok": {
-      "en": "Worked, {ago}",
-      "zh": "可用，{ago}"
-    },
-    "gui.agent.test_bad": {
-      "en": "Failed, {ago}",
-      "zh": "失败，{ago}"
-    },
-    "gui.agent.test_never": {
-      "en": "Never tested",
-      "zh": "还没测过"
-    },
     "gui.agent.tag_stale": {
       "en": "moved",
       "zh": "需迁移"
+    },
+    "gui.agent.g_avail": {
+      "en": "Available",
+      "zh": "可以接入"
+    },
+    "gui.agent.g_missing": {
+      "en": "Not installed",
+      "zh": "本机未安装"
+    },
+    "gui.agent.go_install": {
+      "en": "Install",
+      "zh": "去安装"
+    },
+    "gui.agent.recheck": {
+      "en": "Check again",
+      "zh": "重新检测"
+    },
+    "gui.agent.checking": {
+      "en": "Checking",
+      "zh": "检测中"
+    },
+    "gui.agent.test_label": {
+      "en": "Test",
+      "zh": "测试"
+    },
+    "gui.agent.testing_head": {
+      "en": "Testing",
+      "zh": "正在测试"
+    },
+    "gui.agent.good_at": {
+      "en": "What it is good at",
+      "zh": "擅长什么"
+    },
+    "gui.agent.copy": {
+      "en": "Copy",
+      "zh": "复制"
+    },
+    "gui.agent.copied": {
+      "en": "Copied",
+      "zh": "已复制"
+    },
+    "gui.agent.still_missing": {
+      "en": "Still not found on this machine",
+      "zh": "本机还是没找到它"
+    },
+    "gui.agent.hd_on_tested": {
+      "en": "Connected · test passed",
+      "zh": "已接入 · 测试通过"
+    },
+    "gui.agent.hd_on_by": {
+      "en": "Connected · {by}",
+      "zh": "已接入 · {by}"
+    },
+    "gui.agent.hd_missing_by": {
+      "en": "Not installed · {by}",
+      "zh": "本机未安装 · {by}"
+    },
+    "gui.agent.hd_test_bad": {
+      "en": "Test failed: {detail}",
+      "zh": "测试没通过：{detail}"
+    },
+    "gui.agent.short_raven": {
+      "en": "General assistant, takes a bit of everything",
+      "zh": "通用助手，什么活都能接一点"
+    },
+    "gui.agent.short_raven_code": {
+      "en": "Writes code, runs it, fixes bugs",
+      "zh": "写代码、跑代码、修 bug"
+    },
+    "gui.agent.short_raven_design": {
+      "en": "Produces UI drafts, visual revisions and artwork",
+      "zh": "出界面稿、改视觉、做图"
+    },
+    "gui.agent.short_raven_research": {
+      "en": "Researches and writes sourced reports",
+      "zh": "查资料，写带出处的报告"
+    },
+    "gui.agent.short_raven_oncall": {
+      "en": "Watches long jobs and investigates production issues",
+      "zh": "盯住长任务，排查线上问题"
+    },
+    "gui.agent.short_claude_code": {
+      "en": "Anthropic's coding agent",
+      "zh": "Anthropic 的编码智能体"
+    },
+    "gui.agent.short_codex": {
+      "en": "OpenAI's coding agent",
+      "zh": "OpenAI 的编码智能体"
+    },
+    "gui.agent.short_opencode": {
+      "en": "Open-source coding agent",
+      "zh": "开源编码智能体"
+    },
+    "gui.agent.short_hermes": {
+      "en": "General assistant with its own tools",
+      "zh": "通用助手，自带一套工具"
+    },
+    "gui.agent.short_openclaw": {
+      "en": "General assistant, through your OpenClaw gateway",
+      "zh": "通用助手，接你的 OpenClaw 网关"
+    },
+    "gui.agent.short_mirothinker": {
+      "en": "Deep research, reports with citations",
+      "zh": "深度调研，产出带引用的报告"
+    },
+    "gui.agent.short_github_copilot": {
+      "en": "GitHub's coding agent",
+      "zh": "GitHub 的编码智能体"
+    },
+    "gui.agent.short_qwen_code": {
+      "en": "Tongyi's open-source coding agent",
+      "zh": "通义的开源编码智能体"
+    },
+    "gui.agent.short_codebuddy": {
+      "en": "Tencent's coding agent",
+      "zh": "腾讯的编码智能体"
+    },
+    "gui.agent.short_qoder": {
+      "en": "Alibaba's coding agent",
+      "zh": "阿里的编码智能体"
+    },
+    "gui.agent.short_grok": {
+      "en": "xAI's coding agent",
+      "zh": "xAI 的编码智能体"
+    },
+    "gui.agent.short_kimi_code": {
+      "en": "Moonshot's coding agent",
+      "zh": "月之暗面的编码智能体"
+    },
+    "gui.agent.short_pi": {
+      "en": "Pi's coding agent",
+      "zh": "Pi 的编码智能体"
+    },
+    "gui.agent.by_raven": {
+      "en": "Built into Raven",
+      "zh": "Raven 自带"
+    },
+    "gui.agent.by_oss": {
+      "en": "Open source",
+      "zh": "开源"
+    },
+    "gui.agent.by_qwen_code": {
+      "en": "Alibaba Tongyi",
+      "zh": "阿里通义"
+    },
+    "gui.agent.by_codebuddy": {
+      "en": "Tencent",
+      "zh": "腾讯"
+    },
+    "gui.agent.by_qoder": {
+      "en": "Alibaba",
+      "zh": "阿里"
+    },
+    "gui.agent.by_kimi_code": {
+      "en": "Moonshot",
+      "zh": "月之暗面"
+    },
+    "gui.agent.model_label": {
+      "en": "Model",
+      "zh": "模型"
+    },
+    "gui.agent.model_follow": {
+      "en": "Follows the main Raven",
+      "zh": "跟随主 Raven"
+    },
+    "gui.agent.model_own_default": {
+      "en": "Its own default",
+      "zh": "用它自己的默认"
+    },
+    "gui.agent.model_managed": {
+      "en": "Managed by itself",
+      "zh": "由它自己管理"
+    },
+    "gui.agent.model_change": {
+      "en": "Change the model",
+      "zh": "更换模型"
+    },
+    "gui.agent.model_clear": {
+      "en": "Back to the default model",
+      "zh": "清除，回到默认模型"
+    },
+    "gui.agent.model_no_provider": {
+      "en": "Connect a provider first",
+      "zh": "先接入一个模型供应商"
     },
     "gui.agent.setup_available": {
       "en": "Available",

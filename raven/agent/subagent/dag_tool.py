@@ -355,6 +355,7 @@ class SubAgentDagTool(Tool):
         state_for: "Callable[[str, str | None, str], Any] | None" = None,
         memory_for: "Callable[[str], MemoryScope | None] | None" = None,
         mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
+        model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
         charge: QuotaCharger | None = None,
         ask: "Ask | None" = None,
         control_reachable: "Callable[[], bool] | None" = None,
@@ -394,6 +395,12 @@ class SubAgentDagTool(Tool):
         # and a direct chat do. Injected for the same reason as `state_for`: this
         # tool is built from the same config as the manager but does not own one.
         self._mode_for = mode_for
+        # The manager's model resolution for a third-party acp row (an instance
+        # override, else the row's own configured model), so a node dispatching
+        # to that row reads the same model a spawn to it would. Injected for the
+        # same reason as `state_for`: this tool is built from the same config as
+        # the manager but does not own one.
+        self._model_for = model_for
         self._adopt = adopt
         self._charge = charge
         # A direct publisher (tests) and/or a late-bound conversation-keyed sink.
@@ -1763,6 +1770,7 @@ class SubAgentDagTool(Tool):
                 state_for=self._state_for,
                 memory_for=self._memory_for,
                 mode_for=self._mode_for,
+                model_for=self._model_for,
                 capabilities=self._capability_map(),
                 run_id=run_id,
                 cancel=cancel,

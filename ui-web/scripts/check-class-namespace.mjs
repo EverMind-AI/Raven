@@ -171,14 +171,14 @@ const SHARED = new Set([
 // shared is gone with them. The page's total debt is unchanged; where it is
 // counted is not.
 const LEGACY_SHARED = {
-  a: 4, ag: 2, body: 2, btn: 3, cap: 4, cfind: 2, chev: 2, chgs: 2,
+  a: 4, ag: 2, body: 2, btn: 3, cap: 3, cfind: 2, chev: 2, chgs: 2,
   cmd: 2, ct: 2, d: 4, empty: 2, foot: 2, gap: 3,
-  'ghost-ic': 3, h: 3, hd: 3, ic: 3, k: 3, kd: 2, key: 5, l1: 3, l2: 3, lb: 3,
-  mk: 2, n: 5, none: 2, ph: 2,
-  pmdhead: 2, pmdmeta: 2, pmhero: 5, pmsec: 2,
+  'ghost-ic': 3, h: 3, hd: 3, ic: 3, k: 3, kd: 2, key: 4, l1: 2, l2: 2, lb: 3,
+  mk: 2, n: 5, ph: 2,
+  pmhero: 5,
   rm: 2, row: 2, sheet: 2, shot: 3, sk: 3, skel: 3,
   step: 2, sulist: 3, sustate: 2, sz: 2, t: 2,
-  tipdn: 2, tm: 2, v: 3, val: 2, w: 3, warn: 2, wkg: 3, wsnote: 2,
+  tipdn: 2, tm: 2, v: 3, val: 2, w: 3, wkg: 3, wsnote: 2,
 }
 
 // How many of a domain's own classes -- the ones no other domain names -- still
@@ -223,17 +223,22 @@ const LEGACY_LOCAL = {
      the sheet is the only thing that wrote it. */
   dag: 12,
   desk: 5,
-  extAgents: 7,
+  /* Down to none with the agent hub: every class the page writes carries its
+     prefix now, and its rules live in features/extAgents/styles.css. */
+  extAgents: 0,
   importSync: 0,
   installed: 0,
   /* Up from 6 by the same move: `.faint`, `.hubpage`, `.pmcnt`, `.pmsign` and
      `.pnote` were the memory hub's names, shared with the two hubs that are
      gone. */
-  memory: 11,
+  /* Up from 11 with the agent hub: `.pmdhead`, `.pmdmeta` and `.pmsec` were
+     shared with the agents page, which draws its own sheet now. */
+  memory: 14,
   model: 6,
   onboard: 0,
   /* Up from 13 for `.tag`, the skills page's other reader. */
-  playbooks: 14,
+  /* Up from 14 with the agent hub: `.warn` was shared with the agents page. */
+  playbooks: 15,
   rail: 11,
   settings: 0,
   subagents: 38,
@@ -246,7 +251,8 @@ const LEGACY_LOCAL = {
   tasks: 7,
   /* Up from 74 for `.act`, `.dact` and `.pmdesc`, which the plugins page drew
      the same way the transcript does. */
-  transcript: 77,
+  /* Up from 77 with the agent hub: `.none` was shared with the agents page. */
+  transcript: 78,
   workspace: 37,
 }
 
@@ -263,7 +269,7 @@ const LEGACY_EXPR = {
   cron: 0,
   dag: 3,
   desk: 2,
-  extAgents: 1,
+  extAgents: 0,
   importSync: 0,
   installed: 0,
   memory: 1,
@@ -302,7 +308,11 @@ const LEGACY_CHROME_EXPR = {
   /* Up from 8 by the same deletion: `.led`, written from inside an expression
      in SetupRow.tsx and SetupSheet.tsx, was shared with the old settings page
      and is these two files' own now. */
-  components: 10,
+  /* Up from 10 with the agent hub: `warn` in SetupSheet.tsx passed as borrowed
+     while the playbooks and agents pages both wrote the class; the agents page
+     writes its own names now, so the name is playbooks' alone and the
+     component's use of it counts here instead. */
+  components: 11,
 }
 
 // A class the markup writes that styles/page.css does not define -- page.css
@@ -347,15 +357,15 @@ const UNSTYLED = {
 // another. Attribute and expression borrowings are one list: an expression is
 // how a class is written as often as an attribute is (`'led' + ...` in
 // SetupRow.tsx and SetupSheet.tsx), and keeping them apart would leave the
-// expression form as the way around the list. `warn` in `components` is the
-// price of that: it is SetupSheet.tsx comparing a state name, which an
-// expression cannot tell from a class.
+// expression form as the way around the list. `warn` in SetupSheet.tsx is the
+// price of that: it is a state name being compared, which an expression cannot
+// tell from a class, and it is counted on LEGACY_CHROME_EXPR above.
 const LEGACY_BORROWED = {
   chrome: [
     'body', 'btn', 'chev', 'cmd', 'foot', 'ghost-ic', 'hd', 'ic',
     'lb', 'mk', 'n', 'sheet', 't', 'tipdn',
   ],
-  components: ['a', 'cap', 'hd', 'key', 'l1', 'l2', 'n', 'skel', 'sustate', 'warn'],
+  components: ['a', 'cap', 'hd', 'key', 'l1', 'l2', 'n', 'skel', 'sustate'],
 }
 
 const domains = readdirSync(join(src, 'features'))

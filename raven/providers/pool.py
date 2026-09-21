@@ -42,19 +42,20 @@ def live_pin_resolver(
     ``None`` means run on the conversation's model, which is both what an
     unset pin means and what an unusable one falls back to. The two are not
     the same mistake, so a pin that names a vendor with no credentials says so
-    -- once, because the alternative is a line per call for as long as the
-    config stays wrong.
+    -- once per pin, because the alternative is a line per call for as long as
+    the config stays wrong, and per pin rather than per resolver because the
+    resolver outlives the config that produced it: a later, different unusable
+    pin is a new problem and gets its own line.
     """
-    warned = False
+    warned: set[tuple[str, str | None]] = set()
 
     def _resolve_now() -> "ModelBinding | None":
-        nonlocal warned
         model, provider_name = read_pin()
         if not model:
             return None
         binding = pool.bind_pin(model, provider_name) if pool is not None else None
-        if binding is None and not warned:
-            warned = True
+        if binding is None and (model, provider_name) not in warned:
+            warned.add((model, provider_name))
             logger.warning(
                 "{}={!r} has no usable credentials of its own; {} follows the conversation's model instead",
                 key,

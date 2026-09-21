@@ -94,6 +94,78 @@ async def test_a_missing_executable_invents_no_install_it_does_not_know(tmp_path
     assert "npm" not in res.detail
 
 
+def _fake_executable(tmp_path: Path, name: str) -> Path:
+    exe = tmp_path / name
+    exe.write_text("#!/bin/sh\nexit 0\n")
+    exe.chmod(0o755)
+    return exe
+
+
+async def test_a_shim_row_is_missing_when_the_agent_it_drives_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``npx`` resolving says nothing about whether ``pi`` is installed.
+
+    The shim is fetched on connect and fails a minute later with "executable not
+    found" when the agent it drives is absent. That is the sentence the probe can
+    say up front, with the install beside it, so the row reads absent rather
+    than connectable -- the same reading a local-executable row gets.
+    """
+    _fake_executable(tmp_path, "npx")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(name="Pi", preset="pi", command="npx -y pi-acp@0.0.33")
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path))
+
+    assert res.status == "missing"
+    assert res.target == "pi"
+    assert res.detail == (
+        "pi is not on the login shell PATH; install with npm install -g @earendil-works/pi-coding-agent"
+    )
+
+
+async def test_a_shim_row_whose_agent_is_installed_goes_on_to_the_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    npx = _fake_executable(tmp_path, "npx")
+    _fake_executable(tmp_path, "pi")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(name="Pi", preset="pi", command="npx -y pi-acp@0.0.33")
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path))
+
+    assert res.status == "attention"
+    assert res.target == str(npx)
+
+
+async def test_a_shim_that_ships_its_own_agent_asks_after_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``codex-acp`` bundles the agent as its own binary; what it wants is a login, not an install."""
+    _fake_executable(tmp_path, "npx")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="Codex", preset="codex", command="npx -y @agentclientprotocol/codex-acp@1.1.14"
+    )
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path))
+
+    assert res.status == "attention"
+
+
+async def test_a_hand_written_npx_row_is_not_held_to_a_shims_requirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The requirement rides on provenance: a row that merely wears the preset's name runs its own command."""
+    _fake_executable(tmp_path, "npx")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(name="Pi", command="npx -y my-own-acp-shim@1.0.0")
+
+    res = await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert res.status == "attention"
+
+
 async def test_cli_probe_reports_missing_and_still_names_what_it_looked_for(tmp_path: Path) -> None:
     res = await probe_one(_cli("definitely-not-installed {prompt}"), source="config", path=str(tmp_path))
     assert res.status == "missing"
@@ -770,6 +842,85 @@ class TestAutomaticSnapshotVerification:
 
         assert len(recorded) == 2  # both missing and stale round-tripped to a fresh snapshot
         assert manager.refresh_calls == 1, "the materialized rows must be rebuilt after recording"
+
+    async def test_a_snapshot_missing_the_model_choices_key_is_reverified(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A snapshot recorded before ``modelChoices`` existed is fresh and not
+        stale by every other measure, but a row stuck on it would never learn
+        the agent's model menu until the agent is edited or Test is pressed by
+        hand -- so the older format alone must trigger a re-verify."""
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            status: str = "ready"
+            stale: bool = False
+
+        row = _FakeRow("old-format")
+        recorded: list[str] = []
+
+        async def fake_verify(cfg: object) -> Snap:
+            recorded.append(getattr(cfg, "name", "?"))
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: Snap())
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type(
+                "S",
+                (),
+                {
+                    "record": staticmethod(lambda s: None),
+                    "has_model_menu": staticmethod(lambda agent: False),
+                },
+            )(),
+        )
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        task = schedule_snapshot_verification(_FakeManager([row]))
+        await task
+
+        assert recorded == ["old-format"]
+
+    async def test_a_store_without_has_model_menu_does_not_force_a_reverify(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A caller's stand-in store (a bare ``record``-only object, as several
+        tests in this class substitute) must not be treated as "every row is on
+        the older format" -- the predicate is optional, and its absence must
+        leave a fresh, non-stale snapshot alone exactly as before this hook."""
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            status: str = "ready"
+            stale: bool = False
+
+        row = _FakeRow("fresh")
+        recorded: list[str] = []
+
+        async def fake_verify(cfg: object) -> Snap:
+            recorded.append(getattr(cfg, "name", "?"))
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: Snap())
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        task = schedule_snapshot_verification(_FakeManager([row]))
+        await task
+
+        assert recorded == []
 
     async def test_failed_verification_does_not_stop_the_rest(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.agent.subagent.probe import schedule_snapshot_verification

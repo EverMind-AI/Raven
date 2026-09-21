@@ -27,11 +27,11 @@ from loguru import logger
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
-from raven.agent.subagent.presets import install_hint_for
+from raven.agent.subagent.presets import install_hint_for, shim_requirement_for
 from raven.agent.subagent.probe_state import LastTest
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
-Source = Literal["config", "preset"]
+Source = Literal["config", "preset", "vendored"]
 
 PROBE_PROMPT = "Reply with exactly: PONG"
 
@@ -165,8 +165,11 @@ def _missing_exe_detail(cfg: Any, exe: str) -> str:
     them growing the hint alone is the shape a reader would trust and be wrong
     about on the other.
     """
+    return _missing_detail(exe, install_hint_for(cfg))
+
+
+def _missing_detail(exe: str, hint: str | None) -> str:
     detail = f"{exe} is not on the login shell PATH"
-    hint = install_hint_for(cfg)
     return f"{detail}; install with {hint}" if hint else detail
 
 
@@ -208,6 +211,12 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     ``which`` alone would be a green light for an agent that cannot run a task --
     so an unverified entry is ``attention``, with the recorded verdict taking over
     once one exists.
+
+    For a shim-launched preset the executable asked after is the agent the shim
+    drives, not ``argv[0]``: an ``npx`` command resolves on any machine with
+    node, so on its own it would report Pi installed wherever ``pi`` is not, and
+    the connect that follows would fail a minute later inside the adapter with
+    the sentence this probe can say up front.
     """
     name = getattr(cfg, "name", "") or ""
 
@@ -228,6 +237,11 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     resolved = shutil.which(exe, path=cfg_path or path)
     if resolved is None:
         return done("missing", _missing_exe_detail(cfg, exe), exe)
+    requirement = shim_requirement_for(cfg)
+    if requirement is not None:
+        agent_exe, install = requirement
+        if shutil.which(agent_exe, path=cfg_path or path) is None:
+            return done("missing", _missing_detail(agent_exe, install), agent_exe)
 
     snapshot = acp_snapshot_for(cfg)
     if snapshot is None:
@@ -244,6 +258,17 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
         return done(
             "attention",
             f"installed at {resolved}, but its launch config changed since the last test -- run a test",
+            resolved,
+        )
+    if not getattr(snapshot, "model_menu_measured", True):
+        # A row recorded before the menu was: its "ready" predates a capability
+        # the sheet now draws from, and reporting it would put a disabled
+        # "managed by itself" pill on an agent that may well offer a menu. The
+        # boot-time backfill re-measures such rows; until one succeeds, the row
+        # says what is missing rather than claiming a verdict it does not have.
+        return done(
+            "attention",
+            f"installed at {resolved}, but its model menu has not been measured yet -- run a test",
             resolved,
         )
     return done(snapshot.status, snapshot.detail, resolved)
@@ -499,16 +524,76 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     """
     # Function-level on purpose: the acp client family is future shelf cargo,
     # and this module must not name it at import time (binding-time debt).
+    from raven.acp_client.capabilities import verify_agent
+
+    # Presets are templates, not entries: recording a snapshot for one would
+    # key it to a name no config claims, and the roster would then read
+    # capabilities off a preset the user never installed.
+    snapshot = await record_capabilities(cfg) if source != "preset" else await verify_agent(cfg)
+    reply = ", ".join(snapshot.available_models[:5]) or None
+    return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
+
+
+async def record_capabilities(cfg: Any) -> Any:
+    """Measure an acp entry's capabilities live and write them down; the snapshot.
+
+    The one writer the manual test and the connect share. A connect proves the
+    agent answers (``ping_agent``) but records nothing, so until now a row
+    connected from the page stayed "capabilities not recorded -- run a test",
+    stateless and menuless, until someone pressed Test or the gateway restarted
+    into the boot backfill: no ``instance`` for it, no model pill, an attention
+    dot on an agent that had just replied. The handshake this records costs no
+    tokens, so the connect can afford it.
+    """
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
     snapshot = await verify_agent(cfg)
-    if source == "config":
-        # Presets are templates, not entries: recording a snapshot for one would
-        # key it to a name no config claims, and the roster would then read
-        # capabilities off a preset the user never installed.
-        SnapshotStore().record(snapshot)
-    reply = ", ".join(snapshot.available_models[:5]) or None
-    return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
+    store = SnapshotStore()
+    store.record(_test_record(snapshot, store.load([cfg], allow_stale=True).get(cfg.name)))
+    return snapshot
+
+
+def capabilities_wanted(cfg: Any) -> bool:
+    """Does this acp entry lack a fresh, complete capability record?
+
+    The same three cases the boot backfill re-measures: no snapshot, one whose
+    launch config has changed, or one written before the model menu was
+    recorded. A row with a complete record keeps it -- a connect must not spend
+    a handshake re-measuring what is already known.
+    """
+    snapshot = acp_snapshot_for(cfg)
+    return snapshot is None or snapshot.stale or not getattr(snapshot, "model_menu_measured", True)
+
+
+def _test_record(snapshot: Any, previous: Any) -> Any:
+    """What a manual test writes down: its verdict always, its capabilities only
+    when it reached them.
+
+    A verify that fails before ``session/new`` -- a cold shim start, a machine
+    under load, a login that lapsed -- carries no menu and no statefulness, and
+    recorded whole it would cost the row both until the next success, silently:
+    the verdict is visible, the loss of the previous measurement is not. So an
+    unusable result keeps the previous record's capabilities under its own
+    status and detail. Same reasoning as ``SnapshotStore.load`` gives for a
+    stale row: the old capabilities are the weaker claim and self-heal, since a
+    session that really cannot be loaded fails at ``session/load`` and the
+    backend starts fresh. ``previous`` is the last record for this agent, stale
+    or not -- the roster reads a stale row's capabilities too, so a failed test
+    after a config edit must not erase what it was trusting -- or ``None``,
+    with nothing to keep. The record takes this test's fingerprint: it is a
+    measurement of the config as it stands now, whatever it kept.
+    """
+    if snapshot.usable or previous is None:
+        return snapshot
+    return replace(
+        previous,
+        fingerprint=snapshot.fingerprint,
+        stale=False,
+        status=snapshot.status,
+        detail=snapshot.detail,
+        measured_at_ms=snapshot.measured_at_ms,
+        elapsed_ms=snapshot.elapsed_ms,
+    )
 
 
 _SCHEDULED = False
@@ -565,6 +650,10 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
     store = SnapshotStore()
+    # Optional: a caller's own stand-in (tests substitute a bare `record`-only
+    # object) may not carry it, and its absence must not itself force a
+    # re-verify -- see `SnapshotStore.has_model_menu` for what it detects.
+    has_model_menu = getattr(store, "has_model_menu", None)
     recorded = False
     for row in rows:
         cfg = getattr(row, "config", None)
@@ -572,7 +661,12 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
             continue
         try:
             snapshot = acp_snapshot_for(cfg)
-            if snapshot is not None and not snapshot.stale:
+            outdated_menu = (
+                snapshot is not None
+                and has_model_menu is not None
+                and not has_model_menu(getattr(row, "name", "") or "")
+            )
+            if snapshot is not None and not snapshot.stale and not outdated_menu:
                 continue
             result = await verify_agent(cfg)
             if result.status == "ready":
@@ -591,6 +685,8 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
 
 
 __all__ = [
+    "capabilities_wanted",
+    "record_capabilities",
     "PROBE_PROMPT",
     "PingResult",
     "ProbeResult",

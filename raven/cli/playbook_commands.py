@@ -402,6 +402,7 @@ def playbook_run(
     )
     from raven.playbook.params import resolve_params, secret_param_names
     from raven.providers.factory import make_provider
+    from raven.providers.pool import ProviderPool
 
     provider = make_provider(config)
     manager = SubagentManager(
@@ -410,6 +411,7 @@ def playbook_run(
         model=config.agents.defaults.model,
         exec_config=config.tools.exec,
         agents=config.subagents.agents,
+        provider_pool=ProviderPool(config),
     )
     # The manager's table, so a node here resolves to the same agent it would in
     # a conversation -- built-in rows included, which is what lets the CLI run a
@@ -419,6 +421,7 @@ def playbook_run(
         registry=manager.registry,
         guide_skill_id=None,
         state_for=manager.instance_state,
+        model_for=manager.session_model_for,
     )
     executor = PlaybookExecutor(
         dag_tool=dag_tool,
