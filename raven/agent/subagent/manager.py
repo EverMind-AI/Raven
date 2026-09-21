@@ -32,7 +32,7 @@ from raven.agent.subagent.direct_chat import (
     DirectTurnMeta,
     NotAddressableError,
 )
-from raven.agent.subagent.history import SpawnRecord, session_history_root
+from raven.agent.subagent.history import SpawnRecord, session_history_root, spawn_live_key
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
 from raven.agent.subagent.mode_tiers import resolve_tier, turn_tier_in_force
@@ -1685,10 +1685,11 @@ class SubagentManager:
         # publishing into nothing is a no-op. Every exit below therefore has the
         # tool calls and token cost the run got as far as producing -- a failed
         # run's are the ones worth keeping. Keyed into the live index by the
-        # record's own directory name, so `subagent.context` can serve the run
-        # while it is still in flight, and by instance so the conversation view
-        # can: a spawned call is a turn of the same instance a direct chat talks
-        # to, and watching it there is the same question.
+        # record's own address (`spawn_live_key`), so `subagent.context` and
+        # `tasks.list` can serve the run while it is still in flight, and by
+        # instance so the conversation view can: a spawned call is a turn of
+        # the same instance a direct chat talks to, and watching it there is
+        # the same question.
         cancelled = False
         # The record's own id, not its directory's name: the artifacts are a
         # filename prefix in the shared node root now, so the directory names
@@ -1698,7 +1699,7 @@ class SubagentManager:
         # queued behind a direct chat to the same instance is not that
         # instance's turn yet, and registering it here took the slot from the
         # turn that was (see ``activity.collecting``).
-        with activity.collecting(live_key=call_id, prompt=task) as did:
+        with activity.collecting(live_key=spawn_live_key(record.dir, call_id), prompt=task) as did:
             try:
                 backend = self._resolve_backend(agent)
                 # The same message list a direct chat to this handle would carry.

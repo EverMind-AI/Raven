@@ -84,8 +84,10 @@ stores it uncapped; a spawn's is the head of `.error.md`, or of `.out.md` when `
 the files are read off the activity being collected for it in this process (the same
 in-memory account `subagent.context` and `dag.node` serve a transcript from), since the record
 on disk carries them only once the run finishes; what the lane has not reported yet stays null,
-and a node that is not running takes nothing from that index (its key is a record id unique per
-conversation only). A dag node that has finished while its run has not keeps the account the
+and a node that is not running takes nothing from that index. The index is one per process and
+keyed by the record's address (`history.spawn_live_key`: the conversation's node root plus the
+id; `dag_store.node_live_key`: the run plus the node), so two conversations that named a spawn
+alike never share an entry. A dag node that has finished while its run has not keeps the account the
 runner set aside for it at its end (`activity.record_settled`) until the manifest is written,
 so its usage does not vanish between the two.
 
