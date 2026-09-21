@@ -9,8 +9,9 @@ means or which fields a write is allowed to touch.
 The install group is computed here rather than in the client because a client
 that computes it is how the rule drifts: a second copy in the TUI, or in the
 page, would be one more place for it to go stale. For `kind == "acp"` the rule
-is whether the executable is on the login shell's PATH, which is the same
-question `ui-web/`'s agent rows gate on (`probe_status === "missing"`).
+is whether the executable -- and, for a shim-launched preset, the agent the shim
+drives -- is on the login shell's PATH, which is the same question `ui-web/`'s
+agent rows gate on (`probe_status === "missing"`).
 """
 
 from __future__ import annotations
@@ -29,7 +30,14 @@ from raven.agent.subagent.presets import (
     third_party_subagent_preset,
     third_party_subagent_presets,
 )
-from raven.agent.subagent.probe import ProbeResult, ping_agent, probe_all, run_test
+from raven.agent.subagent.probe import (
+    ProbeResult,
+    capabilities_wanted,
+    ping_agent,
+    probe_all,
+    record_capabilities,
+    run_test,
+)
 from raven.agent.subagent.probe_state import TestStateStore
 from raven.config.loader import get_config_path
 from raven.config.schema import SubagentsConfig
@@ -300,11 +308,16 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 result = replace(result, status="attention")
         last = result.last_test
         task = _RUNNING.get(cfg.name)
-        # One store read per acp row, beside the one ``agent_meta`` already
-        # makes. Not hoisted into a cache: the store is deliberately uncached,
-        # because a cache is what keeps serving a stale verdict after a verify
-        # has already fixed it.
-        caps = acp_snapshot_for(cfg) if getattr(cfg, "kind", None) == "acp" else None
+        # One store read per acp row, handed to `agent_meta` so it is not read
+        # twice. Not cached across rows or listings: a cache is what keeps
+        # serving a stale verdict after a verify has already fixed it.
+        snapshot = acp_snapshot_for(cfg) if cfg.kind == "acp" else None
+        meta = agent_meta(cfg, snapshot=snapshot)
+        # One of raven's own, whichever way this install registered it: the
+        # built-in row, a product discovered under `agents/`, or a config row
+        # whose acp handshake named raven -- the shipped installer writes a
+        # product as a plain config row, and that row is still raven's.
+        own = source in ("builtin", "vendored") or getattr(snapshot, "agent_name", "") == "raven"
         rows.append(
             {
                 "name": cfg.name,
@@ -326,8 +339,9 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 # Read from the same derivation the roster and the DAG pre-check
                 # use, never from `kind`: an acp row's statefulness comes from its
                 # own capability snapshot and an openai row's from a declaration.
-                "stateful": agent_meta(cfg).stateful,
+                "stateful": meta.stateful,
                 "builtin": source == "builtin",
+                "own": own,
                 "group": _group(cfg, result.status),
                 "upgrade_to": _upgrade_transport(cfg, source),
                 "probe_status": result.status,
@@ -346,6 +360,11 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "last_test_detail": None if last is None else last.detail,
                 "last_test_at_ms": None if last is None else last.tested_at_ms,
                 "test_running": task is not None and not task.done(),
+                "model": getattr(cfg, "model", None),
+                "model_choices": [{"value": c.value, "name": c.name, "group": c.group} for c in meta.model_choices],
+                # The kind's editing rule, not ownership: what `subagents.update`
+                # accepts for `model` on this row. `own` is the ownership mark.
+                "model_source": "raven" if cfg.kind == "builtin" else "agent" if cfg.kind == "acp" else "fixed",
             }
         )
     return rows
@@ -462,45 +481,144 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     return {"added": True, "name": entry["name"]}
 
 
-def _default_description(preset_name: str | None) -> str:
-    """The preset's shipped description, or "" when there is no preset to fall
-    back to (a hand-written entry with no ``preset`` provenance)."""
+def _factory_description(name: str, preset_name: str | None) -> str:
+    """The shipped text a cleared description reverts to.
+
+    Tried in the order a row could actually own one: its own preset (the
+    add-time provenance field), or a discovered product's manifest (a vendored
+    row, which carries no preset). A hand-written entry matching neither has
+    nothing to fall back to, and blanking it is the honest answer -- the same
+    fallback ``add`` already uses.
+
+    A built-in row is deliberately not looked up: its factory text is the
+    package seed, and ``""`` is the schema's own way of saying "the seed's" --
+    the merge drops a field at its default and lets the seed govern. Copying
+    today's seed text in would pin it, and the row would stop following the
+    package from then on.
+    """
     if preset_name and preset_name in THIRD_PARTY_SUBAGENT_PRESETS:
         return third_party_subagent_preset(preset_name)["description"]
-    return ""
+    from raven.agent.subagent.vendored_agents import discover_product_rows
+
+    discovered = next((cfg for cfg in discover_product_rows() if getattr(cfg, "name", None) == name), None)
+    return (getattr(discovered, "description", "") or "") if discovered is not None else ""
+
+
+def _host_pair(model: str) -> str | None:
+    """The id a built-in row stores for ``model``, or ``None`` when no provider
+    of raven's can serve it.
+
+    The built-in row runs in this process, on raven's providers, so its model is
+    checked against the pairing the dispatch will make -- ``ProviderPool.bind_pin``
+    with the provider the stored id names, read by ``stored_provider_name``, the
+    same function the pin reads it with -- rather than against any agent's menu,
+    and decided here so a write that lands is a write that runs: the id names a
+    provider raven knows, by its prefix or by appearing in a configured section's
+    own model list (a passthrough vendor no spec matches, stored naming that
+    section, which then serves only the ids it lists), and that provider's
+    section holds a usable credential. Answered from config alone. The picker's
+    own listing (``model.options``) also asks the codex account and a local
+    runtime what they hold, which is seconds of network a write has no reason to
+    wait on.
+
+    A config that cannot be read raises out of here: that is the server's
+    failure, not a fact about the reader's model or key, and the refusal this
+    answer feeds would have blamed both.
+    """
+    from raven.config.loader import load_config
+    from raven.config.schema import section_has_credentials
+    from raven.providers.registry import find_by_name, split_model_id
+    from raven.providers.wire import stored_model_id, stored_provider_name
+
+    providers = load_config().providers
+
+    def usable(provider: str) -> bool:
+        section = providers.get(provider)
+        return section is not None and bool(section_has_credentials(section, find_by_name(provider)))
+
+    def listed(provider: str, model_id: str) -> bool:
+        return model_id in (getattr(providers.get(provider), "models", None) or [])
+
+    provider = stored_provider_name(model, providers=providers)
+    if provider is not None:
+        if find_by_name(provider) is None and not listed(provider, split_model_id(model)[1]):
+            return None
+        return stored_model_id(provider, model) if usable(provider) else None
+    names = [*type(providers).model_fields, *(providers.model_extra or {})]
+    listing = next((n for n in names if listed(n, model)), None)
+    if listing is None or not usable(listing):
+        return None
+    return stored_model_id(listing, model)
 
 
 async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
-    """Change editable presentation, credential and MCP policy fields."""
+    """Change editable presentation, credential, MCP policy and model fields."""
     name = params.get("name")
     try:
         entries = get_agents(config_path=get_config_path())
     except ValidationError as exc:
         _raise_config_error(exc)
-    target = next((e for e in entries if e.get("name") == name), None)
+    from raven.agent.subagent.builtin_agents import canonical_agent_name, is_builtin_agent_name
+
+    if is_builtin_agent_name(name or ""):
+        # Resolved the way the table resolves it: a seed's override is merged
+        # under the canonical name whatever spelling config stored it in, and an
+        # acp row of that name is the supported transport switch -- either is
+        # the row the reader is editing, and the edit lands on it in place. A
+        # cli or openai row of the name is one the table ignores
+        # (`merge_builtin_seeds` refuses to displace the seed), so an edit there
+        # would change nothing anyone sees, and a second row of the name would
+        # not be written beside it either.
+        canonical = canonical_agent_name(name or "")
+        of_name = [e for e in entries if canonical_agent_name(e.get("name") or "") == canonical]
+        target = next((e for e in of_name if e.get("kind") in ("builtin", "acp")), None)
+        if target is None and of_name:
+            raise ConfigFieldReadonlyError(
+                f"{name!r} is a built-in agent, and config holds a {of_name[0].get('kind')!r} row of that name "
+                "the table ignores; remove that row before editing the built-in one",
+                data={"field": "name", "name": name},
+            )
+    else:
+        target = next((e for e in entries if e.get("name") == name), None)
     materialized_discovered = target is None
     if target is None:
         from raven.agent.subagent.vendored_agents import discover_product_rows
 
         discovered = next((cfg for cfg in discover_product_rows() if getattr(cfg, "name", None) == name), None)
-        if discovered is None:
+        if discovered is not None:
+            target = discovered.model_dump(by_alias=True)
+            entries.append(target)
+        elif is_builtin_agent_name(name or ""):
+            # A built-in row has no config entry until its first edit -- writing
+            # one here is how "retune this agent" is spelled, on the same terms
+            # a `skills` override already is (see `builtin_agents.merge_builtin_seeds`).
+            from raven.config.schema import BuiltinAgentConfig
+
+            target = BuiltinAgentConfig(name=canonical_agent_name(name)).model_dump(by_alias=True)
+            entries.append(target)
+        else:
             raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
-        target = discovered.model_dump(by_alias=True)
-        entries.append(target)
     new_name = _clean_name(params.get("new_name"), field="new_name")
     if new_name:
         if materialized_discovered and new_name != name:
+            # A row written here from a shipped launcher or a package seed is
+            # bound to it by name; renamed, it would become a second agent.
             raise ConfigFieldReadonlyError(
-                "a discovered sub-agent override cannot be renamed; its name binds it to the shipped launcher",
+                "a discovered or built-in sub-agent override cannot be renamed; its name binds it to what it overrides",
                 data={"field": "new_name", "name": name},
             )
         target["name"] = new_name
-    if params.get("description") is not None:
+    if "description" in params:
         description = params["description"]
-        # Blank/whitespace-only reverts to the preset default, same as add: a
-        # cleared description would otherwise strip the agent's only description
-        # from the `spawn` roster the dispatching model reads.
-        target["description"] = description if description.strip() else _default_description(target.get("preset"))
+        # Blank, whitespace-only or explicit ``null`` all revert to the factory
+        # text, same as add: a cleared description would otherwise strip the
+        # agent's only description from the `spawn` roster the dispatching
+        # model reads.
+        target["description"] = (
+            description
+            if description is not None and description.strip()
+            else _factory_description(name, target.get("preset"))
+        )
     # Blank/absent means keep the stored key: the caller is never shown it, so
     # an empty field is "unchanged", never "clear it".
     if (params.get("api_key") or "").strip():
@@ -509,6 +627,48 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
         target["mcps"] = list(params["mcps"])
     if params.get("allow_mcp_secrets") is not None:
         target["allowMcpSecrets"] = params["allow_mcp_secrets"]
+    if params.get("clear_model") or params.get("model") is not None:
+        cfg_for_meta = _as_configs([target])[0]
+        if cfg_for_meta.kind not in ("acp", "builtin"):
+            raise ConfigFieldReadonlyError(
+                f"model is not editable for kind {cfg_for_meta.kind!r}: it has no menu this call can pick from",
+                data={"field": "model", "name": name},
+            )
+        if params.get("clear_model"):
+            target["model"] = None
+        elif cfg_for_meta.kind == "acp":
+            # Mirrors ``SubagentManager.set_instance_model``'s own message: the
+            # values are opaque provider-qualified ids, so a refusal names how
+            # many the agent offers rather than leaving a reader to guess at
+            # the vocabulary.
+            proposed = str(params["model"])
+            choices = [c.value for c in agent_meta(cfg_for_meta).model_choices]
+            if proposed not in choices:
+                raise ConfigValidationError(
+                    f"{name!r} has no model {proposed!r}"
+                    + (f"; it offers {len(choices)}" if choices else "; it offers none"),
+                    data={"field": "model", "name": name},
+                )
+            target["model"] = proposed
+        else:
+            # Stored naming its provider, the way `config.set model` stores the
+            # host's: a bare id is claimed by keyword matching at dispatch, and
+            # that sends it wherever those rules land rather than to the
+            # section the reader picked it under.
+            proposed = str(params["model"])
+            provider = str(params.get("provider") or "").strip()
+            if provider:
+                from raven.providers.wire import stored_model_id
+
+                proposed = stored_model_id(provider, proposed)
+            stored = _host_pair(proposed)
+            if stored is None:
+                raise ConfigValidationError(
+                    f"{name!r} runs on raven's own providers, and none of them can serve {proposed!r}: "
+                    "it names no provider raven knows, or that provider has no usable credentials",
+                    data={"field": "model", "name": name},
+                )
+            target["model"] = stored
     try:
         reject_unsupported_openai_fields([target])
         set_agents(entries, config_path=get_config_path())
@@ -610,6 +770,16 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
         return
     result = await ping_agent(cfg)
     if result.ok:
+        if getattr(cfg, "kind", None) == "acp" and capabilities_wanted(cfg):
+            # It answered, so it can be measured: the record its statefulness,
+            # menu and modes are read from is written now rather than left to
+            # the Test button or the next restart. Best effort -- the agent has
+            # already proved itself, and a handshake that fails afterwards is
+            # not a reason to refuse the connect.
+            try:
+                await record_capabilities(cfg)
+            except Exception as exc:  # noqa: BLE001 - the connect stands on the ping
+                logger.warning("subagents: {!r} answered but its capabilities could not be recorded: {}", name, exc)
         return
     # `detail` is repeated inside `data` deliberately: the dispatcher fills
     # `data` from `detail` only when a handler passed no `data` of its own, so a
@@ -798,7 +968,17 @@ def _find(name: str, source: str) -> Any:
     malformed entry anywhere in it (written by any client sharing this config,
     not necessarily this feature) would otherwise raise a bare ``ValidationError``
     out of a request to test one unrelated, perfectly healthy row.
+
+    A discovered row lives in neither pool: its folder is the only place it
+    exists, and it is already a config object.
     """
+    if source == "vendored":
+        from raven.agent.subagent.vendored_agents import discover_product_rows
+
+        cfg = next((c for c in discover_product_rows() if getattr(c, "name", None) == name), None)
+        if cfg is None:
+            raise SubagentNotFoundError(f"no {source} sub-agent named {name!r}", data={"name": name})
+        return cfg
     try:
         pool = third_party_subagent_presets() if source == "preset" else get_agents(config_path=get_config_path())
     except ValidationError as exc:
@@ -868,7 +1048,7 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
     # `create_instance` reads the table and refuses the very agent the picker just
     # offered. Same door a build takes after a filesystem change, for the same
     # reason -- a write to durable truth the table has not been re-derived from.
-    if result.kind == "acp" and source == "config":
+    if result.kind == "acp" and source != "preset":
         try:
             _hot_apply(agent_loop_factory)
         except Exception as exc:  # noqa: BLE001 - the measurement is already recorded

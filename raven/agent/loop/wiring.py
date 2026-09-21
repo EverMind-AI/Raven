@@ -1185,6 +1185,7 @@ class WiringMixin:
                 state_for=self.subagents.instance_state,
                 memory_for=self.subagents.memory_scope,
                 mode_for=self.subagents.resolve_mode,
+                model_for=self.subagents.session_model_for,
                 gate=self.subagents.dispatch_gate,
                 announce=self.subagents.announce_dag_result,
                 announce_exception=self.subagents.announce_dag_exception,
@@ -1458,6 +1459,7 @@ class WiringMixin:
             # at all -- the executor dropped the field on the way to dispatch.
             state_for=self.subagents.instance_state,
             mode_for=self.subagents.resolve_mode,
+            model_for=self.subagents.session_model_for,
             gate=self.subagents.dispatch_gate,
             announce=self.subagents.announce_dag_result,
             announce_exception=self.subagents.announce_dag_exception,

@@ -157,6 +157,15 @@ class CapabilitySnapshot:
     stale" -- an agent waiting to be signed in is neither usable nor broken, and
     the surface that tells a reader which is which needs the distinction."""
     elapsed_ms: int = 0
+    model_menu_measured: bool = True
+    """Whether ``model_choices`` was measured, or only defaulted at load.
+
+    A row written before the menu was recorded reads back with an empty
+    ``model_choices``, exactly like an agent measured to offer none; only the
+    raw row tells the two apart (``SnapshotStore.has_model_menu``). Set at load
+    time from the row's keys and never written as a field of its own: an
+    unmeasured menu is written as the key's absence, so a verdict re-recorded
+    over such a row does not turn "never measured" into "measured, none"."""
     stale: bool = False
     """Measured against a launch config this agent no longer has.
 
@@ -201,6 +210,8 @@ class CapabilitySnapshot:
     def to_row(self) -> dict[str, Any]:
         row = self.to_wire()
         row["fingerprint"] = self.fingerprint
+        if not self.model_menu_measured:
+            del row["modelChoices"]
         return row
 
     @classmethod
@@ -266,6 +277,7 @@ class CapabilitySnapshot:
             auth_methods=_strs("authMethods"),
             needs_auth=bool(row.get("needsAuth")),
             elapsed_ms=int(row.get("elapsedMs") or 0),
+            model_menu_measured="modelChoices" in row,
         )
 
 
@@ -369,6 +381,21 @@ class SnapshotStore:
                 snapshot = replace(snapshot, stale=True)
             found[name] = snapshot
         return found
+
+    def has_model_menu(self, agent: str) -> bool:
+        """Whether the stored row for ``agent`` carries a ``modelChoices`` key at all.
+
+        Distinct from the field reading empty on a loaded :class:`CapabilitySnapshot`,
+        which also happens for an agent genuinely measured to offer no menu
+        (``from_row``'s ``_choices`` defaults a missing or malformed key to
+        ``()`` either way) -- only the raw row can tell "never measured this"
+        apart from "measured, and it has none". ``True`` when there is no
+        stored row at all: that case is already the missing-snapshot branch of
+        the auto-verify backfill, and this predicate must not itself demand a
+        re-verify for a name nothing has recorded yet.
+        """
+        row = next((r for r in self._read() if r.get("agent") == agent), None)
+        return row is None or "modelChoices" in row
 
     def forget(self, agent: str) -> None:
         def drop(current: str | None) -> tuple[str, None]:

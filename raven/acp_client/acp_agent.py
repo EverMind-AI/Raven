@@ -708,6 +708,10 @@ class AcpAgentBackend:
         # send that choice again -- and nothing else remembers what it was.
         self._model_baseline: dict[str, str] = {}
         self._model_pushed: dict[str, str] = {}
+        # Values this agent has refused, so a refusal re-attempted on every
+        # route into a session -- and on every fresh session a spawn opens --
+        # is said once per value rather than once per turn.
+        self._model_refused: set[str] = set()
         self._registry = registry or get_registry()
         # Which pool this backend's turns are served from. Almost always the
         # process-wide one, and held unresolved until it is used so that
@@ -1599,7 +1603,10 @@ class AcpAgentBackend:
         answers invalid-params and one that will not take the value answers with
         its own code; either way the task still runs on the agent's own model,
         and failing the run would be a worse outcome than running it on a model
-        the caller did not pick.
+        the caller did not pick. Said once per value: the push is re-asserted
+        on every route in and on every session a spawn opens, so a permanent
+        refusal would otherwise be a warning per turn for as long as the row
+        keeps the pick.
         """
         pushed = self._model_pushed.get(session_id)
         if model:
@@ -1629,23 +1636,26 @@ class AcpAgentBackend:
                 timeout=budget,
             )
         except AcpRemoteError as exc:
-            logger.warning(
+            self._say_model_refused(
+                target,
                 "acp agent {!r}: session {} would not take model {!r} ({}); running on its default",
                 self.name,
                 session_id,
-                model,
+                target,
                 exc.message,
             )
             return
         except AcpError as exc:
-            logger.warning(
+            self._say_model_refused(
+                target,
                 "acp agent {!r}: could not set model {!r} on session {} ({}); running on its default",
                 self.name,
-                model,
+                target,
                 session_id,
                 exc,
             )
             return
+        self._model_refused.discard(target)
         # Reached only when the agent took it, which both refusal arms above
         # return before. That is what keeps this record true in either
         # direction: a refused switch must not leave this host believing it
@@ -1656,6 +1666,11 @@ class AcpAgentBackend:
             self._model_pushed[session_id] = target
         else:
             self._model_pushed.pop(session_id, None)
+
+    def _say_model_refused(self, value: str, message: str, *args: Any) -> None:
+        first = value not in self._model_refused
+        self._model_refused.add(value)
+        logger.log("WARNING" if first else "DEBUG", message, *args)
 
     async def _set_mode(self, client: Any, session_id: str, mode: str | None, *, budget: float) -> None:
         """Put this session in ``mode`` before the prompt, if one was asked for.

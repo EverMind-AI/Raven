@@ -13,10 +13,10 @@ import {
   extAgentsFetch,
   extAgentRowOf,
   extAgentsSource,
-  groupOf,
   isAvailable,
   isConnected,
   isFound,
+  sectionOf,
   stageOf,
 } from './source'
 
@@ -234,7 +234,7 @@ describe('the seven writes a card can make', () => {
 })
 
 /* The onboarding wizard's two buckets, over the same row the settings page's
-   four-group `stageOf`/`groupOf` reads -- moved here from ExtAgentsPage.tsx so
+   `stageOf`/`sectionOf` reads -- moved here from ExtAgentsPage.tsx so
    both live beside the row shape they classify. */
 describe('the wizard step buckets', () => {
   const cases: Array<[string, Partial<ExtAgentRow>, boolean, boolean, boolean]> = [
@@ -305,6 +305,6 @@ describe('the wizard step buckets', () => {
 
   it('still exports the settings page classifiers', () => {
     expect(typeof stageOf).toBe('function')
-    expect(typeof groupOf).toBe('function')
+    expect(typeof sectionOf).toBe('function')
   })
 })

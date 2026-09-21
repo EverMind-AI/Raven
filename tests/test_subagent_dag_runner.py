@@ -279,9 +279,17 @@ class _FakeExec:
         instance: str | None = None,
         mode: str | None = None,
         authored_task: str | None = None,
+        session_model: str | None = None,
     ) -> str:
         self.calls.append(
-            {"task_id": task_id, "session_key": session_key, "instance": instance, "prompt": task, "mode": mode}
+            {
+                "task_id": task_id,
+                "session_key": session_key,
+                "instance": instance,
+                "prompt": task,
+                "mode": mode,
+                "session_model": session_model,
+            }
         )
         if task_id in self.fail_ids:
             raise RuntimeError(f"boom {task_id}")
@@ -6984,6 +6992,105 @@ async def test_a_runner_with_no_mode_source_dispatches_without_one() -> None:
     )
 
     assert execu.calls[0]["mode"] is None
+
+
+async def test_a_node_on_an_acp_backend_receives_the_row_s_default_model() -> None:
+    """A node dispatched to a third-party acp agent carries that row's own
+    configured model, on the same terms a spawn to it would
+    (``SubagentManager.row_default_model``) -- a graph reaching the agent
+    through a different lane must not read a different model than a spawn to
+    it would."""
+    execu = _FakeExec()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "an acp node", "prompt_template": "hello"},
+                {"id": "b", "subagent": "y", "node_summary": "a row with no model set", "prompt_template": "hello"},
+            ],
+        }
+    )
+
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": execu, "y": execu}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        session_key="cli:direct",
+        model_for=lambda skey, agent, instance: {"x": "vendor/model-a"}.get(agent),
+    )
+
+    by_id = {call["task_id"]: call for call in execu.calls}
+    assert by_id["a"]["session_model"] == "vendor/model-a"
+    assert by_id["b"]["session_model"] is None
+
+
+async def test_an_instance_model_override_wins_over_the_row_s_default() -> None:
+    """A node naming an ``instance`` reads that instance's own model override
+    ahead of the row's default -- the same priority a spawn already gives
+    ``instance_model(...) or row_default_model(...)``."""
+    execu = _FakeExec()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [
+                {
+                    "id": "a",
+                    "subagent": "x",
+                    "node_summary": "continue the researcher",
+                    "prompt_template": "hello",
+                    "instance": "researcher",
+                },
+            ],
+        }
+    )
+
+    def model_for(session_key: str | None, agent: str | None, instance: str | None) -> str | None:
+        if instance == "researcher":
+            return "vendor/override"
+        return {"x": "vendor/row-default"}.get(agent or "")
+
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": execu}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        session_key="cli:direct",
+        model_for=model_for,
+    )
+
+    assert execu.calls[0]["session_model"] == "vendor/override"
+
+
+async def test_a_runner_with_no_model_source_dispatches_without_one() -> None:
+    """The unwired host (tests, an offline entry point, a bare `SubAgentDagTool`
+    built with no `model_for`) must not crash and must not guess."""
+    execu = _FakeExec()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "plain node", "prompt_template": "hello"}],
+        }
+    )
+
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": execu}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        session_key="cli:direct",
+    )
+
+    assert execu.calls[0]["session_model"] is None
 
 
 async def test_an_unstarted_background_run_retires_every_per_run_entry(tmp_path: Path) -> None:

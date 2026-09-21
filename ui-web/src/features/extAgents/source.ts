@@ -54,6 +54,12 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
     last_test_detail: r.last_test_detail || '',
     last_test_at_ms: r.last_test_at_ms || null,
     test_running: !!r.test_running,
+    own: !!r.own,
+    model: r.model ?? null,
+    model_choices: (r.model_choices || [])
+      .filter((c) => c && c.value)
+      .map((c) => ({ value: c.value, name: c.name || '', group: c.group || '' })),
+    model_source: r.model_source,
   }
 }
 
@@ -90,54 +96,25 @@ export function stageOf(row: ExtAgentRow): Stage {
   return 'off'
 }
 
-/* Which group a row belongs in: what it would take to use it, in four steps of
-   one answer each. The page used to lead with provenance -- built-in, then
-   vendored, then connected, then available -- which put a broken agent three
-   groups down while a healthy built-in row sat at the top with nothing to do.
-   Two groups replaced that and were right about the ordering and too coarse
-   about the rest: "available" held the switch that takes a click and the CLI
-   this machine has never had, in one list of eleven, sorted by a cost the
-   heading did not name.
+/* Which section a row belongs in. Three, and the question each answers is the
+   reader's, not the config's: is it working for me now, could I connect it
+   from here, or is it not on this machine at all.
 
-   The fourth group is the one worth having. Everything else here is a question
-   about Raven's config; that one is a question about the machine, and it is
-   where nine of the eleven live on a stock install. It is also the only group a
-   reader can be done with, which is why it is the one that folds. */
-export type Grp = 'on' | 'switch' | 'setup' | 'install'
-export const groupOf = (row: ExtAgentRow): Grp => {
+   `on` is every row that dispatches today, the built-in loop included.
+   `missing` is a command this machine has never had -- and only a command: an
+   openai row is an endpoint whose probe says `missing` for "unreachable", a
+   network fact with nothing to install behind it, and a shipped product is
+   never absent (the server demotes a probe miss on one to `attention`; the
+   `vendored` test is belt to that brace). Everything else -- a switch to flip,
+   an entry to write, a key to paste, a preset that moved transport, a product
+   whose engine wheel is not installed -- is connected from here, and is one
+   section. */
+export type Section = 'on' | 'avail' | 'missing'
+export function sectionOf(row: ExtAgentRow): Section {
   const stage = stageOf(row)
   if (stage === 'live' || stage === 'builtin') return 'on'
-  if (stage === 'install' || stage === 'building') return 'install'
-  /* The probe before the stage, for everything that is not connected and runs
-     a command. A switch, an entry, a credential: each is a write to Raven's own
-     config, and each connects nothing when the command it names is not on this
-     machine -- and the probe is the only thing that knows. That includes the
-     switch. A configured agent keeps its entry after its binary is removed, so
-     `off` is a stage a missing executable can be in, and `subagents.toggle`'s
-     enable gate probes the agent and refuses the write when nothing answers; a
-     row like that under "ready to enable" promised the one click that cannot
-     work. `attention` stays out of this group: it means the binary answered
-     and nothing has verified what it can do, which is a row worth connecting
-     and then testing, not one worth hiding.
-
-     Only the command-backed kinds. An openai row is an endpoint, and its probe
-     says `missing` for "unreachable" -- a connection error, a timeout -- which
-     is a network fact with nothing to install behind it, and the enable gate
-     does not ping that kind at all. Its group stays the one its config state
-     says: the switch, or the credential. The server's own grouping draws the
-     same line for the same reason (`_group` keys an openai row off its key). */
-  if ((row.kind === 'cli' || row.kind === 'acp') && row.probe_status === 'missing') return 'install'
-  return stage === 'off' ? 'switch' : 'setup'
-}
-
-/* What connecting costs, which is what a group is ordered by inside itself --
-   the same question the entrances page sorts on. Most of this is now said by
-   which group the row is in; what is left is the one distinction the groups do
-   not draw, between an entry Raven writes on its own and a credential the
-   reader has to go and find. */
-export const costOf = (row: ExtAgentRow): number => {
-  const stage = stageOf(row)
-  return stage === 'off' ? 0 : stage === 'add' ? 1 : stage === 'key' ? 2 : 3
+  if ((row.kind === 'cli' || row.kind === 'acp') && row.probe_status === 'missing' && !row.vendored) return 'missing'
+  return 'avail'
 }
 
 /* The onboarding wizard's agents step draws two buckets instead of stageOf's
@@ -232,6 +209,15 @@ export const extAgentsSource: ExtAgentsSource = {
         description: a.description,
         api_key: a.api_key || undefined,
       })
+    } else if (op === 'model') {
+      /* The row's own model, set or cleared. `clear_model` wins over `model`
+         server-side, so the two never travel together from here. The built-in
+         row's pick names its provider, which the server spells into the
+         stored id; an acp row's value is the agent's own and goes verbatim. */
+      await gateway().call(
+        'subagents.update',
+        a.clear_model ? { name: row.name, clear_model: true } : { name: row.name, model: a.model, provider: a.provider || undefined },
+      )
     } else if (op === 'toggle') {
       /* One switch for every kind of row. A discovered folder has no config
          entry, so the server writes one from the folder's own manifest and puts
@@ -261,7 +247,10 @@ export const extAgentsSource: ExtAgentsSource = {
          The verdict is recorded server-side and comes back on the refetched
          rows (`last_test_ok` / `last_test_at_ms` / `last_test_detail`), so
          nothing here has to hold it. */
-      await gateway().call('subagents.test', { name: row.name, source: row.configured ? 'config' : 'preset' })
+      await gateway().call('subagents.test', {
+        name: row.name,
+        source: row.vendored ? 'vendored' : row.configured ? 'config' : 'preset',
+      })
     } else if (op === 'test_cancel') {
       /* Kills the agent's process group server-side. The test's own call is
          still open on another connection and answers `cancelled: true` from
