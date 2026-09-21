@@ -464,6 +464,7 @@ async def test_status_before_during_and_after_a_run(state: ImportState, monkeypa
         "failed": 0,
         "by_platform": {},
         "phase": None,
+        "current": None,
         "phases": None,
         "tier": None,
         "platforms": [],
@@ -518,6 +519,7 @@ async def test_status_counts_only_the_run_import_run_started(cfg: Path, state: I
         "failed": 0,
         "by_platform": {"claude_code": {"total": 2, "submitted": 2, "failed": 0}},
         "phase": None,
+        "current": None,
         "phases": {"status": "done", "errors": []},
         "tier": "full",
         "platforms": ["claude_code"],
@@ -699,6 +701,30 @@ async def test_status_names_the_request_a_stopped_run_was_asked_for(state: Impor
     assert out["phase"] is None
     # No verdict on the phases: the run never reached them.
     assert out["phases"] is None
+
+
+async def test_status_carries_the_current_source_while_the_pass_is_on(
+    state: ImportState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A large source is many batches and many minutes; the per-source counts
+    stand still for all of them, so the row needs to know how far into it the
+    pass is."""
+    state.set_total(2, keys=["claude_code:a", "claude_code:b"], tier="memory_files", platforms=["claude_code"])
+    task = await _running_task()
+    monkeypatch.setattr(import_sync, "_TASK", task)
+    monkeypatch.setattr(
+        import_sync, "_CURRENT", {"platform": "claude_code", "source_key": "a", "sent": 40, "total": 287}
+    )
+    try:
+        out = await import_sync.import_status({})
+    finally:
+        await _cancel(task)
+
+    assert out["running"] is True
+    assert out["current"] == {"platform": "claude_code", "source_key": "a", "sent": 40, "total": 287}
+
+    monkeypatch.setattr(import_sync, "_TASK", None)
+    assert (await import_sync.import_status({}))["current"] is None
 
 
 async def test_status_carries_how_the_phases_ended(state: ImportState) -> None:

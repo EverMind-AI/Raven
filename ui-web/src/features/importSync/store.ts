@@ -79,7 +79,10 @@ export function view(s: ImportSyncState): RowView {
   const st = s.status
   const total = st?.total ?? 0
   const settled = st ? st.submitted + st.failed : 0
-  const pct = total ? Math.min(100, Math.round((settled / total) * 100)) : 0
+  /* The share of the source the pass is on: a large source is many batches
+     and many minutes, and the per-source counts stand still for all of them. */
+  const within = st?.current && st.current.total ? Math.min(1, st.current.sent / st.current.total) : 0
+  const pct = total ? Math.min(100, Math.round(((settled + within) / total) * 100)) : 0
   if (s.starting && !st?.running) return { ...HIDDEN, kind: 'scan' }
   if (!st) return HIDDEN
   const phase = st.phase ?? null

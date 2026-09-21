@@ -267,6 +267,31 @@ class TestErrorIsolation:
         assert state.is_submitted("claude_code", "b")
 
 
+class TestBatchProgress:
+    @pytest.mark.asyncio
+    async def test_on_batch_reports_the_messages_landed_so_far_per_source(self, tmp_path: Path) -> None:
+        """25 messages in batches of 10: a report before the first send, then one
+        after each landed batch, all naming the source."""
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend()
+        scanner = FakeScanner({"a": _session(n_msgs=25, session_id="import-a")})
+        seen: list[tuple[str, str, int, int]] = []
+
+        await run_import(
+            [(scanner, _scan_result("a"))],
+            backend,
+            state,
+            on_batch=lambda platform, key, sent, total: seen.append((platform, key, sent, total)),
+        )
+
+        assert seen == [
+            ("claude_code", "a", 0, 25),
+            ("claude_code", "a", 10, 25),
+            ("claude_code", "a", 20, 25),
+            ("claude_code", "a", 25, 25),
+        ]
+
+
 class TestStoreRetry:
     """A refused batch is sent again, with a wait, before its source is given up on."""
 

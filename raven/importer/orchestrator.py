@@ -79,12 +79,16 @@ async def run_import(
     state: ImportState,
     *,
     on_progress: Callable[[ProgressEvent], None] | None = None,
+    on_batch: Callable[[str, str, int, int], None] | None = None,
     cancel_path: Path | None = None,
 ) -> ImportSummary:
     """Import pre-filtered scan results into the memory backend.
 
     The caller (CLI layer) is responsible for scanning, tier/platform
-    filtering, and MemoryBackend lifecycle (start/stop).
+    filtering, and MemoryBackend lifecycle (start/stop). ``on_batch(platform,
+    source_key, sent, total)`` reports, per source, how many of its messages
+    have landed so far: a large source is many batches and many minutes, and
+    the per-source counts alone stand still for all of them.
     """
     total = len(items)
     logger.info("import started: {} items", total)
@@ -135,7 +139,12 @@ async def run_import(
         logger.info("[{}/{}] importing {}/{}", i + 1, total, platform, key)
         try:
             session = await scanner.read(result)
-            if not await _feed_session(backend, session, cancel_path=cancel_path):
+            if not await _feed_session(
+                backend,
+                session,
+                cancel_path=cancel_path,
+                on_batch=(lambda sent, count: on_batch(platform, key, sent, count)) if on_batch else None,
+            ):
                 # Stopped between two batches: the source is neither done nor
                 # failed, so it keeps no entry and a later run sends it whole.
                 logger.info("[{}/{}] import cancelled inside {}/{}", i + 1, total, platform, key)
@@ -219,6 +228,7 @@ async def _feed_session(
     session: ImportSession,
     *,
     cancel_path: Path | None = None,
+    on_batch: Callable[[int, int], None] | None = None,
 ) -> bool:
     """Store the session in batches. Returns False when a stop request arrived
     between two batches or during a retry wait, leaving the rest unsent; a long
@@ -230,12 +240,15 @@ async def _feed_session(
     all_dicts = [_to_store_dict(m) for m in session.messages]
     batch: list[dict[str, Any]] = []
     batch_chars = 0
+    sent = 0
+    if on_batch:
+        on_batch(0, len(all_dicts))
 
     def _cancelled() -> bool:
         return cancel_path is not None and cancel_path.exists()
 
     async def _flush(*, is_final: bool) -> bool:
-        nonlocal batch, batch_chars
+        nonlocal batch, batch_chars, sent
         # bulk: nothing waits on an import write; the backend budgets it as extraction.
         metadata: dict[str, Any] = {"is_final": is_final, "bulk": True}
         _log_store_request(session.session_id, batch, metadata, batch_chars)
@@ -262,6 +275,9 @@ async def _feed_session(
             if not await _pause(wait, _cancelled):
                 return False
         logger.debug("store completed: session_id={}", session.session_id)
+        sent += len(batch)
+        if on_batch:
+            on_batch(sent, len(all_dicts))
         batch = []
         batch_chars = 0
         return True

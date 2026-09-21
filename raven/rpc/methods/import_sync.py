@@ -55,6 +55,9 @@ _STARTING = False
 # running task's progress callback and cleared with the slot: the state file
 # knows nothing of the phases, so this is the only place their progress lives.
 _PHASE: dict[str, Any] | None = None
+# The source the message pass is on and how far into it: a large source is
+# many batches, and the per-source counts do not move for any of them.
+_CURRENT: dict[str, Any] | None = None
 
 
 def _busy() -> bool:
@@ -214,10 +217,15 @@ async def import_run(params: dict) -> dict:
             global _PHASE
             _PHASE = {"kind": kind, "current": current, "total": total}
 
+        def _on_batch(platform: str, source_key: str, sent: int, total: int) -> None:
+            global _CURRENT
+            _CURRENT = {"platform": platform, "source_key": source_key, "sent": sent, "total": total}
+
         async def _run(backend: "MemoryBackend", started: bool) -> None:
-            global _TASK, _PHASE
+            global _TASK, _PHASE, _CURRENT
             try:
-                summary = await run_import(items, backend, state, cancel_path=state.cancel_path)
+                summary = await run_import(items, backend, state, on_batch=_on_batch, cancel_path=state.cancel_path)
+                _CURRENT = None
                 # A stop has to stop the run, not hand it its two longest steps.
                 if not summary.cancelled:
                     await run_phases(
@@ -239,6 +247,7 @@ async def import_run(params: dict) -> dict:
                     except Exception:
                         logger.exception("import.run: the memory backend did not stop cleanly")
                 _PHASE = None
+                _CURRENT = None
                 _TASK = None
 
         _TASK = asyncio.create_task(_run(backend, bool(items)))
@@ -286,6 +295,7 @@ async def import_status(params: dict) -> dict:
         "failed": failed,
         "by_platform": by_platform,
         "phase": dict(_PHASE) if running and _PHASE is not None else None,
+        "current": dict(_CURRENT) if running and _CURRENT is not None else None,
         "phases": dict(meta["phases"]) if isinstance(meta.get("phases"), dict) else None,
         "tier": meta.get("tier"),
         "platforms": list(meta.get("platforms") or sorted(by_platform)),

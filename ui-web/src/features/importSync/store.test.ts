@@ -57,6 +57,16 @@ describe('what the row shows', () => {
     expect(v).toMatchObject({ kind: 'run', pct: 39, failed: 1, clickable: false })
   })
 
+  it('the settled share moves with the source the pass is on', () => {
+    /* 18 sources, 7 settled, the eighth 40 of 287 messages in: 7.14 of 18. */
+    const v = store.view(state(status({
+      running: true, total: 18, submitted: 6, failed: 1,
+      current: { platform: 'claude_code', source_key: 'a', sent: 40, total: 287 },
+    })))
+    expect(v).toMatchObject({ kind: 'run', pct: 40 })
+    expect(store.view(state(status({ running: true, total: 18, submitted: 6, failed: 1 }))).pct).toBe(39)
+  })
+
   it("a phase's own share while one is on", () => {
     const v = store.view(state(status({ running: true, total: 18, submitted: 18, phase: { kind: 'profile', current: 1, total: 3 } })))
     expect(v).toMatchObject({ kind: 'wrap', pct: 33, phase: { kind: 'profile', current: 1, total: 3 } })
