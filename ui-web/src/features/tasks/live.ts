@@ -108,17 +108,30 @@ export function applyRunStarted(rows: readonly TaskRow[], p: RunStartedPayload):
   return [row, ...rows]
 }
 
+/* The statuses a node's own frame can settle it into: its collecting block
+   has exited, so the account the runner set aside for it is final. */
+const NODE_SETTLED: ReadonlySet<TaskNode['status']> = new Set<TaskNode['status']>(
+  ['completed', 'failed', 'skipped', 'cancelled', 'interrupted', 'exception'],
+)
+
 /* Moves one node. Timestamps only where the event actually carries them --
    a skipped/cancelled transition has none (contract §5.1) -- and the row's
-   own status and counts are recomputed from the whole node list every time. */
-export function applyNodeUpdated(rows: readonly TaskRow[], p: NodeUpdatedPayload): TaskRow[] {
-  return rows.map((row) => {
+   own status and counts are recomputed from the whole node list every time.
+   A node's own terminal frame asks for a reconcile: the frame carries no
+   usage, the runner sets the node's account aside as it settles, and only a
+   read brings that final total -- the run's own terminal frame reconciles
+   too, but with a sibling still running it can be minutes away. */
+export function applyNodeUpdated(rows: readonly TaskRow[], p: NodeUpdatedPayload): LiveResult {
+  const at = rows.findIndex((r) => r.kind === 'dag' && r.id === p.run_id)
+  if (at < 0) return { rows: [...rows] }
+  const next = rows.map((row) => {
     if (row.kind !== 'dag' || row.id !== p.run_id) return row
     const nodes = row.nodes.map((n) => (n.node_id === p.node
       ? { ...n, status: p.status, started_at: p.started_at ?? n.started_at, ended_at: p.ended_at ?? n.ended_at }
       : n))
     return { ...row, nodes, counts: countsOf(nodes), status: deriveStatus(nodes) }
   })
+  return { rows: next, refetch: NODE_SETTLED.has(p.status) ? { kind: 'dag', id: p.run_id } : undefined }
 }
 
 /* Ends the frame. `files` absent (or empty) is the hard-cancel shape --
