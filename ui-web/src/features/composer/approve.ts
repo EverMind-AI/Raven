@@ -52,7 +52,7 @@ const NO_DEADLINE = 'noDeadline'
    reach one are in two modules, and a second copy of this rule is how one of
    them comes to disagree with the other. */
 export const sparePendingApproval = (el: HTMLElement): boolean =>
-  el.dataset[NO_DEADLINE] === '1' 
+  el.dataset[NO_DEADLINE] === '1'
 
 export interface Approval {
   /* Takes the sheet down without answering. For a caller that has learned the

@@ -50,7 +50,6 @@ from raven.permissions.session import remember_allowed, session_allows, session_
 from raven.permissions.turn import current_tool_call_id, current_turn
 from raven.tracing import trace
 
-
 #: What one evidence value may carry to a prompt. A person reads a prompt; past
 #: a few screens nothing more is read, and the frame is built, serialised and
 #: drawn on the event loop. The filesystem tools cap what they read off disk,

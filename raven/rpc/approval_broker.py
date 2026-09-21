@@ -214,9 +214,7 @@ class ApprovalBroker:
             if answer is ApprovalChoice.ALLOW_ALWAYS:
                 # The slot exists before the gate writes, so an undo that
                 # arrives first has something to wait on rather than a miss.
-                self._grants[approval_id] = _Grant(
-                    reported=asyncio.Event(), conversation_id=conversation_id
-                )
+                self._grants[approval_id] = _Grant(reported=asyncio.Event(), conversation_id=conversation_id)
             return ApprovalOutcome(choice=answer, feedback=feedback, pattern=pattern, approval_id=approval_id)
         except TimeoutError:
             close_reason = "timeout"

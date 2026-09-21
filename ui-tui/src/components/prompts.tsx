@@ -189,9 +189,13 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
           ))}
 
           <Text color={t.color.muted}>
-            {tr('gui.confirm.keys', 'up/down select · Enter confirm · 1-{count} quick pick · Tab add note · Ctrl+C deny', {
-              count: String(options.length)
-            })}
+            {tr(
+              'gui.confirm.keys',
+              'up/down select · Enter confirm · 1-{count} quick pick · Tab add note · Ctrl+C deny',
+              {
+                count: String(options.length)
+              }
+            )}
           </Text>
         </>
       )}

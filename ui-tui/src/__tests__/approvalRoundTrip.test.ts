@@ -232,7 +232,6 @@ describe('approval round-trip', () => {
     expect(approvalResponseAccepted({ ok: false })).toBe(false)
     expect(approvalResponseAccepted(null)).toBe(false)
   })
-
 })
 
 describe('an approval outlives the turn that opened it', () => {
