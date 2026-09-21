@@ -7205,6 +7205,39 @@ class TestReconfiguringRestartsOurOwnService:
         monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
         assert onboard_everos._stop_for_reload(Path("/r")) is False
 
+    def test_a_stop_that_does_not_finish_says_which_way_it_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Three situations a bool collapsed into one: a process raven never
+        started, a signal that could not be delivered, and a server still
+        draining. The wizard told a user whose memory tasks were mid-flight that
+        raven had not started the process, which is simply untrue."""
+        from raven_everos.server import StopOutcome
+
+        said: list[str] = []
+        monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: SimpleNamespace(pid=7))
+        # The whole UI, not one field: it is a frozen dataclass, and what this
+        # case is about is the sentence, not the plumbing under it.
+        monkeypatch.setattr(
+            onboard_everos,
+            "_UI",
+            SimpleNamespace(
+                console=SimpleNamespace(print=lambda *a, **kw: said.append(str(a[0]))),
+                t=lambda text, **kw: text.format(**kw) if kw else text,
+            ),
+        )
+        monkeypatch.setattr("raven_everos.server.stop_for_reload", lambda _root: StopOutcome.STILL_DRAINING)
+
+        assert onboard_everos._stop_for_reload(Path("/r")) is False
+        assert any("still finishing memory work" in m for m in said), said
+
+    def test_a_role_the_shell_set_reports_the_shell_s_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An operator who exported the endpoint outranks raven, so the menu has
+        to name what they set rather than the pin raven happens to hold."""
+        monkeypatch.setattr(onboard_everos, "_everos_role_configured", lambda _s: True)
+        monkeypatch.setattr("raven_everos.config.role_is_env_managed", lambda _s: True)
+        monkeypatch.setenv("EVEROS_RERANK__MODEL", "theirs/reranker")
+
+        assert onboard_everos._configured_model("rerank") == "theirs/reranker"
+
 
 class TestIntentAndAddressAreDifferentQuestions:
     """Where it should be, and where it is, are answered from different fields.

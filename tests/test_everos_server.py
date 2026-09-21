@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import sys
@@ -1440,3 +1441,68 @@ class TestRestartingForAConfigChange:
         await self._run(seen)
 
         assert seen["result"] == [(True, None)]
+
+
+class TestThePiecesTheChainIsMadeOf:
+    """`precheck_spawn` and `stop_for_reload` asked directly.
+
+    Every case above poses them through the chain, which is where the ordering
+    lives -- but neither is only the chain's. The wizard calls the stop, and
+    both are exported for anyone who has to know whether a spawn could work
+    before spending a stop on finding out.
+    """
+
+    def test_the_precheck_names_the_missing_llm(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("raven_everos.config.everos_role_configured", lambda _s: False)
+
+        answer = everos_server.precheck_spawn()
+
+        assert answer and "memory LLM is not configured" in answer
+
+    def test_the_precheck_answers_none_when_a_spawn_could_work(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("raven_everos.config.everos_role_configured", lambda _s: True)
+        monkeypatch.setattr(everos_server, "_inotify_gate", lambda: None)
+
+        assert everos_server.precheck_spawn() is None
+
+    def test_stopping_a_root_nothing_is_serving_is_not_a_failure(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """None, not an outcome: there was nothing to stop, which is what lets
+        the chain go on and start one."""
+        monkeypatch.setattr(everos_server, "lock_holder", lambda _root: None)
+
+        assert everos_server.stop_for_reload(tmp_path) is None
+
+    def test_stopping_asks_the_pid_the_lock_named(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Not the pidfile's: asking that would report NOT_OURS about the very
+        process the lock just identified, which is the state the lock lookup
+        exists to get out of."""
+        asked: list[int] = []
+        monkeypatch.setattr(everos_server, "lock_holder", lambda _root: SimpleNamespace(pid=4321))
+        monkeypatch.setattr(
+            everos_server, "stop_pid", lambda pid: asked.append(pid) or everos_server.StopOutcome.STOPPED
+        )
+
+        assert everos_server.stop_for_reload(tmp_path) is everos_server.StopOutcome.STOPPED
+        assert asked == [4321]
+
+    async def test_a_chain_cancelled_mid_flight_says_so(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A gateway shutting down during a restart. Swallowed, the page keeps
+        whatever the last run put on its banner and the next session inherits a
+        claim nobody can check."""
+        monkeypatch.setattr(everos_server, "precheck_spawn", lambda: None)
+        monkeypatch.setattr(everos_server, "stop_for_reload", lambda _root: everos_server.StopOutcome.STOPPED)
+
+        async def _ensure(*a: object, **kw: object) -> None:
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(everos_server, "ensure_everos_server", _ensure)
+        seen: list = []
+
+        with pytest.raises(asyncio.CancelledError):
+            await everos_server.restart_for_config_change(
+                "/tmp/root", "http://127.0.0.1:18791", on_result=lambda ok, err: seen.append((ok, err))
+            )
+
+        assert seen == [], "the chain itself reports nothing on cancellation; its caller does"

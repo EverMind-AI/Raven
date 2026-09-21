@@ -196,6 +196,26 @@ class TestLifecycle:
             await b.start()
             await b.stop()
 
+    async def test_a_role_the_migration_could_not_move_is_said_out_loud(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A role whose vendor cannot be named is left unset on purpose -- a
+        guess would send memory's traffic to the wrong endpoint. Silent, that is
+        a slot the person has no reason to look at; the notice is the only thing
+        that sends them to it."""
+        said: list[str] = []
+        monkeypatch.setattr(
+            "raven_everos.config.migrate_roles",
+            lambda: ["EverOS llm: could not tell which provider serves https://nobody/v1"],
+        )
+
+        b = EverosBackend(_ctx(tmp_path))
+        b.notify = said.append
+        with patch("raven_everos.server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        assert any("could not tell which provider" in m for m in said), said
+
     async def test_start_binds_all_four_roles_into_this_process(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

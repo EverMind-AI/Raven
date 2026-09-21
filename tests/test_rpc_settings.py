@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -368,6 +369,79 @@ class TestTheSaveRestartsTheService:
         assert a, "the session that started the run heard nothing"
         assert b, "the session that queued the second run heard nothing"
 
+    async def test_one_dead_session_does_not_silence_the_others(
+        self, everos_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sessions come and go while a restart runs. A tab closed mid-flight
+        raises on its own emit, and the loop reporting to it must not take the
+        outcome away from everyone still watching."""
+        self._seeded(everos_cfg)
+        alive: list = []
+
+        class _Dead:
+            def _emit_mcp_event(self, method: str, params: dict) -> None:
+                raise RuntimeError("that socket is gone")
+
+        async def _chain(root, base_url, *, on_result):
+            on_result(True, None)
+
+        monkeypatch.setattr("raven_everos.server.restart_for_config_change", _chain)
+        pin = {"section": "llm", "model": "m", "provider": "deepinfra"}
+
+        await rpc_console.settings_everos_set(dict(pin), agent_loop_factory=lambda: _Dead())
+        for _ in range(8):
+            await asyncio.sleep(0)
+        await rpc_console.settings_everos_set({**pin, "model": "m2"}, agent_loop_factory=lambda: self._loop(alive))
+        for _ in range(8):
+            await asyncio.sleep(0)
+
+        assert alive, "the live session heard nothing after a dead one raised"
+
+    async def test_a_chain_that_raises_reports_the_failure(self, everos_cfg, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Anything the chain did not catch still has to reach the banner --
+        dropped, the page keeps whatever the last run put there."""
+        self._seeded(everos_cfg)
+        frames: list = []
+
+        async def _chain(root, base_url, *, on_result):
+            raise RuntimeError("the port moved under us")
+
+        monkeypatch.setattr("raven_everos.server.restart_for_config_change", _chain)
+
+        await rpc_console.settings_everos_set(
+            {"section": "llm", "model": "m", "provider": "deepinfra"},
+            agent_loop_factory=lambda: self._loop(frames),
+        )
+        for _ in range(10):
+            await asyncio.sleep(0)
+
+        assert frames, "a chain that raised reported nothing"
+        assert frames[-1][1]["ok"] is False
+        assert "port moved" in (frames[-1][1]["error"] or "")
+
+    async def test_a_cancelled_restart_still_reports(self, everos_cfg, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A gateway shutting down mid-restart. Silent, the page keeps whatever
+        the last run put on its banner, and the next session inherits a claim
+        nobody can check."""
+        self._seeded(everos_cfg)
+        frames: list = []
+
+        async def _chain(root, base_url, *, on_result):
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr("raven_everos.server.restart_for_config_change", _chain)
+
+        await rpc_console.settings_everos_set(
+            {"section": "llm", "model": "m", "provider": "deepinfra"},
+            agent_loop_factory=lambda: self._loop(frames),
+        )
+        for _ in range(10):
+            await asyncio.sleep(0)
+
+        assert frames, "a cancelled restart reported nothing"
+        assert frames[-1][1]["ok"] is False
+        assert "interrupted" in (frames[-1][1]["error"] or "")
+
     async def test_two_saves_run_one_after_the_other_and_the_last_one_wins(
         self, everos_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -404,6 +478,57 @@ class TestTheSaveRestartsTheService:
 
         assert live["max"] == 1, "two restart chains overlapped"
         assert models[-1] == "second", "the last run did not read the last configuration"
+
+
+async def test_an_unknown_role_is_refused_by_name(everos_cfg):
+    everos_cfg(providers={})
+
+    with pytest.raises(ConfigValidationError, match="unknown everos role"):
+        await rpc_console.settings_everos_set({"section": "not-a-role", "model": "m", "provider": "p"})
+
+
+async def test_an_absurdly_long_pair_is_refused(everos_cfg):
+    """Length is checked before anything is written, because both halves end up
+    in a config file somebody has to be able to read afterwards."""
+    everos_cfg(providers={"deepinfra": {"apiKey": "k", "apiBase": "https://d/v1"}})
+
+    with pytest.raises(ConfigValidationError, match="under 500 characters"):
+        await rpc_console.settings_everos_set({"section": "llm", "model": "m" * 501, "provider": "deepinfra"})
+
+
+async def test_a_pair_that_cannot_embed_is_refused_readably(everos_cfg):
+    """`set_embedding_endpoint` refuses a chat model in the embedding slot. Left
+    as its own exception it reaches the dispatcher, which renders any non-RpcError
+    as internal_error plus a traceback -- and the sentence naming the model, the
+    only useful thing it carries, never reaches the page."""
+    everos_cfg(providers={"openai": {"apiKey": "sk-1"}})
+
+    with pytest.raises(ConfigValidationError, match="not an embedding model"):
+        await rpc_console.settings_everos_set({"section": "embedding", "model": "gpt-4o", "provider": "openai"})
+
+
+async def test_a_write_to_a_root_the_user_manages_is_refused_readably(everos_cfg, monkeypatch):
+    """Same shape, different exception: the refusal carries the path of the root
+    somebody else manages, which is the one thing the reader needs."""
+    everos_cfg(providers={"deepinfra": {"apiKey": "k", "apiBase": "https://d/v1"}})
+    # Past the fixture's own patch, which declares the throwaway root owned so
+    # every other case can write to it.
+    monkeypatch.setattr("raven_everos.config.everos_owned", lambda: False)
+    monkeypatch.setattr("raven_everos.config.everos_root", lambda: Path("/somewhere/theirs"))
+
+    with pytest.raises(ConfigValidationError, match="/somewhere/theirs"):
+        await rpc_console.settings_everos_set({"section": "llm", "model": "m", "provider": "deepinfra"})
+
+
+async def test_clearing_a_required_role_is_refused(everos_cfg):
+    """Clearing llm turns long-term memory off outright and embedding is what
+    every stored vector was written under. The page reads the same list now, so
+    this is the second line of the same defence rather than the only one."""
+    everos_cfg(providers={})
+
+    for section in ("llm", "embedding"):
+        with pytest.raises(ConfigValidationError, match="cannot be cleared"):
+            await rpc_console.settings_everos_set({"section": section, "clear": True})
 
 
 class TestTheRoleCardReadsAndWritesRavensOwnRecord:

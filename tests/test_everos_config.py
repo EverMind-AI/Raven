@@ -737,3 +737,140 @@ class TestWhatTheTomlStillSays:
 
     def test_a_file_with_no_role_sections_says_nothing(self, monkeypatch) -> None:
         assert self._notes(monkeypatch, in_file=set(), pinned={"llm"}) == []
+
+
+class TestTheEdgesThatOnlyShowUpWhenSomethingIsWrong:
+    """Paths that exist because a dependency can be absent or a name can be
+    stale. None of them is reachable in a healthy install, which is exactly why
+    they are worth a case: the failure they exist to absorb would otherwise
+    reach a caller that has no idea what to do with it.
+    """
+
+    def test_a_reverse_lookup_that_raises_falls_through_to_the_table(
+        self, legacy, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`provider_serving_at` reads raven's config through its own loader.
+        Nothing to match against is not a migration failure -- the vendor table
+        is still there to answer."""
+        from raven_everos.config import migrate_roles, role_pin
+
+        def _boom(*a: object, **kw: object) -> None:
+            raise RuntimeError("config unreadable right now")
+
+        monkeypatch.setattr("raven.config.update_providers.provider_serving_at", _boom)
+
+        migrate_roles()
+
+        assert role_pin("rerank") == ("Qwen/Qwen3-Reranker-4B", "deepinfra")
+
+    def test_a_pin_naming_a_provider_that_was_removed_resolves_to_nothing(
+        self, pinned, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`resolve_provider_credentials` raises KeyError for a name raven no
+        longer carries. A raise here would take down every gate that merely
+        wanted to know whether the role was configured."""
+        import json
+
+        from raven_everos.config import resolve_role
+
+        raw = json.loads(pinned.read_text(encoding="utf-8"))
+        raw.setdefault("plugins", {}).setdefault("config", {}).setdefault("everos-memory", {})["llm"] = {
+            "model": "m",
+            "provider": "deepinfra",
+        }
+        pinned.write_text(json.dumps(raw), encoding="utf-8")
+        assert resolve_role("llm") is not None, "the pin has to resolve before the provider is removed"
+
+        def _gone(name: str, **kw: object) -> None:
+            raise KeyError(name)
+
+        monkeypatch.setattr("raven.config.update_providers.resolve_provider_credentials", _gone)
+
+        assert resolve_role("llm") is None
+
+    def test_a_vendor_whose_row_cannot_be_read_is_still_created(self, legacy, monkeypatch) -> None:
+        """The migration asks whether a row already resolves before creating one.
+        For a vendor raven has no spec for, that ask raises rather than answering
+        -- and a raise there would abandon the role it was about to rescue."""
+        from raven_everos.config import migrate_roles, role_pin
+
+        real = None
+        from raven.config import update_providers as up
+
+        real = up.resolve_provider_credentials
+
+        def _raises_for_unknown(name: str, **kw: object):
+            if name == "deepinfra":
+                raise KeyError(name)
+            return real(name, **kw)
+
+        monkeypatch.setattr(up, "resolve_provider_credentials", _raises_for_unknown)
+
+        migrate_roles()
+
+        assert role_pin("rerank") == ("Qwen/Qwen3-Reranker-4B", "deepinfra")
+
+    def test_a_missing_host_import_is_not_this_modules_to_report(self, pinned, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The plugin reaches into raven for the wire rules. An install where
+        that import fails has bigger problems than an unresolved role, and this
+        is not the surface that should say so."""
+        import builtins
+        import json
+
+        from raven_everos.config import resolve_role, role_pin
+
+        # A pin first, or this returns None before it reaches the import and the
+        # case passes without touching what it names.
+        raw = json.loads(pinned.read_text(encoding="utf-8"))
+        raw.setdefault("plugins", {}).setdefault("config", {}).setdefault("everos-memory", {})["llm"] = {
+            "model": "m",
+            "provider": "deepinfra",
+        }
+        pinned.write_text(json.dumps(raw), encoding="utf-8")
+        assert role_pin("llm") is not None, "the pin has to be there or this proves nothing"
+        assert resolve_role("llm") is not None, "and it has to resolve before the import is broken"
+
+        real = builtins.__import__
+
+        def _fail(name: str, *a: object, **kw: object):
+            if name == "raven.providers.wire":
+                raise ImportError("no wire here")
+            return real(name, *a, **kw)
+
+        monkeypatch.setattr(builtins, "__import__", _fail)
+
+        assert resolve_role("llm") is None
+
+    def test_an_address_no_table_and_no_row_names_leaves_the_role_unset(self, legacy) -> None:
+        """The last thing `_vendor_serving` can do is say it does not know. A
+        guess would send memory's traffic somewhere the person never chose."""
+        from raven_everos.config import migrate_roles, role_pin
+
+        _cfg, write = legacy
+        write('[multimodal]\nmodel = "m"\napi_key = "k"\nbase_url = "relative-nonsense"\n')
+
+        migrate_roles()
+
+        assert role_pin("multimodal") is None
+
+    def test_clearing_embedding_empties_ravens_own_block(self, pinned) -> None:
+        """Embedding's pin is not in this plugin's slice, so clearing it cannot
+        be a slice delete -- it has to reach the writer a knowledge base reads."""
+        import json
+
+        from raven_everos.config import clear_role, role_pin
+
+        raw = json.loads(pinned.read_text(encoding="utf-8"))
+        raw["embedding"] = {"model": "bge-m3", "provider": "deepinfra"}
+        pinned.write_text(json.dumps(raw), encoding="utf-8")
+        assert role_pin("embedding") is not None
+
+        clear_role("embedding")
+
+        assert role_pin("embedding") is None
+
+    def test_clearing_an_unknown_role_is_refused_by_name(self, pinned) -> None:
+        from raven_everos.config import clear_role
+
+        with pytest.raises(KeyError, match="unknown everos role"):
+            clear_role("not-a-role")

@@ -1049,19 +1049,11 @@ def _config_everos_role(
         # be on file under that provider first: a pin naming a provider the host
         # holds nothing for resolves to nothing, and the wizard would have
         # reported success over a service still running keyword-only.
-        provider = str(result.get("provider") or "")
-        if not provider:
-            # A hand-typed address with no vendor behind it. raven stores a pair,
-            # so there is nothing to pin it to -- say so rather than writing half
-            # a role that would read as unconfigured with no explanation.
-            warnings.append(
-                _UI.t(
-                    "{label}: a model needs a provider raven knows, so this endpoint was not saved. "
-                    "Add it under providers first, then pick it here.",
-                    label=label,
-                )
-            )
-            continue
+        # Always set: every entry in the source picker is a vendor, including
+        # the self-hosted slots. The guard that used to stand here was for the
+        # "Other, type an address" path, which had no vendor to pin to and is
+        # gone -- a typed address goes into one of those slots now.
+        provider = str(result["provider"])
         # The address this vendor is *reached* at, which for rerank is not the
         # address this role calls. DeepInfra serves reranking from
         # `/v1/inference` and chat from `/v1/openai`; this row is what every
