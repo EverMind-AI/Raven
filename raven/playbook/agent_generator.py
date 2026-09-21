@@ -84,9 +84,17 @@ SYSTEM_PROMPT = (
     "write briefs, system prompts, and stop conditions for how they should behave when the Harness "
     "is used later (and now for runtime_and_artifact). Do not carry over creation-time meta commands "
     "such as create/save the assistant, do not execute now, or plan only on future runs. A named "
-    "single persona normally becomes one specialized worker; infer additional complementary workers "
-    "only when the user's needs genuinely justify a team.\n\n"
-    "Be sparing. Every worker you name is a separate process the agent has to wait for."
+    "single persona becomes one worker only when all requested behaviour belongs to one offered agent's declared ownership. "
+    "Choose workers by declared capability ownership, not by whether the user called "
+    "the result one assistant, persona, or team. When distinct work belongs to different specialist "
+    "agents, use those specialists as separate workers. A generic agent is only for work with no "
+    "specialist owner; never let its broad abilities absorb research, visual design, coding, or "
+    "watched work that another offered agent explicitly owns. When a worker must block before "
+    "doing any work until the user supplies required input, and the schema offers functions.intake, "
+    "implement that gate in intake instead of merely restating it in the brief or system prompt: "
+    "return a reply and note for missing input, and allow compliant input. Avoid workers for incidental steps, "
+    "duplicate ownership, or roles that do not materially change execution: every worker is a "
+    "separate process the agent has to wait for."
 )
 
 

@@ -25,7 +25,7 @@ from raven.agent.subagent.prompt_capabilities import AgentCapabilities
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.config.schema import PlaybookConfig
 from raven.playbook import NodeSpec, PlaybookSpec, Triggers
-from raven.playbook.agent_generator import WorkerTableGenerator, build_table, emit_tool, render_charter
+from raven.playbook.agent_generator import SYSTEM_PROMPT, WorkerTableGenerator, build_table, emit_tool, render_charter
 from raven.playbook.agent_spec import AgentPlaybookSpec
 from raven.providers.base import LLMProvider, LLMResponse
 
@@ -449,6 +449,18 @@ def test_the_brief_stands_in_when_no_prompt_was_written() -> None:
 # --------------------------------------------------------------------------- #
 # Generation                                                                    #
 # --------------------------------------------------------------------------- #
+
+
+def test_generation_prefers_specialist_owners_over_a_generic_agent() -> None:
+    """One named artifact may need several workers with distinct ownership."""
+    flat = " ".join(SYSTEM_PROMPT.split())
+
+    assert "Choose workers by declared capability ownership" in flat
+    assert "not by whether the user called the result one assistant, persona, or team" in flat
+    assert "A generic agent is only for work with no specialist owner" in flat
+    assert "never let its broad abilities absorb research, visual design, coding, or watched work" in flat
+    assert "implement that gate in intake instead of merely restating it" in flat
+    assert "incidental steps, duplicate ownership" in flat
 
 
 def test_the_roster_and_the_tools_are_enums_not_prose() -> None:

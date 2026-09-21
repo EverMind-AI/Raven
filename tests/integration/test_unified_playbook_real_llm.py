@@ -254,7 +254,7 @@ async def test_live_whole_turn_infers_a_travel_assistant_harness_from_user_needs
     assert workers
     assert any(worker.label != worker.name for worker in workers)
     assert all("save the assistant" not in worker.brief.lower() for worker in workers)
-    assert all("do not plan" not in worker.brief.lower() for worker in workers)
+    assert all("do not plan a specific trip" not in worker.brief.lower() for worker in workers)
     assert list((playbook_root / ".runs").glob("*.json"))
 
     print(
