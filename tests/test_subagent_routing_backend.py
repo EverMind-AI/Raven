@@ -613,6 +613,12 @@ class TestATemplateOpensTheRoute:
             # The name alone, as a model that read the host's relative note writes it.
             {"task": f"use the attached {Path(TEMPLATE).name} as the template"},
             {"task": f"\u9644\u4ef6\uff1auploads/{Path(TEMPLATE).name}"},
+            # ASCII marks right after the name: the full stop that ends an
+            # English sentence, an ellipsis, and the rest of the keyboard.
+            {"task": f"Build the deck on the attached template {TEMPLATE}."},
+            {"task": f"template {Path(TEMPLATE).name}..."},
+            {"task": f"use {Path(TEMPLATE).name}!"},
+            {"task": f'the template is "{Path(TEMPLATE).name}"; 20 pages'},
         ):
             entry, design, deck = _entry(_Router("Deck"), min_tier="", needs_file=NEEDS_FILE)
             task = kwargs.pop("task")
@@ -633,6 +639,8 @@ class TestATemplateOpensTheRoute:
             f"a deck like {TEMPLATE}.bak",
             "Ignore the attachment; save the new deck as /home/u/.raven/tmp/tui/new_brand.pptx",
             "the old my-brand.pptx and rebrand.pptx in the folder are not yours",
+            "a brand.pptx-based look, a brand.pptx_copy on disk, and brand.pptxx as a typo",
+            f"keep {TEMPLATE}.bak, it is last year's",
         )
         for brief in briefs:
             for attached in ((), (_media(TEMPLATE),)):

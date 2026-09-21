@@ -288,7 +288,7 @@ def test_tiers_climb_a_ladder_of_effort_around_the_hosts(grounded, tmp_path):
     """Design tiers keep one iteration cap and climb a ladder of reasoning effort.
 
     This agent designs every deck itself, so what a tier buys is how hard it
-    thinks: medium asks for low, max for the highest the model offers, and the
+    thinks: medium asks for low, max for xhigh, and the
     baseline inherits whatever the host is set to -- ``high`` here, so the
     ladder reads low / high / xhigh.
     """

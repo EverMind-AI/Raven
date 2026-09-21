@@ -44,7 +44,7 @@ MODE_LABELS = {
     ),
     "max": (
         "Max",
-        "400 tool iterations at the highest reasoning effort the model offers. A full deliverable where the ceiling matters more than the bill.",
+        "400 tool iterations at xhigh reasoning effort. A full deliverable where the ceiling matters more than the bill.",
     ),
 }
 BASELINE_MODE = "high"
@@ -188,8 +188,10 @@ def render_config(source: Path) -> Path:
     #
     # A mode that names an effort of its own keeps it; the baseline inherits
     # the host's. This agent designs every deck itself, so what a tier buys is
-    # how hard it thinks about it: medium asks for low, max for the highest
-    # the model offers, and high says nothing, which is the same as
+    # how hard it thinks about it: medium asks for low, max for xhigh (the
+    # rung below the ladder's top -- on the providers this lane runs against,
+    # ``max`` spends the whole output window on thinking), and high says
+    # nothing, which is the same as
     # inheriting -- an unset entry effort reads ``agents.defaults.reasoningEffort``,
     # and that is the host's. The overlay itself does not carry the effort --
     # it is lifted onto the entry so the trunk dispenses it, and a copy in the
