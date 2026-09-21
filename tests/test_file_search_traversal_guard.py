@@ -581,6 +581,26 @@ async def test_list_dir_recursive_lists_what_rglob_listed_in_the_same_order(tmp_
 
 
 @pytest.mark.asyncio
+async def test_a_noise_name_above_the_searched_path_hides_nothing(tmp_path, monkeypatch):
+    """Recursive ``list_dir`` used to filter ``rglob`` results on the absolute
+    path's parts, so a workspace under a directory named ``build`` listed as
+    empty. Pruning applies below the searched path only, for all three tools."""
+    root = tmp_path / "build" / "proj"
+    (root / "src").mkdir(parents=True)
+    (root / "a.py").write_text("needle\n", encoding="utf-8")
+    (root / "src" / "b.py").write_text("needle\n", encoding="utf-8")
+    monkeypatch.setattr(file_search, "_resolve_rg", lambda: None)
+
+    listed = await ListDirTool().execute(path=str(root), recursive=True)
+    found = await FindTool().execute(pattern="*.py", path=str(root))
+    matched = await GrepTool().execute(pattern="needle", path=str(root), output_mode="files_with_matches")
+
+    assert listed.splitlines() == ["a.py", "src/", "src/b.py"]
+    assert set(found.splitlines()) == {"a.py", "src/b.py"}
+    assert set(matched.splitlines()) == {"a.py", "src/b.py"}
+
+
+@pytest.mark.asyncio
 async def test_list_dir_recursive_never_enters_a_noise_directory(tmp_path, monkeypatch):
     (tmp_path / "node_modules" / "pkg").mkdir(parents=True)
     (tmp_path / "keep.txt").write_text("", encoding="utf-8")

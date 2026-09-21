@@ -113,7 +113,10 @@ All notable changes to Raven are documented here.
   finite. A noise directory the pattern names first (`node_modules/*.js`)
   is walked, since the pattern asked for it, where `Path.glob` filtered it
   out, and `list_dir` on such a path lists it; both tool descriptions say
-  so.
+  so. Recursive `list_dir` also used to filter on the components of the
+  absolute path, so a workspace beneath a directory named `build`, `dist`,
+  `venv` or another noise name listed as empty; it prunes below the listed
+  path only now.
 
 - A sub-agent run that is stopped now tells the conversation that started
   it, and says why: `[Subagent '...' was cancelled]` with the reason (`the
