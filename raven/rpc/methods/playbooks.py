@@ -875,6 +875,9 @@ def _stint_row(record: Any) -> dict[str, Any]:
         "max_rounds": int(stop.get("maxRounds") or stop.get("max_rounds") or DEFAULT_MAX_ROUNDS),
         "status": record.status,
         "live": record.live,
+        # What `stop` acts on, which is wider than `live`: a paused stint is not
+        # live and still has to be stoppable, or the page draws no way to end it.
+        "unfinished": record.unfinished,
         "stop_reason": record.stop_reason,
         "workdir": record.workdir,
         "branch": record.branch,
@@ -952,22 +955,54 @@ async def playbooks_stints_get(params: dict) -> dict:
     return _stint_detail(_require_stint(params)[1])
 
 
-async def playbooks_stints_stop(params: dict) -> dict:
-    """Open no further rounds.
+async def playbooks_stints_stop(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+    """Open no further rounds, and with ``now`` cut the round in flight short.
 
-    The round in flight is somebody else's process and is not interrupted: it
-    finishes and reports, and the hand-over that would have opened the next one
-    reads this and ends the stint instead. Throwing away a round already paid for
-    would be the worse of the two answers.
+    Without ``now`` the round in flight is left alone: it finishes and reports,
+    and the hand-over that would have opened the next one reads this and ends the
+    stint instead. Throwing away a round already paid for is the worse of the two
+    answers, which is why it is the verb the caller has to ask for.
+
+    ``now`` is that ask. It reaches the round only where this process is the one
+    running it -- a stint dispatched from a conversation on this gateway. A stint
+    held by somebody's `raven playbook run` terminal is not addressable from
+    here, and Ctrl-C there is what stops it; the record is still written either
+    way, so the stint ends after the round however it was reached.
     """
     from raven.stint.record import STOPPED
 
     store, record = _require_stint(params)
-    if record.live:
+    now = bool(params.get("now"))
+    # `unfinished`, not `live`: a paused stint is not live, and it still owns its
+    # branch and refuses a second stint on the project, so `stop` is the one verb
+    # that has to reach it. Guarding on `live` left it with no way out at all.
+    if record.unfinished:
         record.status = STOPPED
         record.stop_reason = "a person stopped the stint"
         store.write(record)
+    if now:
+        _cut_the_round_short(record, agent_loop_factory)
     return _stint_detail(record)
+
+
+def _cut_the_round_short(record: Any, agent_loop_factory: "AgentLoopFactory | None") -> bool:
+    """Signal the round in flight to stop where it is. False when out of reach.
+
+    The same signal the graph's own cancel sends, so the round lands on the path
+    that already knows what a cut round means: the roles that finished stay
+    committed, the one that was cut leaves its work in the tree, and the record
+    says which round was stopped before it finished.
+    """
+    from raven.agent.subagent.dag_live import cancel_run
+
+    entry = record.round(record.round_index)
+    if entry is None or not entry.run_id or agent_loop_factory is None:
+        return False
+    try:
+        loop = agent_loop_factory()
+    except Exception:  # noqa: BLE001 - no loop is out of reach, not a failure
+        return False
+    return cancel_run(loop, entry.run_id)
 
 
 async def playbooks_stints_pause(params: dict) -> dict:
@@ -1115,7 +1150,10 @@ def register_playbooks_methods(
     dispatcher.register("playbooks.create", _create)
     dispatcher.register("playbooks.stints.list", playbooks_stints_list)
     dispatcher.register("playbooks.stints.get", playbooks_stints_get)
-    dispatcher.register("playbooks.stints.stop", playbooks_stints_stop)
+    async def _stop(p: dict) -> dict:
+        return await playbooks_stints_stop(p, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("playbooks.stints.stop", _stop)
     dispatcher.register("playbooks.stints.pause", playbooks_stints_pause)
 
     async def _resume(p: dict) -> dict:

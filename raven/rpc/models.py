@@ -4785,6 +4785,8 @@ class StintRow(_Strict):
     max_rounds: int
     status: str
     live: bool
+    unfinished: bool
+    """Not over: running, interrupted or paused. What `stop` acts on."""
     stop_reason: str
     workdir: str
     branch: str
@@ -4815,6 +4817,8 @@ class PlaybooksStintsGetParams(_Strict):
 
 class PlaybooksStintsStopParams(_Strict):
     stint_id: str
+    now: bool | None = None
+    """Cut the round in flight short instead of letting it finish."""
 
 
 class PlaybooksStintsPauseParams(_Strict):

@@ -1386,7 +1386,10 @@ function StintDetailView({ detail, busy }: { detail: StintDetail; busy: boolean 
               {t('gui.pb.stint_pause')}
             </button>
           ) : null}
-          {stint.live ? (
+          {/* `unfinished`, not `live`: a paused stint still owns its branch and
+              still refuses a second stint on the project, so the page has to
+              keep offering the verb that ends it. */}
+          {stint.unfinished ? (
             <button className="mini" type="button" disabled={busy} onClick={() => void store.stopStint(stint.stint_id)}>
               {t('gui.pb.stint_stop')}
             </button>

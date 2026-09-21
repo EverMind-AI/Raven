@@ -36,6 +36,7 @@ __all__ = [
     "HEARTBEAT_EVERY_SEC",
     "RoundRecord",
     "STALE_AFTER_SEC",
+    "STATUSES",
     "STINTS_DIRNAME",
     "StintRecord",
     "StintRef",
@@ -51,6 +52,12 @@ FINISHED = "finished"
 STOPPED = "stopped"
 PAUSED = "paused"
 INTERRUPTED = "interrupted"
+
+#: Every status a stint may be in. Named as a set because a reader looks a status
+#: up rather than matching it: the page draws a pill by asking for the message
+#: `gui.pb.stint_status_<status>`, so a status no catalog has drew its own key at
+#: the reader -- which is what `finished`, the ordinary end of a run, did.
+STATUSES = (RUNNING, FINISHED, STOPPED, PAUSED, INTERRUPTED)
 
 #: How often a process holding a stint says so, in seconds. Short enough that
 #: the stamp is fresh when anyone looks, long enough that a stint costs one
@@ -400,7 +407,12 @@ class StintRecord:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "StintRecord":
-        rounds = [RoundRecord(**entry) for entry in data.get("rounds", [])]
+        known_round = {f for f in RoundRecord.__dataclass_fields__}
+        rounds = [
+            RoundRecord(**{key: value for key, value in entry.items() if key in known_round})
+            for entry in data.get("rounds") or []
+            if isinstance(entry, dict)
+        ]
         known = {f for f in cls.__dataclass_fields__}
         # Unknown keys are dropped rather than refused: a stint written by a
         # newer build has to stay readable by an older one long enough for it to
@@ -466,7 +478,15 @@ class StintStore:
             return None
         if not isinstance(data, dict):
             return None
-        return StintRecord.from_dict(data)
+        try:
+            return StintRecord.from_dict(data)
+        except (TypeError, ValueError, AttributeError):
+            # One unreadable stint is one unreadable stint. Raising here reached
+            # `list`, so a single malformed file answered every question the
+            # store is asked -- and a stint that cannot be listed cannot be
+            # stopped either.
+            logger.warning("stint {} could not be read and was skipped", stint_id)
+            return None
 
     def list(self) -> StintRecords:
         """Every readable stint, newest first."""

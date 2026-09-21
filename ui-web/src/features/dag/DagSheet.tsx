@@ -21,7 +21,7 @@ import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'reac
 
 import { ds, t } from '../../shell/bridge'
 import { CHEVRON_DOWN, CROSS, Glyph } from '../../shell/ico'
-import { openPage as openPlaybooks, openStint } from '../playbooks/store'
+import { revealStint } from '../playbooks/store'
 import { getState as subState, subscribe as subSubscribe } from '../subagents/store'
 import { DagGraph } from './DagGraph'
 import { SHEET, ordered, summary } from './graph'
@@ -115,13 +115,13 @@ export function Sheet({ sess, host, onClose }: { sess: string; host: HTMLElement
  * leads somewhere.
  */
 /* Opening the page is the part that must happen; reading the run into it is the
-   part that can fail. `openStint` resolves the playbooks seam eagerly and throws
-   when the page's island was never installed -- from an onClick that takes the
-   render tree down with it, over a detail the reader can also get by looking at
-   the page they are now on. */
+   part that can fail. `revealStint` resolves the playbooks seam eagerly and
+   throws when the page's island was never installed -- from an onClick that
+   takes the render tree down with it, over a detail the reader can also get by
+   looking at the page they are now on. */
 async function openRun(stintId: string): Promise<void> {
   try {
-    await openStint(stintId)
+    await revealStint(stintId)
   } catch {
     /* the page is open; it will load its own list */
   }
@@ -135,7 +135,7 @@ function Round({ run }: { run: DagRun }): JSX.Element | null {
   return (
     <button className="dround tipdn" type="button" data-tip={t('gui.dag.stint_open')}
       aria-label={t('gui.dag.stint_open')}
-      onClick={() => { openPlaybooks(); void openRun(run.stint_id as string) }}>
+      onClick={() => { void openRun(run.stint_id as string) }}>
       {label}
     </button>
   )

@@ -782,17 +782,32 @@ def plan_get(stint_id: str = typer.Argument(..., help="Stint id, as listed")):
 
 
 @stints_app.command("stop")
-def plan_stop(stint_id: str = typer.Argument(..., help="Stint id, as listed")):
-    """Open no further rounds. A round already running finishes first."""
+def plan_stop(
+    stint_id: str = typer.Argument(..., help="Stint id, as listed"),
+    now: bool = typer.Option(False, "--now", help="Cut the round in flight short instead of letting it finish"),
+):
+    """Open no further rounds. A round already running finishes first, unless --now."""
     from raven.stint.record import STOPPED
 
     _, store, record = _require_stint(_load_config(), stint_id)
-    if not record.live:
+    if not record.unfinished:
         console.print(f"{escape(stint_id)} is already {escape(record.status)}.")
+        return
+    # Relayed before the file is written, because only the raven running the
+    # round can cut it short: the write is what that side does either way, and
+    # doing it twice would be the same write.
+    if now and _relayed("playbooks.stints.stop", {"stint_id": stint_id, "now": True}):
+        console.print(f"Stopped {escape(stint_id)}, and asked the round in flight to stop where it is.")
         return
     record.status = STOPPED
     record.stop_reason = "a person stopped the stint"
     store.write(record)
+    if now:
+        console.print(
+            f"Stopped {escape(stint_id)}. No raven is serving a page here, so the round in flight could not "
+            f"be reached: it is held by the terminal that opened it, and Ctrl-C there stops it where it is."
+        )
+        return
     console.print(
         f"Stopped {escape(stint_id)}. A round already in flight finishes and reports; no further round opens."
     )

@@ -581,10 +581,17 @@ class StintDriver:
         if not live:
             return False
         store = self.store_for(None)
+        # Every record with a round in this process's active set, not only the
+        # ones still calling themselves live. A `stop` lands on the file while a
+        # round is running, and its own promise is that the round finishes and
+        # reports; filtering on `record.live` here let go of a round that was
+        # still going, so `raven playbook run` returned and took the round down
+        # with it -- the roles after the stop never ran and were never recorded.
+        # `entry.run_id in live` is the real question, and it is already about
+        # this process alone.
         return any(
             (entry := record.round(record.round_index)) is not None and entry.run_id in live
             for record in store.list()
-            if record.live
         )
 
     async def _advance(self, ref: StintRef, run_id: str, result: Any, stopped: bool) -> Any | None:

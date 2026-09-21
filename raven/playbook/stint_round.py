@@ -33,7 +33,7 @@ import asyncio
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from loguru import logger
 
@@ -192,7 +192,7 @@ class RoundContext:
                 follow_up=_complaint(failures, report),
             )
         self._journal(role, output)
-        self._commit(node.id, role, report)
+        self._commit(node.id, role)
         self._record(report, failures, handbacks=spent, role=role.label, node_id=node.id)
         return Verdict(accomplished=True)
 
@@ -220,16 +220,17 @@ class RoundContext:
         role and never said why is a stint nobody can take up again.
         """
         role = self.role_of(node_id)
-        self.record.questions.append(
-            {
-                "round": self.index,
-                "role": role.label if role is not None else node_id,
-                "text": reason,
-                "answered_at": None,
-                "answer": "",
-            }
+        self._persist(
+            lambda record: record.questions.append(
+                {
+                    "round": self.index,
+                    "role": role.label if role is not None else node_id,
+                    "text": reason,
+                    "answered_at": None,
+                    "answer": "",
+                }
+            )
         )
-        self.store.write(self.record)
         logger.info("stint {} round {} filed a question nobody answered", self.record.stint_id, self.index)
         return True
 
@@ -377,14 +378,19 @@ class RoundContext:
         except OSError as exc:  # noqa: BLE001 - a journal that cannot be written must not end the round
             logger.warning("stint {} could not write {}'s journal entry: {}", self.record.stint_id, role.label, exc)
 
-    def _commit(self, node_id: str, role: RoleEntry, report: EnforceReport | None) -> None:
+    def _commit(self, node_id: str, role: RoleEntry) -> None:
         """This role's work, as its own commit under its own name.
 
         One commit a role rather than one a round, so "what did the reviewer
         change" is a question git can answer, and so the next role's boundary is
         measured from a tree this one has finished with.
+
+        Every role of an enforcing stint, not only the hard-enforced ones. A role
+        whose work stayed uncommitted was not merely unrecorded: the next role's
+        base is this commit, so what the soft role wrote read as the hard role's
+        stray write, and the hard role's pass quarantined and reverted it.
         """
-        if report is None or (repository := self.git()) is None:
+        if not self.enforcing or (repository := self.git()) is None:
             return
         try:
             if repository.dirty():
@@ -392,6 +398,27 @@ class RoundContext:
             self._bases[node_id] = repository.head()
         except (HistoryError, OSError) as exc:
             logger.warning("stint {} could not commit {}'s work: {}", self.record.stint_id, role.label, exc)
+
+    def _persist(self, mutate: Callable[[StintRecord], None]) -> None:
+        """Apply a round's own finding to the stint as it stands on disk.
+
+        The record this context was handed is a snapshot taken when the round
+        opened, and the round outlives it: a `stop`, a `pause` or an `answer`
+        arrives from a terminal or an RPC while the roles are running and writes
+        the file. Writing the snapshot back at the end of each role restored the
+        status it was opened with, so the stop was read as `running` at the
+        hand-over and another round opened -- the person's instruction lost
+        without a word.
+
+        So the file is re-read, the finding applied to *that*, and the result
+        kept as what this round now believes. What a round writes here only ever
+        grows -- a round entry, a handback count, a question -- which is what
+        makes re-reading a merge rather than a guess at who wrote last.
+        """
+        current = self.store.read(self.record.stint_id) or self.record
+        mutate(current)
+        self.store.write(current)
+        self.record = current
 
     def _record(
         self,
@@ -419,22 +446,24 @@ class RoundContext:
         about the two before it: a Verifier handed back three times for the same
         append read, on the record, as a Verifier that stayed inside its paths.
         """
-        existing = self.record.round(self.index)
-        entry = self.record.open_round(self.index, existing.run_id if existing is not None else "")
-        if node_id and role:
-            entry.finished[role] = node_id
-        if handbacks:
-            self.record.handbacks[f"r{self.index:02d}-{role}"] = handbacks
-            entry.violations.append(f"{role} was handed back {handbacks} time(s) before this attempt")
-        if report is not None:
-            entry.violations.extend(report.violations)
-        entry.verify = [result.to_dict() for result in self._results.values()]
-        if failures:
-            entry.violations.append(
-                f"{len(failures)} check(s) still failing when the round moved on: "
-                + ", ".join(result.name for result in failures)
-            )
-        self.store.write(self.record)
+        def apply(record: StintRecord) -> None:
+            existing = record.round(self.index)
+            entry = record.open_round(self.index, existing.run_id if existing is not None else "")
+            if node_id and role:
+                entry.finished[role] = node_id
+            if handbacks:
+                record.handbacks[f"r{self.index:02d}-{role}"] = handbacks
+                entry.violations.append(f"{role} was handed back {handbacks} time(s) before this attempt")
+            if report is not None:
+                entry.violations.extend(report.violations)
+            entry.verify = [result.to_dict() for result in self._results.values()]
+            if failures:
+                entry.violations.append(
+                    f"{len(failures)} check(s) still failing when the round moved on: "
+                    + ", ".join(result.name for result in failures)
+                )
+
+        self._persist(apply)
 
 
 UNDONE_HEADING = "What you wrote outside your own paths was undone:"

@@ -9642,6 +9642,10 @@
     "gui.pb.stints_unsupported": {
       "en": "This engine has no runs surface; update it to see multi-round runs here.",
       "zh": "这个引擎没有运行列表接口；升级后才能在这里看到多轮运行。"
+    },
+    "gui.pb.stint_status_finished": {
+      "en": "finished",
+      "zh": "已完成"
     }
   }
 }

@@ -1086,6 +1086,7 @@ function planRow(over: Partial<StintRow> & { stint_id: string }): StintRow {
     max_rounds: 30,
     status: 'running',
     live: true,
+    unfinished: true,
     stop_reason: '',
     workdir: '/w/tree',
     branch: 'stint/stint-a',
@@ -1155,8 +1156,41 @@ describe('the runs a playbook started', () => {
     expect(screen.getByText('1: dev wrote reports/verifier.md')).toBeTruthy()
   })
 
+  /* A paused run is not live, and it still owns its branch and still refuses the
+     next stint on that project -- so the page has to keep offering the verb that
+     ends it. Drawing Stop off `live` left it with no way out on any surface. */
+  it('still offers a stop on a run that is only paused', async () => {
+    const paused = planRow({ stint_id: 'stint-a', live: false, unfinished: true, status: 'paused' })
+    install({
+      stints: async () => [paused],
+      stint: async () => ({ ...planDetail(), stint: paused }),
+      stopStint: async () => ({ ...planDetail(), stint: planRow({ stint_id: 'stint-a', live: false, unfinished: false, status: 'stopped' }) })
+    })
+    await mount()
+    fireEvent.click(screen.getByText('gui.pb.tab_plans'))
+    await act(async () => {})
+    fireEvent.click(screen.getByText('stint-a'))
+    await act(async () => {})
+
+    expect(screen.getByText('gui.pb.stint_stop')).toBeTruthy()
+    fireEvent.click(screen.getByText('gui.pb.stint_stop'))
+    await act(async () => {})
+    expect(screen.queryByText('gui.pb.stint_stop')).toBeNull()
+  })
+
+  /* `finished` is the record's own word for a run that ended normally, and the
+     pill looks the key up by that word: with no message for it the card drew the
+     key itself at the reader. */
+  it('names a finished run rather than showing the key it looked up', async () => {
+    install({ stints: async () => [planRow({ stint_id: 'stint-a', live: false, unfinished: false, status: 'finished' })] })
+    await mount()
+    fireEvent.click(screen.getByText('gui.pb.tab_plans'))
+    await act(async () => {})
+    expect(screen.getByText('gui.pb.stint_status_finished')).toBeTruthy()
+  })
+
   it('offers a stop only while a run is live, and says what a stop does', async () => {
-    const stopped = { ...planDetail(), stint: planRow({ stint_id: 'stint-a', live: false, status: 'stopped' }) }
+    const stopped = { ...planDetail(), stint: planRow({ stint_id: 'stint-a', live: false, unfinished: false, status: 'stopped' }) }
     install({
       stints: async () => [planRow({ stint_id: 'stint-a' })],
       stint: async () => planDetail(),
@@ -1227,7 +1261,11 @@ describe('the runs a playbook started', () => {
     await act(async () => {})
 
     expect(screen.queryByText('gui.pb.stint_pause')).toBeNull()
-    expect(screen.queryByText('gui.pb.stint_stop')).toBeNull()
+    /* The stop stays: a paused run is unfinished, it still owns its branch and
+       still refuses the next stint on that project, so this is the only surface
+       that can end it. */
+    expect(screen.getByText('gui.pb.stint_stop')).toBeTruthy()
+    expect(screen.getByText('gui.pb.stint_resume')).toBeTruthy()
   })
 
   it('draws no pause where the host has no such method', async () => {

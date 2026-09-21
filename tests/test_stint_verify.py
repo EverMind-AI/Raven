@@ -18,6 +18,7 @@ from raven.stint.verify import (
     parse_check_spec,
     render_checks,
     resolve_display,
+    curated_env,
     run_check,
     run_checks,
     save_results,
@@ -105,6 +106,32 @@ def test_the_seed_reaches_the_command_as_an_environment_variable(tmp_path) -> No
         CheckSpec(name="seed", command="echo $STINT_SEED"), cwd=tmp_path, log_dir=tmp_path / "logs", seed="42"
     )
     assert result.stdout_tail.strip() == "42"
+
+
+def test_a_check_sees_the_environment_it_was_given_and_no_other(tmp_path, monkeypatch) -> None:
+    """The curated environment replaces the host's rather than being added to it.
+
+    It is a subset of `os.environ`, so overlaying it onto a full copy removed
+    nothing: the check kept every key the curation exists to drop, and a check's
+    output tail travels into the next role's prompt and into the stint record.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-not-for-a-check")
+    result = run_check(
+        CheckSpec(name="env", command="echo [$ANTHROPIC_API_KEY]"),
+        cwd=tmp_path,
+        log_dir=tmp_path / "logs",
+        env=curated_env(),
+    )
+    assert result.stdout_tail.strip() == "[]", result.stdout_tail
+    assert "sk-not-for-a-check" not in result.stdout_tail
+
+
+def test_a_check_given_no_environment_still_runs_under_the_hosts(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("RAVEN_CHECK_MARKER", "present")
+    result = run_check(
+        CheckSpec(name="env", command="echo $RAVEN_CHECK_MARKER"), cwd=tmp_path, log_dir=tmp_path / "logs"
+    )
+    assert result.stdout_tail.strip() == "present"
 
 
 def test_results_are_saved_with_the_display_they_ran_under(tmp_path) -> None:

@@ -458,6 +458,19 @@ export function openPage(): void {
   void load()
 }
 
+/* Open the page *on* a stint -- every step it takes to actually see one.
+   `openPage` alone left the page on whichever view and whichever playbook
+   detail it was last on, and the page draws the stint only when the stints view
+   is showing and no playbook detail is open, so the fetched run was never the
+   thing on screen. A caller from outside the feature cannot be expected to know
+   that, which is why the sequence lives here rather than at the click. */
+export async function revealStint(stintId: string): Promise<void> {
+  openPage()
+  back()
+  showView('stints')
+  await openStint(stintId)
+}
+
 export function closePage(): void {
   shell().showPage(null)
 }

@@ -569,6 +569,34 @@ class TestRunning:
         assert record.round(1) is None
         assert driver.holding() is False and driver._beats == {}
 
+    async def test_a_terminal_keeps_holding_the_round_a_stop_landed_on(self, tmp_path: Path) -> None:
+        """`stop` ends the stint after this round, and `raven playbook run` holds
+        the terminal for exactly as long as a round of it is running here.
+
+        `holding` asked only the records that still called themselves live, so a
+        stop landing mid-round took the stint out of that set while its round was
+        still in flight: the terminal let go, the process returned, and the roles
+        after the stop never ran (measured end to end 2026-09-21, twice).
+        """
+        from raven.stint.record import STOPPED
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = _spec(confirm=False, roles=[{"as": "probe", "name": "echo", "promptTemplate": "look"}])
+        assert not (await driver.start(spec)).startswith("Error")
+
+        store = StintStore(tool.stints_root("web:stint"))
+        [record] = store.list()
+        tool._live = [record.round(1).run_id]
+        driver._stop_beat(record.stint_id)
+        assert driver.holding() is True, "the round is in this process's active set"
+
+        record.status = STOPPED
+        record.stop_reason = "a person stopped the stint"
+        store.write(record)
+
+        assert driver.holding() is True, "the round in flight is still this process's to finish"
+
     async def test_a_first_round_the_person_refused_closes_the_stint_rather_than_leaving_it_open(
         self, tmp_path: Path
     ) -> None:
@@ -967,6 +995,126 @@ class TestBoundaries:
 
         assert orders.read_text(encoding="utf-8") == "judge fairly\n"
         assert any(".stint/verifier.md" in note for note in context.record.round(1).violations)
+
+    async def test_a_softly_enforced_role_s_work_is_committed_like_everyone_else_s(self, tmp_path: Path) -> None:
+        """A role is committed for having run, not for being hard-enforced.
+
+        Committing only the hard-enforced roles meant a soft role's work never
+        reached a commit, so the next role's base did not hold it and the
+        boundary pass read those files as that role's stray write: the soft
+        role's work was quarantined and reverted, and the hard role was told off
+        for writing it.
+        """
+        spec = _spec(
+            roles=[
+                {
+                    "as": "planner",
+                    "name": "echo",
+                    "promptTemplate": "plan",
+                    "owns": ["reports/**"],
+                    "enforce": {"write": "soft"},
+                    "maxHandbacks": 0,
+                },
+                {"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0},
+            ]
+        )
+        context = self._context(tmp_path, spec)
+
+        planner = self._node("game-dev-r01-planner")
+        await context.node_started(planner.id)
+        (context.workdir / "reports").mkdir()
+        (context.workdir / "reports" / "brief.md").write_text("the plan\n", encoding="utf-8")
+        await context.judge(node=planner)
+
+        dev = self._node("game-dev-r01-dev")
+        await context.node_started(dev.id)
+        (context.workdir / "src" / "main.py").write_text("print('done')\n", encoding="utf-8")
+        await context.judge(node=dev)
+
+        assert (context.workdir / "reports" / "brief.md").read_text(encoding="utf-8") == "the plan\n"
+        assert not any("brief.md" in note for note in context.record.round(1).violations), (
+            context.record.round(1).violations
+        )
+
+    async def test_a_stop_that_lands_mid_round_is_still_there_when_the_round_ends(self, tmp_path: Path) -> None:
+        """The record a round was opened with is a snapshot, and a person writes
+        the file while the roles are running. Writing the snapshot back after
+        each role restored the status it opened with, so a `stop` was read as
+        `running` at the hand-over and another round opened."""
+        from raven.stint.record import STOPPED
+
+        spec = _spec(
+            roles=[
+                {"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0},
+            ]
+        )
+        context = self._context(tmp_path, spec)
+        node = self._node("game-dev-r01-dev")
+        await context.node_started(node.id)
+
+        stopped = context.store.read(context.record.stint_id)
+        stopped.status = STOPPED
+        stopped.stop_reason = "a person stopped the stint"
+        context.store.write(stopped)
+
+        await context.judge(node=node)
+
+        after = context.store.read(context.record.stint_id)
+        assert after.status == STOPPED, "the round wrote its own findings over the person's stop"
+        assert after.stop_reason == "a person stopped the stint"
+        assert after.round(1) is not None, "and still wrote down what the round did"
+
+    async def test_a_round_in_flight_still_runs_its_remaining_roles_after_a_stop(self, tmp_path: Path) -> None:
+        """`stop` ends the stint after this round, not this round. The role after
+        the stop is still judged, still committed and still written down."""
+        from raven.stint.record import STOPPED
+
+        spec = _spec(
+            roles=[
+                {"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0},
+                {"as": "verifier", "name": "echo", "promptTemplate": "check", "owns": ["reports/**"], "maxHandbacks": 0},
+            ]
+        )
+        context = self._context(tmp_path, spec)
+
+        dev = self._node("game-dev-r01-dev")
+        await context.node_started(dev.id)
+        (context.workdir / "src" / "main.py").write_text("print('one')\n", encoding="utf-8")
+        verdict_one = await context.judge(node=dev)
+
+        stopped = context.store.read(context.record.stint_id)
+        stopped.status = STOPPED
+        context.store.write(stopped)
+
+        verifier = self._node("game-dev-r01-verifier")
+        await context.node_started(verifier.id)
+        (context.workdir / "reports").mkdir(exist_ok=True)
+        (context.workdir / "reports" / "v.md").write_text("checked\n", encoding="utf-8")
+        verdict_two = await context.judge(node=verifier)
+
+        assert verdict_one.accomplished and verdict_two.accomplished
+        after = context.store.read(context.record.stint_id)
+        assert after.status == STOPPED
+        assert sorted(after.round(1).finished) == ["dev", "verifier"], after.round(1).finished
+
+    async def test_an_answer_that_lands_mid_round_survives_the_next_role(self, tmp_path: Path) -> None:
+        spec = _spec(
+            roles=[
+                {"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0},
+            ]
+        )
+        context = self._context(tmp_path, spec)
+        node = self._node("game-dev-r01-dev")
+        await context.node_started(node.id)
+
+        answered = context.store.read(context.record.stint_id)
+        answered.questions.append({"round": 1, "role": "dev", "text": "which?", "answered_at": 1, "answer": "this one"})
+        context.store.write(answered)
+
+        await context.judge(node=node)
+
+        after = context.store.read(context.record.stint_id)
+        assert [q["answer"] for q in after.questions] == ["this one"]
 
     async def test_a_failing_check_is_handed_back_to_the_role_not_to_a_person(self, tmp_path: Path) -> None:
         """There is nobody to ask on an unattended run, and the judge already

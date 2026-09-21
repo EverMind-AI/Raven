@@ -8,6 +8,7 @@ import {
   _resetForTests as rackReset,
   sync as rackSync,
 } from '../composer/sheets'
+import { getState as pbState, showView } from '../playbooks/store'
 import { back as subBack, openDagNode, _resetForTests as subReset } from '../subagents/store'
 import { advance, forget, resume, run, settle, start, sync, touch, _resetForTests } from './mount'
 import { fold as storeFold } from './store'
@@ -112,6 +113,19 @@ describe('the dag sheet', () => {
 
     expect(paged).toEqual(['pbPage'])
     expect(stints).toEqual(['stint-7'])
+  })
+
+  /* Fetching the run is not showing it: the page draws a stint only on the
+     stints view with no playbook detail open, so a click that opened the page
+     on the library left the reader looking at the library. */
+  it('leaves the page on the view that draws the run it just read', () => {
+    act(() => { showView('library') })
+    act(() => { start('a', graph('r1', { stint_id: 'stint-7', round_index: 3, round_budget: 30 })) })
+
+    act(() => { click(sheets()[0]!.querySelector('.dround')!) })
+
+    expect(pbState().view).toBe('stints')
+    expect(pbState().openName).toBeNull()
   })
 
   it('raises one sheet in the rack, on the element the rack files', () => {

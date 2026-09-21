@@ -1572,6 +1572,60 @@ class TestStints:
         assert stints.read("stint-a").stop_reason == "a person paused the stint"
         assert [entry["run_id"] for entry in detail["rounds"]] == ["run-1", "run-2"]
 
+    async def test_a_plain_stop_leaves_the_round_in_flight_alone(self, stints) -> None:
+        """The default is the one that keeps a round already paid for."""
+        cancelled: list[str] = []
+
+        class _Loop:
+            def cancel_dag_run(self, run_id: str) -> bool:
+                cancelled.append(run_id)
+                return True
+
+        detail = await mod.playbooks_stints_stop({"stint_id": "stint-a"}, agent_loop_factory=lambda: _Loop())
+
+        assert detail["stint"]["status"] == "stopped"
+        assert cancelled == [], "nothing was asked to stop where it is"
+
+    async def test_stopping_with_now_cuts_the_round_in_flight_short(self, stints) -> None:
+        """`now` is the ask that reaches the round, through the graph's own cancel
+        so the round lands on the path that knows what a cut round means."""
+        cancelled: list[str] = []
+
+        class _Loop:
+            def cancel_dag_run(self, run_id: str) -> bool:
+                cancelled.append(run_id)
+                return True
+
+        record = stints.read("stint-a")
+        running = record.round(record.round_index)
+
+        detail = await mod.playbooks_stints_stop(
+            {"stint_id": "stint-a", "now": True}, agent_loop_factory=lambda: _Loop()
+        )
+
+        assert detail["stint"]["status"] == "stopped"
+        assert cancelled == [running.run_id]
+
+    async def test_a_now_that_reaches_no_round_here_still_stops_the_stint(self, stints) -> None:
+        """A stint held by somebody's terminal is not addressable from a gateway,
+        and the record is what ends it either way."""
+        detail = await mod.playbooks_stints_stop({"stint_id": "stint-a", "now": True}, agent_loop_factory=None)
+
+        assert detail["stint"]["status"] == "stopped"
+        assert stints.read("stint-a").unfinished is False
+
+    async def test_a_paused_stint_can_still_be_stopped(self, stints) -> None:
+        """`unfinished` is the guard, not `live`. A paused stint is not live and
+        still owns its branch, so with `live` there guarding it nothing on any
+        surface could end it -- and the page draws Stop off the same fact."""
+        await mod.playbooks_stints_pause({"stint_id": "stint-a"})
+
+        detail = await mod.playbooks_stints_stop({"stint_id": "stint-a"})
+
+        assert detail["stint"]["status"] == "stopped"
+        assert detail["stint"]["unfinished"] is False
+        assert stints.read("stint-a").unfinished is False
+
     async def test_a_stopped_stint_is_not_reopened_by_pausing_it(self, stints) -> None:
         """`live` is the guard on both verbs, so the later call is a read. Without
         it, pausing something already over would make it unfinished again -- and

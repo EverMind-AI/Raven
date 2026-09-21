@@ -299,8 +299,10 @@ def run_check(
     log_dir.mkdir(parents=True, exist_ok=True)
     out_path = log_dir / f"{spec.name}.out"
     err_path = log_dir / f"{spec.name}.err"
-    environment = dict(os.environ)
-    environment.update(env or {})
+    # Replaced, not overlaid: `curated_env` hands back a *subset* of the host's
+    # environment, and updating a full copy of `os.environ` with a subset removes
+    # nothing -- the check kept every secret the curation was there to drop.
+    environment = dict(env) if env is not None else dict(os.environ)
     if display is not None:
         environment.update(display.env())
     if seed is not None:

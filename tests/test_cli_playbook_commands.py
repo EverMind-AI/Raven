@@ -868,6 +868,31 @@ class TestPlanCommands:
         assert "finishes and reports" in result.output
         assert store.read("stint-20260917T000000Z").status == "stopped"
 
+    def test_stop_now_says_what_it_could_not_reach_when_no_page_is_served(self, stints: Path) -> None:
+        """`--now` reaches a round only through the raven running it. With none
+        served, the stint is still ended and the terminal holding the round is
+        named, rather than the caller being told the round was cut when it was
+        not."""
+        store, _ = _plan_on_disk(stints)
+
+        result = runner.invoke(app, ["playbook", "stints", "stop", "stint-20260917T000000Z", "--now"])
+
+        assert result.exit_code == 0, result.output
+        assert "Ctrl-C" in result.output
+        assert store.read("stint-20260917T000000Z").status == "stopped"
+
+    def test_stopping_a_paused_plan_is_what_ends_it(self, stints: Path) -> None:
+        """A paused stint is not live, and it still refuses the next stint on the
+        project. Guarding `stop` on `live` left the one verb that ends it
+        refusing it, and the refusal named `stop` as the way out."""
+        store, _ = _plan_on_disk(stints, status="paused")
+
+        result = runner.invoke(app, ["playbook", "stints", "stop", "stint-20260917T000000Z"])
+
+        assert result.exit_code == 0, result.output
+        assert store.read("stint-20260917T000000Z").status == "stopped"
+        assert store.read("stint-20260917T000000Z").unfinished is False
+
     def test_stopping_a_finished_plan_says_so_rather_than_pretending(self, stints: Path) -> None:
         _plan_on_disk(stints, status="finished")
 

@@ -14296,6 +14296,10 @@
           "live": {
             "type": "boolean"
           },
+          "unfinished": {
+            "type": "boolean",
+            "description": "Not over: running, interrupted or paused. What `stop` acts on."
+          },
           "stop_reason": {
             "type": "string"
           },
@@ -14322,6 +14326,7 @@
           "max_rounds",
           "status",
           "live",
+          "unfinished",
           "stop_reason",
           "workdir",
           "branch",
