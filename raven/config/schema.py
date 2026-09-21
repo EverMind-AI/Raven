@@ -1258,9 +1258,17 @@ class ToolSearchConfig(Base):
     there (``ToolRegistry.hide_from_schema``), and that has nothing to do with
     catalog size. Turning this off folds nothing; it does not take the name
     route away.
+
+    On by default, which costs a deploy under the threshold nothing: the
+    strategy drops ``tool_search`` from every request while the catalog fits, so
+    the switch only starts deciding anything once a deploy has more tools than a
+    request should carry. Neither name can be taken away through
+    ``tools.disabled_tools`` -- their absence is how the fold reads "this request
+    has no search route", so an off switch there would unfold the array rather
+    than slim it. This setting is the one that speaks for both.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     compaction_threshold: int = 50
     """Tool-catalog size that triggers compaction: at or below this many tools
     everything is exposed directly; above it, schemas are withheld."""

@@ -99,10 +99,14 @@ def test_disabled_registers_no_search_but_keeps_tool_call(workspace) -> None:
     assert loop.tools.has("tool_call")
 
 
-def test_none_config_registers_no_search_but_keeps_tool_call(workspace) -> None:
+def test_none_config_takes_the_factory_default(workspace) -> None:
+    # A host that wires no tool-search config gets the schema's, and the schema
+    # ships the fold on -- so "no config" is the on case, not a third state. It
+    # costs a small catalog nothing: the strategy drops tool_search from every
+    # request until the catalog passes the threshold.
     loop = _make_loop(workspace, None)
-    assert not loop.tools.has("tool_search")
-    assert loop.strategies.get("tool_search") is None
+    assert loop.tools.has("tool_search")
+    assert loop.strategies.get("tool_search") is not None
     assert loop.tools.has("tool_call")
 
 
