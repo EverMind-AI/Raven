@@ -1073,6 +1073,7 @@ class StintDriver:
                 # Built when asked rather than now, so a round that is not going to
                 # be asked about does not pay for the text.
                 confirm_question=lambda: approval(spec, record, layout),
+                **_own_servers(spec, record),
             )
         except RoundBudgetSpentError as spent:
             return await self._pause_on_budget(record, store, index, spent.refusal)
@@ -1144,6 +1145,31 @@ def _release_tasks(record: StintRecord, index: int) -> None:
             )
     except (backlog_mod.BacklogError, OSError) as exc:
         logger.warning("stint {} could not tidy its backlog after round {}: {}", record.stint_id, index, exc)
+
+
+def _own_servers(spec: PlaybookSpec, record: StintRecord) -> dict[str, Any]:
+    """The playbook's own ``mcpServers``, as the graph tool takes them, for one round.
+
+    The same hand-off the executor makes for a ``dag`` playbook, made here for
+    every round because every round is its own dispatch: the servers are read
+    fresh from the spec the record carries and the machine's stored secrets, so
+    a credential stored between two rounds reaches the next one. Empty when the
+    playbook carries no section, and the tool then resolves a role's ``mcps``
+    against the host's servers as before.
+    """
+    if not spec.mcp_servers:
+        return {}
+    from raven.playbook.credentials import credential_scope, stored_secret_params
+    from raven.playbook.mcp import playbook_mcp_servers, servers_missing_a_credential
+
+    def values() -> dict[str, str]:
+        return {**dict(record.values or {}), **stored_secret_params(spec)}
+
+    return {
+        "mcp_servers": lambda: playbook_mcp_servers(spec, values()),
+        "mcp_scope": credential_scope(spec.name),
+        "mcp_credential_gaps": lambda: servers_missing_a_credential(spec, values()),
+    }
 
 
 def _nothing_ran(summary: str) -> bool:

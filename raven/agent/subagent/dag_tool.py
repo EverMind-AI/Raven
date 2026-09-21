@@ -1458,8 +1458,19 @@ class SubAgentDagTool(Tool):
         confirm: bool = False,
         origin: "Mapping[str, str] | None" = None,
         confirm_question: "Callable[[], str] | None" = None,
+        mcp_servers: "Mapping[str, MCPServerConfig] | Callable[[], Mapping[str, MCPServerConfig]] | None" = None,
+        mcp_scope: str | None = None,
+        mcp_credential_gaps: "Callable[[], frozenset[str]] | None" = None,
     ) -> str | ToolResult:
         """Run one graph as a round of a multi-round stint. Not for a model.
+
+        ``mcp_servers``, ``mcp_scope`` and ``mcp_credential_gaps`` are the same
+        hand-off :meth:`execute` takes: the playbook's own ``mcpServers``
+        section, scoped and re-read per dispatch. A stint declaring a server of
+        its own ran that server from the CLI, whose pre-flight wires every
+        declared server into the host source, and not from a conversation,
+        where this door had no such argument and a role's ``mcps`` resolved
+        against the host's servers alone.
 
         Separate from :meth:`execute` rather than three more keywords on it.
         ``execute`` is what a model reaches through the registry, and every
@@ -1482,15 +1493,16 @@ class SubAgentDagTool(Tool):
         Always backgrounded: the hand-over that opens the next round only exists
         on that path, and a round is not something a turn waits for.
         """
-        return await self._execute(
-            nodes,
-            True,
-            confirm=confirm,
-            task_summary=task_summary,
-            stint=stint,
-            origin=_DagOrigin.from_dict(origin) if origin is not None else None,
-            confirm_question=confirm_question,
-        )
+        with run_mcp_scope(mcp_servers, scope=mcp_scope, credential_gaps=mcp_credential_gaps):
+            return await self._execute(
+                nodes,
+                True,
+                confirm=confirm,
+                task_summary=task_summary,
+                stint=stint,
+                origin=_DagOrigin.from_dict(origin) if origin is not None else None,
+                confirm_question=confirm_question,
+            )
 
     async def _execute(
         self,

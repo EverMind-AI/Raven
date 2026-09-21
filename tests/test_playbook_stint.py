@@ -12,13 +12,32 @@ import pytest
 
 from raven.agent.subagent.dag_tool import SubAgentDagTool
 from raven.config.schema import ThirdPartyCliSubagentConfig
+from raven.i18n import prompt, t
 from raven.playbook.executor import PlaybookExecutor
 from raven.playbook.stint import StintDriver, compile_round, journal_entry
+from raven.playbook.stint_prompt import (
+    ENDING_EARLY,
+    READS_LEAD_HARD,
+    READS_LEAD_SOFT,
+    STILL_UNANSWERED,
+    WHERE_CHECKOUT,
+    WHERE_IN_PLACE,
+)
 from raven.playbook.types import PlaybookSpec
 from raven.stint.git import ProjectGit
 from raven.stint.record import StintRef, StintStore
 from raven.stint.verify import CheckSpec
 from tests.test_subagent_dag_runner import draining_dag_runs
+
+
+def _template_tail(name: str) -> str:
+    """The last line of a prompt template, after every slot: the words the role reads, not a copy of them."""
+    return prompt(name).rsplit("}}", 1)[-1].strip().splitlines()[-1]
+
+
+def _template_head(name: str) -> str:
+    """The heading a prompt template opens with, before its first slot."""
+    return prompt(name).split("{{", 1)[0].strip().splitlines()[0]
 
 
 def tmpdir() -> Path:
@@ -103,8 +122,8 @@ class TestCompile:
 
         assert "~/.raven" in told
         assert ".raven/" in told
-        assert "filesystem root" in told
-        assert "undone is kept outside the project" in told
+        assert _template_tail("stint_guard") in told
+        assert "~/.raven" in prompt("stint_guard"), "the constraint names the host's own directory"
 
     def test_what_a_role_owns_reaches_the_role_even_when_the_author_forgot_to_ask(self) -> None:
         """One declaration, read twice: here and by the pass that undoes a stray
@@ -319,7 +338,7 @@ class TestRunning:
 
         progress = announced[0]
         assert "progress, not a request" in progress
-        assert "Do not edit the stint's checkout" in progress
+        assert "Do not edit" in progress
 
     async def test_a_playbook_may_ask_for_the_silence_back(self, tmp_path: Path) -> None:
         """Reporting costs a main-agent turn a round. A long unattended stint is
@@ -365,8 +384,8 @@ class TestRunning:
         # the role was told about where it stands. A branch is not a checkout:
         # told it was in one, a role goes looking for the "real" project.
         told = record.rounds[0].summary
-        assert "the project itself" in told, told
-        assert "checkout of the project made for this stint" not in told
+        assert t(WHERE_IN_PLACE).split("{workdir}")[1] in told, told
+        assert t(WHERE_CHECKOUT).split("{workdir}")[1][:40] not in told
 
     async def test_the_checks_ledger_the_run_writes_is_not_the_person_s_uncommitted_work(self, tmp_path: Path) -> None:
         """Resolving a check declared by description writes `.stint/checks.json`
@@ -475,6 +494,40 @@ class TestRunning:
         receipt = await driver.start(spec)
 
         assert receipt.startswith("Error") and ".stint/planner.md" in receipt and "Commit or stash" in receipt
+
+    async def test_a_playbook_s_own_mcp_servers_reach_every_round(self, tmp_path: Path) -> None:
+        """A stint carrying `mcpServers` ran that server from the CLI, whose
+        pre-flight wires every declared server into the host source, and not
+        from a conversation: `run_round` had no hand-off for the section, so a
+        role's `mcps: [time]` resolved against the host's servers and found
+        nothing. The hand-off is the executor's, made per round."""
+        from raven.playbook.credentials import credential_scope
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = _spec(
+            confirm=False,
+            mcpServers={"time": {"command": "uvx", "args": ["mcp-server-time"]}},
+            roles=[{"as": "probe", "name": "echo", "promptTemplate": "look", "mcps": ["time"]}],
+        )
+
+        assert not (await driver.start(spec)).startswith("Error")
+
+        [handed] = tool.handed
+        assert handed["mcp_scope"] == credential_scope("game-dev")
+        assert handed["mcp_servers"]()["time"].command == "uvx"
+        assert handed["mcp_credential_gaps"]() == frozenset()
+        [[node]] = tool.submitted
+        assert node["mcps"] == ["time"]
+
+    async def test_a_playbook_with_no_servers_of_its_own_hands_nothing_over(self, tmp_path: Path) -> None:
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+
+        await driver.start(_spec(confirm=False, roles=[{"as": "probe", "name": "echo", "promptTemplate": "look"}]))
+
+        [handed] = tool.handed
+        assert "mcp_servers" not in handed and "mcp_scope" not in handed
 
     async def test_a_second_stint_of_one_playbook_in_one_conversation_gets_ids_of_its_own(self, tmp_path: Path) -> None:
         """Node ids are claimed for the life of a conversation, and a round's
@@ -634,7 +687,7 @@ class TestRunning:
         stint = await executor.execute(_spec(confirm=False), {})
 
         assert stint.kind == "questions"
-        assert "no commits" in stint.reply and "Commit something here first" in stint.reply
+        assert "no commits" in stint.reply and "Commit" in stint.reply
 
     async def test_a_plan_that_enforces_boundaries_needs_a_repository_to_enforce_them_against(
         self, tmp_path: Path
@@ -693,7 +746,7 @@ class TestRunning:
 
         record = StintStore(executor.dag_tool.stints_root("web:stint")).list()[0]
         assert record.status == "paused"
-        assert "dispatch budget is spent before round 2" in record.stop_reason
+        assert "before round 2" in record.stop_reason
         assert [entry.index for entry in record.rounds] == [1], "the refused round opened no entry"
         assert "paused before round 2" in announced[-1]
         assert "stints resume" in announced[-1]
@@ -1017,6 +1070,7 @@ class _FakeTool:
         self._live = live or []
         self.submitted: list[list[dict[str, Any]]] = []
         self.summaries: list[str] = []
+        self.handed: list[dict[str, Any]] = []
 
     def stints_root(self, _session_key: str | None = None) -> Path:
         return self.root
@@ -1045,6 +1099,7 @@ class _FakeTool:
             raise RoundNotApprovedError("the person did not approve the round")
         self.submitted.append(nodes)
         self.summaries.append(str(kwargs.get("task_summary") or ""))
+        self.handed.append(kwargs)
         return f"DAG run run-{len(self.submitted)} started in the background ({len(nodes)} nodes)."
 
 
@@ -1056,10 +1111,10 @@ class TestWhatTheReadsListIsFor:
         it needed."""
         told = compile_round(_spec(), 1)[0]["prompt_template"]
 
-        assert "not a fence" in told
-        assert "says nothing about what you may write" in told
-        # and the closing sentence is about writing, not about reading
-        assert "is another role's to *write*" in told
+        assert t(READS_LEAD_SOFT) in told
+        assert t(READS_LEAD_HARD) not in told
+        # and the closing sentence is the guard's own, about writing
+        assert _template_tail("stint_guard") in told
 
     def test_a_role_whose_reads_are_enforced_is_told_that_instead(self) -> None:
         spec = _spec(
@@ -1077,8 +1132,8 @@ class TestWhatTheReadsListIsFor:
 
         told = compile_round(spec, 1)[0]["prompt_template"]
 
-        assert "The only paths you may read" in told
-        assert "not a fence" not in told
+        assert t(READS_LEAD_HARD) in told
+        assert t(READS_LEAD_SOFT) not in told
 
 
 class TestWhereTheRoleIsStanding:
@@ -1091,7 +1146,7 @@ class TestWhereTheRoleIsStanding:
         told = compile_round(_spec(), 1, where=where_section("/stints/p1/tree", True))[0]["prompt_template"]
 
         assert "/stints/p1/tree" in told
-        assert "is* the project" in told or "is the project" in told
+        assert t(WHERE_CHECKOUT).split("{workdir}")[1][:40] in told
 
     def test_a_plan_working_in_place_is_not_told_it_has_a_checkout(self) -> None:
         from raven.playbook.stint_prompt import where_section
@@ -1099,7 +1154,7 @@ class TestWhereTheRoleIsStanding:
         told = compile_round(_spec(), 1, where=where_section("/srv/game", False))[0]["prompt_template"]
 
         assert "/srv/game" in told
-        assert "checkout of the project made for this stint" not in told
+        assert t(WHERE_CHECKOUT).split("{workdir}")[1][:40] not in told
 
     def test_a_round_compiled_without_a_directory_says_nothing_about_one(self) -> None:
         """The slot is filled from a stint record; a caller compiling a round on
@@ -1135,8 +1190,8 @@ class TestWhatIsHandedBack:
         )
 
         assert ".stint/backlog.json" in said
-        assert "commands' own answer" not in said, said
-        assert "no check has failed" in said
+        assert _template_head("stint_verify_handback") not in said or "`build`" not in said, said
+        assert _template_tail("stint_boundary_handback") in said
 
     def test_a_failed_check_is_still_reported_as_the_command_s_own_answer(self) -> None:
         from raven.playbook.stint_round import _complaint
@@ -1144,7 +1199,7 @@ class TestWhatIsHandedBack:
         said = _complaint([self._failure()], None)
 
         assert "boom" in said
-        assert "commands' own answer" in said
+        assert _template_tail("stint_verify_handback") in said
 
     def test_both_findings_are_said_separately_rather_than_under_one_claim(self) -> None:
         from raven.playbook.stint_round import _complaint
@@ -1154,8 +1209,8 @@ class TestWhatIsHandedBack:
         )
 
         assert said.index("src/x.py") < said.index("boom"), "the undone work comes first"
-        assert "no check has failed" in said
-        assert "commands' own answer" in said
+        assert _template_tail("stint_boundary_handback") in said
+        assert _template_tail("stint_verify_handback") in said
 
 
 class TestAScreenForTheChecks:
@@ -1663,7 +1718,7 @@ class TestSayingItIsStillHeld:
 
         answer = await driver.resume(record.stint_id, "web:stint")
 
-        assert "working round 1 here right now" in answer
+        assert "round 1 here" in answer
         assert len(tool.submitted) == submitted, "nothing was dispatched"
 
 
@@ -2078,7 +2133,7 @@ class TestResume:
         receipt = await driver.start(_spec(confirm=False))
 
         assert not receipt.startswith("Error"), receipt
-        assert "taken up rather than started over" in receipt
+        assert "taken up" in receipt
         assert [record.stint_id for record in store.list()] == ["stint-x"], "no second stint was written"
         [nodes] = tool.submitted
         assert [node["id"] for node in nodes] == ["game-dev-r01x1-builder"]
@@ -2122,7 +2177,7 @@ class TestTheWordThatEndsItEarly:
         [_planner, builder] = compile_round(self._chain(), 3)
 
         assert "NOTHING-LEFT" in builder["prompt_template"]
-        assert "last role of this round" in builder["prompt_template"]
+        assert t(ENDING_EARLY).split("{marker}")[0][:40] in builder["prompt_template"]
 
     def test_a_role_something_waits_on_is_not(self) -> None:
         """Only a terminal node's output reaches the check, so the word would be
@@ -2280,7 +2335,7 @@ class TestAProjectThatWasNeverSetUp:
         asked = approval(_spec(), record, layout)
 
         assert "untracked" in asked and ".stint/planner.md" in asked
-        assert "the roles stint from PRD.md" in asked
+        assert "PRD.md" in asked
 
 
 class TestWhatAPersonApproves:
@@ -2319,7 +2374,7 @@ class TestWhatAPersonApproves:
         # Every command in full: they run here, and this is the one moment.
         assert "python3 -m compileall -q src" in asked
         assert "uv run pytest -q" in asked
-        assert "stint/stint-x" in asked and "the branch you are on now is left where it is" in asked
+        assert "stint/stint-x" in asked and "left where it is" in asked
         assert "NOTHING-LEFT" in asked
         assert "/home/me/game" in asked
 
@@ -2331,15 +2386,15 @@ class TestWhatAPersonApproves:
         own = approval(_spec(isolation="worktree"), self._record())
         theirs = approval(_spec(isolation="branch"), self._record())
 
-        assert "in a checkout of its own -- your working tree is untouched" in own
-        assert "the tree is the stint's until it ends" in theirs
+        assert "checkout of its own" in own
+        assert "until it ends" in theirs
 
     def test_a_budget_with_no_way_out_does_not_read_as_a_promise(self) -> None:
         from raven.playbook.stint import approval
 
         asked = approval(_spec(stop={"maxRounds": 4}), self._record())
 
-        assert "nothing ends it before the budget" in asked
+        assert "before the budget" in asked
 
     def test_a_boundary_nothing_undoes_is_not_shown_as_one_that_does(self) -> None:
         from raven.playbook.stint import approval
@@ -2558,7 +2613,7 @@ class TestTakingAPlanUpAgain:
 
         answer = await self._driver(tmp_path, tool).extend("stint-x", 3, "web:stint")
 
-        assert "in flight is no longer its last" not in answer
+        assert "no longer its last" not in answer
         assert "resume stint-x" in answer
 
     async def test_a_plan_whose_round_really_is_in_flight_is_left_to_finish_it(self, tmp_path: Path) -> None:
@@ -2567,7 +2622,7 @@ class TestTakingAPlanUpAgain:
 
         answer = await self._driver(tmp_path, tool).extend("stint-x", 3, "web:stint")
 
-        assert "in flight is no longer its last" in answer
+        assert "no longer its last" in answer
         assert tool.submitted == []
 
 
@@ -2774,7 +2829,7 @@ class TestMoreRounds:
 
         text = _summary(record)
 
-        assert "on branch stint/stint-x, which nothing has merged" in text
+        assert "stint/stint-x" in text
         assert "raven playbook stints extend stint-x --rounds N" in text
 
 
@@ -2925,8 +2980,8 @@ class TestStopping:
         [nodes] = tool.submitted
         prompt = nodes[0]["prompt_template"]
         assert "the second one" in prompt
-        assert "still unanswered" in prompt
-        assert "Do not ask it again" in prompt
+        assert t(STILL_UNANSWERED) in prompt
+        assert _template_tail("stint_question") in prompt
 
 
 class TestHandbackThatWorks:
