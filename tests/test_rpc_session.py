@@ -1812,6 +1812,40 @@ async def test_session_pin_persists_and_shows_up_in_the_list(tmp_path: Path, mon
     assert row["pinned"] is False
 
 
+async def test_a_refused_pin_or_rename_is_reported_rather_than_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A filesystem that refuses the append answers pending, not success.
+
+    Same contract the archive verb answers under: the flag holds in memory for
+    as long as this process lives, and the reply says it did not reach the
+    disk, so a client does not draw a state the next load will contradict.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+    for key in ("tui:20260610_100000_pinrefused", "tui:20260610_100000_titlerefused"):
+        session = mgr.get_or_create(key)
+        session.add_message("user", "hello")
+        mgr.save(session)
+
+    def refuse(*_args: object, **_kwargs: object) -> bool:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(mgr, "append_metadata_patch", refuse)
+
+    pinned = await session_pin({"session_id": "tui:20260610_100000_pinrefused", "pinned": True})
+    assert pinned == {"pinned": True, "session_key": "tui:20260610_100000_pinrefused", "pending": True}
+    assert mgr.get_or_create("tui:20260610_100000_pinrefused").metadata["pinned"] is True
+
+    named = await session_title({"session_id": "tui:20260610_100000_titlerefused", "title": "by hand"})
+    assert named == {"title": "by hand", "session_key": "tui:20260610_100000_titlerefused", "pending": True}
+    assert mgr.get_or_create("tui:20260610_100000_titlerefused").metadata["title"] == "by hand"
+
+
 async def test_pinning_and_renaming_keep_a_key_another_writer_added(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

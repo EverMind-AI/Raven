@@ -108,6 +108,30 @@ def test_a_save_does_not_resurrect_a_key_this_copy_cleared(tmp_path: Path):
     assert stored.get("archived") is True
 
 
+def test_a_save_over_a_transcript_with_no_record_writes_its_own(tmp_path: Path):
+    """Nothing to merge under is not an error; this copy's metadata stands.
+
+    A transcript can lose its metadata record -- a crashed writer, a truncated
+    file -- and the merge has nothing to read. Refusing to save then would
+    lose the conversation over a record that is already gone.
+    """
+    key = "tui:20260610_100000_norecord"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(key)
+    session.add_message("user", "hello")
+    session.metadata["archived"] = True
+    mgr.save(session)
+
+    path = mgr.session_path(key)
+    kept = [line for line in path.read_text(encoding="utf-8").splitlines() if '"_type": "metadata"' not in line]
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+    session.add_message("user", "again")
+    mgr.save(session)
+
+    assert _last_metadata(path).get("archived") is True
+
+
 def test_a_save_re_reads_only_when_the_file_moved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """The merge costs a scan, and an undisturbed conversation does not pay it.
 
