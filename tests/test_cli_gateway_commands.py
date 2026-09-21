@@ -1163,3 +1163,160 @@ def test_a_swap_cancelled_mid_unbind_leaves_no_live_watcher_thread(tmp_path) -> 
             break
         time.sleep(0.1)
     assert _live() == before, "a generation's watcher outlived the shutdown"
+
+
+async def test_the_control_plane_keeps_the_historical_port_when_the_span_is_free(monkeypatch) -> None:
+    """The fallback below must not move the port on a host that has one free."""
+    from raven.cli.gateway_commands import _CONTROL_PORT_DEFAULT, _control_plane_port
+    from raven.rpc.transports import ws
+
+    async def _free(preferred: int, **_kwargs) -> int:
+        return preferred + 1
+
+    monkeypatch.setattr(ws, "pick_port", _free)
+    assert await _control_plane_port() == _CONTROL_PORT_DEFAULT + 1
+
+
+async def test_the_control_plane_falls_back_to_an_os_assigned_port(monkeypatch) -> None:
+    """Every port in the probe span can be refused at once, and then the gateway
+    must still come up. Windows reserves whole hundred-port blocks (winnat), a
+    host whose dynamic range starts low gets them over 8765..8784, and a bind
+    inside one fails while netstat shows the port unused. The raise reached no
+    handler, so `raven web` died on a port nobody had asked for."""
+    from raven.cli.gateway_commands import _control_plane_port
+    from raven.rpc.transports import ws
+
+    async def _none_free(preferred: int, **_kwargs) -> int:
+        raise OSError(f"no free port in {preferred}..{preferred + 20}")
+
+    monkeypatch.setattr(ws, "pick_port", _none_free)
+    assert await _control_plane_port() == 0
+
+
+def _hold_exclusively(sock) -> None:
+    """Ask for the exclusivity the running platform actually means by it.
+
+    ``SO_REUSEADDR`` is what POSIX needs: with a live listener behind it the
+    port is taken, and the option only lets the test reclaim it without waiting
+    out TIME_WAIT. Winsock reads the same option as permission for a second
+    socket to bind the identical address and port, which is the opposite of
+    what the holder wants, so Windows gets ``SO_EXCLUSIVEADDRUSE`` instead.
+
+    Keyed on the constant rather than on ``sys.platform`` because the constant
+    is the thing that decides: a platform that does not define it has no
+    Winsock semantics to defend against.
+    """
+    import socket
+
+    exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+    option = socket.SO_REUSEADDR if exclusive is None else exclusive
+    sock.setsockopt(socket.SOL_SOCKET, option, 1)
+
+
+@pytest.mark.parametrize("windows", [True, False], ids=["windows", "posix"])
+def test_the_port_holder_asks_for_the_exclusivity_its_platform_means(
+    windows: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The holder below has to keep a port from being bound twice, and the two
+    platforms spell that differently.
+
+    On POSIX ``SO_REUSEADDR`` plus a live listener does it. On Windows the same
+    option does the opposite: Winsock lets a second socket bind the identical
+    address and port, with indeterminate ownership, so ``_port_is_free`` -- which
+    sets ``SO_REUSEADDR`` itself -- can bind a port this holder is listening on.
+    ``pick_port`` would then return the base port and the exhaustion case below
+    would fail without anything being wrong with the code it guards.
+
+    Both branches are driven here because they cannot both be driven anywhere
+    else: the unit matrix is one cell, ubuntu, and ``SO_EXCLUSIVEADDRUSE`` does
+    not exist on it. Only the option asked for is asserted. Whether Winsock then
+    refuses the second bind is Winsock's contract, not this repository's, and is
+    not claimed to have been observed here.
+    """
+    import socket
+
+    from tests.test_cli_gateway_commands import _hold_exclusively
+
+    asked: list[tuple[int, int, int]] = []
+
+    class _Sock:
+        def setsockopt(self, level: int, option: int, value: int) -> None:
+            asked.append((level, option, value))
+
+    exclusive = 0x4321
+    if windows:
+        monkeypatch.setattr(socket, "SO_EXCLUSIVEADDRUSE", exclusive, raising=False)
+    else:
+        monkeypatch.delattr(socket, "SO_EXCLUSIVEADDRUSE", raising=False)
+
+    _hold_exclusively(_Sock())
+
+    wanted = exclusive if windows else socket.SO_REUSEADDR
+    assert asked == [(socket.SOL_SOCKET, wanted, 1)]
+
+
+async def test_pick_port_raises_the_class_the_fallback_catches() -> None:
+    """The fallback catches one exception class, decided in another module.
+
+    Both cases above replace ``pick_port`` with a stub that raises ``OSError``
+    itself, so they pin the helper's reaction to a raise they authored and would
+    not notice ``pick_port`` starting to raise something else -- which turns the
+    fallback into dead code and brings back the bring-up crash this change
+    exists to remove. This case reaches the real function instead.
+    """
+    import socket
+
+    from raven.rpc.transports.ws import _PORT_PROBE_SPAN, pick_port
+
+    def _hold(base: int) -> list[socket.socket] | None:
+        """The whole span held here, or None if any port was already taken.
+
+        Occupied the way ``_port_is_free`` probes for it: that probe sets
+        SO_REUSEADDR, so a socket merely bound does not keep it out and only a
+        live listener does -- on POSIX. Winsock reads that option as leave to
+        bind the same address and port a second time, so the holder asks for
+        the platform's own spelling of exclusivity; see ``_hold_exclusively``.
+        Holding every port here rather than counting a stranger's as one of
+        them is what stops this racing them releasing it.
+        """
+        held: list[socket.socket] = []
+        for port in range(base, base + _PORT_PROBE_SPAN):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            _hold_exclusively(sock)
+            try:
+                sock.bind(("127.0.0.1", port))
+                sock.listen(1)
+            except OSError:
+                sock.close()
+                for other in held:
+                    other.close()
+                return None
+            held.append(sock)
+        return held
+
+    for base in range(41000, 41000 + 10 * _PORT_PROBE_SPAN, _PORT_PROBE_SPAN):
+        held = _hold(base)
+        if held is not None:
+            break
+    else:
+        pytest.fail("no span of free ports to exhaust; the contract went unchecked")
+
+    try:
+        with pytest.raises(OSError):
+            await pick_port(base)
+    finally:
+        for sock in held:
+            sock.close()
+
+
+def test_the_gateway_takes_its_control_port_from_the_fallback() -> None:
+    """The two tests above only bind the helper; this pins the caller to it.
+    Both passed while the command still probed inline, which is the state that
+    shipped the failure."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    assert "ControlPlaneServer(await _control_plane_port()" in src
+    assert "pick_port(8765)" not in src, "an inline probe has no fallback to fall back to"
