@@ -119,7 +119,7 @@ from raven.agent.subagent.acp_registry_presets import (
 #             printed on stderr, matched by sessionIdPattern)
 
 # Pinned deliberately; see the module docstring.
-_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.66.0"
+_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.79.0"
 _CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@1.1.14"
 
 SHIM_LAUNCHED_PRESETS = frozenset({"claude_code", "codex"}) | ACP_REGISTRY_SHIM_PRESETS
@@ -147,9 +147,13 @@ really does reach for a local install: ``pi-acp`` launches ``pi`` and fails
 with "executable not found" without it. The other two shims bring their agent
 along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
 runs the CLI its ``@anthropic-ai/claude-agent-sdk`` pin carries as a
-per-platform optional dependency (read from the 0.66.0 package on 2026-09-20),
-so a ``claude`` on PATH is neither needed nor the one that answers -- and what
-either wants is a login, not an install.
+per-platform optional dependency (read from the 0.66.0 and 0.79.0 packages on
+2026-09-20/21), so a ``claude`` on PATH is neither needed nor the one that
+answers -- and what either wants is a login, not an install. The pin is also
+what decides which Claude models the row can reach: 0.66.0 bundled CLI 2.1.220,
+which refuses a model newer than it knows ("version 2.1.251 or newer is
+required"), so an account whose Claude settings name a recent model could not
+connect at all; 0.79.0 bundles 2.1.274.
 """
 
 
