@@ -5235,14 +5235,6 @@
       "en": "Connect a provider first",
       "zh": "先接入一个模型供应商"
     },
-    "gui.agent.setup_available": {
-      "en": "Available",
-      "zh": "可以接入"
-    },
-    "gui.agent.setup_connected": {
-      "en": "Connected",
-      "zh": "已接入"
-    },
     "gui.agent.setup_scanning": {
       "en": "Scanning",
       "zh": "检测中"

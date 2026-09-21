@@ -162,8 +162,8 @@ const without = (map: Record<string, Failure>, name: string): Record<string, Fai
 }
 
 /* One row's write, held on `joining` for its length and remembered on `failed`
-   when it does not land. The page's verbs all come through here; the wizard's
-   `connect` / `disconnect` below keep their toast. */
+   when it does not land. Every verb -- the hub's and the wizard's -- comes
+   through here. */
 export async function act(row: ExtAgentRow, op: ExtAgentOp, args: ExtAgentActArgs = {}): Promise<void> {
   set({ joining: [...get().joining, row.name], failed: without(get().failed, row.name) })
   try {
@@ -238,36 +238,6 @@ export async function recheck(row: ExtAgentRow): Promise<void> {
   const still = !!now && sectionOf(now) === 'missing'
   const rest = get().stillMissing.filter((name) => name !== row.name)
   set({ stillMissing: still ? [...rest, row.name] : rest })
-}
-
-/* The wizard's one connect, choosing the write by the row's stage the way the
-   settings page does: a preset not yet on the roster is added, one switched
-   off (configured, or one of Raven's own shipped agents) has its flag put
-   back, and a stale one -- its preset moved to another transport -- is removed
-   and re-added, because a flag would leave the old command line in place.
-   Held in `joining` for the length of the write so a caller can disable that
-   one row alone -- `subagents.add` pings the agent for up to 60s and may
-   refuse. */
-export async function connect(row: ExtAgentRow): Promise<void> {
-  const stage = stageOf(row)
-  const op: ExtAgentOp = stage === 'add' ? 'connect' : stage === 'stale' ? 'migrate' : 'toggle'
-  set({ joining: [...get().joining, row.name] })
-  try {
-    await run(op, row, op === 'toggle' ? { enabled: true } : {})
-  } finally {
-    set({ joining: get().joining.filter((name) => name !== row.name) })
-  }
-}
-
-/* Only marks it unavailable in the registry, same as the settings page's own
-   disconnect -- the entry stays, and a later connect puts it back. */
-export async function disconnect(row: ExtAgentRow): Promise<void> {
-  set({ joining: [...get().joining, row.name] })
-  try {
-    await run('toggle', row, { enabled: false })
-  } finally {
-    set({ joining: get().joining.filter((name) => name !== row.name) })
-  }
 }
 
 /* The rows the wizard's step counts against: found on this machine, whatever

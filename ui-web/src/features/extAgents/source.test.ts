@@ -8,19 +8,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { FixtureTransport } from '../../rpc/fixtureTransport'
 import { setGateway } from '../../rpc/gateway'
-import {
-  resetExtAgentsSeen,
-  extAgentsFetch,
-  extAgentRowOf,
-  extAgentsSource,
-  isAvailable,
-  isConnected,
-  isFound,
-  sectionOf,
-  stageOf,
-} from './source'
+import { resetExtAgentsSeen, extAgentsFetch, extAgentRowOf, extAgentsSource, isFound, sectionOf, stageOf, wizardSection } from './source'
 
-import type { ExtAgentRowWire } from './source'
+import type { ExtAgentRowWire, Section } from './source'
 import type { ExtAgentRow } from './types'
 
 const wire = (over: Partial<ExtAgentRowWire>): ExtAgentRowWire => ({ name: 'codex', ...over } as ExtAgentRowWire)
@@ -236,76 +226,44 @@ describe('the seven writes a card can make', () => {
 /* The onboarding wizard's two buckets, over the same row the settings page's
    `stageOf`/`sectionOf` reads -- moved here from ExtAgentsPage.tsx so
    both live beside the row shape they classify. */
-describe('the wizard step buckets', () => {
-  const cases: Array<[string, Partial<ExtAgentRow>, boolean, boolean, boolean]> = [
-    // label, row, isFound, isConnected, isAvailable
-    ['the built-in agent', { builtin: true, probe_status: 'unknown' }, false, false, false],
-    ['a vendored agent switched on', { vendored: true, enabled: true, probe_status: 'ready' }, false, true, false],
-    [
-      /* Never found -- the step does not count Raven's own -- but offered
-         back: the connected bucket switches it off, so the available one has
-         to be where it comes back from. */
-      'a vendored agent switched off, unverified',
-      { vendored: true, enabled: false, probe_status: 'attention' },
-      false,
-      false,
-      true,
-    ],
-    ['a vendored agent whose folder was never built', { vendored: true, enabled: false, probe_status: 'missing' }, false, false, false],
-    [
-      'a preset this machine has, unverified',
-      { configured: false, enabled: false, probe_status: 'attention' },
-      true,
-      false,
-      true,
-    ],
-    ['a preset this machine has never had', { configured: false, enabled: false, probe_status: 'missing' }, false, false, false],
-    ['a configured agent switched on', { configured: true, enabled: true, probe_status: 'ready' }, true, true, false],
-    ['a configured agent switched off', { configured: true, enabled: false, probe_status: 'ready' }, true, false, true],
+describe('the wizard step sections', () => {
+  const cases: Array<[string, Partial<ExtAgentRow>, Section, 'on' | 'avail' | null, boolean]> = [
+    // label, row, sectionOf (the hub's), wizardSection, isFound
+    ['the built-in agent', { builtin: true, enabled: true, probe_status: 'unknown' }, 'on', null, false],
+    ['a vendored agent switched on', { vendored: true, enabled: true, probe_status: 'ready' }, 'on', 'on', false],
+    /* Drawn as available -- the connected section switched it off and it needs
+       somewhere to come back from -- but never counted: the step is about
+       connecting something external. */
+    ['a vendored agent switched off', { vendored: true, enabled: false, probe_status: 'attention' }, 'avail', 'avail', false],
+    ['a preset this machine has, unverified', { configured: false, enabled: false, probe_status: 'attention' }, 'avail', 'avail', true],
+    ['a preset never probed', { configured: false, enabled: false, probe_status: 'unknown' }, 'avail', 'avail', true],
+    /* The hub's third section, not a first run's decision: an install is not a
+       wizard step. */
+    ['a preset this machine has never had', { kind: 'cli', configured: false, enabled: false, probe_status: 'missing' }, 'missing', null, false],
+    /* An older server's build-in-flight flag: the hub files it under
+       available; the step offers nothing, since its Connect would toggle an
+       install that is not finished. */
+    ['a preset mid-build on an older server', { configured: false, enabled: false, building: true, probe_status: 'ready' }, 'avail', null, false],
+    ['a configured agent switched on', { configured: true, enabled: true, probe_status: 'ready' }, 'on', 'on', true],
+    ['a configured agent switched off', { configured: true, enabled: false, probe_status: 'ready' }, 'avail', 'avail', true],
     [
       'a configured agent off with its preset moved to another transport',
       { configured: true, enabled: false, probe_status: 'ready', upgrade_to: 'acp' },
+      'avail',
+      'avail',
       true,
-      false,
-      true,
     ],
-    [
-      /* An endpoint, not a command on the machine: the wizard neither offers
-         it nor lists it under the sync step, whatever its probe says. */
-      'an openai row with no key',
-      { kind: 'openai', configured: false, enabled: false, has_api_key: false, probe_status: 'ready' },
-      false,
-      false,
-      false,
-    ],
-    [
-      'an openai row with a key, switched on',
-      { kind: 'openai', configured: true, enabled: true, has_api_key: true, probe_status: 'ready' },
-      false,
-      false,
-      false,
-    ],
-    [
-      /* An older server's build-in-flight flag: the settings page draws a
-         disabled Installing button for it, so the wizard offers nothing. */
-      'a preset mid-build on an older server',
-      { configured: false, enabled: false, building: true, probe_status: 'ready' },
-      true,
-      false,
-      false,
-    ],
+    /* An endpoint, not a command on the machine: its connect is a key typed
+       into the hub's sheet, which the step has not got. */
+    ['an openai row with no key', { kind: 'openai', configured: false, enabled: false, has_api_key: false, probe_status: 'ready' }, 'avail', null, false],
+    ['an openai row with a key, switched on', { kind: 'openai', configured: true, enabled: true, has_api_key: true, probe_status: 'ready' }, 'on', null, false],
   ]
 
-  it.each(cases)('%s', (_label, over, found, connected, available) => {
+  it.each(cases)('%s', (_label, over, hub, section, found) => {
     const row = fullRow(over)
+    expect(sectionOf(row)).toBe(hub)
+    expect(wizardSection(row)).toBe(section)
     expect(isFound(row)).toBe(found)
-    expect(isConnected(row)).toBe(connected)
-    expect(isAvailable(row)).toBe(available)
-  })
-
-  it('still exports the settings page classifiers', () => {
-    expect(typeof stageOf).toBe('function')
-    expect(typeof sectionOf).toBe('function')
   })
 })
 

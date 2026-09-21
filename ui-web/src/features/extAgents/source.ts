@@ -125,45 +125,30 @@ export function sectionOf(row: ExtAgentRow): Section {
   return 'avail'
 }
 
-/* The onboarding wizard's agents step draws two buckets instead of stageOf's
-   four groups: available to connect, and connected. Both are pure reads of a
-   row the wizard gets from the same `subagents.list` this page lists from, and
-   the step counts itself done against a third read, FOUND. The three agree on
-   what the wizard never shows -- the built-in Raven and openai endpoints are in
-   none of them -- and differ on one row only, on purpose: a shipped agent is
-   CONNECTED when on and AVAILABLE when off, but never FOUND, because the step
-   is about connecting something external and the prototype counts it done on
-   those alone.
- *
- * A row is FOUND when it is a command this machine has: neither one of
- * Raven's own (`builtin`, `vendored` -- both already usable with no connect
- * step), nor an openai row (an endpoint, which no scan finds and the wizard
- * does not offer), nor a probe that answered nothing (`missing`: not on the
- * machine; `unknown`: never probed). An acp preset that only proved its
- * binary exists still counts -- `attention` is a row worth connecting and then
- * testing, not one worth hiding. */
+/* The onboarding wizard's agents step draws two of the hub's three sections,
+   from the same `sectionOf`, and leaves out the rows that are not a first
+   run's decision: the built-in loop (always on, nothing to do), an openai
+   endpoint (its connect is a key typed into a sheet the step has not got), a
+   command this machine has never had (an install is not a wizard step), and a
+   build an older gateway still has in flight -- `sectionOf` files that under
+   available, and the row's Connect would flip a switch on an install that is
+   not finished. */
+export function wizardSection(row: ExtAgentRow): Section | null {
+  if (row.builtin || row.kind === 'openai' || row.building) return null
+  const section = sectionOf(row)
+  return section === 'missing' ? null : section
+}
+
+/* The rows the step counts itself against: the external agents this machine
+   has, whichever of the two sections each sits in. Raven's own shipped agents
+   are drawn -- connected when on, available when off -- but never counted:
+   the step is about connecting something external, and the prototype counts
+   it done on those alone. A connected row counts whatever its probe says --
+   it is on the roster and dispatchable, which is what `sectionOf` reads
+   first -- so a verdict that failed to carry over a re-scan no longer flips
+   the step back to not done. */
 export function isFound(row: ExtAgentRow): boolean {
-  if (row.builtin || row.vendored || row.kind === 'openai') return false
-  return row.probe_status !== 'missing' && row.probe_status !== 'unknown'
-}
-
-/* Connected: on the roster and dispatchable. Raven's own shipped agents count
-   here once switched on, same as a configured one -- but the built-in
-   in-process Raven never does, and neither does an openai endpoint, because
-   this pane shows neither. */
-export function isConnected(row: ExtAgentRow): boolean {
-  if (row.builtin || row.kind === 'openai') return false
-  return row.enabled && (!!row.vendored || row.configured)
-}
-
-/* Available: what the connect button can act on. A found row not yet enabled,
-   or one of Raven's own shipped agents switched off with its folder built
-   (`off`, not `install`) -- never FOUND, so the step does not count it, but the
-   connected bucket offers to switch it off and it needs somewhere to come back
-   from. */
-export function isAvailable(row: ExtAgentRow): boolean {
-  if (row.vendored) return stageOf(row) === 'off'
-  return isFound(row) && !row.enabled && !row.building
+  return !row.vendored && wizardSection(row) !== null
 }
 
 /* What the last fetch reported, kept here rather than read back off the page:
