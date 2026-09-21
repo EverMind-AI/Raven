@@ -879,6 +879,66 @@
       "en": "Attach",
       "zh": "附件"
     },
+    "gui.tpl.pick": {
+      "en": "Deck template",
+      "zh": "PPT 模板"
+    },
+    "gui.tpl.prev": {
+      "en": "Previous page",
+      "zh": "上一页"
+    },
+    "gui.tpl.next": {
+      "en": "Next page",
+      "zh": "下一页"
+    },
+    "gui.tpl.title": {
+      "en": "Pick a deck template",
+      "zh": "选一个 PPT 模板"
+    },
+    "gui.tpl.hint": {
+      "en": "The deck is built on the template you pick, by the deck engine. Skip this to have it designed from scratch.",
+      "zh": "选中后，这份 PPT 会由模板引擎在该模板上制作；不选则从零设计。"
+    },
+    "gui.tpl.loading": {
+      "en": "Loading the templates...",
+      "zh": "正在读取模板…"
+    },
+    "gui.tpl.none": {
+      "en": "No deck templates are installed here.",
+      "zh": "这里没有安装 PPT 模板。"
+    },
+    "gui.tpl.unavailable": {
+      "en": "The deck engine is not installed here, so there are no templates to pick from.",
+      "zh": "这里没有安装模板引擎，没有可选的模板。"
+    },
+    "gui.tpl.close": {
+      "en": "Close",
+      "zh": "关闭"
+    },
+    "gui.tpl.fail": {
+      "en": "{name} could not be attached",
+      "zh": "{name} 没能加为附件"
+    },
+    "gui.tpl.back": {
+      "en": "All templates",
+      "zh": "全部模板"
+    },
+    "gui.tpl.use": {
+      "en": "Use this template",
+      "zh": "用这个模板"
+    },
+    "gui.tpl.pages_loading": {
+      "en": "Loading the pages...",
+      "zh": "正在读取页面…"
+    },
+    "gui.tpl.pages_none": {
+      "en": "This host cannot render the pages; the template is still usable.",
+      "zh": "这里渲染不了页面预览，模板仍可使用。"
+    },
+    "gui.tpl.page": {
+      "en": "{n} / {total}",
+      "zh": "{n} / {total}"
+    },
     "gui.auth.checking": {
       "en": "Sign-in was refused - checking whether the service is still up",
       "zh": "登录被拒——正在确认服务是否还在"
@@ -4550,6 +4610,10 @@
     "gui.ws.dlv_turn": {
       "en": "turn {n}",
       "zh": "第 {n} 轮"
+    },
+    "gui.ws.download": {
+      "en": "Download",
+      "zh": "下载"
     },
     "gui.ws.dlv_here": {
       "en": "delivered this turn",

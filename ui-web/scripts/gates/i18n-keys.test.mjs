@@ -85,6 +85,7 @@ const ALIAS = {
   br: 'browser',
   clarify: 'composer',
   confirm: 'composer',
+  tpl: 'composer',
   caps: 'cron',
   conn: 'connections',
   dur: 'cron',

@@ -32,6 +32,28 @@ export interface UploadRes {
   size: number
 }
 
+/* One bundled deck template as the server lists it. `cover` is the first page
+   as a data URL, and null (or absent) on a host that cannot render one. */
+export interface TemplateRow {
+  name: string
+  label: string
+  size: number
+  cover?: string | null
+}
+
+/* The template picker's two calls. Picking deposits the template under
+   uploads and answers as an upload does, so the chip it stages is an ordinary
+   attachment from there on. */
+export interface TemplatesApi {
+  /* `pending` says a cover is still being drawn on the server; the sheet asks
+     again while it is open until every cover has landed. */
+  list(): Promise<{ templates: TemplateRow[]; available: boolean; pending?: boolean }>
+  pick(name: string): Promise<UploadRes>
+  /* Every page of one template as data URLs, for the reader to flip through
+     before picking; empty where the server cannot render. */
+  pages(name: string): Promise<{ pages: string[] }>
+}
+
 /* The composer source: what the dock reads of the page it sits in. The boot's
  * own wiring installs it (app/install.ts) and the settings chrome adds the
  * one member only it can answer -- `beforeSend`. Turn phase and queue state
@@ -46,6 +68,9 @@ export interface ComposerSource {
      backend for. Absent in live mode, which installs `upload` instead. */
   pickHint?: string
   upload?(req: UploadReq): Promise<UploadRes>
+  /* The deck template picker. Optional like `upload`: the demo canvas has no
+     server to list them from, and the button stays hidden without it. */
+  templates?: TemplatesApi
   beforeSend?(): boolean
   /* The two actions the go button is. Required, not optional like `upload`:
      both modes install them, because a composer that cannot send is not a

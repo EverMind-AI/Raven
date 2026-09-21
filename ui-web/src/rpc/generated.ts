@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 189 methods, 104 component schemas.
+// 192 methods, 105 component schemas.
 
 /* eslint-disable */
 /**
@@ -433,6 +433,21 @@ export interface ChannelStatusRow {
    * Whether this channel signs in by scanning a code.
    */
   qr_login?: boolean;
+}
+export interface DeckTemplateRow {
+  /**
+   * The template's stem, which deck.templates.pick takes.
+   */
+  name: string;
+  /**
+   * The stem as words, for the picker's caption.
+   */
+  label: string;
+  size: number;
+  /**
+   * The first page as a JPEG data URL, or null where this host cannot render one.
+   */
+  cover?: string | null;
 }
 export interface FsEntry {
   name: string;
@@ -3301,6 +3316,49 @@ export interface FsUploadResult {
   abs_path: string;
   size: number;
 }
+export interface DeckTemplatesListParams {
+  /**
+   * False lists the names alone, without rendering a cover for each.
+   */
+  covers?: boolean;
+}
+export interface DeckTemplatesListResult {
+  templates: DeckTemplateRow[];
+  /**
+   * False when the deck engine is not installed here; the picker then stays hidden.
+   */
+  available: boolean;
+  /**
+   * True while a cover is still being drawn in the background; ask again for it.
+   */
+  pending?: boolean;
+}
+export interface DeckTemplatesPagesParams {
+  /**
+   * A row's name from deck.templates.list.
+   */
+  name: string;
+}
+export interface DeckTemplatesPagesResult {
+  /**
+   * Every page as a JPEG data URL, in order; empty where this host cannot render.
+   */
+  pages: string[];
+}
+export interface DeckTemplatesPickParams {
+  /**
+   * A row's name from deck.templates.list.
+   */
+  name: string;
+}
+export interface DeckTemplatesPickResult {
+  /**
+   * Workspace-relative path to hand the agent; uploads never return bytes.
+   */
+  path: string;
+  abs_path: string;
+  size: number;
+}
 export interface FsRevealParams {
   /**
    * Absolute, or relative to the session's working directory.
@@ -4569,6 +4627,9 @@ export interface RpcMethods {
   'fs.list': { params: FsListParams; result: FsListResult };
   'fs.read': { params: FsReadParams; result: FsReadResult };
   'fs.upload': { params: FsUploadParams; result: FsUploadResult };
+  'deck.templates.list': { params: DeckTemplatesListParams; result: DeckTemplatesListResult };
+  'deck.templates.pages': { params: DeckTemplatesPagesParams; result: DeckTemplatesPagesResult };
+  'deck.templates.pick': { params: DeckTemplatesPickParams; result: DeckTemplatesPickResult };
   'fs.reveal': { params: FsRevealParams; result: FsRevealResult };
   'fs.open': { params: FsOpenParams; result: FsOpenResult };
   'deliverables.list': { params: DeliverablesListParams; result: DeliverablesListResult };
@@ -4688,6 +4749,9 @@ export const RPC_METHODS = [
   "cron.set_enabled",
   "dag.get",
   "dag.node",
+  "deck.templates.list",
+  "deck.templates.pages",
+  "deck.templates.pick",
   "delegation.pause",
   "delegation.status",
   "deliverables.list",

@@ -105,8 +105,12 @@ def install_hint() -> str:
     return "apt install libreoffice"
 
 
-def convert_command(source: Path, staged: Path, profile: Path, *, executable: str) -> list[str]:
-    """The argv that converts `source` to PDF into `staged`, using `profile` alone."""
+def convert_command(source: Path, staged: Path, profile: Path, *, executable: str, fmt: str = "pdf") -> list[str]:
+    """The argv that converts `source` to `fmt` into `staged`, using `profile` alone.
+
+    `fmt` is a LibreOffice export filter name. "pdf" is the whole document; "png"
+    is the first page only, which is what a thumbnail wants.
+    """
     return [
         executable,
         "--headless",
@@ -119,7 +123,7 @@ def convert_command(source: Path, staged: Path, profile: Path, *, executable: st
         "--norestore",
         f"-env:UserInstallation={profile.resolve().as_uri()}",
         "--convert-to",
-        "pdf",
+        fmt,
         "--outdir",
         str(staged),
         str(Path(source).resolve()),
@@ -143,8 +147,9 @@ def to_pdf(
     executable: str,
     timeout_s: float,
     profile_root: Path | None = None,
+    fmt: str = "pdf",
 ) -> Converted:
-    """Run one conversion of `source` into `staged`, and say what came of it.
+    """Run one conversion of `source` into `staged` as `fmt`, and say what came of it.
 
     `staged` is the caller's, because where the output lands decides how it is
     moved afterwards -- a rename is not a rename across filesystems. The profile
@@ -159,9 +164,11 @@ def to_pdf(
     with tempfile.TemporaryDirectory(prefix="raven-soffice-", dir=profile_root) as scratch:
         profile = Path(scratch) / "profile"
         profile.mkdir()
-        command = convert_command(Path(source), Path(staged), profile, executable=executable)
+        command = convert_command(Path(source), Path(staged), profile, executable=executable, fmt=fmt)
         returncode, stdout, stderr = _run(command, timeout_s=timeout_s)
-    return Converted(produced=sorted(Path(staged).glob("*.pdf")), returncode=returncode, stdout=stdout, stderr=stderr)
+    return Converted(
+        produced=sorted(Path(staged).glob(f"*.{fmt}")), returncode=returncode, stdout=stdout, stderr=stderr
+    )
 
 
 def _run(command: Sequence[str], *, timeout_s: float) -> tuple[int, str, str]:

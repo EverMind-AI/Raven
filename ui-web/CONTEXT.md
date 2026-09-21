@@ -267,8 +267,11 @@ _Avoid_: "pane" for this -- a pane is a resizable column.
 A card that docks above the composer for as long as one turn needs it: a
 clarifying question, or an approval request
 (`src/features/composer/ClarifySheet.tsx`, `GateSheet.tsx`,
-`AskApproveSheet.tsx`). Filed under the session it was raised in and mounted
-only while that session is open -- see Sheet rack. A delegated graph used to
+`AskApproveSheet.tsx`) -- or for as long as the reader wants it: the deck
+template picker (`TemplateSheet.tsx`, opened by `templates.ts`) docks the same
+way but asks nothing, so the composer stays live under it. Filed under the
+session it was raised in and mounted only while that session is open -- see
+Sheet rack. A delegated graph used to
 dock here too and no longer does -- see Task strip.
 _Avoid_: "dialog" for this -- a dialog is the settings or channel one, which is
 not docked and is not about a turn.
@@ -351,10 +354,12 @@ it rebuilds the conversation from disk.
 
 **Sheet rack**:
 `src/state/sheetRack.ts` plus `src/chrome/SheetRack.tsx` -- what docks above the
-composer (a clarify question, an approval request), filed under the session it
-was raised in and mounted only while that session is open. A parked sheet keeps
-its element and loses its interior, which is why what the reader typed into one
-lives in `src/state/sheetDrafts.ts` rather than in the input.
+composer (a clarify question, an approval request, the deck template picker),
+filed under the session it was raised in and mounted only while that session is
+open. A parked sheet keeps its element and loses its interior, which is why what
+the reader typed into one lives in `src/state/sheetDrafts.ts` rather than in the
+input; a sheet re-added with a new view keeps its id and its place, so a repaint
+is a repaint and not a remount.
 
 **Task strip**:
 `TaskRuns` in `src/features/tasks/TasksPage.tsx`, rendered by
