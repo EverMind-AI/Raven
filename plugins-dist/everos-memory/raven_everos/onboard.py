@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import typer
 
 from raven.plugins import OnboardUI, PluginContext, StepOutcome
-from raven_everos.config import recorded_slice
+from raven_everos.config import RERANK_PROTOCOLS, VENDORS, recorded_slice, vendors
 
 # ponytail: module global; the wizard is one-shot and single-threaded. Thread
 # the parameter if a second concurrent wizard ever exists.
@@ -26,12 +26,6 @@ _UI: OnboardUI | None = None
 # Sentinel a required EverOS role returns when the user chooses to give up EverOS
 # rather than configure it; ``_step4_memory`` then leaves memory disabled.
 _ABORT_EVEROS = object()
-
-
-def _everos_section(section: str) -> dict[str, Any]:
-    from raven_everos.config import everos_section
-
-    return everos_section(section)
 
 
 def _everos_role_configured(section: str) -> bool:
@@ -354,65 +348,10 @@ def _verify_embedding_dim(
             return False
 
 
-# Curated OpenAI-compatible endpoints for EverOS memory models. Picking one
-# pre-fills its base_url (mirrors the main provider step); everything else is
-# reachable via "reuse an existing endpoint" or "custom" (type a base_url).
-# These are the providers' documented OpenAI-compatible /v1 endpoints.
-_EVEROS_PROVIDERS: list[dict[str, Any]] = [
-    {
-        "name": "openai",
-        "label": "OpenAI",
-        "base_url": "https://api.openai.com/v1",
-        "supports": {"llm", "embedding", "multimodal"},
-    },
-    {
-        "name": "openrouter",
-        "label": "OpenRouter",
-        "base_url": "https://openrouter.ai/api/v1",
-        "supports": {"llm", "embedding", "rerank", "multimodal"},
-        "rerank_provider": "vllm",
-    },
-    {
-        "name": "deepseek",
-        "label": "DeepSeek",
-        "base_url": "https://api.deepseek.com/v1",
-        "supports": {"llm"},
-    },
-    {
-        "name": "deepinfra",
-        "label": "DeepInfra",
-        "base_url": "https://api.deepinfra.com/v1/openai",
-        "supports": {"llm", "embedding", "rerank"},
-        "rerank_provider": "deepinfra",
-        "rerank_base_url": "https://api.deepinfra.com/v1/inference",
-    },
-    {
-        "name": "siliconflow",
-        "label": "SiliconFlow",
-        "base_url": "https://api.siliconflow.cn/v1",
-        "supports": {"llm", "embedding", "rerank"},
-        "rerank_provider": "vllm",
-    },
-    {
-        "name": "dashscope",
-        "label": "DashScope (Alibaba)",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "supports": {"llm", "embedding", "rerank"},
-        "rerank_provider": "dashscope",
-        "rerank_base_url": "https://dashscope.aliyuncs.com",
-    },
-]
-
-
-def _match_provider_by_url(base_url: Optional[str]) -> Optional[str]:
-    """Reverse-lookup a curated provider name from its base_url."""
-    if not base_url:
-        return None
-    normalized = base_url.rstrip("/")
-    for prov in _EVEROS_PROVIDERS:
-        if prov["base_url"].rstrip("/") == normalized:
-            return prov["name"]
-    return None
+# The table now lives beside the config it describes: the settings page needs the
+# same mapping and must not import the wizard to get it. This name is the curated
+# half; the picker below offers `vendors()`, which adds the self-hosted slots.
+_EVEROS_PROVIDERS = VENDORS
 
 
 # Per-role config: menu/verify label, model-id example, whether optional, and
@@ -647,20 +586,22 @@ def _match_everos_default(example: str, models: list[str]) -> str:
 # can see which providers cost nothing to pick, and the same origin names the
 # note printed when the key is taken -- a key that arrives without being typed
 # has to say where it came from.
+#
+# Two origins, not three. A key typed for the memory LLM used to live only in
+# that everos.toml section, so it was a store of its own; every step keeps its
+# key under the provider now, so that case arrives as "config" like any other.
 _KEY_REUSE_TAG: dict[str, str] = {
     "main": "{label} (main model provider, reuse Key)",
-    "llm": "{label} (memory LLM provider, reuse Key)",
     "config": "{label} (configured, reuse Key)",
 }
 _KEY_REUSE_NOTE: dict[str, str] = {
     "main": "  [dim]API key and endpoint reused from main chat model.[/dim]",
-    "llm": "  [dim]API key and endpoint reused from memory LLM.[/dim]",
     "config": "  [dim]API key and endpoint reused from this provider's Raven configuration.[/dim]",
 }
 
 
 def _reusable_creds(
-    section: str, prov: dict[str, Any], main_model: Optional[str], llm_section: dict[str, Any]
+    section: str, prov: dict[str, Any], main_model: Optional[str]
 ) -> tuple[Optional[dict[str, str]], str]:
     """The credentials raven already holds for ``prov``, and which store lent them.
 
@@ -670,19 +611,17 @@ def _reusable_creds(
     private gateway, and pairing that key with the curated vendor URL would send
     a private credential to the public endpoint.
 
-    Two stores. The memory LLM's own section answers first for the roles
-    configured after it, because a key typed into that step lives there and
-    nowhere else. Otherwise ``lend_provider_credentials`` reads the provider
-    section, which is the one place that knows the precedence a section can be
-    written in -- ``endpoints``, then ``api_key_list``, then the flat pair. The
-    origin only names which store answered, and separates the main chat model's
-    provider from any other configured one for the note the user sees.
+    One store now. There used to be two, because a key typed into the memory LLM
+    step lived in that ``everos.toml`` section and nowhere else, so it had to be
+    read back from there for the roles configured after it. Every step keeps its
+    key under the provider now, so ``lend_provider_credentials`` sees it -- and
+    that reader is the one place that knows the precedence a section can be
+    written in: ``endpoints``, then ``api_key_list``, then the flat pair.
+
+    The origin only names which store answered, and separates the main chat
+    model's provider from any other configured one for the note the user sees.
     """
     provider = prov["name"]
-    if section != "llm" and _match_provider_by_url(llm_section.get("base_url")) == provider:
-        key = llm_section.get("api_key")
-        if key:
-            return {"api_key": str(key), "base_url": str(llm_section.get("base_url") or "")}, "llm"
     try:
         lent = _UI.lend_provider_credentials(provider)
     except (KeyError, ValueError):
@@ -793,7 +732,7 @@ def _everos_pick_creds_and_model(
     field rewinds one step."""
     questionary = _UI.require_questionary()
 
-    llm_section = _everos_section("llm")
+    from raven_everos.config import role_pin
 
     # Which provider the cursor lands on. For the LLM role, the main chat
     # model's. For the others, whichever provider the LLM step just configured —
@@ -803,11 +742,12 @@ def _everos_pick_creds_and_model(
     if section == "llm":
         default_provider = _UI.resolve_main_model(main_model or "")["provider"]
     else:
-        default_provider = _match_provider_by_url(llm_section.get("base_url"))
+        llm_pin = role_pin("llm")
+        default_provider = llm_pin[1] if llm_pin else None
 
     while True:  # source picker — a field-level back rewinds here
-        offered = [p for p in _EVEROS_PROVIDERS if section in p.get("supports", set())]
-        held = {p["name"]: _reusable_creds(section, p, main_model, llm_section) for p in offered}
+        offered = [p for p in vendors() if section in p.get("supports", set())]
+        held = {p["name"]: _reusable_creds(section, p, main_model) for p in offered}
         choices: list[Any] = []
         default_choice = None
         for prov in offered:
@@ -820,16 +760,6 @@ def _everos_pick_creds_and_model(
             choices.append(choice)
             if prov["name"] == default_provider:
                 default_choice = choice.value
-        if section != "embedding":
-            # Embedding is stored as a pin naming a provider, so a typed-in
-            # address has nowhere to go. The listed vendors are the ones this
-            # screen can record.
-            choices.append(
-                questionary.Choice(
-                    _UI.t("Other (custom OpenAI-compatible endpoint)"),
-                    value=("custom",),
-                )
-            )
         choices.append(questionary.Separator())
         choices.append(questionary.Choice(_UI.t("Back"), value=_UI.back))
 
@@ -844,44 +774,45 @@ def _everos_pick_creds_and_model(
             raise typer.Exit(1)
         if src is _UI.back:
             return _UI.back
-        kind = src[0]
 
         # Resolve (api_key, base_url) from the chosen source.
-        chosen_provider: Optional[str] = None
-        if kind == "provider":
-            chosen_provider = src[1]["name"]
-            creds, origin = held[chosen_provider]
-            if creds:
-                # The lent address, not the curated one: a borrowed key is only
-                # valid against the endpoint it was issued for.
-                api_key = creds["api_key"]
-                base_url = creds.get("base_url") or src[1]["base_url"]
-                _UI.console.print(_UI.t(_KEY_REUSE_NOTE[origin]))
-            else:
-                base_url = src[1]["base_url"]
-                api_key = _UI.prompt_api_key(chosen_provider, allow_back=True)
-                if api_key is _UI.back:
+        chosen_provider = src[1]["name"]
+        creds, origin = held[chosen_provider]
+        if creds:
+            # The lent address, not the curated one: a borrowed key is only
+            # valid against the endpoint it was issued for.
+            api_key = creds["api_key"]
+            base_url = creds.get("base_url") or src[1]["base_url"]
+            _UI.console.print(_UI.t(_KEY_REUSE_NOTE[origin]))
+        else:
+            base_url = src[1]["base_url"]
+            if src[1].get("self_host"):
+                # A curated vendor's address is a fact about the vendor; a
+                # self-hosted one is only knowable by asking. The row carries the
+                # conventional port as a starting point, not an answer.
+                base_url = _prompt_text(_UI.t("Base URL (must include /v1):"), default=base_url, allow_back=True)
+                if base_url is _UI.back:
                     continue
-        else:  # custom
-            base_url = _prompt_text(_UI.t("Base URL (must include /v1):"), allow_back=True)
-            if base_url is _UI.back:
-                continue
-            api_key = _prompt_text(_UI.t("API key (hidden):"), secret=True, allow_back=True)
+            api_key = _UI.prompt_api_key(chosen_provider, allow_back=True)
             if api_key is _UI.back:
                 continue
 
-        # Guard against a source that resolved to an empty key / endpoint —
-        # set_everos_section drops None values, which would otherwise persist a
-        # section with a model but no usable endpoint.
+        # Guard against a source that resolved to an empty key / endpoint: the
+        # provider row about to be written is what every role pinned to it
+        # resolves through, and one with no usable endpoint fails at spawn.
         if not (api_key and base_url):
             _UI.console.print(_UI.t("  [yellow]✗ Missing API key or Base URL for this source — pick another.[/yellow]"))
             continue
 
+        # Held before the rerank branch can move it: that override is this
+        # role's address, not the vendor's.
+        provider_base_url = base_url
+
         # rerank: resolve service type + override base_url when needed.
         rerank_provider: Optional[str] = None
         if section == "rerank":
-            chosen_prov_dict = src[1] if kind == "provider" else None
-            if chosen_prov_dict and chosen_prov_dict.get("rerank_provider"):
+            chosen_prov_dict = src[1]
+            if chosen_prov_dict.get("rerank_provider"):
                 rerank_provider = chosen_prov_dict["rerank_provider"]
                 if chosen_prov_dict.get("rerank_base_url"):
                     base_url = chosen_prov_dict["rerank_base_url"]
@@ -889,9 +820,7 @@ def _everos_pick_creds_and_model(
                 rerank_provider = questionary.select(
                     _UI.t("Rerank service type:"),
                     choices=[
-                        questionary.Choice("deepinfra", value="deepinfra"),
-                        questionary.Choice("vllm", value="vllm"),
-                        questionary.Choice("dashscope", value="dashscope"),
+                        *(questionary.Choice(name, value=name) for name in RERANK_PROTOCOLS),
                         questionary.Choice(_UI.t("Back"), value=_UI.back),
                     ],
                     style=_UI.style,
@@ -914,15 +843,24 @@ def _everos_pick_creds_and_model(
         if model is _UI.back:
             continue
 
-        result: dict[str, Any] = {"model": model, "api_key": api_key, "base_url": base_url}
-        # Which provider was picked, for a role whose endpoint raven holds: it
-        # stores the pair rather than the address and key, so the name has to
-        # travel with them. ``rerank`` already used this key for its own
-        # service-path choice and keeps it.
+        result: dict[str, Any] = {
+            "model": model,
+            "api_key": api_key,
+            "base_url": base_url,
+            # Before the rerank override below moved it. What the provider row
+            # is written from -- see the call site.
+            "provider_base_url": provider_base_url,
+        }
+        # Which vendor was picked. Every role stores the pair now rather than the
+        # address and key, so the name has to travel with them.
+        #
+        # Two things used to share this key: rerank put EverOS's request shape
+        # here, which is not a vendor at all. They are separate now -- the shape
+        # is derived from the vendor table, so nothing has to carry it -- and the
+        # probe below still gets it under its own name.
+        result["provider"] = chosen_provider
         if rerank_provider:
-            result["provider"] = rerank_provider
-        elif chosen_provider:
-            result["provider"] = chosen_provider
+            result["rerank_protocol"] = rerank_provider
         return result
 
 
@@ -935,7 +873,7 @@ def _config_everos_role(
     Returns ``None`` normally; returns ``_ABORT_EVEROS`` when the user gives up a
     required role (the caller then disables EverOS, leaving no long-term memory)."""
     questionary = _UI.require_questionary()
-    from raven_everos.config import clear_everos_section, set_everos_section
+    from raven_everos.config import clear_role, set_role
 
     role = _EVEROS_ROLES[section]
     label = _UI.t(role["label"])
@@ -985,7 +923,7 @@ def _config_everos_role(
             if action == "keep":
                 return
             if action == "off":
-                clear_everos_section(section)
+                clear_role(section)
                 _UI.console.print(_UI.t("  [dim]{label} skipped.[/dim]", label=label))
                 return
         elif optional:
@@ -1085,7 +1023,7 @@ def _config_everos_role(
                 model=result["model"],
                 api_key=result["api_key"],
                 base_url=result["base_url"],
-                rerank_provider=result.get("provider"),
+                rerank_provider=result.get("rerank_protocol"),
                 non_interactive=non_interactive,
                 warnings=warnings,
                 continue_hint=role.get("continue_hint"),
@@ -1105,22 +1043,45 @@ def _config_everos_role(
         if not ok:
             continue
 
+        # The pair only -- model and provider -- for every role now. The address
+        # and key stay with the provider, so this screen hands over a choice
+        # rather than a copy of somebody's credential. Which means the key has to
+        # be on file under that provider first: a pin naming a provider the host
+        # holds nothing for resolves to nothing, and the wizard would have
+        # reported success over a service still running keyword-only.
+        provider = str(result.get("provider") or "")
+        if not provider:
+            # A hand-typed address with no vendor behind it. raven stores a pair,
+            # so there is nothing to pin it to -- say so rather than writing half
+            # a role that would read as unconfigured with no explanation.
+            warnings.append(
+                _UI.t(
+                    "{label}: a model needs a provider raven knows, so this endpoint was not saved. "
+                    "Add it under providers first, then pick it here.",
+                    label=label,
+                )
+            )
+            continue
+        # The address this vendor is *reached* at, which for rerank is not the
+        # address this role calls. DeepInfra serves reranking from
+        # `/v1/inference` and chat from `/v1/openai`; this row is what every
+        # other role and the main chat model on that vendor resolve through, so
+        # writing the rerank endpoint here sent all of them somewhere that does
+        # not answer. The rerank address is derived at resolve time instead, by
+        # `rerank_base_url`.
+        _UI.keep_provider_credentials(provider, api_key=result["api_key"], base_url=result["provider_base_url"])
+        cost = ""
         if section == "embedding":
-            # Raven's block, not this one's: a knowledge base reads the same
-            # endpoint, and writing it into everos.toml left the host's empty,
-            # so every other reader fell back and said so on each use.
-            #
-            # The pair only -- model and provider. The address and key stay
-            # with the provider, so this screen hands over a choice rather than
-            # a copy of somebody's credential. Which means the key has to be on
-            # file under that provider first: a pin naming a provider the host
-            # holds nothing for resolves to nothing, and the wizard would have
-            # reported success over a service still running keyword-only.
-            _UI.keep_provider_credentials(result["provider"], api_key=result["api_key"], base_url=result["base_url"])
-            cost = _UI.set_embedding_endpoint({"model": result["model"], "provider": result["provider"]})
+            # Raven's own block, which a knowledge base reads too. `set_role`
+            # routes it there; the cost line is what only this writer can report.
+            cost = _UI.set_embedding_endpoint({"model": result["model"], "provider": provider})
         else:
-            set_everos_section(section, result)
-            cost = ""
+            set_role(
+                section,
+                model=result["model"],
+                provider=provider,
+                protocol=result.get("rerank_protocol", ""),
+            )
         _UI.console.print(_UI.t("  [green]\u2713 {label} configured.[/green]", label=label))
         if cost:
             # After the tick, not instead of it: the write did happen, and what
@@ -1134,15 +1095,21 @@ def _config_everos_role(
 def _configured_model(section: str) -> str | None:
     """The model this role will actually run with, or ``None``.
 
-    Embedding's endpoint lives in raven's block now, so reading the toml alone
+    Two owners, and ``everos.toml`` is neither: raven's pin for the roles raven
+    manages, the environment for one an operator exported. Reading the toml
     answered ``None`` for a role the wizard had configured a moment earlier --
     and the menu then offered "Configure it?" instead of "Keep current".
     """
-    from raven_everos.config import host_embedding_section
+    import os
+
+    from raven_everos.config import role_is_env_managed, role_pin
 
     if not _everos_role_configured(section):
         return None
-    return _everos_section(section).get("model") or host_embedding_section().get("model")
+    if role_is_env_managed(section):
+        return os.environ.get(f"EVEROS_{section.upper()}__MODEL") or None
+    pin = role_pin(section)
+    return pin[0] if pin else None
 
 
 def _lock_holder(root: Path | str):
@@ -1165,16 +1132,14 @@ def _stop_for_reload(root: Path | str) -> bool:
     the models a moment ago, and applying them is what that means. Only a server
     raven can identify as serving this root is touched.
     """
-    from raven_everos.server import StopOutcome, stop_pid
+    from raven_everos.server import StopOutcome, stop_for_reload
 
-    holder = _lock_holder(root)
-    if holder is None:
+    if _lock_holder(root) is None:
         return False
     _UI.console.print(_UI.t("  [dim]Restarting the service so it picks up the new configuration...[/dim]"))
-    # The pid the lock named, not the one the pidfile remembers. Asking the
-    # pidfile here would report "not ours" about the very process just
-    # identified, which is the state the lock lookup exists to get out of.
-    outcome = stop_pid(holder.pid)
+    # Shared with the settings page, which has to reach the same verdict about
+    # the same process -- the screen text below is all this caller adds.
+    outcome = stop_for_reload(root)
     if outcome is not StopOutcome.STOPPED:
         reason = {
             StopOutcome.SIGNAL_FAILED: _UI.t("the stop signal could not be delivered"),
@@ -1733,9 +1698,9 @@ def _step4_memory(
         )
 
     # Ensure the EverOS home directory has its config templates (everos.toml
-    # + ome.toml) BEFORE writing model sections — set_everos_section merges
-    # into the template so default sections (memory/sqlite/lancedb/api) are
-    # preserved. Also creates ome.toml which the runtime requires.
+    # + ome.toml) BEFORE writing [api] — set_everos_section merges into the
+    # template so the default sections (memory/sqlite/lancedb) are preserved.
+    # Also creates ome.toml which the runtime requires.
     from raven_everos.config import configure_everos_env, ensure_everos_home, owned_everos_root
 
     # owned_everos_root, not everos_root: after a user declined to share theirs,

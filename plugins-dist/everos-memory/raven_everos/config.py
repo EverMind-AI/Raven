@@ -1,13 +1,26 @@
-"""Atomic operations for EverOS memory settings (``<root>/everos.toml``).
+"""EverOS memory settings: the roles raven records, and the file it still writes.
 
-This module is the ONLY write path for the EverOS memory-model sections
-(llm / embedding / rerank / multimodal) and for the ``[api]`` address. The
-onboard wizard's memory step writes here; EverOS reads it back through its own
-pydantic-settings loader (user-level toml, ``EVEROS_*`` env). It lives apart
-from raven's ``config.json`` because EverOS owns this channel.
+Two homes, on purpose.
 
-Only those sections are writable; the rest EverOS ships (memory / sqlite /
-lancedb) are preserved untouched on every write.
+**raven's config** holds what serves each of the four roles (llm / embedding /
+rerank / multimodal) as a **pin** -- a model and the vendor serving it, never a
+credential. The address and key are resolved from that vendor at the moment they
+are needed, so rotating a key is one edit and every role on that vendor follows.
+Embedding's pin is raven's own top-level block because a knowledge base embeds
+with it too and must keep working when this plugin is not the configured
+backend; the other three live in this plugin's ``plugins.config`` slice.
+
+**``<root>/everos.toml``** is EverOS's own file. raven writes exactly one
+section of it now, ``[api]``, which records where a server for that root
+listens. The four role sections are reached by the ``EVEROS_*`` environment
+instead -- emitted from the pins on every spawn and bound into this process at
+backend start -- which is what lets a change take effect without editing a file
+raven may not own. The runtime knobs the file carries (timeouts, batch sizes,
+the multimodal file-uri allowlist) are untouched and keep applying: EverOS
+merges per key, not per section.
+
+Everything EverOS ships and raven never writes (memory / sqlite / lancedb) is
+preserved untouched on every write.
 
 **Which root.** EverOS resolves its root from ``EVEROS_ROOT`` (default: a bare
 ``~/.everos``). raven does not read that variable as an input — it *writes* it
@@ -24,8 +37,13 @@ nothing else.
 
 Boot sequence (called by ``make_backend`` / ``make_understand_media_tool``):
 
-1. :func:`configure_everos_env` — ``EVEROS_ROOT`` → the recorded root
-2. :func:`ensure_everos_home` — create ``everos.toml`` + ``ome.toml`` from
+1. :func:`migrate_roles` — move any role still in ``everos.toml`` into raven's
+   config. Runs every start and skips a role already pinned.
+2. :func:`bind_roles_here` — the four roles into this process's environment, so
+   the multimodal tool that runs in-process reads the same models the service
+   does.
+3. :func:`configure_everos_env` — ``EVEROS_ROOT`` → the recorded root
+4. :func:`ensure_everos_home` — create ``everos.toml`` + ``ome.toml`` from
    shipped templates (skip if exists) + migrate legacy ``config.toml``.
    Owned roots only.
 """
@@ -37,8 +55,10 @@ import logging
 import os
 import shutil
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import tomli_w
 
@@ -51,7 +71,14 @@ logger = logging.getLogger(__name__)
 # installs keep this one; discovery finds it and nothing is moved.
 _LEGACY_EVEROS_SUFFIX = (".everos", "raven")
 
-WRITABLE_SECTIONS = ("llm", "embedding", "rerank", "multimodal", "api")
+WRITABLE_SECTIONS = ("api",)
+"""What raven still writes into ``everos.toml``.
+
+Only ``[api]`` -- where this root's server listens, which has to be spelled the
+same way in the bind and in the health probe. The four role sections moved to
+raven's own config and travel as environment variables; leaving them addressable
+here would be a second way to write them, and the two would drift.
+"""
 
 
 def default_everos_root() -> Path:
@@ -132,33 +159,6 @@ def _raven_config_raw() -> dict[str, Any]:
     except (OSError, json.JSONDecodeError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
-
-
-def host_embedding_section() -> dict[str, str]:
-    """raven's embedding endpoint, resolved, in this module's spelling.
-
-    Through the host's own resolver rather than a second reading of its
-    config. The block names a model and a provider; turning that pair into an
-    address, a key and the id the vendor answers to is one rule, and a copy of
-    it here is a copy that drifts -- the id in particular, since whether a
-    leading segment comes off depends on the provider registry.
-
-    Empty when nothing is pinned or the provider has no usable credential --
-    all three values are what :func:`configure_embedding_env` needs before it
-    binds anything, so anything less is not an endpoint.
-    """
-    try:
-        from raven.knowledge import load_embedding_config
-    except Exception:  # noqa: BLE001 - nothing to resolve against
-        return {}
-    try:
-        resolved = load_embedding_config()
-    except Exception as exc:  # noqa: BLE001 - an unreadable config is not this module's to report
-        logger.warning("everos: cannot read raven's embedding endpoint: %s", exc)
-        return {}
-    if resolved is None:
-        return {}
-    return {"model": resolved.model, "base_url": resolved.base_url, "api_key": resolved.api_key}
 
 
 def _recorded_slice() -> dict[str, Any]:
@@ -270,106 +270,13 @@ def configure_everos_env(root: Path | str | None = None) -> None:
     os.environ["EVEROS_ROOT"] = str(resolved)
 
 
-def configure_embedding_env(embedding: Any) -> bool:
-    """Offer EverOS the host's embedding endpoint, when EverOS has none of its own.
-
-    The host's block is a default to fall back on, not a takeover: an operator
-    who wrote ``[embedding]`` into ``everos.toml`` chose that endpoint for
-    memory specifically, and reusing the host's is a convenience they are
-    entitled to decline. So this defers to the file and fills the gap only when
-    the file leaves one -- which is also what the settings page still edits.
-
-    Delivered through the env binding EverOS already documents
-    (``EVEROS_EMBEDDING__MODEL`` and friends) rather than by writing the file:
-    the file belongs to whoever manages the root, and on a self-managed root
-    raven promised not to touch it. Env beats the file in EverOS's own source
-    order, which is exactly why the file is checked first here.
-
-    Returns whether anything was set, so a caller can log which lane it took.
-
-    Must run BEFORE EverOS's cached ``load_settings()``, same as
-    :func:`configure_everos_env`.
-    """
-    env = embedding_env(
-        {
-            "model": getattr(embedding, "model", ""),
-            "base_url": getattr(embedding, "base_url", ""),
-            "api_key": getattr(embedding, "api_key", ""),
-            "dimensions": getattr(embedding, "dimensions", None),
-        }
-    )
-    os.environ.update(env)
-    _BOUND_HERE.update(env)
-    os.environ[PROVENANCE_ENV] = ",".join(sorted(_BOUND_HERE))
-    return bool(env)
-
-
-def embedding_env(values: Any) -> dict[str, str]:
-    """``values`` rendered as EverOS's embedding variables, or ``{}``.
-
-    Split out from :func:`configure_embedding_env` because two consumers need
-    the same answer in different forms: that function binds it into this
-    process, and the child environment a spawn builds fills it in for a launch
-    nobody bound it for. Both go through here so the deference below is decided
-    once.
-
-    Empty when the three values are not all present -- fewer than three is not
-    an endpoint -- and empty when ``everos.toml`` carries an ``[embedding]`` of
-    its own, which :func:`everos_has_own_embedding` decides: an operator who
-    wrote one chose that endpoint for memory specifically, and reusing the
-    host's is a convenience they may decline.
-    """
-    model = str(values.get("model") or "")
-    base_url = str(values.get("base_url") or "")
-    api_key = str(values.get("api_key") or "")
-    if not (model and base_url and api_key):
-        return {}
-    if everos_has_own_embedding():
-        return {}
-    env = {
-        "EVEROS_EMBEDDING__MODEL": model,
-        "EVEROS_EMBEDDING__BASE_URL": base_url,
-        "EVEROS_EMBEDDING__API_KEY": api_key,
-    }
-    dimensions = values.get("dimensions")
-    if isinstance(dimensions, int) and dimensions > 0:
-        env["EVEROS_EMBEDDING__DIMENSIONS"] = str(dimensions)
-    return env
-
-
-def everos_has_own_embedding() -> bool:
-    """Whether EverOS already has an embedding endpoint of its own.
-
-    The one question that decides whether the host's endpoint is used at all,
-    asked by everything that reads or writes it -- the binding, the spawn, the
-    wizard, and the settings page -- so no surface can show one home while
-    another writes the other.
-
-    Both of the places EverOS itself reads, since both are an operator saying
-    which endpoint memory should use:
-
-    1. ``everos.toml``, by :func:`role_configured_in`'s criterion -- model
-       **and** key, not a second criterion beside it. The shipped template
-       seeds every section with a real model name and an empty key, so "has a
-       model" is true of a root nobody has configured; reading it that way made
-       a fresh managed install look like a deliberate choice, and the service
-       the wizard had just started ran keyword-only while the wizard said
-       embedding was configured.
-    2. the ``EVEROS_EMBEDDING__*`` variables EverOS documents, which outrank
-       the file in its own resolution order. All three or none: two of them is
-       not an endpoint, and filling the third from the host would hand EverOS a
-       mixture of two operators' intentions rather than either one.
-    """
-    return role_configured_in(load_everos_config(), "embedding") or embedding_is_env_managed()
-
-
 _EMBEDDING_ENV_KEYS = (
     "EVEROS_EMBEDDING__MODEL",
     "EVEROS_EMBEDDING__BASE_URL",
     "EVEROS_EMBEDDING__API_KEY",
 )
 
-PROVENANCE_ENV = "RAVEN_EVEROS_EMBEDDING_BOUND"
+PROVENANCE_ENV = "RAVEN_EVEROS_BOUND"
 """Where the provenance below is kept so it outlives this module object.
 
 ``raven gateway --restart`` re-launches through ``os.execv``, which keeps the
@@ -382,7 +289,7 @@ the rest of its life. Provenance has to travel with the thing it describes.
 _BOUND_HERE: set[str] = {k for k in os.environ.get(PROVENANCE_ENV, "").split(",") if k}
 """Which of those variables this process, or the one it replaced, set itself.
 
-Provenance, not a cache. ``configure_embedding_env`` puts the host's endpoint
+Provenance, not a cache. ``bind_roles_here`` puts raven's own pins
 into ``os.environ`` so the in-process EverOS imports and every child see it --
 after which the variables are present and complete, and a reader that asks only
 "are all three set" cannot tell the host's own binding from an operator's
@@ -395,7 +302,7 @@ person to change variables they had never set.
 def embedding_is_env_managed() -> bool:
     """Whether the endpoint EverOS uses came from outside this process.
 
-    Named apart from :func:`everos_has_own_embedding` because one surface needs
+    Named apart from :func:`role_is_env_managed` because one surface needs
     to tell the homes apart rather than only know that one is in force: a
     settings page can offer to edit a file, and cannot offer to edit somebody's
     shell.
@@ -407,11 +314,6 @@ def embedding_is_env_managed() -> bool:
     if not all(os.environ.get(k) for k in _EMBEDDING_ENV_KEYS):
         return False
     return not all(k in _BOUND_HERE for k in _EMBEDDING_ENV_KEYS)
-
-
-def host_embedding_env() -> dict[str, str]:
-    """The binding raven's own ``embedding`` block earns, or ``{}``."""
-    return embedding_env(host_embedding_section())
 
 
 def ensure_everos_home(root: Path | str | None = None) -> None:
@@ -508,28 +410,166 @@ def role_configured_in(data: dict[str, Any], section: str) -> bool:
     return bool(sec.get("model") and sec.get("api_key"))
 
 
+def _vendor_serving(base_url: str, api_key: str) -> str | None:
+    """Which vendor an old section's address and key belong to.
+
+    raven's own configured providers first, through the lookup every migration
+    uses -- somebody who configured a row has already said which address that
+    vendor serves for them. The wizard's vendor table answers last, by host.
+
+    The table is what carries DeepInfra: its rerank section holds
+    ``/v1/inference`` while chat is served from ``/v1/openai``, and on the
+    machine this was measured on raven carried no row for it at all.
+    """
+    from raven.config.update_providers import provider_serving_at
+
+    try:
+        named = provider_serving_at(base_url, api_key=api_key)
+    except Exception:  # noqa: BLE001 - nothing to match against is not a failure
+        named = None
+    if named:
+        return named
+    host = urlparse(base_url).netloc
+    if not host:
+        return None
+    for row in vendors():
+        for field in ("base_url", "rerank_base_url"):
+            if urlparse(str(row.get(field) or "")).netloc == host:
+                return str(row["name"])
+    return None
+
+
+def migrate_roles() -> list[str]:
+    """Move the four role sections out of ``everos.toml`` into raven's config.
+
+    Returns the notices a surface should show. Automatic by construction: it
+    runs on every backend start, because until it has run raven holds no pin for
+    any role and the environment it sends the memory service blanks all four --
+    long-term memory simply stops, with a remedy nobody was told to run.
+
+    Scheduled from the plugin rather than raven's config migrations on purpose.
+    The host may know this plugin only through the plugin contract, so a branch
+    in ``loader.py`` calling in here would be the host importing the plugin --
+    and reading ``everos.toml`` or judging who owns a root is not something the
+    host can do for itself either.
+
+    Per role: name the vendor from the address and the key, create the provider
+    row when raven carries none and move the key into it, then record the pin. A
+    role whose vendor cannot be named is **left unset** with a notice -- a
+    guessed vendor would send memory's traffic to the wrong endpoint, which is
+    worse than a slot somebody fills in once.
+
+    Naming runs for every role before any row is created, so two roles served by
+    the same unnamed vendor agree on it rather than racing to describe it
+    differently. DeepInfra is exactly that case on the machine this was measured
+    on: embedding and rerank, one vendor, two addresses, no row at all.
+
+    Idempotent: a role raven already holds a pin for is skipped, so running it on
+    every start means the same thing as running it once.
+    """
+    notices: list[str] = []
+    if not everos_owned():
+        # A root the user manages: raven records its address and never edits its
+        # config, so the sections in it are theirs and stay where they are.
+        return notices
+
+    toml = load_everos_config()
+    if not toml:
+        return notices
+
+    named: dict[str, tuple[str, dict[str, Any]]] = {}
+    for section in ROLES:
+        if role_pin(section) is not None:
+            continue
+        block = toml.get(section)
+        if not isinstance(block, dict):
+            continue
+        model, base_url = str(block.get("model") or ""), str(block.get("base_url") or "")
+        api_key = str(block.get("api_key") or "")
+        if not (model and base_url and api_key):
+            # The shipped template seeds every role with a real model name and an
+            # empty key. Migrating that reports a role as configured that has
+            # never worked -- the same bar the gate's own criterion sets.
+            continue
+        vendor_name = _vendor_serving(base_url, api_key)
+        if vendor_name is None:
+            notices.append(
+                f"EverOS {section}: could not tell which provider serves {base_url}, so the role is "
+                f"unset -- pick a model and a provider for it in settings"
+            )
+            continue
+        named[section] = (vendor_name, block)
+
+    from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
+
+    for vendor_name, block in named.values():
+        try:
+            if resolve_provider_credentials(vendor_name):
+                continue
+        except KeyError:
+            pass
+        # A vendor raven carries no spec for is still configurable when LiteLLM
+        # knows it, which every name in the table is: the plain section with an
+        # address and a key is all such a provider needs.
+        row = vendor(vendor_name)
+        set_provider_fields(
+            vendor_name,
+            {
+                "api_key": str(block.get("api_key") or ""),
+                "api_base": str((row or {}).get("base_url") or block.get("base_url") or ""),
+            },
+        )
+
+    for section, (vendor_name, block) in named.items():
+        protocol = ""
+        if section == "rerank" and not rerank_protocol(vendor_name):
+            # The old file's own `provider` field, which names a request shape
+            # rather than a vendor. Kept only where the table cannot answer.
+            protocol = str(block.get("provider") or "")
+        try:
+            set_role(section, model=str(block["model"]), provider=vendor_name, protocol=protocol)
+        except Exception as exc:  # noqa: BLE001 - one role must not take the others down
+            # Per role, because the writers validate. `set_embedding_endpoint`
+            # refuses a pair that cannot embed, and an old file naming a chat
+            # model there is exactly the install this migration exists for --
+            # letting that escape left llm migrated, rerank and multimodal not,
+            # and the binding below never run at all.
+            logger.warning("everos: could not migrate the %s role: %s", section, exc)
+            notices.append(
+                f"EverOS {section}: {exc}. The role is unset -- pick a model and a provider for it in settings."
+            )
+
+    return notices
+
+
 def everos_role_configured(section: str) -> bool:
     """True iff the user really configured this EverOS role.
 
-    Sole criterion for "configured", shared by every caller: model AND api_key.
-    The shipped everos.toml template seeds each section's model name with an
-    empty api_key, so a model alone also holds on a fresh install -- two callers
-    disagreeing on this made the wizard's Back loop on itself forever.
+    Sole criterion for "configured", shared by all nine callers. It reads raven's
+    own config now: the role pins moved there, and ``everos.toml`` is no longer
+    written for these sections at all.
 
     Lives beside the writers rather than in the wizard so a reader does not have
     to import it: the wizard module costs ~290ms to load, which `raven doctor`
     (a millisecond command) would otherwise pay just to answer this.
 
-    ``embedding`` has two homes since its endpoint became raven's: the toml
-    still wins when an operator wrote one there, and raven's block fills the
-    gap -- the same precedence :func:`configure_embedding_env` binds with.
-    Asking the toml alone made doctor, the wizard's recap and the
-    unavailable-embedding warning all answer "not configured" the moment the
-    wizard wrote the endpoint where it now belongs.
+    Three things now, not two: a model, a vendor, and that vendor resolving to a
+    usable credential. The old reading -- model AND api_key in ``everos.toml`` --
+    cannot be computed once raven's blocks hold no key, and "a model pinned to a
+    vendor with no credential" is precisely the state that would spawn a server
+    doomed to die building its LLM client.
+
+    One rule, two readers: the settings page reports the same answer as
+    ``api_key_set``, so the gate and the card cannot drift apart.
+
+    ``llm`` gates long-term memory outright, so a wrong answer here is memory
+    switched off without a word. A role the operator manages through exported
+    variables counts as configured: raven cannot read their shell, but it can
+    see the endpoint is there.
     """
-    if role_configured_in(load_everos_config(), section):
+    if role_is_env_managed(section):
         return True
-    return section == "embedding" and bool(host_embedding_section())
+    return resolve_role(section) is not None
 
 
 def set_everos_section(section: str, fields: dict[str, Any]) -> None:
@@ -594,3 +634,495 @@ def recorded_slice() -> dict:
     (onboard) legitimately consumes it -- no one imports the private form.
     """
     return _recorded_slice()
+
+
+# Curated OpenAI-compatible endpoints for EverOS memory models. Picking one
+# pre-fills its base_url (mirrors the main provider step); everything else is
+# reachable via "reuse an existing endpoint" or "custom" (type a base_url).
+# These are the providers' documented OpenAI-compatible /v1 endpoints.
+VENDORS: list[dict[str, Any]] = [
+    {
+        "name": "openai",
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "supports": {"llm", "embedding", "multimodal"},
+    },
+    {
+        "name": "openrouter",
+        "label": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "supports": {"llm", "embedding", "rerank", "multimodal"},
+        "rerank_provider": "vllm",
+    },
+    {
+        "name": "deepseek",
+        "label": "DeepSeek",
+        "base_url": "https://api.deepseek.com/v1",
+        "supports": {"llm"},
+    },
+    {
+        "name": "deepinfra",
+        "label": "DeepInfra",
+        "base_url": "https://api.deepinfra.com/v1/openai",
+        "supports": {"llm", "embedding", "rerank"},
+        "rerank_provider": "deepinfra",
+        "rerank_base_url": "https://api.deepinfra.com/v1/inference",
+    },
+    {
+        "name": "siliconflow",
+        "label": "SiliconFlow",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "supports": {"llm", "embedding", "rerank"},
+        "rerank_provider": "vllm",
+    },
+    {
+        "name": "dashscope",
+        "label": "DashScope (Alibaba)",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "supports": {"llm", "embedding", "rerank"},
+        "rerank_provider": "dashscope",
+        "rerank_base_url": "https://dashscope.aliyuncs.com",
+    },
+]
+
+
+def vendors() -> list[dict[str, Any]]:
+    """Every vendor a role may be pinned to.
+
+    The curated table plus the slots raven keeps for a deployment of the
+    operator's own. Those are read from raven's provider registry rather than
+    listed a second time here: their names, labels and default addresses are
+    already declared there, and the main chat model has always been able to use
+    them -- a memory role that could not was the odd one out, not a design.
+
+    They carry every role and no rerank protocol. What somebody's own box serves
+    is theirs to say, so the wizard asks and records the answer on the role,
+    which is the one case the curated table cannot answer for.
+    """
+    from raven.providers.registry import PROVIDERS
+
+    curated = {str(row.get("name") or "") for row in VENDORS}
+    rest: list[dict[str, Any]] = []
+    for spec in PROVIDERS:
+        if spec.name in curated:
+            continue
+        self_host = spec.is_local or spec.name == "custom"
+        rest.append(
+            {
+                "name": spec.name,
+                "label": spec.label,
+                "base_url": spec.default_api_base,
+                # Every role but rerank. What the curated table above knows that
+                # the registry does not is the rerank request shape, and nothing
+                # else -- the other three are ordinary OpenAI-compatible calls
+                # any vendor here can serve. Narrowing them to the curated six
+                # took forty-odd vendors off the slots, which was never the bug
+                # being fixed; the rerank slot offering a vendor that cannot
+                # rerank was.
+                #
+                # Self-hosted rows are the exception: what somebody's own box
+                # serves is theirs to say, so they carry rerank too and the
+                # wizard asks for the shape.
+                "supports": set(ROLES) if self_host else {"llm", "embedding", "multimodal"},
+                **({"self_host": True} if self_host else {}),
+            }
+        )
+    return [*VENDORS, *rest]
+
+
+def vendor(name: str) -> dict[str, Any] | None:
+    """The row `vendors()` carries for ``name``, or None for one it does not."""
+    return next((v for v in vendors() if v.get("name") == name), None)
+
+
+def vendor_supports(name: str, role: str) -> bool:
+    """Whether this vendor can serve ``role`` at all.
+
+    False for a vendor the table does not carry, because offering a role a vendor
+    cannot serve is how the rerank slot came to list OpenAI -- the slot asked only
+    whether a provider had a key.
+    """
+    row = vendor(name)
+    return bool(row and role in (row.get("supports") or ()))
+
+
+RERANK_PROTOCOLS: tuple[str, ...] = ("deepinfra", "vllm", "dashscope")
+"""The request shapes EverOS can build a rerank client for.
+
+EverOS's own ``rerank.provider`` field, whose values these are. Named here
+because three surfaces have to agree on them -- the vendor table's
+``rerank_provider``, the wizard's question for a self-hosted endpoint, and the
+settings page's validation -- and a fourth spelling would be accepted, stored,
+and then fail at the first query.
+"""
+
+
+def rerank_protocol(name: str) -> str | None:
+    """Which client implementation EverOS must build for this vendor.
+
+    EverOS's ``rerank.provider`` names a request shape, not a vendor: DeepInfra
+    posts to ``{base}/{model}`` while vLLM posts to ``{base}/rerank``. None means
+    "say nothing", which leaves whatever the file holds -- the honest answer for a
+    vendor this table has never heard of.
+    """
+    row = vendor(name)
+    return row.get("rerank_provider") if row else None
+
+
+def rerank_protocol_for_role() -> str | None:
+    """The request shape reranking must use, whoever knows it.
+
+    The curated table first, because a vendor's shape is a fact about the vendor.
+    The value recorded on the role second, for a self-hosted endpoint the table
+    has never heard of -- there the operator is the only one who knows, and the
+    wizard asked them. Not two homes for one fact: the table is silent exactly
+    where the recorded answer exists.
+    """
+    pin = role_pin("rerank")
+    if pin is None:
+        return None
+    return rerank_protocol(pin[1]) or str((_recorded_slice().get("rerank") or {}).get("protocol") or "") or None
+
+
+def rerank_base_url(name: str, default: str) -> str:
+    """The address reranking goes to, which is not always the chat address.
+
+    DeepInfra serves rerank from ``/v1/inference`` and chat from ``/v1/openai``;
+    borrowing the chat one is why rerank configured from the settings page has
+    never worked against it.
+    """
+    row = vendor(name)
+    return (row or {}).get("rerank_base_url") or default
+
+
+ROLES: tuple[str, ...] = ("llm", "embedding", "rerank", "multimodal")
+"""The four models EverOS talks to. ``embedding`` is listed with the rest because
+callers reason about four roles, even though its pin lives somewhere else."""
+
+REQUIRED_ROLES: tuple[str, ...] = ("llm", "embedding")
+"""Roles that cannot be cleared from the page.
+
+Clearing ``llm`` turns long-term memory off outright, and ``embedding`` is what
+every stored vector was written under. Neither should be one stray click away;
+both are still editable, just not erasable.
+"""
+
+
+@dataclass(frozen=True)
+class RoleEndpoint:
+    """What a role resolves to at the moment it is asked: an address and a key.
+
+    Built on demand, never stored. The stored form is a pin -- a model and a
+    provider -- so rotating a key is one edit in the provider and every role
+    serving on it follows.
+    """
+
+    model: str
+    base_url: str
+    api_key: str
+    dimensions: int | None = None
+
+
+def role_pin(section: str) -> tuple[str, str] | None:
+    """What raven records for ``section``: a model and the vendor serving it.
+
+    Two homes, one reader. ``embedding`` is raven's own top-level block because a
+    knowledge base embeds with it too and must keep working when the memory
+    plugin is not the configured backend; the other three are this plugin's
+    slice. Callers should not have to know which is which.
+    """
+    if section not in ROLES:
+        raise KeyError(f"unknown everos role {section!r}; roles: {ROLES}")
+    if section == "embedding":
+        block = _raven_config_raw().get("embedding") or {}
+    else:
+        block = _recorded_slice().get(section) or {}
+    model, provider = str(block.get("model") or ""), str(block.get("provider") or "")
+    return (model, provider) if model and provider else None
+
+
+def resolve_role(section: str) -> RoleEndpoint | None:
+    """The pin turned into an address and a key, or None when nothing is pinned.
+
+    Resolved on every call rather than cached: a value written a second ago has
+    to reach the next spawn without restarting raven.
+
+    ``None`` rather than a raise, for three states that are all ordinary: nothing
+    pinned, a provider that no longer exists, a provider with no usable
+    credential. The caller turns that into "set this up first"; a raise here
+    would take down a path that merely wanted to know.
+
+    Rerank asks the vendor table for its address, because the endpoint that
+    serves reranking is not always the one that serves chat.
+    """
+    pin = role_pin(section)
+    if pin is None:
+        return None
+    model, provider = pin
+    try:
+        from raven.config.update_providers import resolve_provider_credentials
+        from raven.providers.wire import wire_model
+    except Exception:  # noqa: BLE001 - an import failure here is not this module's to report
+        return None
+    try:
+        resolved = resolve_provider_credentials(provider)
+    except KeyError:
+        # A pin naming a provider that has since been removed. Ordinary enough
+        # that it must not take the gate down: unconfigured, not broken.
+        logger.warning("everos: the %s role names provider %r, which is not configured", section, provider)
+        return None
+    if resolved is None:
+        logger.warning("everos: the %s role names provider %r, which has no usable credential", section, provider)
+        return None
+    base_url, api_key = resolved
+    if section == "rerank":
+        base_url = rerank_base_url(provider, base_url)
+    dimensions = None
+    if section == "embedding":
+        raw = (_raven_config_raw().get("embedding") or {}).get("dimensions")
+        dimensions = int(raw) if isinstance(raw, int) and raw > 0 else None
+    return RoleEndpoint(
+        model=wire_model(model, client_provider=provider),
+        base_url=base_url.rstrip("/"),
+        api_key=api_key,
+        dimensions=dimensions,
+    )
+
+
+def set_role(section: str, *, model: str, provider: str, protocol: str = "") -> str:
+    """Record what serves ``section``.
+
+    The guard is here, not at the caller: ``_require_owned`` sits at the write
+    primitives so a new caller cannot opt out, and moving these writes out of
+    ``everos.toml`` was very nearly that new caller.
+
+    Embedding goes through ``set_embedding_endpoint`` -- the same writer a
+    knowledge base's own settings use, which validates that the pair can actually
+    embed. Writing it into this plugin's slice instead would save cleanly and
+    never take effect, because nothing reads embedding there.
+
+    ``protocol`` is recorded only for rerank pinned to a self-hosted endpoint,
+    where the vendor table cannot name the request shape and the operator can.
+    See :func:`rerank_protocol_for_role` for the precedence.
+
+    Returns what moving this role costs, empty when it costs nothing. Only
+    embedding has an answer: everything already embedded answers to the old
+    model, and the caller is the one place that can say so while the person is
+    still looking at the change they made.
+    """
+    if section not in ROLES:
+        raise KeyError(f"unknown everos role {section!r}; roles: {ROLES}")
+    if section == "embedding":
+        # Not gated on owning the EverOS root, and the other three are. This
+        # value is raven's own block, which a knowledge base embeds with whether
+        # or not this plugin is the configured backend -- refusing to write it
+        # because somebody else manages an EverOS directory couples two things
+        # that have nothing to do with each other. It is also editable from the
+        # knowledge settings, which never asked about a root at all.
+        from raven.config.update import embedding_model_change, set_embedding_endpoint
+
+        fields = {"model": model, "provider": provider}
+        previous = set_embedding_endpoint(fields)
+        return embedding_model_change(previous, fields)
+    _require_owned(f"configure the {section} role")
+    from raven.config.update import set_plugin_config_fields
+
+    block: dict[str, str] = {"model": model, "provider": provider}
+    if section == "rerank":
+        # Written every time, empty included: a vendor switch that left the old
+        # box's shape behind would post the wrong request to the new endpoint.
+        block["protocol"] = protocol if not rerank_protocol(provider) else ""
+    set_plugin_config_fields("everos-memory", {section: block})
+    return ""
+
+
+def clear_role(section: str) -> None:
+    """Forget what serves ``section``; the next spawn emits it empty.
+
+    Emitting it empty is what makes this mean anything: raven no longer writes
+    ``everos.toml``, so a section left in that file would otherwise come back
+    into force the moment raven stopped naming a model.
+    """
+    if section not in ROLES:
+        raise KeyError(f"unknown everos role {section!r}; roles: {ROLES}")
+    _require_owned(f"clear the {section} role")
+    if section == "embedding":
+        from raven.config.update import set_embedding_endpoint
+
+        set_embedding_endpoint({"model": "", "provider": ""})
+        return
+    from raven.config.update import set_plugin_config_fields
+
+    set_plugin_config_fields("everos-memory", {}, remove=(section,))
+
+
+def role_is_env_managed(section: str) -> bool:
+    """Whether ``section``'s endpoint came from outside this process.
+
+    Generalises ``embedding_is_env_managed`` to all four roles. An operator who
+    exports ``EVEROS_<SECTION>__*`` outranks raven -- the settings page already
+    refuses a save it could not honour -- and raven must not blank what it does
+    not own either. The provenance set is what tells "somebody else exported
+    this" from "raven bound this a moment ago"; it survives ``os.execv`` through
+    ``PROVENANCE_ENV``, because a restarted gateway reading its own binding as
+    somebody else's export is a bug this codebase has already had.
+    """
+    keys = (
+        f"EVEROS_{section.upper()}__MODEL",
+        f"EVEROS_{section.upper()}__BASE_URL",
+        f"EVEROS_{section.upper()}__API_KEY",
+    )
+    if not all(os.environ.get(k) for k in keys):
+        return False
+    return not all(k in _BOUND_HERE for k in keys)
+
+
+def everos_env() -> dict[str, str]:
+    """The binding all four roles earn, from raven's own config.
+
+    Every role is emitted on every spawn. A role raven does not hold is emitted
+    **empty**, which suppresses whatever ``everos.toml`` says. That is what makes
+    clearing a role in the UI mean anything now that raven no longer edits that
+    file, and what stops an upgraded install's stale section -- old model, old key
+    -- from coming back into force.
+
+    Only the model and credential keys travel, so the runtime knobs in the file
+    (timeouts, batch sizes, the multimodal file-uri allowlist) keep applying:
+    EverOS merges per key, not per section. Measured, not assumed --
+    ``.work_context/everos_role_config_moves_to_raven/spikes/env_merge.py``.
+
+    Two keys are deliberately not emitted empty, because both are typed and an
+    empty string is not "unset" to a typed field -- it is invalid. The rerank
+    protocol has no sensible empty request shape, and ``DIMENSIONS`` is an int:
+    sending ``""`` for it fails EverOS\'s own settings validation and the server
+    exits before it serves anything. Measured 2026-09-22 against a real spawn,
+    which is the only layer that could have said so -- nothing below it builds
+    EverOS\'s ``Settings``.
+
+    A role the operator has exported for themselves is skipped whole -- see
+    ``role_is_env_managed``. "raven emits what it holds" is about the roles raven
+    manages, and a shell raven cannot edit is not one of them.
+    """
+    env: dict[str, str] = {}
+    for section in ROLES:
+        if role_is_env_managed(section):
+            # Not ours to say anything about, empty included: the operator put a
+            # complete endpoint in the environment on purpose.
+            continue
+        prefix = f"EVEROS_{section.upper()}__"
+        endpoint = resolve_role(section)
+        env[f"{prefix}MODEL"] = endpoint.model if endpoint else ""
+        env[f"{prefix}BASE_URL"] = endpoint.base_url if endpoint else ""
+        env[f"{prefix}API_KEY"] = endpoint.api_key if endpoint else ""
+        if section == "embedding" and endpoint and endpoint.dimensions:
+            env[f"{prefix}DIMENSIONS"] = str(endpoint.dimensions)
+        if section == "rerank":
+            protocol = rerank_protocol_for_role()
+            if protocol:
+                env[f"{prefix}PROVIDER"] = protocol
+    return env
+
+
+def everos_toml_role_notes() -> list[str]:
+    """What ``everos.toml`` still says about the four roles, and what wins.
+
+    Two sentences, both of which somebody hits. A section raven now holds a pin
+    for is dead text that still reads like configuration -- an operator who
+    edits it and sees nothing change has no way to find out why. A section raven
+    holds no pin for has not moved yet, which happens the next time memory
+    starts; saying so is the difference between "wait" and "reconfigure".
+
+    Read-only, and reported through the backend's health rather than written by
+    doctor: the move belongs to the start path, and doctor is the one command
+    that may not write.
+    """
+    overridden: list[str] = []
+    pending: list[str] = []
+    for section in ROLES:
+        try:
+            if not (everos_section(section) or {}).get("model"):
+                continue
+            (overridden if role_pin(section) is not None else pending).append(section)
+        except Exception:  # noqa: BLE001 - a report never fails on a read
+            return []
+
+    notes: list[str] = []
+    if overridden:
+        notes.append(
+            f"[{'] ['.join(overridden)}] is still in the file, and raven's own configuration "
+            "serves those roles now and overrides it -- editing them there changes nothing"
+        )
+    if pending:
+        notes.append(
+            f"[{'] ['.join(pending)}] has not moved into raven's configuration yet; it moves the "
+            "next time long-term memory starts, and needs no command"
+        )
+    return notes
+
+
+def bind_roles_here() -> dict[str, str]:
+    """Put all four roles into *this* process, as a spawn puts them into its child.
+
+    ``understand_media`` runs multimodal inside raven through EverOS's cached
+    ``load_settings()``, so a role that only ever reached the spawned server was
+    a role that tool could not use. One source for both paths -- ``everos_env``
+    -- so the answer cannot differ by which door it came through.
+
+    Recorded in the provenance set, and through it in the environment: the next
+    reader has to tell raven's own binding from an operator's export, and the
+    record survives ``os.execv`` for exactly that reason. A restarted gateway
+    reading its own binding as somebody else's is a bug this codebase has had.
+
+    Must run BEFORE anything imports EverOS's settings, same as
+    :func:`configure_everos_env`: ``load_settings`` is cached on first read.
+    """
+    env = everos_env()
+    os.environ.update(env)
+    _BOUND_HERE.update(env)
+    os.environ[PROVENANCE_ENV] = ",".join(sorted(_BOUND_HERE))
+    return env
+
+
+def describe_roles() -> dict[str, Any]:
+    """What the settings page needs to render the four role slots.
+
+    Reports the pin as stored -- a model and the vendor serving it -- so the page
+    stops reverse-looking-up a vendor from an address, which answered blank for
+    every endpoint that did not match a provider's own base url character for
+    character.
+
+    ``api_key_set`` means "this vendor has a usable credential", the same
+    question :func:`everos_role_configured` answers. One rule, two readers: a
+    card that said "key set" while the gate said "not configured" is exactly the
+    disagreement this collapses.
+
+    ``supports`` rides along rather than getting a call of its own. The page
+    needs it at the moment it renders these slots -- a rerank slot must not offer
+    a vendor that cannot rerank -- and a second round trip would let the two
+    answers disagree.
+
+    EverOS's rerank protocol is deliberately absent: it is derived from the
+    vendor table now, not chosen by anyone, and returning it under the name
+    ``provider`` is what made one wire field mean two different things.
+    """
+    sections: dict[str, Any] = {}
+    for section in ROLES:
+        pin = role_pin(section)
+        sections[section] = {
+            "model": pin[0] if pin else "",
+            "provider": pin[1] if pin else "",
+            "api_key_set": everos_role_configured(section),
+            "env_managed": role_is_env_managed(section),
+        }
+    supports: dict[str, list[str]] = {}
+    for row in vendors():
+        name = str(row.get("name") or "")
+        if name:
+            supports[name] = sorted(row.get("supports") or ())
+    return {
+        "available": True,
+        "owned": everos_owned(),
+        "config_path": str(get_everos_config_path()),
+        "sections": sections,
+        "supports": supports,
+    }

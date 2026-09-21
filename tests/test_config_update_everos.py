@@ -13,7 +13,6 @@ import os
 import shutil
 import tomllib
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from everos.entrypoints.cli.commands.init_cmd import _EVEROS_TEMPLATE
@@ -25,7 +24,7 @@ from raven_everos import config as ue
 def _no_ambient_embedding_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """Take the operator's documented override out of the ambient shell.
 
-    ``EVEROS_EMBEDDING__*`` is a real input to ``everos_has_own_embedding``,
+    ``EVEROS_EMBEDDING__*`` is a real input to ``role_is_env_managed``,
     so a developer who exports it turns every case here that assumes no
     override into a different case -- silently, and only on their machine. A
     case that reads one answer on one machine and another elsewhere is not
@@ -51,6 +50,17 @@ def everos_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def _read(path: Path) -> dict:
     with path.open("rb") as f:
         return tomllib.load(f)
+
+
+def _seed(path: Path, text: str) -> None:
+    """Write everos.toml the way an operator does -- by hand.
+
+    ``[api]`` is the one section raven writes now, so a case that needs another
+    one present has to put it there itself. That is also the realistic shape:
+    every section except the address arrives from somebody editing the file.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -165,8 +175,8 @@ def test_configure_everos_env_accepts_an_explicit_root(monkeypatch: pytest.Monke
 
 
 def test_load_round_trips_written_content(everos_home: Path) -> None:
-    ue.set_everos_section("llm", {"model": "m", "api_key": "k", "base_url": "u"})
-    assert ue.load_everos_config()["llm"] == {"model": "m", "api_key": "k", "base_url": "u"}
+    ue.set_everos_section("api", {"host": "127.0.0.1", "port": 18791})
+    assert ue.load_everos_config()["api"] == {"host": "127.0.0.1", "port": 18791}
 
 
 # ---------------------------------------------------------------------------
@@ -182,76 +192,62 @@ def test_set_each_writable_section(everos_home: Path, section: str) -> None:
 
 def test_set_creates_file_and_parent_dir(everos_home: Path) -> None:
     assert not everos_home.parent.exists()
-    ue.set_everos_section("llm", {"model": "gpt-4o-mini", "api_key": "k", "base_url": "u"})
+    ue.set_everos_section("api", {"host": "127.0.0.1", "port": 18791})
     assert everos_home.exists()
-    assert _read(everos_home)["llm"] == {"model": "gpt-4o-mini", "api_key": "k", "base_url": "u"}
+    assert _read(everos_home)["api"] == {"host": "127.0.0.1", "port": 18791}
 
 
 def test_set_drops_none_values(everos_home: Path) -> None:
-    ue.set_everos_section("rerank", {"provider": "vllm", "model": "m", "api_key": None})
-    assert _read(everos_home)["rerank"] == {"provider": "vllm", "model": "m"}
+    ue.set_everos_section("api", {"host": "127.0.0.1", "port": 18791, "workers": None})
+    assert _read(everos_home)["api"] == {"host": "127.0.0.1", "port": 18791}
 
 
 def test_set_all_none_writes_empty_section(everos_home: Path) -> None:
-    ue.set_everos_section("llm", {"model": None, "api_key": None})
-    assert _read(everos_home)["llm"] == {}
+    ue.set_everos_section("api", {"host": None, "port": None})
+    assert _read(everos_home)["api"] == {}
 
 
 def test_set_empty_fields_writes_empty_section(everos_home: Path) -> None:
-    ue.set_everos_section("llm", {})
-    assert _read(everos_home)["llm"] == {}
-
-
-def test_set_preserves_other_writable_sections(everos_home: Path) -> None:
-    ue.set_everos_section("llm", {"model": "a"})
-    ue.set_everos_section("embedding", {"model": "b"})
-    data = _read(everos_home)
-    assert data["llm"] == {"model": "a"}
-    assert data["embedding"] == {"model": "b"}
+    ue.set_everos_section("api", {})
+    assert _read(everos_home)["api"] == {}
 
 
 def test_set_preserves_non_writable_sections(everos_home: Path) -> None:
-    # EverOS ships [memory]/[sqlite]/... — a model-section write must not clobber them.
-    everos_home.parent.mkdir(parents=True)
-    everos_home.write_text(
-        '[memory]\nroot = "~/.everos"\n\n[sqlite]\njournal_mode = "WAL"\n',
-        encoding="utf-8",
-    )
-    ue.set_everos_section("llm", {"model": "a"})
+    # EverOS ships [memory]/[sqlite]/... — the address write must not clobber them.
+    _seed(everos_home, '[memory]\nroot = "~/.everos"\n\n[sqlite]\njournal_mode = "WAL"\n')
+    ue.set_everos_section("api", {"host": "127.0.0.1"})
     data = _read(everos_home)
     assert data["memory"] == {"root": "~/.everos"}
     assert data["sqlite"] == {"journal_mode": "WAL"}
-    assert data["llm"] == {"model": "a"}
+    assert data["api"] == {"host": "127.0.0.1"}
 
 
 def test_set_merges_into_existing_section(everos_home: Path) -> None:
-    ue.set_everos_section("llm", {"model": "a", "api_key": "old"})
-    ue.set_everos_section("llm", {"api_key": "new"})
-    assert _read(everos_home)["llm"] == {"model": "a", "api_key": "new"}
+    ue.set_everos_section("api", {"host": "127.0.0.1", "port": 1})
+    ue.set_everos_section("api", {"port": 18791})
+    assert _read(everos_home)["api"] == {"host": "127.0.0.1", "port": 18791}
 
 
 def test_set_preserves_mixed_value_types(everos_home: Path) -> None:
-    # rerank carries ints (timeout_seconds/batch_size) alongside strings.
-    ue.set_everos_section(
-        "rerank",
-        {"provider": "deepinfra", "model": "m", "base_url": "u", "timeout_seconds": 30, "batch_size": 16},
-    )
-    got = _read(everos_home)["rerank"]
-    assert got == {"provider": "deepinfra", "model": "m", "base_url": "u", "timeout_seconds": 30, "batch_size": 16}
-    assert isinstance(got["timeout_seconds"], int)
+    # The address carries an int port alongside a string host.
+    ue.set_everos_section("api", {"host": "127.0.0.1", "port": 18791})
+    got = _read(everos_home)["api"]
+    assert got == {"host": "127.0.0.1", "port": 18791}
+    assert isinstance(got["port"], int)
 
 
 def test_set_unknown_section_rejected(everos_home: Path) -> None:
-    # ``api`` is writable now (the address lives there); the data-layout
-    # sections EverOS owns still are not.
-    for bad in ("sqlite", "memory", "lancedb", ""):
+    # ``api`` is the one section raven writes. The four model roles left for
+    # raven's own config, and this guard is what stops a second home for them
+    # growing back; the data-layout sections EverOS owns were never writable.
+    for bad in ("llm", "embedding", "rerank", "multimodal", "sqlite", "memory", "lancedb", ""):
         with pytest.raises(KeyError):
             ue.set_everos_section(bad, {"x": 1})
 
 
 def test_set_leaves_no_tmp_file(everos_home: Path) -> None:
     # Atomic write goes through a sibling .tmp + os.replace; nothing should linger.
-    ue.set_everos_section("llm", {"model": "a"})
+    ue.set_everos_section("api", {"host": "127.0.0.1"})
     leftovers = [p.name for p in everos_home.parent.iterdir() if p.name != "everos.toml"]
     assert leftovers == []
 
@@ -262,24 +258,24 @@ def test_set_leaves_no_tmp_file(everos_home: Path) -> None:
 
 
 def test_clear_removes_section_keeps_siblings(everos_home: Path) -> None:
-    ue.set_everos_section("multimodal", {"model": "m"})
-    ue.set_everos_section("llm", {"model": "a"})
-    ue.clear_everos_section("multimodal")
+    _seed(everos_home, '[memory]\nroot = "~/.everos"\n')
+    ue.set_everos_section("api", {"host": "127.0.0.1"})
+    ue.clear_everos_section("api")
     data = _read(everos_home)
-    assert "multimodal" not in data
-    assert data["llm"] == {"model": "a"}
+    assert "api" not in data
+    assert data["memory"] == {"root": "~/.everos"}
 
 
 def test_clear_absent_section_is_noop_no_file(everos_home: Path) -> None:
     # No file yet → clearing must not create one.
-    ue.clear_everos_section("rerank")
+    ue.clear_everos_section("api")
     assert not everos_home.exists()
 
 
 def test_clear_absent_section_with_existing_file_preserves_it(everos_home: Path) -> None:
-    ue.set_everos_section("llm", {"model": "a"})
-    ue.clear_everos_section("rerank")  # rerank not present
-    assert _read(everos_home)["llm"] == {"model": "a"}
+    _seed(everos_home, '[memory]\nroot = "~/.everos"\n')
+    ue.clear_everos_section("api")  # api not present
+    assert _read(everos_home)["memory"] == {"root": "~/.everos"}
 
 
 def test_clear_unknown_section_rejected(everos_home: Path) -> None:
@@ -305,13 +301,13 @@ def test_writing_a_section_of_an_unowned_root_is_refused(_unowned: Path) -> None
     that remember to check -- one rule kept in several places is the drift this
     whole change is about."""
     with pytest.raises(ue.EverosRootNotOwnedError, match="managed by the user"):
-        ue.set_everos_section("llm", {"model": "m", "api_key": "k"})
+        ue.set_everos_section("api", {"host": "127.0.0.1", "port": 18791})
     assert not (_unowned / "everos.toml").exists()
 
 
 def test_clearing_a_section_of_an_unowned_root_is_refused(_unowned: Path) -> None:
     with pytest.raises(ue.EverosRootNotOwnedError):
-        ue.clear_everos_section("rerank")
+        ue.clear_everos_section("api")
 
 
 def test_seeding_templates_into_an_unowned_root_is_refused(_unowned: Path) -> None:
@@ -328,7 +324,7 @@ def test_the_address_write_is_refused_too(_unowned: Path) -> None:
 
 
 def test_a_root_raven_owns_may_be_written(everos_home: Path) -> None:
-    ue.set_everos_section("llm", {"model": "m", "api_key": "k"})
+    ue.set_everos_section("api", {"host": "127.0.0.1", "port": 18791})
     assert everos_home.exists()
 
 
@@ -433,30 +429,31 @@ class TestTheLegacyRootBelongsToTheDefaultInstall:
 
 
 def test_a_section_reads_back_as_the_table_that_was_written(everos_home: Path) -> None:
-    ue.set_everos_section("llm", {"model": "gpt-5", "api_key": "k"})
-    ue.set_everos_section("llm", {"base_url": "https://api.test"})
+    ue.set_everos_section("api", {"host": "127.0.0.1", "port": 18791})
+    ue.set_everos_section("api", {"workers": 4})
 
-    assert ue.everos_section("llm") == {
-        "model": "gpt-5",
-        "api_key": "k",
-        "base_url": "https://api.test",
+    assert ue.everos_section("api") == {
+        "host": "127.0.0.1",
+        "port": 18791,
+        "workers": 4,
     }
 
 
 def test_a_section_nobody_wrote_reads_as_empty(everos_home: Path) -> None:
-    ue.set_everos_section("llm", {"model": "gpt-5"})
+    ue.set_everos_section("api", {"host": "127.0.0.1"})
 
-    assert ue.everos_section("embedding") == {}
-    assert ue.everos_section("llm") != {}
+    assert ue.everos_section("memory") == {}
+    assert ue.everos_section("api") != {}
 
 
-class TestEmbeddingHasTwoHomes:
-    """The embedding endpoint became raven's, and the toml kept its claim.
+class TestWhereEmbeddingsEndpointLives:
+    """The embedding endpoint is raven's, and everos.toml's claim survives in
+    exactly one place.
 
     Every reader of "is embedding configured" -- doctor's `configured:` line,
     the wizard's keep/reconfigure menu and its recap, the warning that recall
     has fallen back to keyword matching -- asks one predicate, so that
-    predicate has to know both places or all four go quiet at once.
+    predicate has to answer for raven's record or all four go quiet at once.
     """
 
     @staticmethod
@@ -481,7 +478,6 @@ class TestEmbeddingHasTwoHomes:
     def test_an_endpoint_only_raven_holds_still_counts_as_configured(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        ue.set_everos_section("llm", {"model": "gpt-5", "api_key": "k"})
         self._raven_config(
             tmp_path,
             monkeypatch,
@@ -493,14 +489,14 @@ class TestEmbeddingHasTwoHomes:
     def test_a_half_written_block_is_not_an_endpoint(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Three values or nothing: the same bar configure_embedding_env sets
+        # Three values or nothing: the same bar `resolve_role` sets
         # before it binds. Two of them would report configured and then serve
         # a request that cannot be made.
         # A model with nobody to serve it cannot be called, so it is not an endpoint.
         self._raven_config(tmp_path, monkeypatch, {"model": "Qwen/Qwen3-Embedding-4B"})
 
         assert ue.everos_role_configured("embedding") is False
-        assert ue.host_embedding_section() == {}
+        assert ue.role_pin("embedding") is None
 
     def test_no_block_anywhere_is_not_configured(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -509,10 +505,12 @@ class TestEmbeddingHasTwoHomes:
 
         assert ue.everos_role_configured("embedding") is False
 
-    def test_the_second_home_is_embeddings_alone(
+    def test_no_other_role_reads_embeddings_block(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No other role moved, so none of them may start reading raven's block."""
+        """All four roles read raven now, but not the same block: embedding's is
+        raven's own top-level one, the other three live in this plugin's slice.
+        A pinned embedding must not report the others configured."""
         self._raven_config(
             tmp_path,
             monkeypatch,
@@ -543,14 +541,12 @@ class TestEmbeddingHasTwoHomes:
         assert ue.everos_section("embedding").get("model"), "template must still seed a model, or this proves nothing"
         assert not ue.everos_section("embedding").get("api_key")
 
-        assert ue.everos_has_own_embedding() is False
-
         self._raven_config(
             tmp_path,
             monkeypatch,
             {"model": "Qwen/Qwen3-Embedding-4B", "provider": "siliconflow"},
         )
-        env = ue.host_embedding_env()
+        env = ue.everos_env()
         # Verbatim: "Qwen" is the org on HuggingFace and SiliconFlow serves the
         # id under that name. A head only comes off when it is the provider's
         # own -- the rule `raven.providers.wire` owns for every model id.
@@ -562,7 +558,7 @@ class TestEmbeddingHasTwoHomes:
             monkeypatch,
             {"model": "siliconflow/BAAI/bge-m3", "provider": "siliconflow"},
         )
-        assert ue.host_embedding_env()["EVEROS_EMBEDDING__MODEL"] == "BAAI/bge-m3"
+        assert ue.everos_env()["EVEROS_EMBEDDING__MODEL"] == "BAAI/bge-m3"
 
     def test_the_documented_env_override_is_an_operators_choice(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -588,10 +584,11 @@ class TestEmbeddingHasTwoHomes:
             monkeypatch.setenv(f"EVEROS_EMBEDDING__{name}", value)
         self._raven_config(tmp_path, monkeypatch, {"model": "ravens/model", "provider": "siliconflow"})
 
-        assert ue.everos_has_own_embedding() is True
-        assert ue.host_embedding_env() == {}
-        endpoint = SimpleNamespace(model="ravens/model", base_url="https://ravens/v1", api_key="sk-raven")
-        assert ue.configure_embedding_env(endpoint) is False
+        assert ue.role_is_env_managed("embedding") is True
+        # Skipped whole, not blanked: raven emits nothing for a role somebody
+        # else exported, so the binding below leaves their values standing.
+        assert "EVEROS_EMBEDDING__MODEL" not in ue.everos_env()
+        ue.bind_roles_here()
         assert os.environ["EVEROS_EMBEDDING__MODEL"] == "operators/model"
 
     def test_two_of_the_three_env_values_are_not_an_endpoint(
@@ -611,15 +608,15 @@ class TestEmbeddingHasTwoHomes:
         monkeypatch.delenv("EVEROS_EMBEDDING__API_KEY", raising=False)
         self._raven_config(tmp_path, monkeypatch, {"model": "ravens/model", "provider": "siliconflow"})
 
-        assert ue.everos_has_own_embedding() is False
-        assert ue.host_embedding_env()["EVEROS_EMBEDDING__MODEL"] == "ravens/model"
+        assert ue.role_is_env_managed("embedding") is False
+        assert ue.everos_env()["EVEROS_EMBEDDING__MODEL"] == "ravens/model"
 
     def test_ravens_own_binding_is_not_an_operators_export(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The runtime sequence, in the order it actually happens.
 
-        `configure_embedding_env` puts the host's endpoint into this process so
+        `bind_roles_here` puts raven's own pins into this process so
         the in-process imports and every child see it. From that moment all
         three variables are set and complete -- and a reader that asks only
         "are all three set" told the settings card that an operator had
@@ -635,17 +632,16 @@ class TestEmbeddingHasTwoHomes:
         everos_home.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(_EVEROS_TEMPLATE, everos_home)
         self._raven_config(tmp_path, monkeypatch, {"model": "ravens/model", "provider": "siliconflow"})
-        endpoint = SimpleNamespace(model="ravens/model", base_url="https://ravens/v1", api_key="sk-raven")
 
         assert ue.embedding_is_env_managed() is False, "nothing is exported yet"
-        assert ue.configure_embedding_env(endpoint) is True, "the host endpoint should bind"
+        assert ue.bind_roles_here()["EVEROS_EMBEDDING__MODEL"] == "ravens/model"
         assert os.environ["EVEROS_EMBEDDING__MODEL"] == "ravens/model"
 
         # Everything below is asked after the binding, which is where a reader
         # without provenance changes its answer.
         assert ue.embedding_is_env_managed() is False
-        assert ue.everos_has_own_embedding() is False
-        assert ue.configure_embedding_env(endpoint) is True, "a second start must still bind"
+        assert ue.role_is_env_managed("embedding") is False
+        assert ue.bind_roles_here()["EVEROS_EMBEDDING__MODEL"] == "ravens/model", "a second start must still bind"
 
     def test_provenance_outlives_the_restart_exec(self, tmp_path: Path) -> None:
         """`raven gateway --restart` re-launches through `os.execv`: the
@@ -667,7 +663,12 @@ class TestEmbeddingHasTwoHomes:
         shutil.copy2(_EVEROS_TEMPLATE, root / "everos.toml")
         cfg = tmp_path / "config.json"
         cfg.write_text(
-            json.dumps({"embedding": {"model": "ravens/model", "baseUrl": "https://ravens/v1", "apiKey": "sk-raven"}}),
+            json.dumps(
+                {
+                    "embedding": {"model": "ravens/model", "provider": "siliconflow"},
+                    "providers": {"siliconflow": {"apiKey": "sk-raven"}},
+                }
+            ),
             encoding="utf-8",
         )
         program = (
@@ -677,18 +678,16 @@ class TestEmbeddingHasTwoHomes:
             "import raven_everos.config as ue\n"
             f"ue.everos_root = lambda: pathlib.Path({str(root)!r})\n"
             f"ue.get_everos_config_path = lambda: pathlib.Path({str(root / 'everos.toml')!r})\n"
-            "from types import SimpleNamespace\n"
-            "ep = SimpleNamespace(model='ravens/model', base_url='https://ravens/v1', api_key='sk-raven')\n"
             "stage = sys.argv[1]\n"
             "if stage == 'first':\n"
-            "    bound = ue.configure_embedding_env(ep)\n"
+            "    bound = bool(ue.bind_roles_here().get('EVEROS_EMBEDDING__MODEL'))\n"
             "    print(json.dumps({'bound': bound, 'env_managed': ue.embedding_is_env_managed(),\n"
-            "                      'env': {k: v for k, v in os.environ.items() if k.startswith(('EVEROS_EMBEDDING__', 'RAVEN_EVEROS'))}}))\n"
+            "                      'env': {k: v for k, v in os.environ.items() if k.startswith(('EVEROS_', 'RAVEN_EVEROS'))}}))\n"
             "else:\n"
             "    print(json.dumps({'env_managed': ue.embedding_is_env_managed(),\n"
-            "                      'bound': ue.configure_embedding_env(ep)}))\n"
+            "                      'bound': bool(ue.bind_roles_here().get('EVEROS_EMBEDDING__MODEL'))}))\n"
         )
-        base = {k: v for k, v in os.environ.items() if not k.startswith(("EVEROS_EMBEDDING__", "RAVEN_EVEROS"))}
+        base = {k: v for k, v in os.environ.items() if not k.startswith(("EVEROS_", "RAVEN_EVEROS"))}
         first = json.loads(
             subprocess.run(
                 [sys.executable, "-c", program, "first"], capture_output=True, text=True, env=base, check=True
@@ -709,24 +708,30 @@ class TestEmbeddingHasTwoHomes:
         assert after["env_managed"] is False, "the restarted process must not read its own binding as external"
         assert after["bound"] is True, "and must still bind the host endpoint"
 
-    def test_the_toml_keeps_precedence_when_it_has_one(
+    def test_a_hand_written_section_wins_nowhere(
         self, everos_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An operator who wrote [embedding] chose that endpoint for memory;
-        raven's block fills a gap rather than taking over."""
-        ue.set_everos_section("embedding", {"model": "bge-m3", "api_key": "k-own"})
+        """One answer, both paths.
+
+        There were two: the spawn took raven's pin while the in-process binding
+        deferred to whatever the file said, so ``understand_media`` and the
+        memory service could run different models with nothing saying so. Both
+        read ``everos_env`` now. The file still holds runtime knobs raven never
+        sends -- those keep applying -- but it no longer decides which model a
+        role runs.
+
+        A shell an operator exported is the one thing that still outranks raven,
+        and that is a different mechanism (``role_is_env_managed``).
+        """
+        _seed(everos_home, '[embedding]\nmodel = "bge-m3"\napi_key = "k-own"\n')
         self._raven_config(
             tmp_path,
             monkeypatch,
             {"model": "Qwen/Qwen3-Embedding-4B", "provider": "siliconflow"},
         )
 
-        assert ue.everos_role_configured("embedding") is True
-        assert ue.everos_section("embedding")["model"] == "bge-m3"
-        for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS"):
-            monkeypatch.delenv(f"EVEROS_EMBEDDING__{name}", raising=False)
-        endpoint = SimpleNamespace(
-            model="Qwen/Qwen3-Embedding-4B", base_url="https://api.siliconflow.cn/v1", api_key="sk-sf"
-        )
-        assert ue.configure_embedding_env(endpoint) is False, "the toml's own endpoint must not be overridden"
-        assert "EVEROS_EMBEDDING__MODEL" not in os.environ
+        assert ue.everos_section("embedding")["model"] == "bge-m3", "the file still says what it said"
+
+        assert ue.everos_env()["EVEROS_EMBEDDING__MODEL"] == "Qwen/Qwen3-Embedding-4B"
+        assert ue.bind_roles_here()["EVEROS_EMBEDDING__MODEL"] == "Qwen/Qwen3-Embedding-4B"
+        assert os.environ["EVEROS_EMBEDDING__MODEL"] == "Qwen/Qwen3-Embedding-4B"

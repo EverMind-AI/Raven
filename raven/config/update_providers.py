@@ -21,6 +21,7 @@ import os
 import typing
 from pathlib import Path
 from typing import Any, Union
+from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
@@ -1180,16 +1181,28 @@ _PROVIDER_BASE_URL_FALLBACK = {
 }
 
 
-def provider_serving_at(base_url: str, *, config_path: Path | None = None) -> str | None:
+def provider_serving_at(base_url: str, *, api_key: str | None = None, config_path: Path | None = None) -> str | None:
     """Which configured provider answers at ``base_url``, if any.
 
-    The migrations' one hard part: a retired block stored an address, the
-    block replacing it names a provider, and only the configured providers can
-    say which of them is that address. Compared on the host and path with a
-    trailing slash removed, because the two spellings are the same endpoint and
-    the config may hold either.
+    The migrations' one hard part: a retired block stored an address, the block
+    replacing it names a provider, and only the configured providers can say
+    which of them is that address.
+
+    Three levels, because one is not enough:
+
+    1. the full address, trailing slash removed -- both spellings are the same
+       endpoint and a config may hold either;
+    2. the **host**, which exists for DeepInfra: its rerank section deliberately
+       holds ``/v1/inference`` while chat is served from ``/v1/openai``, so a
+       full-address comparison misses a vendor that is plainly the same one;
+    3. the **key**, when one is offered. A section whose address was hand-edited
+       to a proxy still carries the credential the vendor issued, and that names
+       the vendor more surely than the address does.
+
+    Earlier levels win outright: a host two configured providers share must not
+    overturn an exact address match.
     """
-    want = base_url.rstrip("/")
+    rows: list[tuple[str, str, str]] = []
     for row in list_providers(config_path=config_path):
         name = str(row.get("name") or "")
         if not name:
@@ -1198,8 +1211,24 @@ def provider_serving_at(base_url: str, *, config_path: Path | None = None) -> st
             resolved = resolve_provider_credentials(name, config_path=config_path)
         except Exception:  # noqa: BLE001 - one unusable provider must not stop the search
             continue
-        if resolved and resolved[0].rstrip("/") == want:
+        if resolved:
+            rows.append((name, resolved[0].rstrip("/"), resolved[1]))
+
+    want = base_url.rstrip("/")
+    for name, address, _key in rows:
+        if address == want:
             return name
+
+    want_host = urlparse(want).netloc
+    if want_host:
+        for name, address, _key in rows:
+            if urlparse(address).netloc == want_host:
+                return name
+
+    if api_key:
+        for name, _address, key in rows:
+            if key and key == api_key:
+                return name
     return None
 
 
