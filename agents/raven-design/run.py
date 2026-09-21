@@ -44,7 +44,7 @@ MODE_LABELS = {
     ),
     "max": (
         "Max",
-        "400 tool iterations at the host's full reasoning effort. A full deliverable where the ceiling matters more than the bill.",
+        "400 tool iterations at the highest reasoning effort the model offers. A full deliverable where the ceiling matters more than the bill.",
     ),
 }
 BASELINE_MODE = "high"
@@ -186,13 +186,14 @@ def render_config(source: Path) -> Path:
     # the engine does not read either. The overlay stays on the entry as the
     # record of what the mode changed.
     #
-    # A mode that names an effort of its own keeps it; the rest inherit the
-    # host's. Medium is the one that names one: below the top tier this agent
-    # designs the deck itself instead of handing it to the template lane, and
-    # the cheapest tier asking for the host's full thinking budget on top of
-    # that is the combination nobody chose. The other two say nothing, which
-    # is the same as inheriting -- an unset entry effort reads
-    # ``agents.defaults.reasoningEffort``, and that is the host's.
+    # A mode that names an effort of its own keeps it; the baseline inherits
+    # the host's. This agent designs every deck itself, so what a tier buys is
+    # how hard it thinks about it: medium asks for low, max for the highest
+    # the model offers, and high says nothing, which is the same as
+    # inheriting -- an unset entry effort reads ``agents.defaults.reasoningEffort``,
+    # and that is the host's. The overlay itself does not carry the effort --
+    # it is lifted onto the entry so the trunk dispenses it, and a copy in the
+    # diff the engine reads would be a second place to change it.
     catalogue = render.mode_catalogue(
         MODES_DIR,
         MODE_LABELS,

@@ -56,11 +56,14 @@ What one agent directory carries:
   `"noteFile": "<name>.md"` beside the manifest instead -- discovery reads that
   file into `note`, so a requirement long enough to be worth writing stays
   reviewable as a diff; declaring both is refused. What puts a route under that
-  gate at all is its own declaration, and the two halves are independent:
+  gate at all is its own declaration, and the three parts are independent:
   `"needs": ["image_generation", "image_search"]` names what the target's own
-  pipeline cannot work without, and `"minTier": "max"` the lowest tier the
-  route may open at. A route naming neither is dispatched exactly as routes
-  were before the gate existed -- never probed, never tiered -- because
+  pipeline cannot work without, `"needsFile": ".pptx"` a file the user attached
+  that the dispatch hands over (a direct chat's media, or an attachment of the
+  turn that the spawn task names -- a path in the text alone is not one) for
+  the route to open, and `"minTier": "max"` the lowest tier the route may open
+  at. A route naming none is dispatched exactly as routes were before the
+  gate existed -- never probed, never asked for a file, never tiered -- because
   `routes` is a general facility and a row routing for reasons of its own must
   not inherit conditions it never asked for. The names in `needs` come from a
   closed vocabulary (`ROUTE_REQUIREMENTS`), since the host is what answers
