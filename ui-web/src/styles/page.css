@@ -4692,43 +4692,6 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
   backdrop-filter: blur(20px) saturate(1.4);
 }
-/* ── what is running, above the box you type in ────────────────────────
-   On the dock's axis, not the card's: the strip belongs to the page the way
-   the sheet rack does, and it is what the reader sees of work in flight
-   without opening the panel.
-
-   No ground of its own. The chips sit on the page the way the mock draws them;
-   what keeps the strip from reading as a cut is the ramp on the rail below,
-   which fades the chips themselves out at the edge they scroll past. */
-#taskRuns { display: contents; }
-.runs { position: relative; max-width: var(--col); margin: 0 auto 8px; pointer-events: auto; }
-.trun {
-  flex: none; display: inline-flex; align-items: center; gap: 7px;
-  max-width: 200px; padding: 5px 10px; border-radius: 9px; cursor: pointer;
-  border: 1px solid var(--line-soft); background: var(--surface); box-shadow: var(--elev);
-  font-size: 12px; color: var(--text);
-}
-/* Lit from either side: the pointer may be on this chip or on the same task's
-   row in the panel, and both light the pair. */
-.trun:hover, .trun.hl { border-color: var(--muted); background: var(--raised); }
-.trun[aria-current="true"] { border-color: var(--amber); }
-.trun:focus-visible { outline: 1.5px solid var(--amber); outline-offset: 2px; }
-.trun .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The strip's chip carries the same three-state dot as the task list row --
-   moss running, clay only for a failure or an interruption, faint otherwise
-   -- via `data-st` rather than a new class, so the page-wide `.dot` rule
-   other domains read stays untouched. */
-.trun[data-st="run"] .dot {
-  background: var(--moss);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--moss) 18%, transparent);
-  animation: pulse 1.8s ease-in-out infinite;
-}
-.trun[data-st="error"] .dot {
-  background: var(--clay);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--clay) 15%, transparent);
-  animation: none;
-}
-.trun[data-st="ok"] .dot { background: var(--faint); box-shadow: none; animation: none; }
 
 .csheet {
   border-radius: 12px; padding: 12px 14px;
@@ -6373,9 +6336,10 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   text-decoration: none;
 }
 .sarow.task > .tkerr { margin-top: 3px; }
-/* The same three-state dot as the composer strip's chip: moss running, clay
-   only for a failure or an interruption, faint grey for everything else
-   settled -- carried by `data-st` rather than a new class. */
+/* The prototype's own three-state dot, shared with the task pane's status
+   bar: moss running, clay only for a failure or an interruption, faint grey
+   for everything else settled -- carried by `data-st` rather than a new
+   class. */
 .sarow.task[data-st="run"] .dot {
   background: var(--moss);
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--moss) 18%, transparent);

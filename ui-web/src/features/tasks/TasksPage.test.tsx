@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import { setCurrent } from '../../lib/session'
+import * as lang from '../../state/lang'
 import { resetSources, setSources } from '../../state/sources'
 import { get as toastGet } from '../../state/toast'
 import { installWsPane } from '../../test/wsPaneHarness'
@@ -67,6 +68,7 @@ afterEach(() => {
   cleanup()
   resetSources()
   resetTranslator()
+  lang._resetForTests()
   setCurrent(null)
 })
 
@@ -143,35 +145,56 @@ describe('the running strip', () => {
     render(<TaskRuns />)
     await act(async () => { await store.refresh() })
   }
+  const chip = (): HTMLElement | null => document.querySelector('.tkrunhint')
 
   it('draws nothing when nothing is running', async () => {
     rows = [task({ id: 'a', kind: 'dag', status: 'completed' })]
     await draw()
-    expect(document.querySelector('.runs')).toBeNull()
+    expect(document.querySelector('.tkruns')).toBeNull()
   })
 
-  it('carries name only, up to three', async () => {
+  it('says how many are running in one chip, and names them only in its title', async () => {
     rows = [
       task({ id: 'a', kind: 'dag', status: 'running', task_summary: 'First' }),
-      task({ id: 'b', kind: 'dag', status: 'running', task_summary: 'Second' }),
+      task({ id: 'b', kind: 'spawn', status: 'running', task_summary: null }),
+      task({ id: 'c', kind: 'dag', status: 'completed', task_summary: 'Third' }),
     ]
     await draw()
-    expect([...document.querySelectorAll('.trun .nm')].map((n) => n.textContent)).toEqual(['First', 'Second'])
-    expect(document.querySelector('.trun .st')).toBeNull()
+    expect(document.querySelectorAll('.tkruns .tkrunhint')).toHaveLength(1)
+    expect(chip()!.querySelector('.tkrundot')).not.toBeNull()
+    expect(chip()!.textContent).toBe('gui.tasks.running_n {"n":2}')
+    expect(chip()!.getAttribute('title')).toBe('First\nb')
   })
 
-  it('folds a fourth running task behind one overflow chip', async () => {
-    rows = [0, 1, 2, 3].map((i) => task({ id: `t${i}`, kind: 'dag', status: 'running', task_summary: `T${i}` }))
-    await draw()
-    expect(document.querySelectorAll('.trun')).toHaveLength(4)
-    expect(document.querySelector('.trun[data-more]')?.textContent).toBe('gui.tasks.overflow_more {"n":1}')
-  })
-
-  it('opens the task the same door the list row does', async () => {
+  it('opens the desk on the tasks tab, not a pane of any one task', async () => {
     rows = [task({ id: 'a', kind: 'spawn', status: 'running' })]
     await draw()
-    await act(async () => { (document.querySelector('.trun') as HTMLElement).click() })
-    expect(desk.get().panes[0]!.id).toBe('task:spawn:a')
+    desk.set({ paletteOpen: false, tab: 'diff' })
+    await act(async () => { chip()!.click() })
+    expect(desk.get().paletteOpen).toBe(true)
+    expect(desk.get().tab).toBe('tasks')
+    expect(desk.get().panes).toHaveLength(0)
+  })
+
+  it('follows the rows while it is on screen, and leaves with the last one', async () => {
+    rows = [
+      task({ id: 'a', kind: 'dag', status: 'running' }),
+      task({ id: 'b', kind: 'spawn', status: 'running' }),
+    ]
+    await draw()
+    expect(chip()!.textContent).toBe('gui.tasks.running_n {"n":2}')
+    act(() => { store.set({ ...store.get(), rows: [rows[0]!, { ...rows[1]!, status: 'completed' }] }) })
+    expect(chip()!.textContent).toBe('gui.tasks.running_n {"n":1}')
+    act(() => { store.set({ ...store.get(), rows: rows.map((r) => ({ ...r, status: 'completed' })) }) })
+    expect(document.querySelector('.tkruns')).toBeNull()
+  })
+
+  it('repaints when a language is picked', async () => {
+    rows = [task({ id: 'a', kind: 'dag', status: 'running' })]
+    await draw()
+    setTranslator((key, vars) => `picked:${key} ${JSON.stringify(vars)}`)
+    act(() => { lang.set('en') })
+    expect(chip()!.textContent).toBe('picked:gui.tasks.running_n {"n":1}')
   })
 })
 

@@ -11,10 +11,43 @@
  * LEGACY_LOCAL row is what carries that debt down.
  */
 
-/* The composer strip's chips, wrapping rather than scrolling -- the
-   prototype's `.tasktags` -- restored after a refactor dropped the wrapper
-   that carried this layout and left the chips touching each other. */
-.tkrail { display: flex; flex-wrap: wrap; gap: 6px; }
+/* The strip above the composer: one pill saying how many tasks are running,
+   which opens the desk's tasks tab -- the prototype's `.tasktags` and
+   `.runhint`. On the dock's axis (`--col`) rather than the card's, the way the
+   sheet rack is, and with no ground of its own: the pill sits on the page. */
+.tkruns {
+  display: flex;
+  max-width: var(--col);
+  margin: 0 auto 8px;
+  pointer-events: auto;
+}
+.tkrunhint {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--ink);
+  box-shadow: var(--elev);
+  font-size: 12px;
+  color: var(--muted);
+  transition: color .14s ease, border-color .14s ease, background .14s ease;
+}
+.tkrunhint:hover { color: var(--text); border-color: var(--line); background: var(--raised); }
+/* The running dot the tasks tab's rows carry (`.sarow.task[data-st="run"]
+   .dot`), so the pill and the list it opens breathe alike. Its own class
+   rather than the page-wide `.dot`: this pill has exactly one state. */
+.tkrundot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--moss);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--moss) 18%, transparent);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) { .tkrundot { animation: none; } }
 
 /* The node card's three "there is nothing to show here" lines -- a step nobody
    started, one whose record this panel has not read, and one whose executor
@@ -66,8 +99,8 @@
   color: var(--muted);
   font-weight: 500;
 }
-/* The same three-state dot as the list row and the composer chip: moss
-   running, clay only for a failure or an interruption, faint otherwise. */
+/* The same three-state dot as the list row: moss running, clay only for a
+   failure or an interruption, faint otherwise. */
 .tkbar[data-st="run"] .dot {
   background: var(--moss);
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--moss) 18%, transparent);

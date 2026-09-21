@@ -247,8 +247,9 @@ const LEGACY_LOCAL = {
      had -- is gone with the line it lived on (the head already says a
      running node's state). Every remaining `.dot` here is written from
      inside a `className={...}` expression, which `LEGACY_EXPR` already
-     counted. */
-  tasks: 7,
+     counted. Down two more with the composer strip redrawn as one prefixed
+     pill: `.runs` and `.trun` went with the per-task chips. */
+  tasks: 5,
   /* Up from 74 for `.act`, `.dact` and `.pmdesc`, which the plugins page drew
      the same way the transcript does, and from 77 with the agent hub, where
      `.none` was shared with the agents page. Up three more with the playbooks
