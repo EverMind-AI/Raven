@@ -17,15 +17,16 @@ from raven.importer.types import ImportMessage, ImportSession, Scanner, ScanResu
 # message_id from (session_id, timestamp_ms, index-within-batch), so those
 # boundaries are part of the id: two messages sharing a millisecond collide,
 # and one is dropped, if they land at the same index in different batches.
-# Twenty: EverOS extracts on every add, and that cost is superlinear in the
+# Ten: EverOS extracts on every add, and that cost is superlinear in the
 # message count -- against a real service a 15-message batch took 12s and a
 # 52-message batch 24s, while a batch of 100 ran past the six-minute
 # extraction budget and failed every memory-file source. With a slower
 # extraction model, batches of 50 took 2.4-7.4 minutes and six of seven
-# memory-file sources died on that same budget; twenty keeps a batch inside
-# it with room. Not one: each add carries about 7s of fixed cost, so single
-# messages would make a real-size import three to four times longer.
-_BATCH_MSG_LIMIT = 20
+# memory-file sources died on that same budget. Ten is the maintainer's
+# call: a batch that finishes well inside the budget on any model matters
+# more than the fixed cost of about 7s that every add carries -- which is
+# also why it is not one message per add.
+_BATCH_MSG_LIMIT = 10
 _BATCH_CHAR_LIMIT = 30_000
 
 
