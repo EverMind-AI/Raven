@@ -1237,6 +1237,7 @@ def test_only_resolvable_unconfigured_acp_presets_are_offered_for_verification(
     # would skip an agent the page is reporting as installed.
     assert set(seen_paths) == {"/login/shell/bin"}
 
+
 async def test_a_hand_written_npx_row_is_not_held_to_a_shims_requirement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1248,6 +1249,7 @@ async def test_a_hand_written_npx_row_is_not_held_to_a_shims_requirement(
     res = await probe_one(cfg, source="config", path=str(tmp_path))
 
     assert res.status == "attention"
+
 
 async def test_a_shim_that_ships_its_own_agent_asks_after_nothing_else(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1263,6 +1265,7 @@ async def test_a_shim_that_ships_its_own_agent_asks_after_nothing_else(
 
     assert res.status == "attention"
 
+
 async def test_a_shim_row_whose_agent_is_installed_goes_on_to_the_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1275,6 +1278,7 @@ async def test_a_shim_row_whose_agent_is_installed_goes_on_to_the_snapshot(
 
     assert res.status == "attention"
     assert res.target == str(npx)
+
 
 async def test_a_shim_row_is_missing_when_the_agent_it_drives_is_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1297,6 +1301,7 @@ async def test_a_shim_row_is_missing_when_the_agent_it_drives_is_absent(
     assert res.detail == (
         "pi is not on the login shell PATH; install with npm install -g @earendil-works/pi-coding-agent"
     )
+
 
 def _fake_executable(tmp_path: Path, name: str) -> Path:
     exe = tmp_path / name
