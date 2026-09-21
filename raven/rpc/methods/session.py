@@ -776,14 +776,15 @@ async def session_title(
         # answering with the raw text would have the caller draw a name that is
         # not the one on disk.
         title = session.metadata["title"]
-        if mgr.exists(session_key):
-            try:
-                mgr.save(session)
-            except Exception:
-                logger.warning("session.title: failed to persist title for {}", session_key)
-                return {"title": title, "session_key": session_key, "pending": True}
-            return {"title": title, "session_key": session_key, "pending": False}
-        return {"title": title, "session_key": session_key, "pending": True}
+        # Two keys rather than a saved session: ``set_title`` drops the
+        # ``title_auto`` marker, which a patch says as an explicit False --
+        # both readers of that marker ask whether it is true.
+        try:
+            persisted = mgr.append_metadata_patch(session_key, {"title": title, "title_auto": False})
+        except Exception:
+            logger.warning("session.title: failed to persist title for {}", session_key)
+            persisted = False
+        return {"title": title, "session_key": session_key, "pending": not persisted}
 
     raw = mgr.peek(session_key)
     current_title = None
@@ -811,19 +812,17 @@ async def session_pin(
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
     mgr = manager_for(agent_loop, config)
-    session = mgr.get_or_create(session_key)
-    if pinned:
-        session.metadata["pinned"] = True
-    else:
-        session.metadata.pop("pinned", None)
-    if mgr.exists(session_key):
-        try:
-            mgr.save(session)
-        except Exception:
-            logger.warning("session.pin: failed to persist pin for {}", session_key)
-            return {"pinned": pinned, "session_key": session_key, "pending": True}
-        return {"pinned": pinned, "session_key": session_key, "pending": False}
-    return {"pinned": pinned, "session_key": session_key, "pending": True}
+    # Unpinning writes False rather than dropping the key: a patch can set a
+    # key, not remove one, and both readers of this flag ask whether it is
+    # true, so the two spellings read the same.
+    try:
+        persisted = mgr.append_metadata_patch(session_key, {"pinned": pinned})
+    except Exception:
+        logger.warning("session.pin: failed to persist pin for {}", session_key)
+        persisted = False
+    if not persisted:
+        mgr.get_or_create(session_key).metadata["pinned"] = pinned
+    return {"pinned": pinned, "session_key": session_key, "pending": not persisted}
 
 
 async def session_archive(

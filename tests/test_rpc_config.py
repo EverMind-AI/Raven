@@ -1142,6 +1142,30 @@ async def test_a_conversation_mode_on_a_saved_session_is_persisted_at_once(tmp_p
     assert SessionManager(tmp_path).peek("s-1").metadata["permissions_mode"] == "smart"
 
 
+async def test_a_conversation_mode_keeps_a_key_another_writer_added(tmp_path, own_mode) -> None:
+    """Remembering the mode on the record speaks for that one key.
+
+    It used to save the whole session, so a flag written to the file after this
+    manager loaded its copy -- archiving from another client, say -- was gone
+    the next time somebody switched the conversation's mode.
+    """
+    from raven.session.manager import SessionManager
+
+    sessions = SessionManager(tmp_path)
+    sessions.save(sessions.get_or_create("s-1"))
+    loop = SimpleNamespace(sessions=sessions)
+    SessionManager(tmp_path).append_metadata_patch("s-1", {"archived": True})
+    assert sessions.get_or_create("s-1").metadata.get("archived") is None
+
+    await config_set(
+        {"key": "permissions.mode", "value": "smart", "session_id": "s-1"}, agent_loop_factory=lambda: loop
+    )
+
+    reloaded = SessionManager(tmp_path).peek("s-1")
+    assert reloaded.metadata["permissions_mode"] == "smart"
+    assert reloaded.metadata.get("archived") is True
+
+
 async def test_config_set_model_default_scope_persists_when_no_loop_can_be_built(fake_home: Path) -> None:
     """A gateway that started on an empty config has no loop and a latched build
     error; the first-run wizard's first default still has to land on disk."""
