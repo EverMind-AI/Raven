@@ -31,20 +31,16 @@ function item(over: Partial<MemItem> = {}): MemItem {
    translator on setTranslator (it returns its key, so tests assert catalogue
    keys, not translations) and a fixture source on sources.memory. */
 function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null) {
-  const calls: string[] = []
   const source: MemorySource = {
     stats: async () => stats,
     list: async () => ({ items: [item()], total: 1 }),
-    remove: async () => {
-      calls.push('remove')
-    },
     ...over,
   }
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   setSources({ memory: source })
   document.body.innerHTML = '<div id="memoryBody"></div>'
-  return { source, calls }
+  return { source }
 }
 
 /* The section as the dialog hosts it: the island in its own box, and the two
@@ -136,7 +132,7 @@ describe('memory island', () => {
   /* Beside the list rather than in the shared drawer: inside the settings
      dialog a drawer is a layer over a layer, and the list it covered is what a
      reader comparing two memories needs to keep. */
-  it('shows the picked memory beside the list', async () => {
+  it('shows the picked memory beside the list, and drops it on a kind switch', async () => {
     install()
     await mount()
     await act(async () => {
@@ -144,51 +140,19 @@ describe('memory island', () => {
     })
     expect(screen.getByText('gui.mem.sec_detail')).toBeTruthy()
     expect(screen.getByText('the long form of the episode')).toBeTruthy()
+    /* The pick belongs to the kind that was listed, so switching kind has to
+       drop it -- otherwise the reader is left reading a row from a tab they
+       have left. */
+    await act(async () => {
+      screen.getByText('gui.mem.tab_case').click()
+    })
+    expect(screen.queryByText('gui.mem.sec_detail')).toBeNull()
   })
 
   it('says to pick one until a row is picked', async () => {
     install()
     await mount()
     expect(await screen.findByText('gui.mem.pick')).toBeTruthy()
-  })
-
-  it('keeps the memory on screen when a delete fails handled', async () => {
-    install({
-      remove: async () => {
-        // What the live source throws after toasting the reason itself.
-        throw { handled: true }
-      },
-    })
-    await mount()
-    await act(async () => {
-      row('shipped the island').click()
-    })
-    const del = screen.getByText('gui.mem.delete')
-    await act(async () => {
-      del.click()
-    })
-    await act(async () => {
-      screen.getByText('gui.mem.confirm_del').click()
-    })
-    expect(screen.getByText('gui.mem.sec_detail')).toBeTruthy()
-  })
-
-  it('drops the memory and reloads after a successful delete', async () => {
-    const { source, calls } = install()
-    const listSpy = vi.spyOn(source, 'list')
-    await mount()
-    await act(async () => {
-      row('shipped the island').click()
-    })
-    await act(async () => {
-      screen.getByText('gui.mem.delete').click()
-    })
-    await act(async () => {
-      screen.getByText('gui.mem.confirm_del').click()
-    })
-    expect(calls).toContain('remove')
-    expect(screen.queryByText('gui.mem.sec_detail')).toBeNull()
-    expect(listSpy.mock.calls.length).toBeGreaterThan(1)
   })
 
   it('switches kind through a stat and reloads with it', async () => {

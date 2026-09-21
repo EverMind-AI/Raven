@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useSyncExternalStore } from 'react'
 
 import {
   TwoPane, TwoPaneFind, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow,
@@ -8,12 +8,11 @@ import { subscribe as langSubscribe, tag as langTag } from '../../state/lang'
 import * as store from './store'
 
 import type { MemItem, MemKind, MemStats } from './types'
-import type { CSSProperties, JSX } from 'react'
+import type { JSX } from 'react'
 
 /* Four EverOS memory kinds behind one section of the settings dialog: a kind
    switch that carries the counts, a semantic search box, the rows, and beside
-   them the picked memory with the one mutation memory supports today (delete,
-   two-click armed). */
+   them the picked memory, read-only. */
 const MEM_KINDS: Array<{ kind: MemKind; tab: string; hint: string; stat: keyof MemStats }> = [
   { kind: 'episode', tab: 'gui.mem.tab_episode', hint: 'gui.mem.hint_episode', stat: 'episodes' },
   { kind: 'profile', tab: 'gui.mem.tab_profile', hint: 'gui.mem.hint_profile', stat: 'profiles' },
@@ -52,33 +51,6 @@ function Tile({ name }: { name: string }): JSX.Element {
   let h = 0
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
   return <span className={'pmtile th' + (h % 8)}>{(name[0] || '?').toUpperCase()}</span>
-}
-
-/* Two-click armed delete: the first click turns the button into its own confirm
-   for four seconds, the second fires. */
-function ArmedDelete({ onFire, style }: { onFire: () => void; style?: CSSProperties }): JSX.Element {
-  const [armed, setArmed] = useState(false)
-  useEffect(() => {
-    if (!armed) return
-    const id = setTimeout(() => setArmed(false), 4000)
-    return () => clearTimeout(id)
-  }, [armed])
-  return (
-    <button
-      className={'mini ghost' + (armed ? ' danger' : '')}
-      style={style}
-      onClick={(e) => {
-        e.stopPropagation()
-        if (!armed) {
-          setArmed(true)
-          return
-        }
-        onFire()
-      }}
-    >
-      {t(armed ? 'gui.mem.confirm_del' : 'gui.mem.delete')}
-    </button>
-  )
 }
 
 export function MemoryApp(): JSX.Element {
@@ -188,20 +160,16 @@ function memVal(v: unknown): string {
 function ProfileCard({ it }: { it: MemItem }): JSX.Element {
   const data = it.profile_data || {}
   return (
-    <div>
-      <div className="memkv">
-        {Object.keys(data).map((k) => {
-          const isStamp = /_ms$/i.test(k) && Number(data[k]) > 1e12
-          return (
-            <div className="row" key={k}>
-              <div className="k">{k}</div>
-              <div className="v">{isStamp ? memWhen(new Date(Number(data[k])).toISOString()) : memVal(data[k])}</div>
-            </div>
-          )
-        })}
-      </div>
-      <ArmedDelete style={{ marginTop: '14px' }} onFire={() => store.remove(it)} />
-      <div className="memnote">{t('gui.mem.del_profile_note')}</div>
+    <div className="memkv">
+      {Object.keys(data).map((k) => {
+        const isStamp = /_ms$/i.test(k) && Number(data[k]) > 1e12
+        return (
+          <div className="row" key={k}>
+            <div className="k">{k}</div>
+            <div className="v">{isStamp ? memWhen(new Date(Number(data[k])).toISOString()) : memVal(data[k])}</div>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -278,10 +246,6 @@ function MemDetail({ it }: { it: MemItem }): JSX.Element {
       ) : (
         <Section label={t('gui.mem.sec_detail')} text={it.body || it.summary || ''} />
       )}
-      <div className="pmsec">
-        <ArmedDelete onFire={() => store.remove(it)} />
-        {it.kind === 'episode' && <div className="memnote">{t('gui.mem.del_episode_note')}</div>}
-      </div>
     </>
   )
 }

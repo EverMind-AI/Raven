@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 193 methods, 106 component schemas.
+// 192 methods, 106 component schemas.
 
 /* eslint-disable */
 /**
@@ -3515,17 +3515,6 @@ export interface MemoryListResult {
    */
   note?: string | null;
 }
-export interface MemoryDeleteParams {
-  kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
-  id: string;
-}
-export interface MemoryDeleteResult {
-  ok: boolean;
-  /**
-   * Deleting an episode also drops its derived facts and foresight.
-   */
-  removed: number;
-}
 export interface PlaybooksListParams {}
 export interface PlaybooksListResult {
   playbooks: PlaybookRow[];
@@ -4691,7 +4680,6 @@ export interface RpcMethods {
   'deliverables.list': { params: DeliverablesListParams; result: DeliverablesListResult };
   'memory.stats': { params: MemoryStatsParams; result: MemoryStatsResult };
   'memory.list': { params: MemoryListParams; result: MemoryListResult };
-  'memory.delete': { params: MemoryDeleteParams; result: MemoryDeleteResult };
   'playbooks.list': { params: PlaybooksListParams; result: PlaybooksListResult };
   'playbooks.get': { params: PlaybooksGetParams; result: PlaybooksGetResult };
   'playbooks.credentials.get': { params: PlaybooksCredentialsGetParams; result: PlaybooksCredentialsGetResult };
@@ -4841,7 +4829,6 @@ export const RPC_METHODS = [
   "mcp.list",
   "mcp.test",
   "mcp.tools",
-  "memory.delete",
   "memory.list",
   "memory.stats",
   "model.add_endpoint",

@@ -67,7 +67,6 @@ export const PARAMS = {
   'subagents.instance.history': { session_key: 'a', agent: 'raven', handle: 'h' },
   'subagent.list': { session_id: 'a' },
   'memory.list': { kind: 'episodes', page: 1, page_size: 20, q: null },
-  'memory.delete': { kind: 'episodes', id: 'x' },
   'model.save_key': { slug: 'openai', api_key: 'sk-x' },
   'model.disconnect': { slug: 'openai' },
   'model.add_model': { slug: 'openai', model: 'gpt-5.2' },
