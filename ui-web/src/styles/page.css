@@ -1175,22 +1175,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .dlg .dot.ok { background: var(--moss); }
 .dlg .dot.bad { background: var(--clay); }
 .dlg .dot.skip { background: var(--faint); }
-/* ── the dag card's own graph and node detail ─────────────────────────
-   The strip of chips this replaces held four fields per node and had nowhere to
-   put the rest: not the dependencies that make it a graph, and not the template
-   and inputs that say what each step was asked. The card and sheet now use the
-   same renderer with surface-sized geometry -- one alphabet for this domain,
-   whichever place is showing it. */
-.dtl.dlg.dagc .bd { max-height: none; overflow: visible; }
-.dagc .canvas { margin-top: 11px; overflow: visible; max-height: none; }
-/* Its own size, centred -- never stretched. The renderer sizes a node so its id
-   and agent fit at a fixed type size, and `width: 100%` threw that away: a
-   three-node graph in a 744px column was blown up to 1.7x, so the card's boxes
-   came out half again as big as the SAME graph in the composer sheet. Shrinking
-   is still allowed, because a wide graph in a narrow column has to fit. */
-.dagc .canvas > svg { display: block; width: auto; max-width: 100%; height: auto; margin: 0 auto; }
+/* ── the dag graph ───────────────────────────────────────────────────────
+   What `DagGraph` draws wherever it is mounted -- today the desk's task board,
+   which hands it its own node box and reads these rules for the edges and the
+   node group around that box. */
 .daggraph { --dag-id-size: 13px; --dag-meta-size: 11px; }
-.dagc .daggraph { --dag-id-size: 11px; --dag-meta-size: 9px; }
 .daggraph .dagcap {
   color: var(--faint); font: 10.5px var(--mono); text-align: right; margin-bottom: 5px;
 }
@@ -1265,72 +1254,20 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .daggraph .edge.flowed, .daggraph .tip.flowed { stroke: var(--line); }
 
-/* One node's request. Below the graph rather than beside it: the card lives in a
-   744px reading column, and a two-pane layout inside it leaves neither pane wide
-   enough for a prompt. */
-.dagc .npanel { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; min-width: 0; }
-.dagc .nhd { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; min-width: 0; }
-/* The name gives way, and only the name. A node id is unbounded -- a playbook
-   names one `daily-ai-digest-36e275-scan-news` -- and with nothing here to let
-   it shrink, the flex row grew past the panel and pushed the run link off the
-   right edge, where it read as the card having been cut in half. */
-.dagc .nhd .nm {
-  font-size: 12px; font-weight: 600; color: var(--text);
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.dagc .nhd .st { font-size: 10.5px; color: var(--faint); flex: none; }
-/* The door to what actually happened. Explicit, because selecting a node and
-   opening its transcript are different intentions: the panel takes half the
-   window, and comparing two nodes' configuration is the commoner one.
-   Not `.go`: that is the composer's send button, a 30px circle, and this link
-   inherited its width and its grid centring from it -- so the label was clipped
-   to a couple of characters however much room the row had. */
-.dagc .nhd .orun {
-  margin-left: auto; flex: none; font: inherit; font-size: 11px; background: none;
-  border: 0; color: var(--muted); cursor: pointer; padding: 0; white-space: nowrap;
-}
-.dagc .nhd .orun:hover { color: var(--amber); text-decoration: underline; }
-.dagc .rows { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; }
-.dagc .rows > .k { color: var(--faint); }
-.dagc .rows > .v { color: var(--text); min-width: 0; }
-/* The node id, which is a name the graph keys on rather than prose. */
-.dagc .rows > .v .nid { font: 11px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
-.dagc .hold { color: var(--faint); font-size: 10.5px; }
-/* A dependency is a way back up the graph, so it is a control rather than text. */
-.dagc .dep {
-  font: inherit; font-size: 11px; background: none; cursor: pointer;
-  border: 1px solid var(--line); border-radius: 5px; padding: 0 6px;
-  color: var(--muted); margin-right: 4px;
-}
-.dagc .dep:hover { border-color: var(--amber); color: var(--amber); }
-.dagc .none { color: var(--faint); }
-.dagc .ins { display: grid; grid-template-columns: max-content max-content 1fr; gap: 2px 9px; align-items: baseline; }
-.dagc .ins .key { color: var(--text); }
-/* Where an input came from, as a mark rather than as a sentence: the three read
-   differently and the difference is the whole point of showing them. */
-.dagc .ins .src {
-  font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase;
-  border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--faint);
-}
-.dagc .ins .src[data-k="node"] { color: var(--sky); border-color: color-mix(in oklab, var(--sky) 40%, var(--line)); }
-.dagc .ins .src[data-k="file"] { color: var(--gold); border-color: color-mix(in oklab, var(--gold) 40%, var(--line)); }
-.dagc .ins .val { color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
-.dagc .tpl {
-  margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted);
-  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 7px;
-  padding: 7px 9px; font-size: 11px; line-height: 1.65;
-}
-/* The placeholders are what ties this step to the ones before it. */
-.dagc .tpl .ph { color: var(--amber); }
-.dagc .tpl.clip { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-.dagc .more { font: inherit; font-size: 10.5px; background: none; border: 0; padding: 2px 0 0; color: var(--faint); cursor: pointer; }
-.dagc .more:hover { color: var(--amber); }
-
-/* The task line doubles as the door to the run's transcript: underlined on
-   hover, like the link it behaves as, and never before -- a grid whose every
-   value looked like a link would say nothing about which one goes somewhere. */
+/* A door in a grid: underlined on hover, like the link it behaves as, and never
+   before -- a grid whose every value looked like a link would say nothing about
+   which one goes somewhere. The orchestration card's task cell wears a standing
+   mark on top of that: its grid is all facts about the run, and the one cell
+   that leads to the run's own pane on the desk has to say so before the hover.
+   A spawn card's task cell and the desk's own `.tkgov` doors keep the hover cue
+   alone. */
 .dlg .dgr .v.gov { cursor: pointer; }
 .dlg .dgr .v.gov:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* The text gives way and the mark does not: the cell is a nowrap flex row that
+   clips, and a summary longer than the column would otherwise carry the mark
+   out past the clip with it. */
+.dagc .dgr .v.gov > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dagc .dgr .v.gov::after { content: '\2197'; flex: none; color: var(--faint); font-size: 10.5px; }
 /* The delivery seam: where a delegated run's result re-entered the flow. Two
    things on the row and no more: which task, and how it went. The name is the
    reading size rather than a mono label -- it is a sentence somebody wrote, not

@@ -264,6 +264,9 @@ describe('a task pane', () => {
 
     await act(async () => { (document.querySelector('.tkwhyat') as HTMLElement).click() })
     expect(document.querySelector('.tktt b')?.textContent).toBe('Fetch the futures quote')
+    /* The id is a hover away once the summary has the text: a dependency and
+       the run dir key on it, and nothing else on the pane spells it out. */
+    expect(document.querySelector('.tktt b')?.getAttribute('title')).toBe('fetch_comex')
   })
 
   it('gives the fixed sentence for an interrupted run, not a node error', () => {

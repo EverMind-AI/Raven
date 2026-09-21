@@ -770,7 +770,10 @@ function NodePanel({ row, node, paneId, onClose, roster }: {
           </svg>
         </button>
         <div className="tktt">
-          <b>{node.node_summary || node.node_id}</b>
+          {/* The id rides on the title: it is what a dependency and the run dir
+              key on, and the summary, where the planner wrote one, takes its
+              place in the text. */}
+          <b title={node.node_id}>{node.node_summary || node.node_id}</b>
           <NodeSubtitle node={node} />
         </div>
         <div className="tktabs" role="tablist">

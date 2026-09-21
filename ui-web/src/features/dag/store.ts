@@ -5,8 +5,8 @@
  * `dag.*` events in through mount.ts. Nothing here renders: the trail's
  * delegation card holds its own copy of the same frames, and the graph a
  * reader opens is drawn by the desk's task pane from `tasks.list`. What this
- * answers is `openDagRun` -- which node a receipt in that card points at --
- * and what session resume puts back.
+ * answers is session resume, which puts the run back on reload; nothing else
+ * reads it today.
  *
  * The runs are shared objects, not copies: the pipeline mutates a node's
  * status and times in place and then calls `touch()`. That keeps the event

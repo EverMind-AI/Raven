@@ -664,31 +664,43 @@ function claimRun(lane: Lane, call: CallData): void {
 export const spawnAgentOf = (a: Record<string, unknown>): string =>
   String(a.subagent || a.agent || '')
 
-/* The graph as a run-started payload carries it. Same shape the arguments path
-   builds, so one renderer draws both. */
-/* A failure is the one thing worth opening unasked -- the rule the step's own
-   fold already follows. Written into `sel` rather than derived at render time:
-   derived, it made `null` mean both "nobody picked one" and "the reader closed
-   it", so the panel it opened could not be shut. Once per card, so closing it
-   stays closed and a later failure does not reopen it.
- *
- * Called wherever the node list changes, because a card is built before its
- * nodes have any state: the failure arrives afterwards, from an event or from
- * `dag.get`. */
-function openFirstFailure(call: CallData): void {
-  if (call.selAuto || call.sel) return
-  const failed = call.nodes.find((n) => n.status === 'failed')
-  if (!failed) return
-  call.sel = failed.id
-  call.selAuto = true
-}
-
 /* Test seam: what each raced opening is holding, as (call id, event) pairs.
    Applying an announcement twice is invisible on screen -- `merge` is
    idempotent and `fromStarted` cannot walk a status back -- so the buffer's own
    contents are the only place the claim "buffered once" can be checked. */
 export const _earlyForTests = (): Array<[string, string]> =>
   [...dagEarly].flatMap(([id, evs]) => evs.map((e): [string, string] => [id, e[0]]))
+
+/* Test seam: the node states dagFeed's binding produced, readable now that the
+   card draws no graph of its own. Five regression tests for that binding --
+   two graphs in one turn kept apart, a claimed card not claimed again by the
+   next announcement, one that outran its row, a node that reported inside that
+   gap, and a fenced result binding its run -- used to read this off the
+   card's own nodes and need a seam of their own now that nothing is drawn. */
+export const _dagCallsForTests = (): Array<{
+  runId: string | null
+  nodes: Array<{ id: string; status: string; started_at: number | null; ended_at: number | null }>
+}> => {
+  const out: Array<{
+    runId: string | null
+    nodes: Array<{ id: string; status: string; started_at: number | null; ended_at: number | null }>
+  }> = []
+  for (const lane of lanes) {
+    for (const seg of lane.segs) {
+      if (seg.kind !== 'step') continue
+      for (const call of seg.calls) {
+        if (call.kind !== 'dag') continue
+        out.push({
+          runId: call.runId,
+          nodes: call.nodes.map((n) => (
+            { id: n.id, status: String(n.status), started_at: n.started_at, ended_at: n.ended_at }
+          )),
+        })
+      }
+    }
+  }
+  return out
+}
 
 /* Terminal words for a spawned RUN, which are not the tool call's.
 
@@ -1021,13 +1033,11 @@ export function dagFeed(type: string, p: DagFeedPayload | null): void {
     bump(lane, call)
   } else if (type === 'dag.node_updated') {
     call.nodes = dagNodes.applyUpdate(call.nodes, p)
-    openFirstFailure(call)
     bump(lane, call)
   } else if (type === 'dag.run_completed') {
     ;(p.files || []).forEach((x) => { call.nodes = dagNodes.applyUpdate(call.nodes, x) })
     dagLive.delete(String(p.run_id))
     if (call.callId) dagByCall.delete(call.callId)
-    openFirstFailure(call)
     bump(lane, call)
   } else if (type === 'dag.run_replanned') {
     /* Always arrives before this run's own `dag.run_completed` -- the backend
@@ -1075,7 +1085,6 @@ function hydrateDag(lane: Lane, call: CallData): void {
        until here. Letting the read win either way would replace a title that is
        already on screen with the identical string on every hydrate. */
     if (!call.runTitle) call.runTitle = String(run?.task_summary || '')
-    openFirstFailure(call)
     bump(lane, call)
   }).catch(() => {
     /* A run whose dir is gone keeps whatever the card already had, and may be
@@ -1097,7 +1106,7 @@ function newCallData(
     label: actLabel(id.name, a, display), rowLabel: '',
     done: false, ok: true, ms: 0, res: '', truncated: false,
     hunk: kind === 'plain' ? hunkFor(id.name, a) : null,
-    open: false, t0: Date.now(), runId: null, runTitle: '', nodes: [], live: false, sel: null, selAuto: false, selFull: false, asked: false,
+    open: false, t0: Date.now(), runId: null, runTitle: '', nodes: [], live: false, asked: false,
     callId: callId ? String(callId) : '',
     spawnAgent: '', spawnInstance: '', spawnLabel: '', spawnStatus: '', spawnId: '',
     spawnTaskId: '', spawnAsked: false, spawnT0: 0, spawnT1: 0, stream: [], reading: false,
@@ -1545,23 +1554,6 @@ export function toggleCall(lane: Lane, c: CallData): void {
      every card of every restored conversation would be a read per card for
      detail nobody opened. */
   if (c.open && c.kind === 'dag') hydrateDag(lane, c)
-  bump(lane, c)
-}
-
-/* The node whose detail the card shows. Clicking the open one closes it, which
-   is what makes the graph readable again without a second control.
-
-   Selecting rather than opening the run's transcript: the panel that does that
-   takes half the screen, and comparing two nodes' configuration is the thing a
-   reader of this card is most often doing. The panel is one explicit click away. */
-export function pickDagNode(lane: Lane, c: CallData, id: string): void {
-  c.sel = c.sel === id ? null : id
-  c.selFull = false
-  bump(lane, c)
-}
-
-export function toggleDagFull(lane: Lane, c: CallData): void {
-  c.selFull = !c.selFull
   bump(lane, c)
 }
 
@@ -2135,8 +2127,8 @@ export function branchOf(lane: Lane): ((text: string) => void) | null {
   try { return source().branch || null } catch { return null }
 }
 
-export function openDagNode(runId: string, nodeId: string, summary?: string | null): void {
-  try { source().openDagNode?.(runId, nodeId, summary) } catch { /* no opener wired */ }
+export function openDagRun(runId: string): void {
+  try { source().openDagRun?.(runId) } catch { /* no opener wired */ }
 }
 
 export function openSpawn(agent: string, label: string): void {

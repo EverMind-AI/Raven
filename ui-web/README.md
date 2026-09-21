@@ -102,7 +102,7 @@ runs the same three and then `npm test`.
 
 ## Gates
 
-`npm test` is one run over both trees, so the 37 files under `scripts/gates/`
+`npm test` is one run over both trees, so the 39 files under `scripts/gates/`
 go with the unit suites. Each one's header says what it pins and why; the
 conventions they are written to are `CONTRIBUTING.md` section 8.
 
@@ -131,7 +131,6 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `pipeline-coverage` | every turn event the contract declares has a stage, and no stage names one it does not |
 | `notifications-contract` | the notification table is the server's roster plus exactly one name |
 | `provider-mark-assets` | every logo the provider map names is in the bundle, and every file is named |
-| `dag-renderer` | the CSS contract that keeps the compact DAG card content-sized and scroll-free |
 | `dag-label-css` | a dag node's label is cut by the node, in the stylesheet |
 | `agent-mark-css` | which agent marks the dark theme filters, and with which filter |
 | `agent-fold-css` | the roster's fold slot keeps its width on a head that cannot fold |
