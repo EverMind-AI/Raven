@@ -32,6 +32,22 @@ from raven.spine.turn import Origin, TurnRequest
 
 MODEL = "openai-codex/gpt-5.6-sol"
 _CODEX_AUTH = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "auth.json"
+TRAVEL_PERSONA_PROMPT = (
+    "我每年会独立旅行几次，请为我创建并保存一个名为 travel-concierge 的可复用旅游助手。"
+    "以后我只想提供目的地、日期、总预算、同行人和旅行节奏偏好，它就能给出真正可以照着走的方案。"
+    "它需要调查最新的当地限制、习俗、街区安全、营业时间和预约变化；规划考虑距离、公共交通、"
+    "开放时间、预约和疲劳程度的每日路线；平衡住宿、交通、饮食和门票费用，提供不同价位的替代方案，"
+    "并主动避开游客陷阱。最终交付必须是排版清楚的六部分旅行简报，每天的安排不超过180个中文字。"
+    "这份简报会直接发给同行人，最终交付必须由独立的内容编排与视觉表达职责统一格式和信息层级，"
+    "不能由路线规划职责顺手兼任。"
+    "我有膝盖旧伤，每日步行不得超过12000步，连续步行不得超过30分钟；不要安排红眼航班，任何换乘"
+    "不得少于90分钟。这些是硬性限制，不能只当作建议。缺少目的地、日期、总预算、同行人或节奏偏好"
+    "中的任何一项时，必须先说明缺少什么，不得开始规划。未经我明确批准，不得预订或付款；任何预订"
+    "或付款操作必须携带 approved=true，且单笔人民币金额不得超过2800元，否则必须拒绝。行程批准后"
+    "可以监控预订截止时间和余位变化，但非紧急提醒只能在我的当地时间18:00到21:00发送。如果查询"
+    "失败或信息不足，必须返回已经确认的事实、仍缺少的信息和下一步，不得编造。现在只创建并保存"
+    "这个助手，不要规划任何具体旅行，也不要执行工作流。"
+)
 
 pytestmark = [
     pytest.mark.real_llm,
@@ -239,18 +255,7 @@ async def test_live_whole_turn_infers_a_travel_assistant_harness_from_user_needs
         TurnRequest(
             origin=Origin.USER,
             source=Source(channel="test", chat_id="live-travel-assistant", sender_id="user", chat_type=ChatType.DM),
-            text=(
-                "I travel independently several times a year and want a reusable travel assistant called "
-                "travel-concierge. Later I should only need to provide a destination, dates, budget, and "
-                "preferences. It should produce realistic daily routes that account for distance, transit, "
-                "opening hours, reservations, and fatigue; research current local restrictions, customs, "
-                "neighborhood safety, and changes; balance lodging, transport, food, and admission costs with "
-                "alternatives at different price points; avoid tourist traps; and produce one clear plan I can "
-                "actually follow. The final deliverable should be a polished six-section travel brief, with each "
-                "day kept under 180 words. After I approve an itinerary, monitor booking deadlines and material "
-                "availability changes, but send nonurgent reminders only between 18:00 and 21:00 in my local time. "
-                "For now, create and save the assistant only. Do not plan a specific trip."
-            ),
+            text=TRAVEL_PERSONA_PROMPT,
             conversation="test:live-travel-assistant",
             playbook_mode="persona",
         ),
@@ -269,8 +274,14 @@ async def test_live_whole_turn_infers_a_travel_assistant_harness_from_user_needs
     assert workers
     assert {"Raven-Research", "Raven-Design", "Raven-OnCall"} <= {worker.name for worker in workers}
     assert any(worker.label != worker.name for worker in workers)
+    assert any(worker.playbook and worker.playbook.memory.functions.get("intake") for worker in workers)
+    assert any(
+        worker.playbook and worker.playbook.action.checks and worker.playbook.action.checks.code for worker in workers
+    )
     assert all("save the assistant" not in worker.brief.lower() for worker in workers)
     assert all("do not plan a specific trip" not in worker.brief.lower() for worker in workers)
+    assert all("创建并保存" not in worker.brief for worker in workers)
+    assert all("不要规划任何具体旅行" not in worker.brief for worker in workers)
     assert list((playbook_root / ".runs").glob("*.json"))
     assert not list(tmp_path.glob("skills/**/SKILL.md")), "Persona mode must not duplicate the Harness as a skill"
 
@@ -280,9 +291,7 @@ async def test_live_whole_turn_infers_a_travel_assistant_harness_from_user_needs
                 "reply": reply.get("text"),
                 "playbook": saved.name,
                 "artifactKind": "harness",
-                "workers": [
-                    {"as": entry.label, "agent": entry.name, "brief": entry.brief} for entry in saved.harness.delegate
-                ],
+                "harness": saved.harness.model_dump(by_alias=True, exclude_none=True),
                 "workflow": None,
             },
             ensure_ascii=False,

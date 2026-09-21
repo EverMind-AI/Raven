@@ -78,7 +78,8 @@ PERSONA_SYSTEM_PROMPT = (
     "time commands. Choose distinct specialist owners for materially different responsibilities, and never let a "
     "generic agent absorb work a specialist explicitly owns. Do not design a Workflow or invent a DAG for the act "
     "of creating the persona. Generate participant functions only for concrete long-lived runtime rules that "
-    "ordinary instructions cannot enforce, following the supplied contracts exactly."
+    "ordinary instructions cannot enforce, following the supplied contracts and participantFunctionSyntax exactly. "
+    "Never use for/while statements, try/except, imports, append, or an unlisted call in generated functions."
 )
 
 # Compatibility for direct imports that historically meant the task generator.
@@ -182,6 +183,57 @@ def participant_function_guide() -> dict[str, dict[str, str]]:
             ),
         }
     return guide
+
+
+def participant_function_syntax_guide() -> dict[str, Any]:
+    """The executable subset enforced by charter_code, in model-facing terms."""
+    return {
+        "shape": "Exactly one synchronous def with the supplied signature; no statements outside it.",
+        "allowedStatements": ["assignment", "if", "return"],
+        "allowedIteration": "Use a list or generator comprehension; for and while statements are forbidden.",
+        "allowedCalls": [
+            "len",
+            "str",
+            "int",
+            "float",
+            "bool",
+            "isinstance",
+            "any",
+            "all",
+            "sorted",
+            "set",
+            "list",
+            "dict",
+            "tuple",
+            "min",
+            "max",
+            "abs",
+        ],
+        "allowedMethods": [
+            "startswith",
+            "endswith",
+            "lower",
+            "upper",
+            "strip",
+            "split",
+            "get",
+            "items",
+            "keys",
+            "values",
+            "count",
+            "join",
+        ],
+        "forbidden": [
+            "for or while statements",
+            "try/except",
+            "imports",
+            "with",
+            "raise",
+            "lambda",
+            "async/await",
+            "append or any unlisted call or method",
+        ],
+    }
 
 
 def _choice_profile(choice: Any) -> dict[str, str]:
@@ -1004,6 +1056,7 @@ class PersonaPlaybookGenerator(_PlaybookGenerator):
             "availableTools": inventory,
             "harnessParameters": persona_parameter_guide(),
             "participantFunctions": participant_function_guide(),
+            "participantFunctionSyntax": participant_function_syntax_guide(),
             "existingArtifactNames": sorted(existing_artifact_names or []),
         }
         return await self._resolve(
@@ -1066,6 +1119,7 @@ __all__ = [
     "build_table",
     "emit_tool",
     "participant_function_guide",
+    "participant_function_syntax_guide",
     "persona_parameter_guide",
     "persona_roster_profile",
     "persona_tool",

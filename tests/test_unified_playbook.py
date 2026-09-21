@@ -17,6 +17,7 @@ from raven.playbook.agent_generator import (
     TASK_TOOL,
     PersonaPlaybookGenerator,
     TaskPlaybookGenerator,
+    participant_function_syntax_guide,
 )
 from raven.playbook.agent_spec import AgentPlaybookSpec, DelegateEntry
 from raven.playbook.runtime import PlaybookRuntime
@@ -84,6 +85,14 @@ def test_playbook_generation_mode_defaults_and_camel_case_config() -> None:
         PlaybookConfig(defaultGenerationMode="automatic")
 
 
+def test_persona_function_syntax_guide_matches_the_safety_boundary() -> None:
+    guide = participant_function_syntax_guide()
+
+    assert "isinstance" in guide["allowedCalls"]
+    assert "append or any unlisted call or method" in guide["forbidden"]
+    assert "for and while statements are forbidden" in guide["allowedIteration"]
+
+
 def test_unified_composite_round_trips_through_the_existing_store(tmp_path: Path) -> None:
     store = PlaybookStore(tmp_path / "user", builtin_root=tmp_path / "builtin")
     spec = UnifiedPlaybookSpec(
@@ -100,6 +109,40 @@ def test_unified_composite_round_trips_through_the_existing_store(tmp_path: Path
     assert loaded == spec
     assert "schemaVersion: 2" in path.read_text(encoding="utf-8")
     assert "Workers: analyst" in path.read_text(encoding="utf-8")
+
+
+def test_generated_judge_round_trips_without_serializing_an_implicit_checks_impl(tmp_path: Path) -> None:
+    store = PlaybookStore(tmp_path / "user", builtin_root=tmp_path / "builtin")
+    judge = "def judge(name, params, prior):\n    return []"
+    harness = AgentPlaybookSpec(
+        name="safe-booking",
+        description="Approve travel bookings safely",
+        delegate=[
+            DelegateEntry(
+                **{
+                    "as": "booking-guard",
+                    "name": "Raven",
+                    "brief": "Reject unapproved bookings",
+                    "playbook": {"action": {"checks": {"code": judge}}},
+                }
+            )
+        ],
+    )
+    spec = UnifiedPlaybookSpec(
+        name="safe-booking",
+        description="Approve travel bookings safely",
+        match=PlaybookMatch(summary="Approve travel bookings", keywords=["travel booking"]),
+        harness=harness,
+    )
+
+    body = store.save(spec).read_text(encoding="utf-8")
+    loaded = store.load(spec.name)
+
+    assert "impl: default" not in body
+    assert isinstance(loaded, UnifiedPlaybookSpec)
+    assert loaded.harness is not None
+    checks = loaded.harness.delegate[0].playbook.action.checks
+    assert checks is not None and checks.code == judge
 
 
 @pytest.mark.asyncio

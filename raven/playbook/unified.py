@@ -144,6 +144,18 @@ class UnifiedPlaybookSpec(CamelBase):
 
     def block_dump(self) -> dict[str, Any]:
         data = self.model_dump(by_alias=True, exclude_none=True)
+        if self.harness is not None:
+            # A generated Harness is validated from only the fields it asked
+            # for.  Re-emitting nested model defaults turns them into explicit
+            # user choices on reload; notably Checks.impl="default" then
+            # looks like use of the disabled checksImpl generation surface.
+            # Preserve explicit empty values such as tools=[] while leaving
+            # implicit defaults implicit.
+            data["harness"] = self.harness.model_dump(
+                by_alias=True,
+                exclude_none=True,
+                exclude_unset=True,
+            )
         data.pop("name", None)
         data.pop("description", None)
         return data
