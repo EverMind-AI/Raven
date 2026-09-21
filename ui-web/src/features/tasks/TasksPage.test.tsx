@@ -107,12 +107,16 @@ describe('the tasks list', () => {
     expect(document.querySelector('.sarow.task .tkerr')?.textContent).toBe('error')
   })
 
-  /* The row is the prototype's: dot, name, second line, error tag. Which
-     playbook dispatched a run is not a fact the list needs -- a slug beside
-     the name reads as a node id, and the row is not the place to explain
-     it. */
+  /* The row is the prototype's: dot, name, second line, error tag. A playbook
+     run is told apart only by its node ids, which the executor prefixes with
+     the playbook's name; that name is not a fact the list needs -- a slug
+     beside the name reads as a node id, and the row is not the place to
+     explain it. */
   it('draws a playbook run like any other row, with no source chip beside the name', async () => {
-    rows = [task({ id: 'a', kind: 'dag', status: 'completed', playbook: 'nightly-checks' })]
+    rows = [task({
+      id: 'a', kind: 'dag', status: 'completed',
+      nodes: [node({ node_id: 'nightly-checks-a1b2c3-setup', status: 'completed' })],
+    })]
     await draw()
     expect(document.querySelector('.sarow.task .nm')?.textContent).toBe('Cross-check quotes')
     expect(document.querySelector('.sarow.task')?.textContent).not.toContain('nightly-checks')

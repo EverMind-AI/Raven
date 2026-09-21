@@ -725,34 +725,6 @@ async def test_kind_and_id_narrow_to_one_dag_run(workspace: Path) -> None:
     assert [t["id"] for t in result["tasks"]] == [RUN_ID]
 
 
-async def test_playbook_is_derived_from_the_node_id_prefix(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tasks_mod, "_playbook_names", lambda: ["daily-scan"])
-    graph = {
-        "task_summary": "a playbook run",
-        "nodes": [
-            {"id": "daily-scan-a1b2c3-step1", "subagent": "Raven", "depends_on": [], "instance": None},
-        ],
-    }
-    session_dir = _session_dir(workspace)
-    store = await _make_run(session_dir, RUN_ID, graph, ["daily-scan-a1b2c3-step1"])
-    await store.write_manifest({"daily-scan-a1b2c3-step1": _manifest_entry(status="completed")})
-
-    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
-    assert row["playbook"] == "daily-scan"
-
-
-async def test_an_ordinary_dag_run_has_no_playbook(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tasks_mod, "_playbook_names", lambda: ["daily-scan"])
-    session_dir = _session_dir(workspace)
-    store = await _make_run(session_dir, RUN_ID, _GRAPH, ["n1", "n2"])
-    await store.write_manifest(
-        {"n1": _manifest_entry(status="completed"), "n2": _manifest_entry(status="completed", depends_on=["n1"])}
-    )
-
-    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
-    assert row["playbook"] is None
-
-
 # ---------------------------------------------------------------------------
 # both kinds together
 # ---------------------------------------------------------------------------
@@ -819,24 +791,6 @@ def test_run_id_epoch_ms_reads_the_utc_prefix_and_refuses_the_rest() -> None:
     assert tasks_mod._run_id_epoch_ms("20260918T000000500000Z-aaaaaaaa") == 1789689600500
     assert tasks_mod._run_id_epoch_ms("e2e_spawn_ok") is None
     assert tasks_mod._run_id_epoch_ms("20261399T000000000000Z-aaaaaaaa") is None
-
-
-def test_derive_playbook_needs_a_first_node_and_the_six_hex_tag() -> None:
-    names = ["daily-scan", "daily-scan-report"]
-    assert tasks_mod._derive_playbook(None, names) is None
-    assert tasks_mod._derive_playbook("daily-scan-notahex-collect", names) is None
-    assert tasks_mod._derive_playbook("daily-scan-a1b2c3-collect", names) == "daily-scan"
-    assert tasks_mod._derive_playbook("daily-scan-report-a1b2c3-collect", names) == "daily-scan-report"
-
-
-def test_playbook_names_is_empty_when_the_library_cannot_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven.rpc.methods import playbooks as playbooks_mod
-
-    def _broken() -> Any:
-        raise RuntimeError("no library")
-
-    monkeypatch.setattr(playbooks_mod, "_store", _broken)
-    assert tasks_mod._playbook_names() == []
 
 
 def test_liveness_is_advisory_when_the_manager_refuses(workspace: Path) -> None:

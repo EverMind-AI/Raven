@@ -66,9 +66,8 @@ UTC prefix of its `run_id`.
 
 `TaskRow`: `id`, `kind` (`spawn` | `dag`), `task_summary` (null on a run that predates the
 field), `status` (`running` | `completed` | `failed` | `interrupted` | `cancelled`),
-`replan?` (`{run_id, from_node, reason, started, error?}` from `graph.json`), `playbook`
-(derived: the node-id prefix `<sanitized name>-<6 hex>-` matched against the library's
-names; null otherwise), `started_at` / `ended_at` (epoch ms), `agent` (spawn only),
+`replan?` (`{run_id, from_node, reason, started, error?}` from `graph.json`),
+`started_at` / `ended_at` (epoch ms), `agent` (spawn only),
 `handle` (spawn only; what `subagent.cancel_instance` takes), `counts` (`total`,
 `pending`, `running`, `completed`, `failed`, `skipped`, `cancelled`, `interrupted`,
 `exception`), `nodes[]`.

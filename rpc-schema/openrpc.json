@@ -13524,13 +13524,6 @@
           "replan": {
             "$ref": "#/components/schemas/TaskReplan"
           },
-          "playbook": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The library name of the playbook that dispatched this run, derived from the node-id prefix the executor writes; null when none matches."
-          },
           "started_at": {
             "type": [
               "integer",
