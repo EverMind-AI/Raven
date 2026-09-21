@@ -27,6 +27,9 @@ const TOOL_GROUP_OF = (n) => /file|dir|grep|glob|sheet|pdf/.test(n) ? 'file'
   : /web|fetch|search|research|browser/.test(n) ? 'net'
   : /ask|message|clarify/.test(n) ? 'ask' : 'run';
 const TOOL_DANGER = new Set(['write_file', 'edit_file', 'exec']);
+/* No row: the loop reserves these two names, so tools.disabledTools cannot
+   reach them and a switch here would write a preference nothing acts on. */
+const TOOL_RESERVED = new Set(['tool_search', 'tool_call']);
 
 let disabledToolsLive = [];
 let pluginsDisabledLive = [];
@@ -116,7 +119,7 @@ async function loadExt() {
   const raw = cfg.settings || {};
   disabledToolsLive = (raw.tools && raw.tools.disabledTools) || [];
   pluginsDisabledLive = (raw.plugins && raw.plugins.disabled) || [];
-  toolsLive = ext.tools.filter((t) => !t.mcp_server).map(mkToolRow);
+  toolsLive = ext.tools.filter((t) => !t.mcp_server && !TOOL_RESERVED.has(t.name)).map(mkToolRow);
   skillsLive = ext.skills.map(mkSkillRow);
   pluginsLive = ext.plugins.map(mkPluginRow).concat(ext.mcp.map(mkMcpRow));
   extLoaded = true;

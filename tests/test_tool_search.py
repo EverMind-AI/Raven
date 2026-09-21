@@ -393,8 +393,9 @@ async def test_strategy_none_tools_passthrough() -> None:
 
 @pytest.mark.asyncio
 async def test_strategy_passthrough_when_meta_tools_absent() -> None:
-    # Above threshold but meta-tools missing (e.g. removed via disabled_tools):
-    # expose everything rather than strand cataloged tools.
+    # Above threshold but meta-tools missing (a dispatch charter that narrows the
+    # turn, or a host that never registered them -- tools.disabled_tools cannot
+    # reach them): expose everything rather than strand cataloged tools.
     reg, ctrl = _registry_with_n(40)
     reg.unregister("tool_search")
     reg.unregister(TOOL_CALL_NAME)

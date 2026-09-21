@@ -123,6 +123,9 @@
         "maxResults": 5
       }
     },
+    "toolSearch": {
+      "enabled": false
+    },
     "disabledTools": [
       "exec",
       "spawn",
@@ -131,8 +134,6 @@
       "read_skill",
       "use_skill",
       "find_skill",
-      "tool_search",
-      "tool_call",
       "image_generate",
       "text_to_speech",
       "video_generate",

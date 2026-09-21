@@ -72,12 +72,14 @@ class WiringMixin:
         preference expressed by destroying its subject is one that cannot be
         reversed: nothing remembered what to put back.
 
-        The MCP meta-tools are the one exemption, and it is theirs by ownership
-        rather than by policy: :meth:`_sync_mcp_meta_tools` registers them while
-        some connected server serves resources or prompts and withdraws them when
-        none does, so it owns those five names for the life of the loop. An entry
-        naming one is a preference nothing can act on -- reported here once,
-        ignored where the array is built.
+        Two groups are exempt, and both are theirs by ownership rather than by
+        policy. :meth:`_sync_mcp_meta_tools` registers the five MCP meta-tools
+        while some connected server serves resources or prompts and withdraws them
+        when none does, so it owns those names for the life of the loop.
+        ``tool_search`` and ``tool_call`` are owned the same way by
+        :meth:`_register_default_tools`, and ``tools.tool_search.enabled`` is the
+        switch that speaks for them. An entry naming either group is a preference
+        nothing can act on -- reported here once, ignored where the array is built.
 
         Run after :meth:`_register_default_tools` and after MCP connect, so an
         entry naming a tool from either group is resolvable by the time it is
@@ -88,6 +90,7 @@ class WiringMixin:
         is about the entry the operator can actually see -- most of them are in
         the config file, which is no longer copied into ``_disabled_tools``.
         """
+        from raven.agent.tools.tool_search import META_TOOL_NAMES
         from raven.config.live import disabled_tool_names
         from raven.mcp.prompts import PROMPT_TOOL_NAMES
         from raven.mcp.resources import RESOURCE_TOOL_NAMES
@@ -95,11 +98,12 @@ class WiringMixin:
         entries = set(disabled_tool_names(self._live_config)) | self._disabled_tools
         if not entries:
             return
-        reserved = RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES
+        mcp_reserved = RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES
         for entry in sorted(entries):
             if entry in self._disabled_tools_reserved_warned:
                 continue
-            if any(name in reserved for name in self.tools.resolve_configured(entry)):
+            resolved = self.tools.resolve_configured(entry)
+            if any(name in mcp_reserved for name in resolved):
                 self._disabled_tools_reserved_warned.add(entry)
                 logger.warning(
                     "tools.disabled_tools names '{}', which raven registers and withdraws on its "
@@ -107,16 +111,33 @@ class WiringMixin:
                     "no effect; remove it to keep the config honest.",
                     entry,
                 )
+            elif any(name in META_TOOL_NAMES for name in resolved):
+                self._disabled_tools_reserved_warned.add(entry)
+                logger.warning(
+                    "tools.disabled_tools names '{}', which raven owns for the life of the loop: "
+                    "tool_call is the only route to a tool whose schema is not in the array, and "
+                    "tool_search follows tools.tool_search.enabled. The entry has no effect; "
+                    "remove it, or turn the fold off with that setting.",
+                    entry,
+                )
 
     def _withheld_tool_names(self) -> frozenset[str]:
         """Which tools are not on offer right now, read live.
 
         The registry asks this when it assembles a tool array. Reserved names are
-        removed here rather than at the switch: ``_sync_mcp_meta_tools`` owns those
-        five for the life of the loop (it registers them while some connected
-        server serves resources or prompts and withdraws them when none does), so
-        an entry naming one is a preference the loop cannot honour -- reported
-        above, ignored here.
+        removed here rather than at the switch: ``_sync_mcp_meta_tools`` owns the
+        five MCP meta-tools for the life of the loop (it registers them while some
+        connected server serves resources or prompts and withdraws them when none
+        does), so an entry naming one is a preference the loop cannot honour --
+        reported above, ignored here.
+
+        ``tool_search`` and ``tool_call`` are reserved for that reason and one
+        more. Their absence from the array is how ``ToolSearchStrategy`` reads
+        "this request has no search route", and it answers by shipping every
+        schema instead -- so an off switch here would not slim the array, it would
+        unfold it, and mid-turn at that, because this source is read once per
+        assembly. The switch that speaks for the fold is
+        ``tools.tool_search.enabled``.
 
         Constructor-supplied names are unioned in because an eval harness passes
         them directly rather than through a config file; a file-less run would
@@ -124,6 +145,7 @@ class WiringMixin:
         list in there -- see the note in ``__init__`` on why that made the switch
         one-way.
         """
+        from raven.agent.tools.tool_search import META_TOOL_NAMES
         from raven.config.live import disabled_tool_names
         from raven.mcp.prompts import PROMPT_TOOL_NAMES
         from raven.mcp.resources import RESOURCE_TOOL_NAMES
@@ -133,7 +155,7 @@ class WiringMixin:
         for entry in configured:
             withheld.update(self.tools.resolve_configured(entry))
         withheld.update(self._unconfigured_tool_names())
-        return frozenset(withheld - (RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES))
+        return frozenset(withheld - (RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES | META_TOOL_NAMES))
 
     def _unconfigured_tool_names(self) -> set[str]:
         """Registered tools whose config asks for nothing right now, read live.

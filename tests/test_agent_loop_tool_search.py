@@ -53,7 +53,7 @@ def workspace():
         yield Path(td)
 
 
-def _make_loop(workspace: Path, cfg, strategies=None) -> AgentLoop:
+def _make_loop(workspace: Path, cfg, strategies=None, disabled_tools=None) -> AgentLoop:
     return AgentLoop(
         provider=_StubProvider(),
         workspace=workspace,
@@ -62,7 +62,12 @@ def _make_loop(workspace: Path, cfg, strategies=None) -> AgentLoop:
         # loop only registers it when a search key resolves. Supplying one keeps
         # the subject of the test present for the right reason.
         policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True, tool_search_config=cfg, search_api_key="test-serper-key"),
+        tools=ToolWiring(
+            restrict_to_workspace=True,
+            tool_search_config=cfg,
+            search_api_key="test-serper-key",
+            disabled_tools=disabled_tools or [],
+        ),
         engine=EngineWiring(strategies=strategies),
     )
 
@@ -146,3 +151,25 @@ async def test_tool_call_does_not_name_tool_search_when_it_is_absent(workspace) 
     folded = _make_loop(workspace, ToolSearchConfig(enabled=True, compaction_threshold=5))
     out = await folded.tools.execute("tool_call", {"name": "no_such_tool"})
     assert "tool_search lists what is currently loaded" in out
+
+
+@pytest.mark.asyncio
+async def test_disabled_tools_cannot_withhold_the_meta_tools(workspace) -> None:
+    # The off switch reaches every other name, but not these two. The strategy
+    # reads their absence as "this request has no search route" and ships every
+    # schema instead, so an entry here would unfold the array rather than slim
+    # it -- and mid-turn at that, since the switch is read once per assembly.
+    loop = _make_loop(
+        workspace,
+        ToolSearchConfig(enabled=True, compaction_threshold=5),
+        disabled_tools=["tool_search", "tool_call", "web_search"],
+    )
+    assert loop.tools.offers_by_name("tool_search")
+    assert loop.tools.offers_by_name("tool_call")
+    assert not loop.tools.offers_by_name("web_search"), "every other name still switches off"
+
+    tools = loop.tools.get_definitions()
+    _, out, _ = await loop.strategies.before_llm_call([], tools, "stub")
+    names = {t["function"]["name"] for t in out}
+    assert {"tool_search", "tool_call"} <= names
+    assert len(names) < len(tools), "the fold must still fold, not fall through to passthrough"

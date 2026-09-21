@@ -80,6 +80,9 @@
         "maxResults": 10
       }
     },
+    "toolSearch": {
+      "enabled": false
+    },
     "disabledTools": [
       "create_playbook",
       "cron",
@@ -95,8 +98,6 @@
       "run_subagent_dag",
       "spawn",
       "text_to_speech",
-      "tool_call",
-      "tool_search",
       "video_generate",
       "browser_click",
       "browser_navigate",

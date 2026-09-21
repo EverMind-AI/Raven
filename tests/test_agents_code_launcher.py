@@ -860,12 +860,21 @@ SKILL_LANE_TOOLS = {
     "use_skill",
 }
 
+#: The one trunk name this product cannot hold out. Raven reserves the
+#: tool-search meta-pair from ``tools.disabledTools``: the fold reads their
+#: absence from an array as "this request has no search route" and answers by
+#: shipping every schema, so an off switch there would unfold the array rather
+#: than slim it. ``tool_call`` registers whatever the fold is doing and joins
+#: the face; ``tool_search`` follows ``tools.toolSearch.enabled``, off here, so
+#: it does not.
+TRUNK_RESERVED = {"tool_call"}
+
 #: The product's visible tool face, hermetically rebuilt from the render:
 #: the fork's config intent minus the ledgered pending waves, plus the
-#: opened skill lane. Trunk also grew tools the fork never had; the withheld
-#: ones must be disabled by the product config, not by luck -- the two
-#: playbook tools only register outside this hermetic fixture, so their
-#: disable rows are the pin.
+#: opened skill lane and the reserved name above. Trunk also grew tools the
+#: fork never had; the withheld ones must be disabled by the product config,
+#: not by luck -- the two playbook tools only register outside this hermetic
+#: fixture, so their disable rows are the pin.
 VENDORED_TOOL_FACE = {
     "ask_user",
     "edit_file",
@@ -877,6 +886,7 @@ VENDORED_TOOL_FACE = {
     "read_file",
     "read_skill",
     "todo",
+    "tool_call",
     "use_skill",
     "web_fetch",
     "write_file",
@@ -911,7 +921,12 @@ def test_the_face_arithmetic_is_the_ledger():
     """The literal above is not free-standing: it is the measured fork intent
     minus the ledgered pending waves, respelled -- so a tool can only leave
     or join the face by moving on this ledger."""
-    expected = (FORK_CONFIG_INTENT - PENDING_WAVE_TOOLS - set(RESPELLED)) | set(RESPELLED.values()) | SKILL_LANE_TOOLS
+    expected = (
+        (FORK_CONFIG_INTENT - PENDING_WAVE_TOOLS - set(RESPELLED))
+        | set(RESPELLED.values())
+        | SKILL_LANE_TOOLS
+        | TRUNK_RESERVED
+    )
     assert VENDORED_TOOL_FACE == expected
 
 

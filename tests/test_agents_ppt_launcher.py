@@ -144,9 +144,9 @@ def test_the_roster_row_is_the_vendored_twins_modulo_the_ledgered_deltas():
 
 #: Trunk tools the fork loop never registered under this product's config;
 #: every one is held out of the face by a config row, not by luck (the code
-#: family's ledger discipline). tool_call/tool_search additionally keep the
-#: fork's face: its meta-pair registers only under tools.toolSearch.enabled,
-#: default False and never set by this config (the threshold only folds).
+#: family's ledger discipline). The meta-pair left this set: raven reserves
+#: tool_call/tool_search from tools.disabledTools, so the rows that used to
+#: hold them out are gone and tool_call joins the face (see TRUNK_RESERVED).
 TRUNK_HELD_OUT = {
     "browser_click",
     "browser_navigate",
@@ -169,8 +169,6 @@ TRUNK_HELD_OUT = {
     "read_skill",
     "run_subagent_dag",
     "spawn",
-    "tool_call",
-    "tool_search",
 }
 
 
@@ -218,6 +216,14 @@ TRUNK_OVERRIDDEN_DEFAULTS = {
 }
 
 
+# tools rows the sealed fork's config does not carry: trunk folds a catalog
+# past tools.toolSearch.compactionThreshold by default, and this product opts
+# out. Its face is about twenty tools, so the fold could never trigger -- all
+# the default would do is register a tool_search the product can no longer
+# disable (raven reserves the meta-pair), and a curated face does not carry a
+# tool it will never ship.
+TRUNK_ONLY_TOOLS = {"toolSearch": {"enabled": False}}
+
 # Engine-slice keys the fork's tools.ppt schema never had. The second reader's own
 # reasoning effort: the fork read every page at the author's setting, which litellm
 # dropped for this model anyway, so a GLM thought at its default for 100 to 350 seconds
@@ -254,6 +260,9 @@ def test_the_config_is_the_forks_modulo_the_swap_ledger():
     fork_tools = dict(theirs["tools"])
     retired = fork_tools.pop("ppt")
     assert retired == {**slice_, **TRUNK_DROPPED_SLICE}
+    for key, value in TRUNK_ONLY_TOOLS.items():
+        assert ours["tools"].pop(key) == value, key
+        assert key not in fork_tools, f"{key} is the fork's now; the ledger row is stale"
     ours_disabled = set(ours["tools"].pop("disabledTools"))
     fork_disabled = set(fork_tools.pop("disabledTools"))
     assert ours_disabled - fork_disabled == TRUNK_HELD_OUT
@@ -1033,7 +1042,14 @@ DECK_TOOLS = {
 #: from the rendered slice key) joins only when a Serper key is present -- the
 #: fork's own refusal to register keyless search. Every trunk-new name is held
 #: out by the TRUNK_HELD_OUT config rows pinned above.
-VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | DECK_TOOLS
+#:
+#: TRUNK_RESERVED is the exception those rows cannot cover: raven reserves the
+#: tool-search meta-pair from tools.disabledTools, because the fold reads their
+#: absence from an array as "this request has no search route" and answers by
+#: shipping every schema. tool_call registers whatever the fold is doing and so
+#: joins the face; tool_search follows tools.toolSearch.enabled, off here.
+TRUNK_RESERVED = {"tool_call"}
+VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | DECK_TOOLS | TRUNK_RESERVED
 KEY_GATED = {"web_search", "ppt_image_search"}
 
 
