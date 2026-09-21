@@ -262,23 +262,181 @@ def _glob_fixture(root: Path) -> None:
         "src/*/",
         "missing/*.py",
         "src/nope.py",
+        "node_modules/*/d.py",
+        "node_modules/**/*.py",
+        "node_modules/x/d.py",
+        "node_modules/*/",
+        "**/node_modules/*/d.py",
     ],
 )
 async def test_find_matches_what_path_glob_matched(tmp_path, pattern):
     """The rewrite answers exactly what ``Path.glob`` answered for the same
-    pattern, with the noise directories removed -- ``Path.glob`` is the oracle."""
+    pattern, less the noise directories beneath the pattern's literal prefix --
+    ``Path.glob`` is the oracle. A noise directory the pattern starts with is
+    walked, since the pattern asked for it; one met further down is pruned."""
     _glob_fixture(tmp_path)
-    expr = pattern if "/" in pattern else f"**/{pattern}"
-    expected = set()
-    for p in tmp_path.glob(expr):
-        rel = p.relative_to(tmp_path)
-        if not any(part in tree_walk.IGNORE_DIRS for part in rel.parts):
-            expected.add(rel.as_posix() + ("/" if p.is_dir() else ""))
 
     result = await FindTool().execute(pattern=pattern, path=str(tmp_path))
 
-    got = set() if result == "No files found matching pattern." else set(result.splitlines())
-    assert got == expected
+    assert _found(result) == _glob_oracle(tmp_path, pattern)
+
+
+def _glob_oracle(base: Path, pattern: str) -> set[str]:
+    """What ``Path.glob`` answers for ``pattern`` under ``base``, less the noise
+    directories the walk prunes: those beneath the pattern's literal prefix."""
+    expr = pattern if "/" in pattern else f"**/{pattern}"
+    skip = len(file_search._compile_pattern(expr).prefix)
+    expected = set()
+    for p in base.glob(expr):
+        rel = p.relative_to(base)
+        if not any(part in tree_walk.IGNORE_DIRS for part in rel.parts[skip:]):
+            expected.add(rel.as_posix() + ("/" if p.is_dir() else ""))
+    return expected
+
+
+def _found(result: str) -> set[str]:
+    return set() if result == "No files found matching pattern." else set(result.splitlines())
+
+
+def _symlink_fixture(root: Path) -> Path:
+    """A workspace with a directory link out of it, a link cycle inside it and a file link.
+
+    ``ws/vendor`` points at ``outside/real`` (``util/helper.py``, ``top.py`` and
+    a noise ``node_modules/z.py``), ``ws/src/loop`` at ``ws/src`` itself, and
+    ``ws/alias.py`` at ``ws/a.py``.
+    """
+    ws = root / "ws"
+    for rel in ("a.py", "src/b.py", "src/lib/c.py"):
+        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / rel).write_text("needle\n", encoding="utf-8")
+    real = root / "outside" / "real"
+    for rel in ("util/helper.py", "top.py", "node_modules/z.py"):
+        (real / rel).parent.mkdir(parents=True, exist_ok=True)
+        (real / rel).write_text("needle\n", encoding="utf-8")
+    try:
+        os.symlink(real, ws / "vendor", target_is_directory=True)
+        os.symlink(".", ws / "src" / "loop", target_is_directory=True)
+        os.symlink(ws / "a.py", ws / "alias.py")
+    except (OSError, NotImplementedError):
+        pytest.skip("symbolic links are not available here")
+    return ws
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "vendor/util/helper.py",
+        "vendor/*/helper.py",
+        "*/util/helper.py",
+        "**/helper.py",
+        "**/util/helper.py",
+        "**/vendor",
+        "**/vendor/",
+        "vendor/**/",
+        "*/top.py",
+        "**/top.py",
+        "**/*.py",
+        "*/*/*.py",
+        "*/",
+        "src/*/b.py",
+        "src/**/b.py",
+        "**/loop/b.py",
+        "*/*/*/b.py",
+        "alias.py",
+        "*.py",
+    ],
+)
+async def test_find_reaches_through_a_symbolic_link_where_path_glob_did(tmp_path, monkeypatch, pattern):
+    """A directory link is entered where a single component consumes it
+    (``*/util/helper.py`` reaches a linked ``vendor``) and never under ``**``,
+    which is how ``Path.glob`` read a pattern. A link cycle is therefore entered
+    once per component the pattern spends on it and the walk ends; the budget
+    is short here so a walk that did not end would show as a PARTIAL mismatch
+    rather than a hang."""
+    ws = _symlink_fixture(tmp_path)
+    monkeypatch.setattr(tree_walk, "WALK_DEADLINE_S", 2.0)
+
+    result = await FindTool().execute(pattern=pattern, path=str(ws))
+
+    assert _found(result) == _glob_oracle(ws, pattern)
+
+
+@pytest.mark.asyncio
+async def test_find_does_not_look_inside_a_link_the_pattern_ends_at(tmp_path, monkeypatch):
+    """``**/vendor`` names the link and nothing beneath it can match, so it is a
+    result and not a place to walk: a link is entered only while the pattern
+    has a component left to spend under it."""
+    ws = _symlink_fixture(tmp_path)
+    opened: list[str] = []
+    real_scandir = os.scandir
+
+    def spy(path=".", *args, **kwargs):
+        opened.append(os.fspath(path))
+        return real_scandir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "scandir", spy)
+
+    result = await FindTool().execute(pattern="**/vendor", path=str(ws))
+
+    assert result.splitlines() == ["vendor/"]
+    assert not [p for p in opened if os.path.basename(p) == "vendor"], opened
+
+
+def test_the_walk_enters_a_link_only_when_told_and_under_the_same_budget(tmp_path, monkeypatch):
+    ws = _symlink_fixture(tmp_path)
+    link = str(ws / "vendor")
+
+    default = list(tree_walk.walk(ws))
+    assert (str(ws), "vendor", True) in default
+    assert not [e for e in default if e[0].startswith(link)], "a link is yielded, not entered"
+
+    asked: list[str] = []
+
+    def follow(root: str, name: str) -> bool:
+        asked.append(name)
+        return name == "vendor"
+
+    followed = list(tree_walk.walk(ws, follow=follow))
+    assert sorted(asked) == ["loop", "vendor"], "asked once per directory link"
+    beneath = [e for e in followed if e[0].startswith(link)]
+    assert beneath == [
+        (link, "util", True),
+        (link, "top.py", False),
+        (os.path.join(link, "util"), "helper.py", False),
+    ], "pruned the same way: node_modules beneath the link is not entered"
+    assert followed.index(beneath[0]) == len(followed) - len(beneath), "the link is walked after the tree that holds it"
+    assert not [e for e in followed if e[0].startswith(str(ws / "src" / "loop"))], "a refused link stays shut"
+
+    # One budget for the whole walk: the eight entries of the tree plus one
+    # beneath the link fit, the next is past the deadline.
+    _expire_after_entries(monkeypatch, len(followed) - len(beneath) + 1)
+    got: list[tuple[str, str, bool]] = []
+    with pytest.raises(TimeoutError):
+        for entry in tree_walk.walk(ws, follow=follow):
+            got.append(entry)
+    assert got[-1] == (link, "util", True)
+
+
+@pytest.mark.asyncio
+async def test_list_dir_and_grep_do_not_enter_a_symbolic_link(tmp_path, monkeypatch):
+    """Only ``find`` reads a pattern through a link. ``rglob`` and ``os.walk``,
+    which ``list_dir`` and the grep fallback replaced, never entered one, and
+    the shared walk keeps that unless its caller asks."""
+    ws = _symlink_fixture(tmp_path)
+    monkeypatch.setattr(file_search, "_resolve_rg", lambda: None)
+
+    listed = await ListDirTool().execute(path=str(ws), recursive=True)
+    expected = [
+        f"{p.relative_to(ws)}/" if p.is_dir() else str(p.relative_to(ws))
+        for p in sorted(ws.rglob("*"))
+        if not any(part in tree_walk.IGNORE_DIRS for part in p.relative_to(ws).parts)
+    ]
+    assert listed.splitlines() == expected
+    assert "vendor/" in expected and not [line for line in expected if line.startswith("vendor/") and line != "vendor/"]
+
+    found = await GrepTool().execute(pattern="needle", path=str(ws), output_mode="files_with_matches")
+    assert set(found.splitlines()) == {"a.py", "alias.py", "src/b.py", "src/lib/c.py"}
 
 
 @pytest.mark.asyncio

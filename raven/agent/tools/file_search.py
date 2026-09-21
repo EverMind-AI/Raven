@@ -406,19 +406,66 @@ def _compile_pattern(pattern: str) -> _Pattern:
     return _Pattern(tuple(prefix), tuple(compiled), pattern.endswith("/"))
 
 
-def _matches(components: list[str], segments: tuple[re.Pattern[str] | None, ...], i: int = 0, j: int = 0) -> bool:
-    """Whether the path ``components`` satisfy the compiled ``segments`` from ``i`` and ``j`` on."""
-    while j < len(segments):
-        segment = segments[j]
-        if segment is None:
-            if j == len(segments) - 1:
-                return True
-            return any(_matches(components, segments, k, j + 1) for k in range(i, len(components) + 1))
-        if i >= len(components) or not segment.match(components[i]):
-            return False
-        i += 1
-        j += 1
-    return i == len(components)
+def _advance(
+    components: list[str], segments: tuple[re.Pattern[str] | None, ...], links: frozenset[int] = frozenset()
+) -> set[int]:
+    """The segment positions reachable once ``components`` are consumed.
+
+    A position indexes ``segments``; ``len(segments)`` means the whole pattern
+    is satisfied. ``**`` spans any run of components except one whose index is
+    in ``links``, the components that are symbolic links to directories: that
+    is how ``Path.glob`` read a pattern -- a link is entered for the single
+    component that names or matches it and never swept by ``**`` -- and it is
+    also what makes a walk through a link cycle finite, since each entry into
+    the cycle costs one component of the pattern.
+    """
+
+    def close(positions: set[int]) -> set[int]:
+        out: set[int] = set()
+        pending = list(positions)
+        while pending:
+            j = pending.pop()
+            if j in out:
+                continue
+            out.add(j)
+            if j < len(segments) and segments[j] is None:
+                pending.append(j + 1)
+        return out
+
+    live = close({0})
+    for i, component in enumerate(components):
+        step: set[int] = set()
+        for j in live:
+            if j >= len(segments):
+                continue
+            segment = segments[j]
+            if segment is None:
+                if i not in links:
+                    step.add(j)
+            elif segment.match(component):
+                step.add(j + 1)
+        live = close(step)
+    return live
+
+
+def _matches(
+    components: list[str], segments: tuple[re.Pattern[str] | None, ...], links: frozenset[int] = frozenset()
+) -> bool:
+    """Whether the path ``components`` satisfy the compiled ``segments``."""
+    return len(segments) in _advance(components, segments, links)
+
+
+def _enters(
+    components: list[str], segments: tuple[re.Pattern[str] | None, ...], links: frozenset[int] = frozenset()
+) -> bool:
+    """Whether the walk enters the symbolic link that is the last of ``components``.
+
+    Yes when a single component consumes the link and the pattern still has a
+    component to spend beneath it; a link that ends the pattern (``**/vendor``)
+    is a match, not a place to look.
+    """
+    after = _advance(components, segments, links | {len(components) - 1})
+    return any(j < len(segments) for j in after)
 
 
 def _partial_clause() -> str:
@@ -443,7 +490,7 @@ class FindTool(_FsTool):
             "Find files by glob pattern (e.g. '*.py', 'src/**/*.ts'). Prefer this over "
             "running find/ls through exec. Returns paths relative to the search root, "
             "most-recently-modified first. Noise directories (.git, node_modules, etc.) "
-            "are skipped."
+            "are skipped, except one the pattern starts with: 'node_modules/*.js' looks inside it."
         )
 
     @property
@@ -523,8 +570,12 @@ class FindTool(_FsTool):
         a trailing slash. The prefix itself is a match when the rest of the
         pattern can match nothing at all (``src/**``, or a pattern that is all
         literal), which is also how a pattern naming one file finds it without
-        a walk. The second value says whether the walk hit its deadline, in
-        which case the list is what was found before it did.
+        a walk. A symbolic link to a directory is entered where a single
+        component consumes it (``*/util/helper.py`` reaches through a linked
+        ``vendor``) and never under ``**``, as ``Path.glob`` read it; the link
+        components of a path are handed to the matcher so that ``**`` cannot
+        claim them. The second value says whether the walk hit its deadline,
+        in which case the list is what was found before it did.
         """
         matches: list[tuple[float, str]] = []
         start = base.joinpath(*compiled.prefix)
@@ -540,16 +591,26 @@ class FindTool(_FsTool):
             if not start.is_dir() or not compiled.segments:
                 return matches, False
         start_parts = len(start.parts)
+
+        def links_of(parents: list[str]) -> frozenset[int]:
+            return frozenset(i for i in range(len(parents)) if os.path.islink(os.path.join(start, *parents[: i + 1])))
+
+        def follow(root: str, name: str) -> bool:
+            parents = list(Path(root).parts[start_parts:])
+            return _enters([*parents, name], compiled.segments, links_of(parents))
+
         last_root: str | None = None
         parents: list[str] = []
+        links: frozenset[int] = frozenset()
         try:
-            for root, name, is_dir in tree_walk.walk(start):
+            for root, name, is_dir in tree_walk.walk(start, follow=follow):
                 if root != last_root:
                     last_root = root
                     parents = list(Path(root).parts[start_parts:])
+                    links = links_of(parents)
                 if compiled.dirs_only and not is_dir:
                     continue
-                if _matches([*parents, name], compiled.segments):
+                if _matches([*parents, name], compiled.segments, links):
                     rel = "/".join([*compiled.prefix, *parents, name])
                     matches.append((self._mtime(Path(root, name)), f"{rel}{'/' if is_dir else ''}"))
         except TimeoutError:

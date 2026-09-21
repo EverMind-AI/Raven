@@ -106,7 +106,14 @@ All notable changes to Raven are documented here.
   (`src/**/*.py` never enters a sibling of `src`), answers what `Path.glob`
   answered for the same pattern, keeps a trailing slash's directory-only
   meaning, refuses a pattern with `..` or a leading `/`, and lists files as
-  well as directories under a trailing `**`.
+  well as directories under a trailing `**`. A symbolic link to a directory
+  is entered where a single pattern component names or matches it
+  (`*/util/helper.py` reaches through a linked `vendor`) and never under
+  `**`, which is how `Path.glob` read it and what keeps a link cycle
+  finite. A noise directory the pattern names first (`node_modules/*.js`)
+  is walked, since the pattern asked for it, where `Path.glob` filtered it
+  out, and `list_dir` on such a path lists it; both tool descriptions say
+  so.
 
 - A sub-agent run that is stopped now tells the conversation that started
   it, and says why: `[Subagent '...' was cancelled]` with the reason (`the

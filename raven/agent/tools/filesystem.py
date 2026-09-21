@@ -580,7 +580,8 @@ class ListDirTool(_FsTool):
         return (
             "List the contents of a directory. "
             "Set recursive=true to explore nested structure. "
-            "Common noise directories (.git, node_modules, __pycache__, etc.) are auto-ignored."
+            "Common noise directories (.git, node_modules, __pycache__, etc.) are skipped below the "
+            "listed path; name one as the path to see inside it."
         )
 
     @property
