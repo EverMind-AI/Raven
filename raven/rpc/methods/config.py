@@ -54,7 +54,9 @@ _DEFAULTS: dict[str, Any] = {
     "tui.theme": "default",
     "tui.show_token_usage": True,
     "language": "en",
-    "permissions.mode": "ask",
+    # What config.get reports as the default and what config.unset restores,
+    # so it has to be the value PermissionsConfig.mode carries.
+    "permissions.mode": "smart",
 }
 
 

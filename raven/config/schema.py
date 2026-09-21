@@ -1279,9 +1279,16 @@ class PermissionsConfig(Base):
     (``"git *"``) each mapping to a tier; several matching patterns resolve to
     the strictest. ``judge_model`` pins the smart-mode reviewer to one model id;
     empty means the running turn's own binding.
+
+    ``smart`` out of the box. ``ask`` stopped the agent on every mutation of a
+    conversation, which a reader answers by reflex rather than by reading, and
+    a prompt answered by reflex is not a gate. Smart is not the weaker setting
+    it sounds like: builtin denials and user deny rules hold in every mode, the
+    reviewer speaks only for the ask tier, and a reviewer that cannot run
+    leaves the call at the same prompt ``ask`` would have shown.
     """
 
-    mode: Literal["ask", "smart", "full"] = "ask"
+    mode: Literal["ask", "smart", "full"] = "smart"
     tools: dict[str, str | dict[str, str]] = Field(default_factory=dict)
     judge_model: str = ""
     judge_timeout_seconds: float = 10.0

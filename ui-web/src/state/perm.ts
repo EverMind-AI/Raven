@@ -39,6 +39,13 @@ export const TIERS: readonly Tier[] = [
 
 const KEY = 'raven.perm'
 
+/* What the chip shows before the config has loaded, and the only tier the page
+   can name on its own. It is the engine's default (raven/config/schema.py,
+   PermissionsConfig.mode) written twice: the page paints before the config
+   arrives, and painting a tier the engine is not in reads as a mode flipping
+   under the reader. */
+const DEFAULT_TIER = 'smart'
+
 /* Shields, one per tier, differing only in what is inside them: a question, a
    check, an exclamation. Same outline so the three read as one control's three
    states rather than three unrelated icons. */
@@ -134,7 +141,7 @@ function read(): string {
   } catch {
     stored = ''
   }
-  return TIERS.some((p) => p.id === stored) ? stored : 'ask'
+  return TIERS.some((p) => p.id === stored) ? stored : DEFAULT_TIER
 }
 
 function remember(value: string): void {

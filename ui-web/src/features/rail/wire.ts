@@ -94,14 +94,20 @@ export async function archive(s: SessRow): Promise<void> {
   try {
     const at = sessionRows().findIndex((row: SessRow) => row.id === s.id)
     const result = await setArchived(s.id, true)
-    if (!result.archived || result.session_key !== s.id) throw new Error(`session ${s.id} was not archived`)
+    /* `pending` is the call saying the flag is in memory only -- a conversation
+       with no transcript yet -- so nothing on disk changed and the next list
+       brings the row back. Reading it as a success took the row off the rail
+       and left the reader to find it again after a reload. */
+    if (!result.archived || result.session_key !== s.id || result.pending) {
+      throw new Error(`session ${s.id} was not archived`)
+    }
     await leaveArchivedSession(s.id)
     toast(t('gui.sess.archived', { title: s.title }), {
       label: t('gui.undo'),
       fn: async () => {
         try {
           const restored = await setArchived(s.id, false)
-          if (restored.archived || restored.session_key !== s.id) {
+          if (restored.archived || restored.session_key !== s.id || restored.pending) {
             throw new Error(`session ${s.id} was not restored`)
           }
           if (!sessionRows().some((row: SessRow) => row.id === s.id)) {
