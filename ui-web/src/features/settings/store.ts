@@ -211,6 +211,12 @@ export function redraw(): void {
    reopen shows the values it already has while the reload runs. */
 export async function open(): Promise<void> {
   redraw()
+  /* The two the pages fetch for themselves are not in the snapshot, so the
+     reload below cannot freshen them: a dialog opened once held its archive
+     list and its usage totals for the life of the page, and a session archived
+     from the rail in between never showed up. Dropping them here is what makes
+     each page ask again -- their own lazy loads already key off these two. */
+  set({ usage: undefined, archived: null })
   settingsDialog.open()
   await refresh()
 }

@@ -21,7 +21,7 @@ async function load(answers: Record<string, unknown> = {}): Promise<Source> {
     fakes: {
       'src/state/toast': { show: (text: string) => { toasts.push(text) } },
       'src/lib/openUrl': { open: (url: string) => { opened.push(url) } },
-      'src/features/rail/source': { loadSessions: async () => { railReloads.push(1) } },
+      'src/features/rail/source': { loadSessions: async () => { railReloads.push(1) }, SESS_CHANNELS: ['tui', 'cron'] },
       'src/state/banner': { draw: () => {} },
       'src/i18n/t': { t: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key) },
     },
@@ -83,10 +83,13 @@ describe('settings source', () => {
     expect(railReloads).toEqual([1])
   })
 
-  it('archived lists only the archived sessions', async () => {
+  it('archived lists the archived sessions of every channel the rail shows', async () => {
+    /* Fewer channels here than the rail lists means a row the rail archived is
+       invisible on this page and unreachable on that one: a scheduled run
+       could be archived and then neither restored nor deleted. */
     const mod = await load({ 'session.list': { sessions: [{ id: 'a' }] } })
     expect(await mod.settingsSource.archived()).toEqual([{ id: 'a' }])
-    expect(seen).toEqual([['session.list', { archived: true }]])
+    expect(seen).toEqual([['session.list', { archived: true, channels: ['tui', 'cron'] }]])
   })
 
   it('oauthLogin opens the verification page on this browser and returns the code', async () => {

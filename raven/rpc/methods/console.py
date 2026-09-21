@@ -1048,13 +1048,13 @@ def _usage_range(params: dict):
 async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     """Aggregate API usage for the settings page.
 
-    LLM side reads the UsageTracker telemetry files
-    (``~/.raven/telemetry/usage-YYYY-MM-DD.jsonl``, one JSON row per call);
-    tool side counts ``tool_calls`` entries across session transcripts whose
-    file mtime falls inside the window. Both scans are read-only and bounded
-    by ``days`` (default 30, max 90).
+    Both halves read the same UsageTracker telemetry files
+    (``~/.raven/telemetry/usage-YYYY-MM-DD.jsonl``, one JSON row per call, one
+    per tool call), so one range means one thing across the whole reply. The
+    scan is read-only and bounded by ``days`` (default 30, max 90). Session
+    transcripts are read for their titles only.
     """
-    from datetime import datetime, timedelta
+    from datetime import datetime
 
     from raven.config.loader import load_config
 
@@ -1081,7 +1081,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
 
     selected_session = params.get("session_key") or None
     sessions: set[str] = set()
-    member_sessions: set[str] = {selected_session} if selected_session else set()
     models: dict[str, dict[str, Any]] = {}
     total = empty_totals()
     # The same resolution the writer uses (usage_tracker._default_telemetry_dir):
@@ -1114,8 +1113,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                 sessions.add(root)
             if selected_session and root != selected_session:
                 continue
-            if isinstance(row.get("session_key"), str):
-                member_sessions.add(row["session_key"])
             name = str(row.get("model") or "?")
             acc = models.setdefault(name, {"model": name, **empty_totals()})
             cost = reported_cost(row.get("cost_usd")) if row.get("schema_version") == 2 else None
@@ -1138,7 +1135,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     session_titles: dict[str, str] = {}
     tools: dict[str, int] = {}
     tool_total = 0
-    telemetry_tool_ids: set[str] = set()
     try:
         for day in dates:
             p = tel_dir / f"usage-{day.isoformat()}.jsonl"
@@ -1153,60 +1149,41 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                     if selected_session and root != selected_session:
                         continue
                     name = row.get("name")
-                    if isinstance(row.get("tool_call_id"), str):
-                        telemetry_tool_ids.add(row["tool_call_id"])
                     if isinstance(name, str):
                         tools[name] = tools.get(name, 0) + 1
                         tool_total += 1
             except Exception:
                 continue
+        # Titles only. Tool calls were also counted from transcripts here, to
+        # cover conversations older than the day tool rows started being
+        # written, and a transcript counted as in-range when its file mtime
+        # was -- which gave the range every tool call the conversation had ever
+        # made while its model calls, dated per day, stayed outside it. A reply
+        # cannot carry two readings of one range: a page showing thousands of
+        # tool calls beside no model calls reads as broken, and is.
         sess_root = Path(load_config().workspace_path) / "sessions"
-        # Both ends, because the range is a window rather than a floor: the
-        # daily telemetry files this falls back for are read for the selected
-        # days only, so a transcript touched after `to` would add tool calls
-        # the other two tallies of the same reply do not have.
+        # A floor rather than a window: a transcript last written before the
+        # range cannot name a session the range saw, and which sessions it saw
+        # is what the telemetry above already answered.
         cutoff = datetime.combine(frm, datetime.min.time()).timestamp()
-        until = datetime.combine(to + timedelta(days=1), datetime.min.time()).timestamp()
         for p in sess_root.glob("*/*.jsonl"):
             try:
-                mtime = p.stat().st_mtime
-                if mtime < cutoff or mtime >= until:
+                if p.stat().st_mtime < cutoff:
                     continue
                 lines = p.read_text(encoding="utf-8").splitlines()
             except Exception:
                 continue
-            metadata = None
             for line in lines:
                 try:
                     entry = json.loads(line)
                 except ValueError:
                     continue
-                if isinstance(entry, dict) and entry.get("_type") == "metadata":
-                    metadata = entry
-            if metadata:
-                key = metadata.get("key")
-                title = (metadata.get("metadata") or {}).get("title")
-                if isinstance(key, str) and isinstance(title, str):
+                if not isinstance(entry, dict) or entry.get("_type") != "metadata":
+                    continue
+                key = entry.get("key")
+                title = (entry.get("metadata") or {}).get("title")
+                if isinstance(key, str) and key in sessions and isinstance(title, str):
                     session_titles[key] = title
-            if selected_session and (not metadata or metadata.get("key") not in member_sessions):
-                continue
-            for line in lines:
-                try:
-                    msg = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(msg, dict):
-                    continue
-                for tc in msg.get("tool_calls") or []:
-                    if not isinstance(tc, dict):
-                        continue
-                    name = tc.get("name") or (tc.get("function") or {}).get("name")
-                    call_id = tc.get("id")
-                    if isinstance(call_id, str) and call_id in telemetry_tool_ids:
-                        continue
-                    if name:
-                        tools[str(name)] = tools.get(str(name), 0) + 1
-                        tool_total += 1
     except Exception:
         logger.exception("settings.usage: tool scan failed")
 

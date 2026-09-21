@@ -1085,9 +1085,9 @@ async def test_a_conversation_mode_stays_in_memory_and_off_the_default(fake_home
     own = await config_get({"keys": ["permissions.mode"], "session_id": "s-1"})
     assert own["config"]["permissions.mode"] == "full"
     other = await config_get({"keys": ["permissions.mode"], "session_id": "s-2"})
-    assert other["config"]["permissions.mode"] == "ask"
+    assert other["config"]["permissions.mode"] == "smart"
     default = await config_get({"keys": ["permissions.mode"]})
-    assert default["config"]["permissions.mode"] == "ask"
+    assert default["config"]["permissions.mode"] == "smart"
 
 
 async def test_a_conversation_mode_moves_both_ways(fake_home: Path, own_mode) -> None:

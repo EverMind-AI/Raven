@@ -30,7 +30,7 @@ import {
   setDefaultPair,
   showModel,
 } from '../model/source'
-import { loadSessions } from '../rail/source'
+import { loadSessions, SESS_CHANNELS } from '../rail/source'
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { BannerSource } from '../../state/banner'
@@ -258,7 +258,11 @@ export const settingsSource: SettingsSource = {
   pickModel: (model, provider) => run(persistModel(model, provider, 'default').then((r) => r === 'needs_restart')),
   model: () => defaultModel(),
   defaultProvider: () => defaultProvider(),
-  archived: () => gateway().call('session.list', { archived: true }).then((r) => r.sessions || []),
+  /* The same channels the rail lists, because this page is where a row the
+     rail archived has to show up: asking for fewer left an archived scheduled
+     run invisible here and unreachable there. */
+  archived: () => gateway().call('session.list', { archived: true, channels: SESS_CHANNELS })
+    .then((r) => r.sessions || []),
   /* The rail lists by its own read, so it is that read that puts the row back. */
   restore: (id) => run(gateway().call('session.archive', { session_id: id, archived: false })
     .then(() => loadSessions())),

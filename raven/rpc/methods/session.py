@@ -842,19 +842,23 @@ async def session_archive(
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
     mgr = manager_for(agent_loop, config)
-    session = mgr.get_or_create(session_key)
     # Restore writes an explicit False rather than dropping the key: the auto
     # archive pass in session.list skips any session that carries the key, so
     # a restored session stays out of its reach for good.
-    session.metadata["archived"] = archived
-    if mgr.exists(session_key):
-        try:
-            mgr.save(session)
-        except Exception:
-            logger.warning("session.archive: failed to persist archive state for {}", session_key)
-            return {"archived": archived, "session_key": session_key, "pending": True}
-        return {"archived": archived, "session_key": session_key, "pending": False}
-    return {"archived": archived, "session_key": session_key, "pending": True}
+    #
+    # One appended key rather than a saved session, the same way the auto
+    # archive pass writes it: ``save`` rewrites the whole metadata record from
+    # this process's copy of it, so a second client holding the conversation
+    # from before the archive dropped the flag on its next save of anything --
+    # a title, a model -- and the conversation came back.
+    try:
+        persisted = mgr.append_metadata_patch(session_key, {"archived": archived})
+    except Exception:
+        logger.warning("session.archive: failed to persist archive state for {}", session_key)
+        persisted = False
+    if not persisted:
+        mgr.get_or_create(session_key).metadata["archived"] = archived
+    return {"archived": archived, "session_key": session_key, "pending": not persisted}
 
 
 async def session_clear(
