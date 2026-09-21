@@ -740,8 +740,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .navi .k { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--faint); }
 
 /* ── main ──────────────────────────────────────────────────────────── */
+/* The conversation's ground is the whole content pane's, not the chat column's.
+   It sat on .chat, which ends where the workspace begins -- so a desk pane, a
+   docked panel or the gutter beside one stood on flat --page while the
+   transcript two pixels away stood on the wash, and the join between them read
+   as a seam down the middle of the window. One ground under both: the panes are
+   transparent over it (`.desk-ready .ws`) and now share the gradient instead of
+   interrupting it. --page is the wash's own last layer, so this is the same
+   colour where no gradient stop reaches. */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  background: var(--page);
+  background: var(--wash);
   transition: padding-right .24s ease; }
 .main[data-shift="true"] { padding-right: 340px; }
 
@@ -869,19 +877,30 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chip.risk { color: var(--clay); }
 .chip.risk:hover { color: var(--clay); background: color-mix(in oklab, var(--clay) 10%, transparent); }
 
-/* Permission rows: a shield per tier, the name, and the sentence that decides
-   the choice -- a reader picking a permission level is reading the consequence,
-   not the label, so the sentence is not a hover away. */
-.pop .prow { align-items: flex-start; padding: 8px 9px; }
-.pop .prow .pic { flex: none; width: 15px; height: 15px; margin-top: 1px; color: var(--faint); }
-.pop .prow .pic svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; }
-.pop .prow.risk .pic { color: var(--clay); }
-.pop .prow .nm { font-weight: 600; }
-.pop .prow .sub { display: block; font-size: 11px; line-height: 1.5; color: var(--faint); margin-top: 2px;
+/* Permission rows: the name, and the sentence that decides the choice -- a
+   reader picking a permission level is reading the consequence, not the label,
+   so the sentence is not a hover away.
+   Geometry and type measured off the visual reference's chip menu, which is
+   this control there: 268px wide, 7px/9px rows, the name at
+   13.5px/500 going to 600 when it is the one in force, the sentence at
+   11.5px/1.5 in --faint, and a 14px amber tick with a 2px stroke sitting 3px
+   down so it lines up with the name's cap height rather than its box.
+   What the tick marks is the whole of the "this is the one" signal there --
+   no filled band behind the row, which on a translucent panel reads as a
+   second material -- and no shield beside each name (see state/perm.ts). */
+#permPop { width: 268px; }
+/* The heading's left edge on the row's text, not 1px inside it. The face stays
+   the page's own `.lab` -- mono, tracked, uppercase -- rather than the
+   prototype's plain sans: #tierPop opens from the chip next door and wears the
+   same heading, and one of the two in a different face is worse than either. */
+#permPop .hd { padding: 5px 9px 6px; }
+#permPop .prow { align-items: flex-start; gap: 8px; padding: 7px 9px; border-radius: 8px; }
+#permPop .prow .nm { font-weight: 500; font-size: 13.5px; }
+#permPop .prow[aria-checked="true"] .nm { font-weight: 600; }
+#permPop .prow .sub { display: block; font-size: 11.5px; line-height: 1.5; color: var(--faint); margin-top: 2px;
   white-space: normal; }
-.pop .prow .txt { flex: 1; min-width: 0; text-align: left; }
-.pop .prow[aria-checked="true"] { background: color-mix(in oklab, var(--text) 9%, transparent); }
-.pop .prow .tick { flex: none; width: 13px; height: 13px; color: var(--amber); margin-top: 2px; }
+#permPop .prow .txt { flex: 1; min-width: 0; text-align: left; }
+#permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--amber); margin-top: 3px; }
 .pop .note { padding: 7px 9px 4px; font-size: 10.5px; line-height: 1.5; color: var(--faint); }
 
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
@@ -1841,9 +1860,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* --lift is the measured height of everything docked at the bottom (composer,
    queued rows, a clarify sheet). A constant here would be wrong the moment the
    composer grows a line, which is exactly when the pill matters. */
+/* Centred on the COLUMN, not on the chat: the anchored desk takes a strip off
+   the chat's right edge and the transcript re-centres in what is left
+   (`--desk-reserve`), so a pill at the chat's own centre sits half that strip
+   to the right of the text it belongs to -- 162px of it at the default panel
+   width. Half the reserve is exactly what the column moved. */
 .backpill {
-  position: absolute; left: 50%; bottom: calc(var(--lift, 96px) + 12px);
-  transform: translateX(-50%); transition: bottom .18s ease;
+  position: absolute; left: calc(50% - var(--desk-reserve, 0px) / 2);
+  bottom: calc(var(--lift, 96px) + 12px);
+  transform: translateX(-50%); transition: bottom .18s ease, left .19s cubic-bezier(.16, 1, .3, 1);
   width: 32px; height: 32px; display: grid; place-items: center; padding: 0;
   background: var(--ink); color: var(--muted); border: 1px solid var(--line);
   border-radius: 50%; z-index: 5;
@@ -1876,15 +1901,20 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* The footer belongs to the message the pointer is on, not to the page: at rest
    a turn is just what was said, and the actions and the time arrive when they
    can be used. The row keeps its space either way, so nothing shifts on hover
-   -- and focus reveals it too, since a keyboard has no pointer to hover with. */
-.answer .acts, .answer .turnmeta, .turn.ai > .ansfoot .acts,
-.turn.ai > .ansfoot .turnmeta, .turn.me .acts, .turn.me .turnmeta {
-  opacity: 0; transition: opacity .12s;
-}
+   -- and focus reveals it too, since a keyboard has no pointer to hover with.
+
+   A turn's own footer fades as ONE element rather than as its two children.
+   Fading the children is what hid the answer's footer for good, measured on the
+   running page: `.turn.ai > .ansfoot .acts` is four
+   classes and the reveal it was paired with, `.turn:hover .acts`, is three, so
+   the transparent rule outweighed the hover and the copy and branch buttons
+   never came back. One element, and the reveal outranks the rest by its own
+   pseudo-class. */
+.turn > .ansfoot { opacity: 0; transition: opacity .12s; }
+.turn:hover > .ansfoot, .turn:focus-within > .ansfoot { opacity: 1; }
+.answer .acts, .answer .turnmeta { opacity: 0; transition: opacity .12s; }
 .answer:hover .acts, .answer:hover .turnmeta,
-.answer:focus-within .acts, .answer:focus-within .turnmeta,
-.turn:hover .acts, .turn:hover .turnmeta,
-.turn:focus-within .acts, .turn:focus-within .turnmeta { opacity: 1; }
+.answer:focus-within .acts, .answer:focus-within .turnmeta { opacity: 1; }
 /* Any control can carry its label in a hover pill instead of on the row: set
    data-tip and the row stays icons only. .tipdn prefers the pill below, for
    controls docked against the top of the window.
@@ -2516,8 +2546,9 @@ textarea:focus, textarea:focus-visible,
     padding-left: var(--tl-pad, 78px);
   }
 }
-.chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative;
-  background: var(--wash); }
+/* No ground of its own: the wash is .main's, so the column and whatever stands
+   beside it read as one surface (see .main). */
+.chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
 /* New-task state: no header title, the composer holds the centre line. */
 .chat[data-fresh] #title, .chat[data-fresh] #renameBtn { visibility: hidden; }
 /* The landing page does not move the composer. It used to float it up to the
@@ -4952,7 +4983,12 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .sp-in { display: flex; flex-direction: column; align-items: center;
   transition: transform .5s ease; }
 #splash[data-off] .sp-in { transform: scale(.985); }
-.sp-rv { width: 132px; height: auto; user-select: none;
+/* The mark, near the size its own drawing carries: assets/raven.png is 86x86 --
+   square, because the same file is the favicon and a tab scales it into a
+   square box -- with the bird 68px of that and the rest transparent air. So a
+   box much past 86 is upscaling a flat silhouette; the old illustrated crow was
+   960px wide and could take 132. Square here too, or the padding stretches. */
+.sp-rv { width: 111px; height: 111px; user-select: none;
   filter: drop-shadow(0 12px 10px rgba(17, 21, 30, .22));
   animation: spfloat 3.2s ease-in-out infinite; }
 .sp-wl { margin-top: 20px; font-family: var(--serif); font-size: 30px;
@@ -5008,10 +5044,31 @@ body:has(#onb:not([hidden])) #veil { z-index: calc(var(--z-onboarding) + 1); }
    choosing, or would not leave a readable column behind -- and the fallback of
    zero is then what applies, which is today's behaviour exactly.
 
-   Padding on the two containers rather than a transform on their contents: both
-   centre a fixed-width child with `margin: 0 auto`, so a right inset both slides
-   the column clear AND lets it narrow once there is less than a column's width
-   left. A transform would only ever slide it, off the left edge.
+   The composer takes it as padding; the scroller's three columns take it as a
+   cap and a slide, and the pair is arithmetically the same inset. Centred in a
+   box narrowed on the right by R, a column of its own capped width lands half
+   of R to the left and narrows to what is left once R has eaten into the cap --
+   which is `max-width: min(cap, 100% - R)` plus `translate: -R/2`, case for
+   case, including the clamped one where both land the column's left edge on the
+   scroller's. #bannerHost is full width and left-aligned rather than centred,
+   so narrowing alone re-centres the card inside it; a slide there would take it
+   twice.
+
+   Why not the scroller itself, which is one declaration instead of three: the
+   inset is animated, and a padding animation on a SCROLL CONTAINER re-lays the
+   whole transcript out on every frame of it. That is the standing suspect for
+   the reported stale band -- a turn left painted at its old offset while the
+   turn above it had moved -- which is a raster fault rather than a layout one
+   and has not been reproduced here. Either way the column's own box is the
+   thing that has to move, and moving it moves nothing else: `translate` is
+   composited, and `max-width` only does layout in the clamped case, where the
+   prose has to rewrap anyway.
+
+   A `translate` makes its element a containing block for positioned
+   descendants. Nothing in the three columns depends on an outer one today
+   (measured on the running page: one absolute element, inside its own
+   positioned parent) -- a new `position: fixed` inside the transcript is what
+   this would catch out.
 
    Native scrollbars are off globally (`* { scrollbar-width: none }`) and the
    thumbs are drawn in their own fixed layer, so no scroller furniture is
@@ -5022,21 +5079,29 @@ body:has(#onb:not([hidden])) #veil { z-index: calc(var(--z-onboarding) + 1); }
    Its composer, wordmark and crows are placed by three rules of their own, so
    an inset that moves only the composer leaves three different centres on one
    screen. */
-.chat:not([data-fresh]) .scroll, .chat:not([data-fresh]) .dock {
-  transition: padding-right .19s cubic-bezier(.16, 1, .3, 1); }
-/* The scroller carries no side inset of its own -- `.col` holds the 22px -- so
-   this is the whole of its right padding. The composer's 22px is its own and is
-   kept.
+.chat:not([data-fresh]) .scroll > *, .chat:not([data-fresh]) .dock {
+  transition: translate .19s cubic-bezier(.16, 1, .3, 1),
+    max-width .19s cubic-bezier(.16, 1, .3, 1),
+    padding-right .19s cubic-bezier(.16, 1, .3, 1); }
+/* The two centred columns: capped and slid. `.col` holds the scroller's own
+   22px of side air, so neither carries a right padding to add this to.
 
    The composer moves because the column does, not because the panel was on it:
    the anchored panel ends well above the composer (measured, it does not reach
    it in a 900px-tall window). But the composer is centred UNDER the column, and
    a column that slides 162px left over a composer that does not would read as a
-   layout fault. One inset, both containers. */
-.chat:not([data-fresh]) .scroll { padding-right: var(--desk-reserve, 0px); }
+   layout fault. One inset, every container. The composer's own 36px is not the
+   desk's to spend, so its padding adds to it rather than replacing it. */
+.chat:not([data-fresh]) .scroll > .col, .chat:not([data-fresh]) .scroll > .flash {
+  max-width: min(calc(var(--col) + 72px), calc(100% - var(--desk-reserve, 0px)));
+  translate: calc(var(--desk-reserve, 0px) / -2) 0; }
+.chat:not([data-fresh]) .scroll > #bannerHost { max-width: calc(100% - var(--desk-reserve, 0px)); }
 .chat:not([data-fresh]) .dock { padding-right: calc(36px + var(--desk-reserve, 0px)); }
 @media (prefers-reduced-motion: reduce) {
-  .chat:not([data-fresh]) .scroll, .chat:not([data-fresh]) .dock { transition: none; }
+  .chat:not([data-fresh]) .scroll > *, .chat:not([data-fresh]) .dock { transition: none; }
+  /* The pill still follows the column's height; what it stops doing is sliding
+     across with it. */
+  .backpill { transition: bottom .18s ease; }
 }
 
 #deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 30px; --desk-launcher-edge: 12px;
