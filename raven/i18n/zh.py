@@ -8,6 +8,9 @@ MESSAGES: dict[str, str] = {
     "Saved. Applies after the next gateway reload or restart.": "已保存。下次网关重载或重启后生效。",
     # raven.playbook rounds: the word that ends a plan early, and who hears it.
     "You are the last role of this round, so what you write is what the plan reads when it decides whether to open another one. If nothing is left that is worth another round, write {marker} on a line of its own and the plan ends with this round. That is the only thing that ends it early: without those words it keeps going until its rounds are spent.": "你是这一轮的最后一个角色，所以计划在决定要不要再开一轮时，读的就是你写的东西。如果已经没有任何值得再开一轮的事情，就单独占一行写下 {marker}，计划就到这一轮为止。能提前结束它的只有这一件事：没有这个词，它会一直跑到轮数用完。",
+    # raven.playbook rounds: which directory a role is standing in.
+    "You are working in {workdir}. That directory is a checkout of the project made for this stint, and for this round it *is* the project -- another copy of it elsewhere on this machine is not where your work goes, and not where the state you are reading lives. Your commits are collected on a branch of its own and handed back when the stint ends.": "你在 {workdir} 里工作。这个目录是专为这次 stint 开出的项目检出，这一轮里它*就是*项目本身 —— 这台机器上别处的另一份副本不是你的工作落地的地方，也不是你正在读的状态所在的地方。你的提交会收在一条专属分支上，stint 结束时一并交回。",
+    "You are working in {workdir}, which is the project itself rather than a checkout of it.": "你在 {workdir} 里工作，这里就是项目本身，而不是它的一份检出。",
     # raven.playbook rounds: what a role is told about its own boundary.
     "This is checked, not requested. When you stop, what you touched is compared with the list above and anything outside it is undone -- a copy is kept where a person can read it, and the round records that you went outside.": "这是会被检查的，不是请你配合。你停下来之后，系统会把你动过的文件和上面那份清单比对，清单之外的改动会被撤销 —— 原件会留一份在人能读到的地方，并且这一轮会记下你越界了。",
     "This is stated, not checked. Nothing undoes a write outside the list above, which is exactly why staying inside it is on you.": "这一条只是写明，不做检查。上面清单之外的写入不会被撤销，正因为如此，守住范围是你自己的责任。",

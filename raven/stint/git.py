@@ -29,6 +29,22 @@ _IGNORED = (
     ".import/",
 )
 
+HOST_STATE = ".raven"
+"""Where the host keeps its own state inside a project it is working.
+
+Not part of the project's tree as far as this class is concerned: not staged,
+not reported as a change, and so never graded and never committed. The per-turn
+checkpoint (``agent/loop/checkpoint.py``) writes ``.raven/shadow.git/`` into
+whatever directory the host is working, which on the isolation that runs in the
+project itself is the tree a round commits. Left in, a whole second git
+repository went into a round's commit -- 25 files of hooks and config under
+`round(01): planner` -- and `dirty()` was true forever after, because an
+untracked directory nobody would ever commit never stops being untracked.
+
+Enforced here rather than by writing the person a `.gitignore`: their ignore
+file is theirs, and a run that edits it to make its own bookkeeping invisible
+has changed the project to suit itself."""
+
 AUTHOR_NAME = "raven-rounds"
 AUTHOR_EMAIL = "rounds@localhost"
 
@@ -77,7 +93,7 @@ class ProjectGit:
             return False
         self._run("init", "--quiet")
         self._write_ignore()
-        self._run("add", "--all", check=False)
+        self._stage_all()
         self.commit("chore: the tree this run started from")
         return True
 
@@ -88,6 +104,22 @@ class ProjectGit:
         if missing:
             body = existing + ("\n" if existing and not existing.endswith("\n") else "")
             path.write_text(body + "\n".join(missing) + "\n", encoding="utf-8")
+
+    def _stage_all(self) -> None:
+        """Everything in the tree except the host's own state and the build litter.
+
+        One method because there were two ``add --all`` call sites and only one
+        of them was given the exclusion, which is exactly how a shadow git
+        repository reached a round's commit through the other.
+
+        ``_IGNORED`` is excluded here as well as written to the ignore file,
+        because the file is written only for a repository this class created:
+        a project the person initialised keeps their ignore file as it is, and
+        a round's commit then carried ``src/__pycache__/*.pyc`` for having run
+        the code it had just written.
+        """
+        litter = [f":(exclude,glob)**/{name.strip('/')}/**" for name in _IGNORED]
+        self._run("add", "--all", "--", ".", f":(exclude){HOST_STATE}", *litter, check=False)
 
     def checkout_branch(self, name: str) -> str:
         """The run's branch, cut from wherever the project is now."""
@@ -247,7 +279,10 @@ class ProjectGit:
             path = line[3:].strip()
             if " -> " in path:
                 path = path.split(" -> ", 1)[1]
-            paths.append(path.strip('"'))
+            path = path.strip('"')
+            if path == HOST_STATE or path.startswith(f"{HOST_STATE}/"):
+                continue
+            paths.append(path)
         return tuple(paths)
 
     def footprint(self) -> tuple[tuple[str, int, int], ...]:
@@ -271,7 +306,7 @@ class ProjectGit:
             rows.append((path, int(info.st_size), int(info.st_mtime_ns)))
         return tuple(sorted(rows))
 
-    def commit(self, message: str, author: str = "") -> str:
+    def commit(self, message: str, author: str = "", paths: Sequence[str] = ()) -> str:
         """Everything in the tree as one commit; the empty case is not an error.
 
         ``author`` is the role whose stage this is, and it goes in as the commit
@@ -279,8 +314,18 @@ class ProjectGit:
         this" without a reader having to map commit subjects back to stages. The
         whole ownership design is about telling the three apart; a history where
         all three are one name throws that away at the last step.
+
+        ``paths`` narrows the commit to those paths and nothing else. The revert
+        the boundary pass makes is the caller: staging the whole tree there
+        committed the untracked stray it was meant to undo, and a boundary a role
+        steps around by leaving a file untracked is not one.
         """
-        self._run("add", "--all", check=False)
+        if paths:
+            self._run("reset", "--quiet", "--", ".", check=False)
+            for path in paths:
+                self._run("add", "--all", "--", path, check=False)
+        else:
+            self._stage_all()
         name = f"{self.author_name} ({author})" if author else self.author_name
         email = f"{author}@{self.author_email.partition('@')[2]}" if author else self.author_email
         completed = self._run(
@@ -326,7 +371,15 @@ class ProjectGit:
 
         Zero is what makes an append an append. A role allowed to add to a file
         may not edit or remove what is already in it, and that is checkable.
+
+        Asked of the text before it is asked of the diff: a file whose last line
+        had no newline gains one when anything is added after it, and git counts
+        that line as removed and added back. A QA that appended two rows to a
+        table ending that way was told it had removed lines, three times, and
+        gave up on the file.
         """
+        if self._only_grew(base, path):
+            return 0
         total = 0
         for args in (("diff", "--numstat", f"{base}..HEAD", "--", path), ("diff", "--numstat", "HEAD", "--", path)):
             completed = self._run(*args, check=False)
@@ -336,17 +389,75 @@ class ProjectGit:
                     total += int(parts[1])
         return total
 
+    def _only_grew(self, base: str, path: str) -> bool:
+        """Whether the file as it is now starts with the file as ``base`` had it."""
+        try:
+            shown = self._run("show", f"{base}:{path}", check=False)
+            now = (self.work_tree / path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            # A file git will not count lines for is not one this can read either.
+            return False
+        if shown.returncode != 0:
+            return False
+        old = shown.stdout
+        return now.startswith(old) or (not old.endswith("\n") and now.startswith(old + "\n"))
+
+    def known_at(self, base: str, path: str) -> bool:
+        """Whether ``base`` already carried ``path``.
+
+        The question behind "was this file nobody's when the stint opened": a
+        path exempt from the boundary because the setup pass left it uncommitted
+        stops being exempt the moment a round commits it, since from then on an
+        edit to it is a role's edit and the base has the text to put back.
+        """
+        if not base:
+            return False
+        return self._run("cat-file", "-e", f"{base}:{path}", check=False).returncode == 0
+
     def restore_from(self, base: str, paths: Sequence[str]) -> tuple[str, ...]:
         """``paths`` back to how ``base`` had them, for a path a role may not write."""
         restored: list[str] = []
         for path in paths:
-            known = self._run("cat-file", "-e", f"{base}:{path}", check=False).returncode == 0
-            if known:
+            if self.known_at(base, path):
                 self._run("checkout", base, "--", path, check=False)
-            else:
+            elif self.tracked(path):
                 self._run("rm", "-r", "--force", "--quiet", "--", path, check=False)
+            else:
+                # `git rm` knows nothing about a path that was never added, and
+                # its failure used to be swallowed -- the stray stayed on disk,
+                # `add --all` in the revert commit picked it up, and the revert
+                # committed what it was undoing.
+                self._remove(self.work_tree / path)
             restored.append(path)
         return tuple(restored)
+
+    def tracked(self, path: str) -> bool:
+        return self._run("ls-files", "--error-unmatch", "--", path, check=False).returncode == 0
+
+    @staticmethod
+    def _remove(target: Path) -> None:
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target, ignore_errors=True)
+        elif target.exists() or target.is_symlink():
+            target.unlink(missing_ok=True)
+
+    def keep(self, paths: Sequence[str], quarantine: Path) -> tuple[str, ...]:
+        """Copy ``paths`` as the worktree holds them now, before anything undoes them.
+
+        The copy is what the role wrote, which is the one thing worth reading
+        about a violation. Taken before the revert rather than during it: a
+        committed stray put back to its base and then copied aside kept the base
+        content, and a note saying the role's version was kept was false.
+        """
+        kept: list[str] = []
+        for path in paths:
+            target = self.work_tree / path
+            if not target.is_file():
+                continue
+            self._keep(target, quarantine, path)
+            if (quarantine / path).is_file():
+                kept.append(path)
+        return tuple(kept)
 
     @staticmethod
     def _keep(target: Path, quarantine: Path | None, path: str) -> None:

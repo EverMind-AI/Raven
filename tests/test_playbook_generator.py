@@ -439,7 +439,7 @@ def test_the_generator_cannot_write_a_rounds_playbook():
 
     assert schema["properties"]["mode"]["enum"] == ["dag", "prompt"]
     assert offered.isdisjoint(set(PlaybookSpec.STINT_SECTIONS)), sorted(offered & set(PlaybookSpec.STINT_SECTIONS))
-    assert set(PlaybookSpec.STINT_SECTIONS) == {"roles", "memory", "verify", "stop", "setup"}, (
+    assert set(PlaybookSpec.STINT_SECTIONS) == {"roles", "memory", "verify", "stop", "setup", "isolation"}, (
         "a new rounds section must be withheld too, not just added to the spec"
     )
 

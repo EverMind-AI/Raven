@@ -2613,3 +2613,40 @@ def test_the_oversized_graph_hint_names_the_ref_escape_hatch() -> None:
     assert "Do not shorten prompts by dropping task rules" in hint
     prompt_doc = _NODE_SCHEMA["properties"]["prompt_template"]["description"]
     assert "A long prompt belongs in a file" in prompt_doc
+
+
+async def test_an_addressed_run_is_validated_against_the_conversation_it_names(tmp_path) -> None:
+    """A stint resumed from a terminal or an RPC call has no turn, and validating
+    its graph against the turn's registry found none of the roles the record
+    said had finished: `depends on unknown r03-planner` on the very node the
+    driver had just named as done. The run is written under the addressed
+    conversation, so that is the registry a dependency on an earlier run is
+    checked against."""
+    from raven.agent.subagent.dag_store import SessionNodes
+    from raven.agent.subagent.dag_tool import SubAgentDagTool, _DagOrigin
+
+    tool = SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="x", command="true")])
+    tool.set_context("cli", "direct", None)
+    asked: list[str | None] = []
+
+    async def session_nodes(session_key: str | None = None) -> SessionNodes:
+        asked.append(session_key)
+        return SessionNodes()
+
+    tool.session_nodes = session_nodes  # type: ignore[method-assign]
+
+    await tool._execute(
+        [{"id": "a", "subagent": "x", "prompt_template": "hi", "depends_on": []}],
+        background=True,
+        task_summary="probe",
+        origin=_DagOrigin(channel="web", chat_id="default", conversation="web:the-stint"),
+    )
+    assert asked[:1] == ["web:the-stint"]
+
+    asked.clear()
+    await tool._execute(
+        [{"id": "b", "subagent": "x", "prompt_template": "hi", "depends_on": []}],
+        background=True,
+        task_summary="probe",
+    )
+    assert asked[:1] == [None], "an unaddressed run still reads the turn's own registry"

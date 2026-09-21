@@ -18,6 +18,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 console = Console()
 
@@ -96,7 +97,10 @@ def _task_change(verb: str, project: Path | None, role: str | None, task_id: int
 
     workspace, who, index = _task_context(project, role)
     try:
-        backlog = backlog_mod.load(workspace)
+        # `add` is the verb that files the first task into a project that has
+        # none, which is what the missing-backlog message promises; every other
+        # verb needs a backlog that is already there.
+        backlog = backlog_mod.start(workspace) if verb == "add" else backlog_mod.load(workspace)
         task = backlog_mod.apply(backlog, verb, role=who, task_id=task_id, round_index=index, **fields)
         backlog_mod.save(workspace, backlog)
     except backlog_mod.BacklogError as error:
@@ -123,7 +127,11 @@ def task_list(
 
     workspace, _, _ = _task_context(project, None)
     try:
-        backlog = backlog_mod.load(workspace)
+        # A project with no backlog yet has an empty pool, which is an answer and
+        # not a failure -- and it is the first thing a Planner asks on a project's
+        # first round. Answering it with an error sent one off reading this
+        # program's own source to find out what had gone wrong; nothing had.
+        backlog = backlog_mod.start(workspace)
     except backlog_mod.BacklogError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(code=1) from None
@@ -230,6 +238,54 @@ def task_unblock(
 ):
     """The thing that was holding it up is gone."""
     _task_change("unblock", project, role, task_id, blocker=by)
+
+
+check_app = typer.Typer(
+    help="What this project runs for the checks a playbook declares by description.",
+    no_args_is_help=True,
+)
+stint_app.add_typer(check_app, name="check")
+
+
+@check_app.command("set")
+def check_set(
+    playbook: str = typer.Argument(..., help="The playbook that declares the check"),
+    name: str = typer.Argument(..., help="The check's name, as the playbook declares it"),
+    run: str = typer.Option(..., "--run", help="What it runs here, as a shell command"),
+    project: Path | None = _PROJECT,
+):
+    """Answer, for this project, what one declared check runs.
+
+    A playbook that travels says what has to be true (`the source compiles`) and
+    not how to find out, because the how is the project's and shell in a file is
+    shell on whoever opens it. This is where the project answers, once: written
+    to `.stint/checks.json` and read by every round after.
+    """
+    from raven.stint.verify import remember_check
+
+    workspace, _, _ = _task_context(project, None)
+    path = remember_check(workspace, playbook, name, run, found="person")
+    console.print(f"[green]{escape(playbook)}-{escape(name)}[/green] runs {escape(run)}")
+    console.print(f"[dim]{escape(str(path))}[/dim]")
+
+
+@check_app.command("list")
+def check_list(project: Path | None = _PROJECT):
+    """Every check this project has an answer for."""
+    import json as _json
+
+    from raven.stint.verify import checks_path
+
+    workspace, _, _ = _task_context(project, None)
+    path = checks_path(workspace)
+    try:
+        rows = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        console.print("[dim]This project has answered no checks.[/dim]")
+        return
+    for key in sorted(rows):
+        row = rows[key] or {}
+        console.print(f"[green]{escape(key)}[/green] {escape(str(row.get('run', '')))} [dim]({row.get('from')})[/dim]")
 
 
 @stint_app.command("ask")

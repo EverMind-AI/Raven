@@ -9358,6 +9358,73 @@
           "$ref": "#/components/schemas/StintDetail"
         }
       }
+    },
+    {
+      "name": "playbooks.stints.pause",
+      "summary": "Open no further rounds, and keep the stint so resume can take it up. A round already running finishes and reports first.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintDetail",
+        "schema": {
+          "$ref": "#/components/schemas/StintDetail"
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.resume",
+      "summary": "Take a stint up again in this engine, from the node it stopped at; finished roles are named, not re-run.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintTakeUp",
+        "schema": {
+          "$ref": "#/components/schemas/StintTakeUp"
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.extend",
+      "summary": "Give a stint more rounds; a stint that is over opens its next round in this engine.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "rounds",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintTakeUp",
+        "schema": {
+          "$ref": "#/components/schemas/StintTakeUp"
+        }
+      }
     }
   ],
   "components": {
@@ -12833,6 +12900,18 @@
               "nodes"
             ],
             "properties": {
+              "stint_id": {
+                "description": "The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.",
+                "type": "string"
+              },
+              "round_index": {
+                "description": "Which round of that run this graph is, counting from one.",
+                "type": "integer"
+              },
+              "round_budget": {
+                "description": "Rounds the run may open in all, so a reader can draw \"round 3 of 30\" without opening the run. Absent when the dispatcher did not say.",
+                "type": "integer"
+              },
               "run_id": {
                 "type": "string"
               },
@@ -12904,6 +12983,18 @@
               "status"
             ],
             "properties": {
+              "stint_id": {
+                "description": "The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.",
+                "type": "string"
+              },
+              "round_index": {
+                "description": "Which round of that run this graph is, counting from one.",
+                "type": "integer"
+              },
+              "round_budget": {
+                "description": "Rounds the run may open in all, so a reader can draw \"round 3 of 30\" without opening the run. Absent when the dispatcher did not say.",
+                "type": "integer"
+              },
               "run_id": {
                 "type": "string"
               },
@@ -13029,6 +13120,18 @@
               "files"
             ],
             "properties": {
+              "stint_id": {
+                "description": "The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.",
+                "type": "string"
+              },
+              "round_index": {
+                "description": "Which round of that run this graph is, counting from one.",
+                "type": "integer"
+              },
+              "round_budget": {
+                "description": "Rounds the run may open in all, so a reader can draw \"round 3 of 30\" without opening the run. Absent when the dispatcher did not say.",
+                "type": "integer"
+              },
               "run_id": {
                 "type": "string"
               },
@@ -14432,6 +14535,37 @@
           "max_rounds",
           "until",
           "report"
+        ]
+      },
+      "StintTakeUp": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "A stint after a verb opened a round in this engine, with what the driver said about it.",
+        "properties": {
+          "stint": {
+            "$ref": "#/components/schemas/StintRow"
+          },
+          "rounds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StintRoundRow"
+            }
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StintQuestionRow"
+            }
+          },
+          "reply": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stint",
+          "rounds",
+          "questions",
+          "reply"
         ]
       }
     },

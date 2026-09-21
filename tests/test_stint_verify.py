@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -13,8 +14,11 @@ from raven.stint.verify import (
     CheckSummary,
     Display,
     build_status,
+    checks_path,
     parse_check_spec,
+    remember_check,
     render_checks,
+    resolve_checks,
     resolve_display,
     run_check,
     run_checks,
@@ -315,3 +319,65 @@ def test_a_pass_where_every_check_was_skipped_is_not_a_pass() -> None:
 
     assert build_status([skipped]) == "skipped"
     assert build_status([skipped, ok]) == "passing"
+
+
+class TestWhatThisProjectRuns:
+    """A check declared by description, answered once by the project.
+
+    What travels in a playbook is the requirement -- "the source compiles" --
+    and not the command, because a file carrying literal shell is a file that
+    runs something on whoever opens it, and `uv run pytest` is nothing on a
+    project that uses npm. The answer is the project's, written down where a
+    person can read and change it.
+    """
+
+    @staticmethod
+    def _entry(name: str, **over):
+        from raven.playbook.stint_spec import VerifyEntry
+
+        return VerifyEntry(name=name, **over)
+
+    def test_a_playbook_that_names_its_command_asks_nobody(self, tmp_path: Path) -> None:
+        specs, missing = resolve_checks(tmp_path, "qa-loop", [self._entry("build", run="make")])
+
+        assert [(s.name, s.command) for s in specs] == [("build", "make")]
+        assert missing == []
+        assert not checks_path(tmp_path).exists(), "a file that answers itself writes nothing down"
+
+    def test_a_description_with_no_answer_yet_comes_back_as_a_name(self, tmp_path: Path) -> None:
+        """Returned rather than skipped: a declared check that silently does not
+        run is a gate the round reports and nobody measured."""
+        specs, missing = resolve_checks(tmp_path, "qa-loop", [self._entry("tests", description="the suite passes")])
+
+        assert specs == []
+        assert missing == ["tests"]
+
+    def test_the_answer_is_written_down_and_read_back(self, tmp_path: Path) -> None:
+        entry = self._entry("tests", description="the suite passes")
+        remember_check(tmp_path, "qa-loop", "tests", "uv run pytest -q")
+
+        specs, missing = resolve_checks(tmp_path, "qa-loop", [entry])
+
+        assert [(s.name, s.command) for s in specs] == [("tests", "uv run pytest -q")]
+        assert missing == []
+
+    def test_another_playbook_s_gate_of_the_same_name_is_a_different_question(self, tmp_path: Path) -> None:
+        """Keyed by both: two playbooks may each want a `build` and mean
+        different things, and the second must not inherit the first's answer."""
+        entry = self._entry("build", description="the source compiles")
+        remember_check(tmp_path, "qa-loop", "build", "make")
+
+        assert resolve_checks(tmp_path, "qa-loop", [entry])[1] == []
+        assert resolve_checks(tmp_path, "other-loop", [entry])[1] == ["build"]
+
+    def test_a_person_s_answer_outlives_the_run_that_asked(self, tmp_path: Path) -> None:
+        """Resolved once for the project, not worked out per run: a command
+        re-derived every time can change between two rounds of one stint with
+        nobody having decided that it should."""
+        entry = self._entry("tests", description="the suite passes")
+        remember_check(tmp_path, "qa-loop", "tests", "uv run pytest -q")
+
+        first = resolve_checks(tmp_path, "qa-loop", [entry])[0][0].command
+        second = resolve_checks(tmp_path, "qa-loop", [entry])[0][0].command
+
+        assert first == second == "uv run pytest -q"

@@ -79,7 +79,7 @@ from raven.agent.subagent.delegate import current_delegate, dispatch_charter
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
-from raven.agent.subagent.prompt_errors import DagValidationError, RoundBudgetSpentError
+from raven.agent.subagent.prompt_errors import DagValidationError, RoundBudgetSpentError, RoundNotApprovedError
 from raven.agent.subagent_memory import MemoryScope
 from raven.config.raven import SubagentDagConfig
 from raven.config.schema import MCPServerConfig
@@ -369,12 +369,10 @@ _CLOSE_TIMEOUT_SECONDS = 5.0
 GUIDE_SKILL_ID = "local/subagent-dag-orchestration"
 
 #: How wide one round of a stint may run at once, whatever the host's own limit
-#: is. A stint is charged a single dispatch for its whole life -- deliberately,
-#: because the hourly budget exists to stop an unapproved loop and a stint is an
-#: approved one -- so without a second limit that one charge buys unbounded
-#: concurrency: a round as wide as its roles takes that many of the host's
-#: slots, for hours, and the conversation that started it queues behind its own
-#: stint.
+#: is. The hourly budget is charged per round and bounds how many rounds open,
+#: not how many of the host's slots one round takes: a round as wide as its
+#: roles would hold that many, for hours, and the conversation that started the
+#: stint would queue behind it.
 STINT_MAX_PARALLEL = 2
 
 
@@ -1120,6 +1118,11 @@ class SubAgentDagTool(Tool):
                 value = {**value, "tool_call_id": call_id}
             if stint is not None:
                 value = {**value, "stint_id": stint.stint_id, "round_index": stint.round_index}
+                if stint.rounds:
+                    # Only when it is known: a reader given a round and no
+                    # budget draws "round 3", which is true, rather than
+                    # "round 3 of 0", which is not.
+                    value = {**value, "round_budget": stint.rounds}
             if self._publisher_override is not None:
                 await self._publisher_override(name, value)
             if self._sink is not None and conversation is not None:
@@ -1482,7 +1485,12 @@ class SubAgentDagTool(Tool):
         # turn a malformed graph into an announcement that arrives a turn later.
         try:
             spec = parse_dag_spec({"task_summary": task_summary, "nodes": nodes, "confirm": confirm})
-            validate_and_order(spec, self._reference_roots(), await self._session_nodes())
+            # A dependency on a node an earlier run completed is checked against
+            # that run's conversation. An addressed caller names it; a stint
+            # resumed from a terminal or an RPC has no turn, and checking the
+            # turn's registry found none of the roles the record said finished.
+            known = await (self.session_nodes(origin.conversation) if origin is not None else self._session_nodes())
+            validate_and_order(spec, self._reference_roots(), known)
             pre = await self._preflight(spec)
             spec, dispatch_backends, notices, capabilities = pre.spec, pre.backends, pre.notices, pre.capabilities
         except DagValidationError as exc:
@@ -1518,6 +1526,8 @@ class SubAgentDagTool(Tool):
         # that has usually moved on.
         if spec.confirm and (stint is None or stint.round_index <= 1):
             if not await self._confirmed(spec, origin, confirm_question):
+                if stint is not None:
+                    raise RoundNotApprovedError("the person did not approve the round")
                 return (
                     "The user did not approve this graph, so nothing was run. Do not re-submit it; "
                     "ask them what to change, or do the work another way."

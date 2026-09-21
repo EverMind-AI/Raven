@@ -21,6 +21,11 @@ from raven.stint.backlog import (
     Backlog,
     BacklogError,
     Task,
+    apply,
+    backlog_path,
+    load,
+    save,
+    start,
 )
 
 
@@ -160,6 +165,25 @@ def test_an_unjudged_task_goes_back_to_open_at_the_end_of_a_round() -> None:
     assert "unverified" in backlog.get(2).history[-1]["reason"]
 
 
+def test_a_task_assigned_and_never_taken_goes_back_to_open_when_the_round_ends() -> None:
+    """Assigned is a promise for the round. Kept past it, the next Planner read
+    the task as somebody's and the next Developer was handed only what that
+    round's Planner assigned, so a Developer cut off by its turn budget parked
+    tasks for the rest of the stint (measured 2026-09-20: three of them)."""
+    backlog = _backlog(
+        Task(id=1, title="taken", state=IN_REVIEW),
+        Task(id=2, title="promised", state=ASSIGNED, owner="developer-2"),
+        Task(id=3, title="not this round", state=OPEN),
+        Task(id=4, title="finished", state=DONE),
+    )
+    released = backlog_mod.release_unimplemented(backlog, 3)
+    assert [task.id for task in released] == [2]
+    assert backlog.get(2).state == OPEN and backlog.get(2).owner == ""
+    assert "unimplemented" in backlog.get(2).history[-1]["reason"]
+    assert backlog.get(1).state == IN_REVIEW, "a task the Developer took is QA's to judge, not this verb's"
+    assert [backlog.get(3).state, backlog.get(4).state] == [OPEN, DONE]
+
+
 def test_adding_mints_the_next_id_and_records_where_it_came_from() -> None:
     backlog = _backlog(Task(id=1, title="one"), Task(id=7, title="seven"))
     task = backlog_mod.apply(backlog, "add", role=PLANNER, round_index=4, title="found in round 3", source="round_03")
@@ -249,3 +273,38 @@ def test_a_blocker_that_names_nothing_is_refused(blocker: str) -> None:
     backlog = _backlog(Task(id=1, title="the work"))
     with pytest.raises(BacklogError):
         backlog_mod.apply(backlog, "block", role=PLANNER, task_id=1, blocker=blocker)
+
+
+class TestFilingTheFirstTask:
+    """`task add` into a project that has no backlog yet."""
+
+    def test_the_verb_the_missing_backlog_message_names_is_not_refused_by_it(self, tmp_path: Path) -> None:
+        """`load` refuses a project with no backlog and points at `task add`;
+        `task add` went through `load`, so the cure was refused by the message
+        recommending it and no first task could ever be filed."""
+        backlog = start(tmp_path)
+        apply(backlog, "add", role=HUMAN, title="the first thing", round_index=0)
+        save(tmp_path, backlog)
+
+        assert [task.title for task in load(tmp_path).tasks] == ["the first thing"]
+
+    def test_an_existing_backlog_is_read_rather_than_replaced(self, tmp_path: Path) -> None:
+        first = start(tmp_path)
+        apply(first, "add", role=HUMAN, title="one", round_index=0)
+        save(tmp_path, first)
+
+        second = start(tmp_path)
+        apply(second, "add", role=HUMAN, title="two", round_index=0)
+        save(tmp_path, second)
+
+        assert [task.title for task in load(tmp_path).tasks] == ["one", "two"]
+
+    def test_a_backlog_that_is_there_and_unreadable_still_refuses(self, tmp_path: Path) -> None:
+        """Starting empty here would file the new task into a document that
+        silently dropped every task before it."""
+        path = backlog_path(tmp_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json", encoding="utf-8")
+
+        with pytest.raises(BacklogError):
+            start(tmp_path)

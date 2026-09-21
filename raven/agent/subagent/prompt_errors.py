@@ -19,3 +19,13 @@ class RoundBudgetSpentError(Exception):
     def __init__(self, refusal: str) -> None:
         super().__init__(refusal)
         self.refusal = refusal
+
+
+class RoundNotApprovedError(Exception):
+    """The person was asked to approve a stint's first round and did not.
+
+    Raised for the same reason as :class:`RoundBudgetSpentError`: the driver
+    has a record to close. Handed the denial as a sentence, it read as a
+    started round -- the record stayed ``running`` with round one open, and a
+    later ``resume`` ran, unasked, the graph the person had just refused.
+    """

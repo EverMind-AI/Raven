@@ -25,6 +25,7 @@ from itertools import combinations
 
 from raven.agent.subagent.dag_graph import collect_static_graph_errors
 from raven.playbook.params import param_refs
+from raven.playbook.stint_spec import DEFAULT_ISOLATION
 from raven.playbook.types import NodeSpec, PlaybookSpec
 
 _REFERENCE_RULE = (
@@ -180,6 +181,7 @@ def validate_roles(spec: PlaybookSpec, *, known_agents: Iterable[str] | None = N
 
     errors.extend(_concurrent_and_enforced(roles))
     errors.extend(_read_fences_nobody_holds(roles))
+    errors.extend(_enforced_without_a_tree_to_undo(spec))
 
     verify_names = [entry.name for entry in (spec.verify or [])]
     duplicated = sorted({name for name in verify_names if verify_names.count(name) > 1})
@@ -193,6 +195,35 @@ def validate_roles(spec: PlaybookSpec, *, known_agents: Iterable[str] | None = N
     if repeated:
         errors.append(f"memory names {', '.join(repeated)} twice, with two sets of limits")
     return errors
+
+
+def _enforced_without_a_tree_to_undo(spec: PlaybookSpec) -> list[str]:
+    """A hard boundary declared over the person's own branch.
+
+    ``isolation: none`` runs the round in the checkout the person is standing
+    in, on the branch they are on. Undoing a stray write there is
+    ``git restore`` against that tree, so a file *they* touched while the round
+    ran is indistinguishable from a role that wrote outside its paths: it is
+    reverted and copied into ``violations/``.
+
+    Refused at load for the same reason ``_concurrent_and_enforced`` is: the
+    combination does not fail, it silently does the wrong thing to somebody
+    else's work. Both ways out are named, because which one is right depends on
+    whether the boundary or the shared tree is the point.
+    """
+    if (spec.isolation or DEFAULT_ISOLATION) != "none":
+        return []
+    held = sorted(
+        role.label for role in (spec.roles or []) if (role.owns or role.appends) and role.enforce.write == "hard"
+    )
+    if not held:
+        return []
+    return [
+        f"isolation: none works the person's own checkout and branch, and {', '.join(held)} would be held "
+        "to declared paths there -- a stray write is undone by putting the tree back, which would put "
+        "their own uncommitted work back with it. Use isolation: branch, which gives the run a branch of "
+        "its own in the same checkout, or set enforce.write: soft on those roles."
+    ]
 
 
 def _read_fences_nobody_holds(roles: list) -> list[str]:

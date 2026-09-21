@@ -349,49 +349,21 @@ def _slots(project: Path, role: str, *, enforce_read: str, enforce_write: str, s
     # a set one role could write and another could not is the same trap again.
     artifacts = [f"  - {name}/**" for name in OUTPUT_DIRS]
     session = {"planner": "fresh", "developer": "continue", "qa": "fresh"}[role]
+    del session  # named above for the reader; the note it chose now lives in the template
     return {
-        "project": (
-            f"The specification is `.stint/{SPEC_LINK}`, which points at `{spec_name}`. "
-            f"Settled matters are in `.stint/{DECISIONS_FILE}`. `.stint/` is your reference: the project's "
-            f"decisions, lessons and defects were carried into it when the run was planned, and "
-            f"`.stint/{SOURCES_FILE}` is the reading map of its other documents -- what each is and when "
-            f"to open it. Read the map before opening any of them, take `.stint/` as the ruling where "
-            f"the two disagree, and never write them."
-        ),
+        # Data, not prose. What used to be here was a paragraph of English that a
+        # zh guard could not translate: the template was rendered per language
+        # and then filled with these, so a Chinese role read Chinese headings
+        # over English instruction. Every value below is a name, a path or a
+        # list; the sentences around them belong to the template that is
+        # written in the language the role reads.
+        "spec_name": spec_name,
         "reads": "\n".join(f"  - {item}" for item in reads),
         "commands": _detected_commands(project),
-        "brief_requirements": (
-            "- **Hand the Developer one coherent piece of work**: the unblocked tasks that\n"
-            "  belong together, sized so a round can finish them, and not split so fine that\n"
-            "  each is a chore. Two or three pieces is usual; the number is not the point.\n"
-            "- Each piece says what done looks like and which gate should move; the how --\n"
-            "  design, order within the round, means -- is the Developer's, and the brief\n"
-            "  says so rather than scripting it.\n"
-            "- Take an existing gap before new capability when both are ready, and name the\n"
-            "  evidence that would show each piece done."
-        ),
-        "priority_order": (
-            "A person's own feedback > a regression > a severe QA finding > this stage's "
-            "target gates > other QA findings > last round's gaps."
-        ),
-        "severity_scale": (
-            "   - `severe` -- the conclusion does not hold, a regression, or determinism;\n"
-            "   - `major` -- coverage missed, or a criterion that drifted from the specification;\n"
-            "   - `minor` -- documentation and evidence disagreeing, or naming."
-        ),
-        "review_checklist": (
-            "Open the evidence behind every claim. Re-run what the Developer ran and compare\n"
-            "gate by gate. Where the two disagree, that is the finding that outranks the rest."
-        ),
         "owns_project_paths": "\n".join(owns),
         "artifacts": "\n".join(artifacts),
         "enforce_read": enforce_read,
         "enforce_write": enforce_write,
-        "session_note": (
-            "**Your context is kept across rounds; do not reopen the session.**"
-            if session == "continue"
-            else "You start each round with a fresh conversation, so what you know is what you read."
-        ),
     }
 
 
@@ -498,6 +470,34 @@ def init(
         "# PLAYBOOK\n\nWhat this project learned the hard way. It outranks any general skill a role\n"
         "was given: where the two disagree, follow this.\n\n"
         "## QA proposals\n\n_QA appends here; the Developer promotes an entry into the body above._\n",
+        result,
+        force=force,
+    )
+    # The reading map the standing orders send every role to, written here rather
+    # than by the planning step that fills it in. The orders say "read the map
+    # before opening any of them", and the planning step is not built -- so every
+    # role was told to open a file that does not exist, and the honest ones said
+    # so in their reports instead of doing the work. Written from what the
+    # project actually carries, so on a project that carries nothing the map says
+    # that, which is the one thing a first round most needs to know.
+    carried = project_documents(project, spec=chosen)
+    _write(
+        home / SOURCES_FILE,
+        "# SOURCES\n\n"
+        "The documents this project had before the run, and what each is for. A role\n"
+        "reads this before opening any of them.\n\n"
+        + (
+            # Counted, not listed. `review` reads this file to say which documents
+            # nothing has absorbed yet, and it asks whether a path is named here --
+            # so listing them all would report every one as absorbed on the day the
+            # project was laid out, which is the opposite of true.
+            f"Nothing here has been described yet. The project carries {len(carried)} document(s);\n"
+            "describing them is the planning step's, and a role that needs one before then\n"
+            "opens it and says in its report that the map was silent.\n"
+            if carried
+            else "The project carried no documents of its own. "
+            f"`{SPEC_LINK}` is the whole of what there is to plan from.\n"
+        ),
         result,
         force=force,
     )

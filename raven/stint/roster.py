@@ -154,11 +154,25 @@ def _strings(value: Any) -> tuple[str, ...]:
     return tuple(str(item).strip() for item in value if str(item).strip())
 
 
-def preflight(project: Path, *, harness: str = "raven", names: Sequence[str] = DEFAULT_ROLES) -> list[str]:
+def preflight(
+    project: Path,
+    *,
+    harness: str = "raven",
+    names: Sequence[str] = DEFAULT_ROLES,
+    require_backlog: bool = True,
+) -> list[str]:
     """Everything that must hold before a round runs, as the reasons it does not.
 
     Checked up front and all at once, so a person fixes a project in one pass
     rather than one refusal per attempt. An empty list means the run may start.
+
+    ``require_backlog`` is the two gates on the backlog itself: that a person
+    confirmed it and that it is not empty. They hold for a flow where a person
+    writes the plan before round one. A playbook whose Planner writes the plan
+    *in* round one, from the specification, has an empty backlog by design at
+    this point and a person's word already on the round's approval, so its
+    driver passes ``False`` and keeps the roster, specification and harness
+    checks.
     """
     from raven.stint import backlog as backlog_mod
 
@@ -169,18 +183,19 @@ def preflight(project: Path, *, harness: str = "raven", names: Sequence[str] = D
         return [str(error)]
     reasons.extend(roster.conflicts())
 
-    try:
-        backlog = backlog_mod.load(project)
-    except backlog_mod.BacklogError as error:
-        reasons.append(str(error))
-    else:
-        if not backlog.meta.get("confirmed_by_human"):
-            reasons.append(
-                f"{backlog_mod.backlog_path(project)} has not been confirmed by a person: "
-                f"read the plan, then set meta.confirmed_by_human"
-            )
-        if not backlog.tasks:
-            reasons.append("the backlog is empty, so the Planner would have nothing to pick from")
+    if require_backlog:
+        try:
+            backlog = backlog_mod.load(project)
+        except backlog_mod.BacklogError as error:
+            reasons.append(str(error))
+        else:
+            if not backlog.meta.get("confirmed_by_human"):
+                reasons.append(
+                    f"{backlog_mod.backlog_path(project)} has not been confirmed by a person: "
+                    f"read the plan, then set meta.confirmed_by_human"
+                )
+            if not backlog.tasks:
+                reasons.append("the backlog is empty, so the Planner would have nothing to pick from")
 
     spec = roster_dir(project) / "SPEC.md"
     if not spec.exists():

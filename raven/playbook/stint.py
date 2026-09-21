@@ -26,14 +26,16 @@ point: a run that takes hours should not hold a conversation open.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from loguru import logger
 
-from raven.agent.subagent.prompt_errors import RoundBudgetSpentError
+from raven.agent.subagent.prompt_errors import RoundBudgetSpentError, RoundNotApprovedError
 from raven.playbook.agent_generator import build_payload
 from raven.playbook.stint_prompt import (
     fill_round_slots,
@@ -43,8 +45,18 @@ from raven.playbook.stint_prompt import (
     where_section,
 )
 from raven.playbook.stint_round import RoundContext
-from raven.playbook.stint_spec import DEFAULT_MAX_ROUNDS, MAX_ROUNDS, MemoryEntry, RoleEntry, StopSpec
+from raven.playbook.stint_spec import (
+    DEFAULT_ISOLATION,
+    DEFAULT_MAX_ROUNDS,
+    MAX_ROUNDS,
+    Isolation,
+    MemoryEntry,
+    RoleEntry,
+    StopSpec,
+)
 from raven.playbook.types import PlaybookSpec
+from raven.stint import backlog as backlog_mod
+from raven.stint.backlog import STINT_DIR
 from raven.stint.git import HistoryError, ProjectGit
 from raven.stint.journal import JOURNAL
 from raven.stint.record import (
@@ -53,6 +65,7 @@ from raven.stint.record import (
     INTERRUPTED,
     PAUSED,
     RUNNING,
+    STALE_AFTER_SEC,
     STOPPED,
     StintRecord,
     StintRef,
@@ -62,6 +75,7 @@ from raven.stint.record import (
     peer_stores,
 )
 from raven.stint.setup import Layout, lay_out
+from raven.stint.verify import CHECKS_FILE, resolve_checks
 
 __all__ = [
     "StintDriver",
@@ -77,6 +91,7 @@ _OUTPUT_REF = re.compile(r"\{\{([A-Za-z0-9_-]+)\.(output|output_path)\}\}")
 GUARD_SLOT = "{{round.guard}}"
 FINISH_SLOT = "{{round.finish}}"
 _RECEIPT_RUN_ID = re.compile(r"DAG run (\S+?) started")
+_ROUND_OUTCOME = re.compile(r"finished: (\d+) completed, (\d+) failed")
 
 
 def namespace(playbook: str, index: int, attempt: int = 0) -> str:
@@ -99,6 +114,11 @@ def charters_for(spec: PlaybookSpec, index: int, attempt: int = 0) -> dict[str, 
     Built from the same ``playbook`` block a delegate row carries, through the
     same builder, so a worker briefed for one turn and a role briefed for thirty
     rounds are narrowed by one piece of code rather than two that drift.
+
+    Only that block. ``owns`` and ``appends`` are not turned into a charter: a
+    role with a boundary and no ``playbook:`` block has no tool gate, and what
+    holds its boundary is the prompt and the pass that undoes what it wrote.
+    The shipped playbook is such a role, three times over.
     """
     prefix = namespace(spec.name, index, attempt)
     found: dict[str, Any] = {}
@@ -244,6 +264,7 @@ class StintDriver:
     #: the claim it is making stops being true -- and dies with the process,
     #: which is the case the whole signal exists for.
     _beats: dict[str, "asyncio.Task[None]"] = field(default_factory=dict, repr=False)
+    _handing_over: set[str] = field(default_factory=set, repr=False)
 
     def store_for(self, session_key: str | None) -> StintStore:
         return StintStore(self.stints_root(session_key))
@@ -387,6 +408,18 @@ class StintDriver:
         store = self.store_for(origin.get("session_key"))
         project = self.workspace_at(origin.get("session_key"))
         if (already := self._already_running(store, spec.name, project)) is not None:
+            if already.playbook == spec.name and not _held(already):
+                # The same playbook asked for again on a project whose stint
+                # nobody is advancing -- paused, interrupted, or left running by
+                # a host that died -- is a person saying "carry on", and the
+                # only move that does not redo the first stint's rounds from an
+                # older base is to take that stint up. Said, because what they
+                # asked for by name was a start.
+                taken = await self.resume(already.stint_id, str(already.origin.get("session_key") or "") or None)
+                return (
+                    f"Stint {already.stint_id} was already on {project} at round {already.round_index} and nothing "
+                    f"was advancing it, so it was taken up rather than started over.\n{taken}"
+                )
             return _second_plan_refused(already, spec.name, project)
         record = StintRecord(
             stint_id=make_stint_id(),
@@ -411,13 +444,25 @@ class StintDriver:
             layout = lay_out(project, spec.setup)
             if not layout.ready:
                 return f"Error: {layout.missing}"
+            if problem := self._left_in_the_tree(spec, record, layout):
+                return problem
+            if reasons := _preflight_layout(project, spec):
+                return "Error: this project is not ready for a stint:\n" + "\n".join(f"- {r}" for r in reasons)
+        if problem := _unanswered_checks(project, spec):
+            return problem
         if problem := self._open_tree(spec, record, layout):
             return problem
         store.write(record)
         receipt = await self._submit(spec, record, store, index=1, confirm=spec.confirm, layout=layout)
         if receipt.startswith("Error"):
+            # Closed, not left running: a denied round left the record open
+            # with round one on it, and the next `resume` -- which asks nobody,
+            # the stint having been "approved" -- ran the graph the person had
+            # just refused.
             record.status = STOPPED
-            record.stop_reason = "the first round was refused"
+            record.stop_reason = (
+                "the first round was not approved" if receipt == _NOT_APPROVED else "the first round was refused"
+            )
             store.write(record)
         return receipt
 
@@ -495,6 +540,38 @@ class StintDriver:
         same reason it says nothing anywhere else. Anything returned is
         announced once, as the stint's own result.
         """
+        # Marked for the whole hand-over, because between the finished run
+        # leaving the active set and the next round entering it there is no run
+        # and no beat, and a host asking `holding()` in that gap would let go.
+        self._handing_over.add(ref.stint_id)
+        try:
+            return await self._advance(ref, run_id, result, stopped)
+        finally:
+            self._handing_over.discard(ref.stint_id)
+
+    def holding(self) -> bool:
+        """Whether this process is working a round of any stint right now.
+
+        The question a host that is nothing but this driver has to ask before it
+        returns: a terminal that opened a round and exits closes the loop under
+        it. Answered from this process's own state -- a run in flight, a beat, a
+        hand-over between rounds -- and never from the records, which say what
+        *some* process holds. A refusal leaves nothing held here, and a record
+        another process is beating for is not this one's to wait on.
+        """
+        if self._beats or self._handing_over:
+            return True
+        live = set(self.dag_tool.active_run_ids())
+        if not live:
+            return False
+        store = self.store_for(None)
+        return any(
+            (entry := record.round(record.round_index)) is not None and entry.run_id in live
+            for record in store.list()
+            if record.live
+        )
+
+    async def _advance(self, ref: StintRef, run_id: str, result: Any, stopped: bool) -> Any | None:
         # Stopped first, and whatever follows: this process no longer holds a
         # round of this stint, and a beat still claiming it would keep a record
         # that nothing is advancing looking alive. `_submit` starts a new one if
@@ -511,10 +588,21 @@ class StintDriver:
         finished = record.open_round(ref.round_index, run_id)
         finished.status = "stopped" if stopped else "completed"
         finished.summary = _text_of(result)
+        if not stopped:
+            _release_tasks(record, ref.round_index)
 
         if stopped:
-            record.status = STOPPED
-            record.stop_reason = "the user stopped it"
+            # Cut short, not ended. The round's roles that finished are committed
+            # and readable, the one that was cut left its work uncommitted in the
+            # tree, and `resume` puts the round up again with those roles named
+            # rather than re-run -- which is the whole point of stopping a round
+            # rather than the stint. Recorded as stopped it could not be taken up
+            # at all: `unfinished` is false for a stopped stint, and the one verb
+            # left, `extend`, re-submitted the same node ids. A stint somebody
+            # had already told to stop stays stopped; the cut was its last round.
+            if record.status != STOPPED:
+                record.status = PAUSED
+                record.stop_reason = f"round {ref.round_index} was stopped before it finished"
             store.write(record)
             return None
 
@@ -537,6 +625,20 @@ class StintDriver:
             return None
 
         spec = PlaybookSpec.model_validate(record.spec)
+        if _nothing_ran(finished.summary):
+            # No role finished, so the round left nothing a next one could
+            # build on -- and counting it would spend the budget on a fault the
+            # next round hits again identically. Measured: a missing `{{ref:}}`
+            # target failed every node at render, and the stint ran three
+            # rounds in two seconds. Paused, not stopped: the round stays
+            # un-done on the record, so `resume` puts it up again once the
+            # cause is fixed.
+            finished.status = "failed"
+            record.status = PAUSED
+            record.stop_reason = f"round {ref.round_index}: no role finished"
+            store.write(record)
+            await self._say_paused(record, finished.summary)
+            return None
         if reason := _stop_reason(spec, record, finished.summary):
             record.status = FINISHED
             record.stop_reason = reason
@@ -557,6 +659,21 @@ class StintDriver:
             store.write(record)
             return _summary(record)
         return None
+
+    async def _say_paused(self, record: StintRecord, summary: str) -> None:
+        """Tell whoever is listening that a round did nothing and the stint has stopped advancing."""
+        if (say := getattr(self.dag_tool, "say", None)) is None:
+            return
+        # The node lines carry the errors; the rest is the receipt's boilerplate.
+        errors = [line.strip() for line in summary.splitlines() if "error:" in line or "[failed]" in line]
+        shown = "\n".join(errors[:6]) or summary.strip()[:600]
+        await say(
+            record.stint_id,
+            f"Stint {record.stint_id} ({record.playbook}) is paused: round {record.round_index} ended with "
+            f"no role finished, so nothing was built on and no budget was spent.\n\n{shown}\n\n"
+            f"Fix the cause, then `raven playbook stints resume {record.stint_id}` puts the round up again.",
+            record.origin or None,
+        )
 
     async def _pause_on_budget(self, record: StintRecord, store: StintStore, index: int, refusal: str) -> str:
         """Park a stint the hourly dispatch budget turned down, and say so.
@@ -585,20 +702,62 @@ class StintDriver:
         logger.info("stint {} paused before round {}: the dispatch budget is spent", record.stint_id, index)
         return f"Paused: the sub-agent dispatch budget is spent, so round {index} did not start."
 
-    def _open_tree(self, spec: PlaybookSpec, record: StintRecord, layout: Layout | None = None) -> str:
-        """Give the stint a checkout of its own, or say why it cannot have one.
+    def _left_in_the_tree(self, spec: PlaybookSpec, record: StintRecord, layout: Layout | None = None) -> str:
+        """The person's uncommitted work, as the reason a `branch` stint cannot start on it.
 
-        A stint edits files and commits for hours. Sharing the session's checkout
-        means the person who started it cannot use their own tree until it is
-        done, and every branch either of them switches to surprises the other.
-        A worktree costs one directory and removes the whole class.
+        Round one's boundary is measured against an empty base, which reads as
+        the whole dirty state -- so work the person left in the tree would be
+        graded as the first role's stray write, reverted, and copied into
+        `violations/`. Said before anything is opened rather than discovered
+        afterwards, and said *first*: a layout file they edited is their work
+        before it is a malformed guard file, and the fix is theirs to choose.
+        """
+        enforcing = any(role.owns or role.appends for role in (spec.roles or []))
+        project = Path(record.workdir)
+        if isolation_of(spec) != "branch" or not enforcing or not (project / ".git").exists():
+            return ""
+        repository = ProjectGit(project)
+        if not repository.head():
+            return ""
+        if uncommitted := _theirs(repository, layout):
+            shown = ", ".join(uncommitted[:4]) + (" and more" if len(uncommitted) > 4 else "")
+            return (
+                f"Error: {project} has uncommitted work ({shown}), and '{spec.name}' runs in this "
+                f"checkout on branch stint/{record.stint_id}. Its roles are held to declared paths by putting the "
+                "tree back, so what you left here would be undone as if a role had written it. "
+                "Commit or stash it first."
+            )
+        return ""
+
+    def _open_tree(self, spec: PlaybookSpec, record: StintRecord, layout: Layout | None = None) -> str:
+        """Give the stint the working tree its isolation asks for, or say why it cannot have one.
+
+        A stint edits files and commits for hours, so something has to keep that
+        apart from the person whose repository it is. How much is kept apart is
+        the playbook's ``isolation`` (see :func:`isolation_of`):
+
+        ``worktree``
+            a second checkout, cut from ``HEAD`` onto a branch of the run's own.
+            The person keeps their own checkout and can work while it runs; the
+            price is a full copy of the repository per stint, and one left
+            behind for every stint ever started.
+        ``branch``
+            their checkout, on a branch of the run's own. No copy, and the work
+            lands where they will find it (``git log stint/<id>``); the price is
+            that the tree is the run's until it ends.
+        ``none``
+            their checkout, their branch. Legal only where nothing is enforced,
+            which validation holds -- see ``_enforced_without_a_tree_to_undo``.
 
         A stint that enforces boundaries and has no repository to enforce them
         against is refused rather than started: it would run to the end looking
         like it was being held to its declarations, having held nobody to
-        anything.
+        anything. Two cases of "no repository" that are easy to miss, and are
+        refused here for that same reason: a directory that is not one, and one
+        with no commits -- there is no state to put a stray write back to.
         """
         enforcing = any(role.owns or role.appends for role in (spec.roles or []))
+        isolation = isolation_of(spec)
         project = Path(record.workdir)
         repository = ProjectGit(project)
         if not (project / ".git").exists():
@@ -612,18 +771,51 @@ class StintDriver:
                 "stint {} works {} in place: no repository, so no checkout of its own", record.stint_id, project
             )
             return ""
+        if enforcing and not repository.head():
+            # `worktree_add` would fail here anyway and fall through to working
+            # in place -- which is the outcome this refusal exists to prevent,
+            # because in place with a hard boundary means the undo reaches the
+            # person's own files.
+            return (
+                f"Error: {project} is a git repository with no commits, so there is nothing to put a "
+                f"stray write back to -- and that undo is how '{spec.name}' holds its roles to what they "
+                "declare. Commit something here first."
+            )
+        if isolation == "none":
+            logger.info("stint {} works {} in place, on its own branch: isolation none", record.stint_id, project)
+            record.untracked_at_start = list(repository.changed())
+            return ""
         branch = f"stint/{record.stint_id}"
+        if isolation == "branch":
+            if problem := self._left_in_the_tree(spec, record, layout):
+                return problem
+            try:
+                repository.checkout_branch(branch)
+            except (HistoryError, OSError) as exc:
+                return f"Error: {project} could not be put on branch {branch} ({exc})."
+            record.branch = branch
+            record.untracked_at_start = list(repository.changed())
+            return ""
         tree = (
             self.store_for(str(record.origin.get("session_key") or "") or None).artifacts_for(record.stint_id) / "tree"
         )
         try:
             repository.worktree_add(tree, branch, repository.head())
         except (HistoryError, OSError) as exc:
+            if enforcing:
+                return (
+                    f"Error: '{spec.name}' asks for a checkout of its own and {project} could not give it "
+                    f"one ({exc}). Its boundaries are enforced by putting that checkout back, so running "
+                    "here would hold nobody to anything."
+                )
             logger.error("stint {} could not open a checkout of its own ({}); working in place", record.stint_id, exc)
             return ""
         _carry_layout(project, tree, layout)
         record.workdir = str(tree)
         record.branch = branch
+        # After the carry, because what it copied in is exactly the case this
+        # exists for: uncommitted in the new checkout, and nobody's.
+        record.untracked_at_start = list(ProjectGit(tree).changed())
         return ""
 
     async def extend(self, stint_id: str, rounds: int, session_key: str | None = None) -> str:
@@ -694,13 +886,26 @@ class StintDriver:
             )
         # The round it last ran, plus one -- except where it never finished one,
         # as a stint whose first round was refused never did. Then this is that
-        # round, because skipping it would leave the stint without one.
-        index = record.round_index + (1 if _round_done(record) else 0)
+        # round, taken up the way `resume` takes one up: under a new attempt,
+        # because the node ids of the attempt that did not finish are claimed
+        # for the life of the conversation, and with the roles that did finish
+        # named rather than re-run.
+        attempt, satisfied = 0, {}
+        if _round_done(record):
+            index = record.round_index + 1
+        else:
+            index = record.round_index or 1
+            previous = record.round(index)
+            if previous is not None and previous.run_id:
+                attempt = previous.attempt + 1
+                satisfied = await self._completed_of(record, spec, index, previous)
         record.status = RUNNING
         record.stop_reason = ""
         record.round_index = index
         store.write(record)
-        receipt = await self._submit(spec, record, store, index=index, confirm=False)
+        receipt = await self._submit(
+            spec, record, store, index=index, confirm=False, attempt=attempt, satisfied=satisfied
+        )
         if receipt.startswith("Error"):
             record.status = FINISHED
             record.stop_reason = f"round {index} could not start ({receipt})"
@@ -723,12 +928,13 @@ class StintDriver:
             return f"Error: no stint {stint_id} here."
         if not record.unfinished:
             return f"Stint {stint_id} is {record.status} and has nothing left to take up."
-        if record.status == RUNNING and not record.stale():
-            # Still saying it is running, and still being touched: something is
-            # holding it, and it need not be this process -- the stamp is the one
-            # signal that crosses a process boundary. Two hosts advancing one
-            # stint is the failure the heartbeat exists to prevent, and a person
-            # reaching for `resume` is how it would happen.
+        if record.status == RUNNING and not record.abandoned():
+            # Still saying it is running, still being touched, and its holder not
+            # known to be dead: something is holding it, and it need not be this
+            # process -- the stamp is the one signal that crosses a process
+            # boundary, and the holder's pid the one that crosses a restart. Two
+            # hosts advancing one stint is the failure the heartbeat exists to
+            # prevent, and a person reaching for `resume` is how it would happen.
             #
             # Narrowed to `running` on purpose. A paused or interrupted record
             # has a fresh stamp too -- from the write that paused or marked it --
@@ -778,7 +984,20 @@ class StintDriver:
         return receipt
 
     async def _completed_of(self, record: StintRecord, spec: PlaybookSpec, index: int, previous: Any) -> dict[str, str]:
-        """Which roles of the interrupted round already finished, by node id."""
+        """Which roles of the interrupted round already finished, by node id.
+
+        The record says which: each role is written down as finished, under the
+        node it ran as, when it is judged and committed. The registry is then
+        asked only to confirm that node is readable -- a role that finished
+        without leaving output is not something a later role can read, and
+        naming it would hand the round a reference that resolves to nothing.
+        The registry is that of the conversation the stint started in, which
+        is also the one the new graph is validated against, so what is named
+        here is what validation will find.
+
+        A record from before roles were written down falls back to asking the
+        registry about every role.
+        """
         if previous is None or not previous.run_id:
             return {}
         try:
@@ -787,15 +1006,18 @@ class StintDriver:
             logger.warning("stint {} could not read what its last round finished: {}", record.stint_id, exc)
             return {}
         prefix = namespace(spec.name, index, previous.attempt)
-        # `is_readable` is both halves at once, and both matter: a node that
-        # completed but left no output is not something a later role can read,
-        # so naming it as a dependency would hand the round a reference that
-        # resolves to nothing.
-        return {
-            role.label: f"{prefix}-{role.label}"
-            for role in (spec.roles or [])
-            if nodes.is_readable(f"{prefix}-{role.label}")
+        candidates = dict(previous.finished) or {
+            role.label: f"{prefix}-{role.label}" for role in (spec.roles or [])
         }
+        done = {label: node_id for label, node_id in candidates.items() if nodes.is_readable(node_id)}
+        if skipped := sorted(set(candidates) - set(done)):
+            logger.info(
+                "stint {} round {}: {} finished but left nothing readable, so it runs again",
+                record.stint_id,
+                index,
+                ", ".join(skipped),
+            )
+        return done
 
     async def _submit(
         self,
@@ -817,7 +1039,10 @@ class StintDriver:
             verify=_last_verify(record, index),
             satisfied=satisfied,
             attempt=attempt,
-            where=where_section(record.workdir, bool(record.branch)),
+            # A checkout of its own only under `worktree`. `branch` also records
+            # one, and the text for a checkout tells the role that the project
+            # is elsewhere -- which, in the project itself, sends it looking.
+            where=where_section(record.workdir, isolation_of(spec) == "worktree"),
         )
         if not nodes:
             # Every role of this round already finished, which is what a stint
@@ -828,7 +1053,7 @@ class StintDriver:
                 nodes,
                 task_summary=f"{spec.name}: round {index} of at most {_budget(spec)}",
                 confirm=confirm,
-                stint=record.ref(index),
+                stint=record.ref(index, rounds=_budget(spec)),
                 origin=record.origin or None,
                 # Built when asked rather than now, so a round that is not going to
                 # be asked about does not pay for the text.
@@ -836,12 +1061,79 @@ class StintDriver:
             )
         except RoundBudgetSpentError as spent:
             return await self._pause_on_budget(record, store, index, spent.refusal)
+        except RoundNotApprovedError:
+            return _NOT_APPROVED
         text = _text_of(receipt)
         record.open_round(index, _run_id_of(text), attempt=attempt)
+        record.claim()
         store.write(record)
         # After the write, so the first beat cannot race the record into being.
         self._start_beat(record, store)
         return text
+
+
+_NOT_APPROVED = (
+    "Error: the person did not approve the round, so nothing was run and the stint was not opened. "
+    "Do not re-submit it; ask them what to change."
+)
+
+
+def _preflight_layout(project: Path, spec: PlaybookSpec) -> list[str]:
+    """What the laid-out project still lacks before a round can run on it.
+
+    The roster the guard files declare has to agree with itself and the
+    specification has to be there; both are read by every round and neither
+    was checked at the start until now -- `roster.preflight` existed and
+    nothing on the rounds path called it. The backlog gates are left off: this
+    playbook's Planner writes the backlog in round one, and the person's word
+    is the round's approval.
+    """
+    from raven.stint.roster import RosterError, preflight
+
+    names = [role.label for role in (spec.roles or [])]
+    try:
+        return preflight(project, names=names or None or (), require_backlog=False) if names else []
+    except RosterError as error:  # pragma: no cover - preflight reports its own errors
+        return [str(error)]
+
+
+def _release_tasks(record: StintRecord, index: int) -> None:
+    """A round is over: what it promised and did not deliver goes back to open.
+
+    Two promises. A task in review that QA never judged is not done, and a task
+    assigned that the Developer never took is nobody's. Both rules lived in
+    `backlog.py` with no caller, so a Developer cut off by its turn budget left
+    tasks `assigned` for the rest of the stint, where the next Planner read them
+    as somebody's.
+    """
+    project = Path(record.workdir)
+    if not backlog_mod.backlog_path(project).is_file():
+        return
+    try:
+        backlog = backlog_mod.load(project)
+        released = backlog_mod.sweep_unverified(backlog, index) + backlog_mod.release_unimplemented(backlog, index)
+        if released:
+            backlog_mod.save(project, backlog)
+            logger.info(
+                "stint {} round {} sent {} task(s) back to open: {}",
+                record.stint_id,
+                index,
+                len(released),
+                ", ".join(str(task.id) for task in released),
+            )
+    except (backlog_mod.BacklogError, OSError) as exc:
+        logger.warning("stint {} could not tidy its backlog after round {}: {}", record.stint_id, index, exc)
+
+
+def _nothing_ran(summary: str) -> bool:
+    """Whether the round's receipt says no node of it completed.
+
+    Read off the receipt the graph tool renders -- the same way `_run_id_of`
+    reads the run id off it -- because that is what a finished round hands the
+    driver. A receipt with no such line is not a round that did nothing.
+    """
+    match = _ROUND_OUTCOME.search(summary or "")
+    return match is not None and int(match.group(1)) == 0
 
 
 def _stop_reason(spec: PlaybookSpec, record: StintRecord, last_summary: str) -> str:
@@ -883,22 +1175,67 @@ def _what_to_do(record: StintRecord, waiting: Sequence[Mapping[str, Any]]) -> st
     )
 
 
+def _unanswered_checks(project: Path, spec: PlaybookSpec) -> str:
+    """Refuse a run whose declared checks nobody has said how to run here.
+
+    A check declared by description is a question about the project, and until
+    it is answered the round would report a gate that nothing measured -- which
+    reads, in the round's own table, exactly like a gate that passed. Said
+    before the tree is opened, because the answer is one line in a file and the
+    person is standing right here.
+    """
+    if not spec.verify:
+        return ""
+    _, missing = resolve_checks(project, spec.name, spec.verify)
+    if not missing:
+        return ""
+    told = "; ".join(
+        f"{entry.name} ({entry.description.strip()})" for entry in spec.verify if entry.name in set(missing)
+    )
+    first = missing[0]
+    return (
+        f"Error: '{spec.name}' declares {len(missing)} check(s) this project has never answered -- {told}. "
+        f"A declared check that does not run is a gate the round reports and nobody measured. Say what they "
+        f'run here: `raven playbook stint check set {spec.name} {first} --run "..."`.'
+    )
+
+
+def _held(record: StintRecord) -> bool:
+    """Something is advancing this stint right now, as far as its file can say.
+
+    Only a running record with a live holder is held. Paused and interrupted
+    ones are waiting for exactly the person who just asked; a running one whose
+    holder has gone quiet or is known dead is waiting too, it just does not know
+    it yet.
+    """
+    return record.status == RUNNING and not record.abandoned()
+
+
 def _second_plan_refused(running: StintRecord, playbook: str, project: Path) -> str:
-    """Why a second stint was not started, and the two ways out of it.
+    """Why a second stint was not started, and what to do instead.
 
     A refusal rather than a question, because the surfaces that cannot ask are
     the ones where the mistake is worst: a cron trigger or a reconnecting client
     that quietly opened a second stint would run two of them against one
     repository, on two branches, each redoing the other's work. The graph
     confirm gate runs when nobody can be asked; this one must not.
+
+    Reached only for a stint something is still advancing -- one nobody is
+    advancing is taken up instead (see ``start``). So the way out is not
+    ``stints resume``: that opens a second engine in the caller's process, and
+    a model running it through a shell tool has it killed at the tool's timeout
+    with a round half-dispatched. Either wait, or end the running one.
     """
     reached = running.round_index
     same = " " if running.playbook == playbook else f" (running {running.playbook}) "
+    ago = max(0, int(time.time() - running.touched_at_ms / 1000))
     return (
-        f"Error: a stint is already{same}on {project}: {running.stint_id}, on round {reached}. "
-        f"Take that one up again with `raven playbook stints resume {running.stint_id}`, or end it with "
-        f"`raven playbook stints stop {running.stint_id}` and start fresh. Starting a second stint here would "
-        "put two of them on one repository, each working from a base that does not have the other's work."
+        f"Error: a stint is already{same}on {project}: {running.stint_id}, on round {reached}, and something "
+        f"was advancing it {ago}s ago. Starting a second stint here would put two of them on one repository, "
+        "each working from a base that does not have the other's work. If its host is still running, wait for "
+        "it. If you know its host is gone, ask again in a few minutes: once nothing has touched it for "
+        f"{int(STALE_AFTER_SEC // 60)}, asking for this playbook takes it up where it stopped. To end it "
+        f"instead: `raven playbook stints stop {running.stint_id}`."
     )
 
 
@@ -906,11 +1243,23 @@ def _summary(record: StintRecord) -> str:
     """What the person who started the stint is told, once, at the end."""
     done = [entry for entry in record.rounds if entry.status == "completed"]
     violations = [note for entry in record.rounds for note in entry.violations]
-    where = f"It worked in {record.workdir}"
     # The branch is said because nothing merges it. A stint commits to a branch
     # of its own and the project it was started from is untouched, so a reader
     # told only the directory has been told the work is somewhere it is not.
-    where += f", on branch {record.branch}, which nothing has merged." if record.branch else "."
+    #
+    # And when the branch was cut in their own checkout, that checkout is still
+    # on it: a person who does not know that reads their own project as having
+    # been rearranged. The way back is one command and it is cheap to say.
+    in_place = bool(record.project) and Path(record.workdir) == Path(record.project)
+    if record.branch and in_place:
+        where = (
+            f"It worked in {record.workdir}, on branch {record.branch}, which nothing has merged -- "
+            "and that checkout is still on it, so `git checkout -` puts you back."
+        )
+    elif record.branch:
+        where = f"It worked in {record.workdir}, on branch {record.branch}, which nothing has merged."
+    else:
+        where = f"It worked in {record.workdir}."
     lines = [
         f"Stint {record.stint_id} ({record.playbook}) ran {len(done)} round(s) and stopped: {record.stop_reason}.",
         where,
@@ -941,6 +1290,54 @@ def _reported(marker: str, summary: str) -> str | None:
     return next((line for line in summary.splitlines() if line.strip() == marker), None)
 
 
+def isolation_of(spec: PlaybookSpec) -> "Isolation":
+    """How much of the person's checkout this run borrows.
+
+    One reader for the field so the default lives in one place: a playbook that
+    says nothing gets :data:`DEFAULT_ISOLATION`, and every caller that has to
+    branch on the answer -- opening the tree, writing the approval, taking the
+    stint up again -- asks here rather than repeating ``or "branch"``.
+    """
+    return spec.isolation or DEFAULT_ISOLATION
+
+
+def _theirs(repository: ProjectGit, layout: Layout | None) -> list[str]:
+    """Uncommitted paths in the project that this run did not just write itself.
+
+    The setup pass writes ``.stint/`` and does not commit it, so by the time the
+    tree is opened a first run has made the project dirty itself. Counting that
+    as the person's work would refuse every fresh project; counting nothing would
+    miss the case the check exists for.
+
+    The host's own ``.raven/`` is not weighed here because
+    :meth:`ProjectGit.changed` does not report it at all -- see
+    :data:`raven.stint.git.HOST_STATE`.
+    """
+    # A created entry may be spelled `<path> -> <target>`, which is how `init`
+    # records the specification symlink; the part before the arrow is the path
+    # git will report. Without this the link reads as the person's own file and
+    # every laid-out project is refused.
+    # Written by this run *or by the attempt before it*: a run refused after the
+    # layout leaves the layout behind, and the retry finds it already there. A
+    # file the recipe owns is the person's only once it is committed and then
+    # edited -- so a kept file HEAD does not carry is the layout's, and a kept
+    # file HEAD does carry, showing as changed, is theirs.
+    laid_out = {_path_of(name) for name in (*layout.wrote, *layout.kept)} if layout is not None else set()
+    # Resolving the declared checks writes the ledger, after the layout and
+    # before the tree is opened, and it is not in the layout's lists -- so a
+    # project whose check was detected was refused for its own ledger.
+    laid_out.add(f"{STINT_DIR}/{CHECKS_FILE}")
+    head = repository.head()
+    # `changed()` already leaves the host's own directory out, so what is left
+    # here is the project's: the layout, and the person's.
+    return [path for path in repository.changed() if path not in laid_out or repository.known_at(head, path)]
+
+
+def _path_of(wrote: str) -> str:
+    """The path in a layout entry, which for the specification link is spelled ``<path> -> <target>``."""
+    return str(wrote).split(" -> ", 1)[0]
+
+
 def _carry_layout(project: Path, tree: Path, layout: Layout | None) -> None:
     """Copy what the setup pass just wrote into the stint's fresh checkout.
 
@@ -955,11 +1352,18 @@ def _carry_layout(project: Path, tree: Path, layout: Layout | None) -> None:
     if layout is None or not layout.wrote:
         return
     for name in layout.wrote:
-        source, target = project / name, tree / name
-        if not source.is_file() or target.exists():
+        path = _path_of(name)
+        source, target = project / path, tree / path
+        if not source.is_file() or target.exists() or target.is_symlink():
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(source.read_bytes())
+        if source.is_symlink():
+            # The specification link is relative to `.stint/`, and the checkout
+            # carries the same document at the same place, so the link is what
+            # carries -- a copy would freeze the text on the day the run began.
+            target.symlink_to(os.readlink(source))
+        else:
+            target.write_bytes(source.read_bytes())
 
 
 def approval(spec: PlaybookSpec, record: StintRecord, layout: Layout | None = None) -> str:
@@ -994,11 +1398,27 @@ def approval(spec: PlaybookSpec, record: StintRecord, layout: Layout | None = No
         "",
         f"  up to {budget} round(s) of: {chain}",
     ]
-    if record.branch:
+    if record.branch and isolation_of(spec) == "worktree":
         lines.append(f"  on branch {record.branch}, in a checkout of its own -- your working tree is untouched")
+    elif record.branch:
+        # The sentence above is the one a reader is most likely to carry away,
+        # and here it would be false: this run is in the checkout they are
+        # standing in. Their branch is still safe, and that is the part worth
+        # saying, along with the part that costs them something.
+        lines.append(
+            f"  on branch {record.branch}, cut in this checkout -- the tree is the stint's until it ends, "
+            "and the branch you are on now is left where it is"
+        )
+    else:
+        lines.append("  in this checkout, on the branch you are on, committing nothing")
     if spec.verify:
         lines.append("  every round may run, on this machine:")
-        lines.extend(f"      {check.run}" for check in spec.verify)
+        # Resolved, not as written: a check declared by description carries no
+        # command in the file, and the whole reason this text exists is that the
+        # approval is the one moment somebody reads what will execute here.
+        resolved, missing = resolve_checks(Path(record.project or record.workdir), spec.name, spec.verify)
+        lines.extend(f"      {check.name} -> {check.command}" for check in resolved)
+        lines.extend(f"      {name} -> nothing says what this runs here" for name in missing)
     for role in spec.roles or []:
         if paths := [*role.owns, *role.appends]:
             shown = ", ".join(paths[:3])

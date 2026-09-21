@@ -111,7 +111,10 @@ def _stint_wire(spec: PlaybookSpec) -> dict[str, Any]:
         "checks": [
             {
                 "name": check.name,
-                "run": check.run,
+                # A check may be declared by description instead, and then the
+                # command is the project's rather than the playbook's: the page
+                # is showing the file, so it shows what the file says.
+                "run": check.run or f"({check.description})",
                 "timeout_sec": check.timeout_sec,
                 "needs_display": check.needs_display,
             }
@@ -952,6 +955,102 @@ async def playbooks_stints_stop(params: dict) -> dict:
     return _stint_detail(record)
 
 
+async def playbooks_stints_pause(params: dict) -> dict:
+    """Open no further rounds, and keep the stint so it can be taken up again.
+
+    ``stop`` and this differ in one thing and it is not what happens now: both
+    let the round in flight finish and neither opens another. ``stop`` ends the
+    stint, and ``pause`` leaves it unfinished, which is what ``resume`` acts on.
+    So a person who is not sure they are done wants this one, and the record is
+    the only place that difference is written down.
+
+    Like ``stop``, a file write and nothing else: the process holding the round
+    reads the record at the hand-over. Nothing here reaches the engine, which is
+    why it can answer on a gateway that is not the one running the stint.
+    """
+    from raven.stint.record import PAUSED
+
+    store, record = _require_stint(params)
+    if record.live:
+        record.status = PAUSED
+        record.stop_reason = "a person paused the stint"
+        store.write(record)
+    return _stint_detail(record)
+
+
+def _driver_in_this_process(agent_loop_factory: "AgentLoopFactory | None") -> Any:
+    """The multi-round driver of the engine answering this call, or a refusal.
+
+    Unlike ``pause`` and ``stop``, which write the file and let whoever holds
+    the round read it, taking a stint up *opens* a round -- and a round runs
+    in the process that opened it. So this has to be the engine's own driver:
+    a driver built here for the call would run the round in the RPC handler
+    and report to nobody.
+    """
+    from raven.rpc.errors import ConfigValidationError
+
+    loop = None
+    if agent_loop_factory is not None:
+        try:
+            loop = agent_loop_factory()
+        except Exception:  # noqa: BLE001 - no loop is a refusal, not a crash
+            loop = None
+    runtime = getattr(loop, "_playbooks", None)
+    driver = getattr(runtime, "rounds", None) if runtime is not None else None
+    if driver is None:
+        raise ConfigValidationError("playbooks are not running on this host, so no stint can be taken up here")
+    return loop, driver
+
+
+async def _take_up(params: dict, agent_loop_factory: "AgentLoopFactory | None", verb: str) -> dict:
+    """``resume`` and ``extend`` share everything but the driver method they call."""
+    from raven.agent import workdir
+    from raven.providers.binding import use_binding
+
+    store, record = _require_stint(params)
+    loop, driver = _driver_in_this_process(agent_loop_factory)
+    session_key = str(record.origin.get("session_key") or "") or None
+    # The same two contexts ``playbooks.run`` enters, for the same reason: the
+    # round's nodes resolve their model through the active binding, and the
+    # stint was started in this conversation, not in the RPC handler's absence
+    # of one. A conversation whose directory cannot be resolved still gets its
+    # round -- the stint carries its own workdir -- just on the default binding.
+    try:
+        session_workdir = loop.session_workdir(session_key) if session_key else None
+    except Exception:  # noqa: BLE001 - a bad override is not this verb's to fix
+        session_workdir = None
+    binding = loop.binding_for_session(session_key) if session_key else None
+
+    async def go() -> str:
+        if verb == "extend":
+            return await driver.extend(record.stint_id, int(params.get("rounds") or 0), session_key)
+        return await driver.resume(record.stint_id, session_key)
+
+    if session_workdir is not None and binding is not None:
+        with workdir.bind(session_workdir), use_binding(binding):
+            reply = await go()
+    else:
+        reply = await go()
+    after = store.read(record.stint_id) or record
+    return {**_stint_detail(after), "reply": str(reply or "")}
+
+
+async def playbooks_stints_resume(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+    """Take a stint up again, in this engine, from the node it stopped at.
+
+    The roles that finished are named rather than re-run, and the round reports
+    to the conversation the stint was started in -- which is what a person who
+    restarted raven and came back to that conversation expects, and what a
+    terminal running its own driver could not give them.
+    """
+    return await _take_up(params, agent_loop_factory, "resume")
+
+
+async def playbooks_stints_extend(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+    """Give a stint more rounds; a stint that is over opens the next one here."""
+    return await _take_up(params, agent_loop_factory, "extend")
+
+
 async def playbooks_stints_answer(params: dict) -> dict:
     """Answer a question a round left, for the round after this one to read."""
     import time
@@ -1000,6 +1099,16 @@ def register_playbooks_methods(
     dispatcher.register("playbooks.stints.list", playbooks_stints_list)
     dispatcher.register("playbooks.stints.get", playbooks_stints_get)
     dispatcher.register("playbooks.stints.stop", playbooks_stints_stop)
+    dispatcher.register("playbooks.stints.pause", playbooks_stints_pause)
+
+    async def _resume(p: dict) -> dict:
+        return await playbooks_stints_resume(p, agent_loop_factory=agent_loop_factory)
+
+    async def _extend(p: dict) -> dict:
+        return await playbooks_stints_extend(p, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("playbooks.stints.resume", _resume)
+    dispatcher.register("playbooks.stints.extend", _extend)
     dispatcher.register("playbooks.stints.answer", playbooks_stints_answer)
 
 
@@ -1015,6 +1124,7 @@ __all__ = [
     "playbooks_stints_answer",
     "playbooks_stints_get",
     "playbooks_stints_list",
+    "playbooks_stints_pause",
     "playbooks_stints_stop",
     "playbooks_run",
     "register_playbooks_methods",

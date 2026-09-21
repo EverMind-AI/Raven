@@ -1778,9 +1778,10 @@ The append-only file the roles hand over through. Only the most recent rounds re
 
 **Ownership** (`owns` / `appends`, `raven/stint/ownership.py`):
 What a role may write, what it may only add to, and everything else, which it may not touch.
-One path has one owner. Declared in the playbook, rendered into the role's prompt, refused at
-the write, and undone afterwards -- four layers, because a prompt is not a fence and a fence a
-role can shell around is not one either.
+One path has one owner. Declared in the playbook, rendered into the role's prompt, measured by
+the role's own checks, and undone afterwards -- three layers, because a prompt is not a fence.
+Nothing refuses a write before it lands: a charter narrows a role's tools only where the
+playbook declares one, and `owns` is not turned into a charter.
 
 **Violation** (`violations/`):
 A write outside a role's paths, found by comparing the stage's own commits and worktree against

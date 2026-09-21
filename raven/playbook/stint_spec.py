@@ -34,15 +34,41 @@ from raven.stint.journal import JOURNAL_ROUNDS_IN_PROMPT, MAX_JOURNAL_CHARS
 from raven.stint.verify import DEFAULT_TIMEOUT_SEC
 
 __all__ = [
+    "DEFAULT_ISOLATION",
     "DEFAULT_MAX_HANDBACKS",
     "DEFAULT_MAX_ROUNDS",
     "MAX_ROUNDS",
     "EnforceSpec",
+    "Isolation",
     "MemoryEntry",
     "RoleEntry",
     "StopSpec",
     "VerifyEntry",
 ]
+
+Isolation = Literal["worktree", "branch", "none"]
+"""How much of the person's checkout a run borrows.
+
+``worktree`` gives the run a second checkout of its own, so the person keeps
+theirs; ``branch`` works their checkout on a branch of the run's own, so their
+branch stays where it was and no second copy of a large repository is made;
+``none`` works their checkout on their branch, which is why it may not be
+combined with an enforced boundary -- putting the tree back would put *their*
+edits back.
+
+The three differ in what they protect, not in what they measure. Roles run one
+at a time (``_concurrent_and_enforced`` refuses the alternative), so a single
+tree grades correctly whoever owns it."""
+
+DEFAULT_ISOLATION: Isolation = "branch"
+"""What a playbook that says nothing gets.
+
+Not ``worktree``: a second checkout costs a full copy of the repository, leaves
+one behind for every run ever started, and puts the work on a branch in a
+directory the person did not choose and will not find. ``branch`` keeps the work
+in the repository they are looking at, one ``git log stint/<id>`` away, and
+costs them the use of the tree while the run goes -- which a run they approved
+by the round count is already asking for."""
 
 DEFAULT_MAX_ROUNDS = 10
 """Rounds a stint runs when it says nothing. Enough to be worth starting and
@@ -138,11 +164,30 @@ class MemoryEntry(CamelBase):
 
 
 class VerifyEntry(CamelBase):
-    """A real command whose verdict no model wrote."""
+    """A real command whose verdict no model wrote, or the description of one.
+
+    Two ways to say what a round is measured by, and the difference is what
+    travels. ``run`` is the command itself, which is right for a playbook
+    written for one project and wrong for one that moves: `uv run pytest` is
+    nothing on a project that uses npm, and a file carrying literal shell is a
+    file that runs something on the next machine that opens it.
+
+    ``description`` says what has to be true instead -- "the source compiles" --
+    and the host answers it once for the project and writes the answer down
+    (``.stint/checks.json``). What travels then is the requirement; the command
+    is the project's, readable and editable where it lives.
+    """
 
     name: str = Field(pattern=_NAME_RE)
-    run: str = Field(min_length=1)
+    run: str = ""
+    description: str = ""
     timeout_sec: float = Field(default=DEFAULT_TIMEOUT_SEC, gt=0)
+
+    @model_validator(mode="after")
+    def _says_what_it_checks(self) -> "VerifyEntry":
+        if not self.run.strip() and not self.description.strip():
+            raise ValueError(f"verify {self.name!r} needs either a run command or a description of one")
+        return self
 
     needs_display: bool = False
     """This check renders, so it needs a screen to render onto.

@@ -29,7 +29,7 @@ from pydantic import Field, model_validator
 from raven.agent.subagent.dag_graph import DagNodeSpec
 from raven.config.schema import MCPServerConfig
 from raven.playbook.base import CamelBase
-from raven.playbook.stint_spec import MemoryEntry, RoleEntry, StopSpec, VerifyEntry
+from raven.playbook.stint_spec import Isolation, MemoryEntry, RoleEntry, StopSpec, VerifyEntry
 from raven.utils.paths import mint_slug
 
 SPEC_VERSION = 1
@@ -195,7 +195,16 @@ class PlaybookSpec(CamelBase):
     what it lays down. Absent is a playbook that works a project as it finds
     it -- most of them."""
 
-    STINT_SECTIONS: ClassVar[tuple[str, ...]] = ("roles", "memory", "verify", "stop", "setup")
+    isolation: Isolation | None = None
+    """rounds mode: how much of the person's checkout the run borrows. Absent is
+    ``DEFAULT_ISOLATION``.
+
+    Declared by the author because it is a property of the work -- a playbook
+    whose roles rebuild a large tree wants its own checkout; one meant to leave
+    its commits where the person can see them does not. Read through
+    ``raven.playbook.stint.isolation_of``, which supplies the default."""
+
+    STINT_SECTIONS: ClassVar[tuple[str, ...]] = ("roles", "memory", "verify", "stop", "setup", "isolation")
 
     @model_validator(mode="after")
     def _mode_section_pairing(self) -> "PlaybookSpec":

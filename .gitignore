@@ -108,10 +108,6 @@ demos/skill_retrieval/sessions/
 demos/skill_retrieval/user_memory/
 demos/skill_retrieval/agent_memory/
 
-# The dispatch ledger a running gateway keeps beside its sessions: per-process
-# state, written wherever the workspace happens to be, which in a checkout is here.
-/sessions/
-
 # Scratch workspace for local sub-agent / DAG testing.
 /tmp/
 .omo/*

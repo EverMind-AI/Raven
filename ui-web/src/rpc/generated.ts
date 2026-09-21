@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 197 methods, 114 component schemas.
+// 186 methods, 106 component schemas.
 
 /* eslint-disable */
 /**
@@ -55,14 +55,6 @@ export type TurnEvent =
   | MediaEvent
   | SessionTitledEvent
   | SessionNamingEndedEvent;
-/**
- * Which delegation path made a task: a spawn call, or a run_subagent_dag run (a playbook run is one).
- */
-export type TaskKind = 'spawn' | 'dag';
-/**
- * A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state.
- */
-export type TaskStatus = 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled';
 
 export interface BrowserTab {
   index: number;
@@ -277,10 +269,6 @@ export interface ExtToolRow {
    */
   mcp_server?: string;
   needs?: ToolSetupNeed;
-  /**
-   * True for a tool whose off switch the loop would not honour: the two tool-search meta-tools, and the MCP resource and prompt meta-tools the loop registers and withdraws on its own. The page draws these without a switch.
-   */
-  builtin?: boolean;
 }
 /**
  * Set when the tool exists but is withheld for want of a key. The model cannot call it; the row is here so the page can offer the field instead of the tool simply being absent.
@@ -341,21 +329,6 @@ export interface ApiUsageModel {
   output_missing_calls?: number;
 }
 export interface ApiUsageTotals {
-  calls: number;
-  input_tokens?: number | null;
-  output_tokens?: number | null;
-  cache_read_tokens?: number | null;
-  cost_usd?: number | null;
-  cache_write_tokens?: number | null;
-  cost_missing_calls: number;
-  cache_read_missing_calls: number;
-  cache_write_missing_calls: number;
-  legacy_cost_calls: number;
-  input_missing_calls?: number;
-  output_missing_calls?: number;
-}
-export interface DailyUsage {
-  date: string;
   calls: number;
   input_tokens?: number | null;
   output_tokens?: number | null;
@@ -433,21 +406,6 @@ export interface ChannelStatusRow {
    * Whether this channel signs in by scanning a code.
    */
   qr_login?: boolean;
-}
-export interface DeckTemplateRow {
-  /**
-   * The template's stem, which deck.templates.pick takes.
-   */
-  name: string;
-  /**
-   * The stem as words, for the picker's caption.
-   */
-  label: string;
-  size: number;
-  /**
-   * The first page as a JPEG data URL, or null where this host cannot render one.
-   */
-  cover?: string | null;
 }
 export interface FsEntry {
   name: string;
@@ -539,14 +497,6 @@ export interface McpSnapshot {
    * The authorization URL this server is parked on, when it is. Carried on the pull because the `oauth.pending` notification that also carries it is dropped when no client is attached, which is every connect started at assembly time.
    */
   auth_url?: string;
-  /**
-   * How the server authenticates (ext.list rows only).
-   */
-  auth?: ('none' | 'apikey' | 'oauth') | null;
-  /**
-   * Whether it holds the credential that mode needs (ext.list rows only).
-   */
-  credentialed?: boolean | null;
 }
 /**
  * What the install actually landed, which is what uninstall replays.
@@ -761,10 +711,6 @@ export interface SubagentRow {
    */
   builtin?: boolean;
   /**
-   * One of raven's own agents, whichever way this install registered it: the built-in row, a product discovered under `agents/`, or a config row whose acp handshake named raven (the shipped installer writes a product as a plain config row). The row a client draws with raven's own mark, and whose unset model reads as following the main Raven. Absent from a server that predates it, which reads as 'not raven's'.
-   */
-  own?: boolean;
-  /**
    * The transport this entry's preset has since moved to, or null when it is current. A configured entry is never rewritten underneath the user, so the mismatch is shown instead.
    */
   upgrade_to?: string;
@@ -782,40 +728,11 @@ export interface SubagentRow {
   last_test_detail?: string;
   last_test_at_ms?: number;
   test_running: boolean;
-  /**
-   * The model this row sends, or null to use the agent's own default.
-   */
-  model?: string | null;
-  /**
-   * The models this row's agent advertised, empty when it advertised none.
-   */
-  model_choices?: {
-    /**
-     * The id the agent takes back.
-     */
-    value: string;
-    /**
-     * What the agent asked to be shown, usually far shorter than the value.
-     */
-    name?: string;
-    /**
-     * The agent's own bucketing, a provider typically. Empty when it offered none.
-     */
-    group?: string;
-  }[];
-  /**
-   * What subagents.update accepts for model on this row, by kind -- not ownership, which is own: raven for the built-in row, picking from raven's own provider catalogue; agent for an acp row, raven's own or not, picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all.
-   */
-  model_source?: 'raven' | 'agent' | 'fixed';
 }
 export interface ModelOptionProvider {
   slug: string;
   name: string;
   homepage?: string;
-  /**
-   * Where the vendor hands out API keys; null when the registry has no console link.
-   */
-  key_url?: string | null;
   /**
    * The vendor's own model index. Distinct from `homepage`: the question a settings page asks is which model to put here, and a marketing front page does not answer it.
    */
@@ -847,18 +764,8 @@ export interface ModelOptionProvider {
   protocol_overrides?: {
     [k: string]: string;
   };
-  /**
-   * Custom request headers by name, each value redacted.
-   */
-  extra_headers?: {
-    [k: string]: string;
-  };
   total_models: number;
   needs_api_base: boolean;
-  /**
-   * The registry's is_gateway: resells other vendors' models under vendor/model ids. The catalogue's gateway filter reads this; absent means false.
-   */
-  gateway?: boolean;
   platforms?: {
     label: string;
     api_base: string;
@@ -890,10 +797,6 @@ export interface ModelLabel {
    * What the model writes: text, image, video, audio, vector.
    */
   output_modalities?: string[];
-  /**
-   * The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text.
-   */
-  kind: 'text' | 'image' | 'audio' | 'video' | 'embedding' | 'reranker';
   /**
    * Tokens the model reads in one request, from the tables that also route rather than from the display registry -- the number shown has to be the number a request is sized with. Absent where no such table names the model.
    */
@@ -1424,6 +1327,18 @@ export interface DagNodeDetail {
 export interface DagRunStartedEvent {
   type: 'dag.run_started';
   payload: {
+    /**
+     * The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.
+     */
+    stint_id?: string;
+    /**
+     * Which round of that run this graph is, counting from one.
+     */
+    round_index?: number;
+    /**
+     * Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening the run. Absent when the dispatcher did not say.
+     */
+    round_budget?: number;
     run_id: string;
     /**
      * The call this run belongs to. Absent on hosts that do not correlate progress with a tool row.
@@ -1454,6 +1369,18 @@ export interface DagRunStartedEvent {
 export interface DagNodeUpdatedEvent {
   type: 'dag.node_updated';
   payload: {
+    /**
+     * The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.
+     */
+    stint_id?: string;
+    /**
+     * Which round of that run this graph is, counting from one.
+     */
+    round_index?: number;
+    /**
+     * Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening the run. Absent when the dispatcher did not say.
+     */
+    round_budget?: number;
     run_id: string;
     tool_call_id?: string;
     node: string;
@@ -1493,6 +1420,18 @@ export interface DagNodeStalledEvent {
 export interface DagRunCompletedEvent {
   type: 'dag.run_completed';
   payload: {
+    /**
+     * The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.
+     */
+    stint_id?: string;
+    /**
+     * Which round of that run this graph is, counting from one.
+     */
+    round_index?: number;
+    /**
+     * Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening the run. Absent when the dispatcher did not say.
+     */
+    round_budget?: number;
     run_id: string;
     tool_call_id?: string;
     dir: string;
@@ -1769,157 +1708,6 @@ export interface OkResult {
   ok: boolean;
 }
 /**
- * How many of the task's nodes sit in each state. Counted from graph.json, so skipped nodes are counted too.
- */
-export interface TaskCounts {
-  total: number;
-  pending: number;
-  running: number;
-  completed: number;
-  failed: number;
-  skipped: number;
-  cancelled: number;
-  interrupted: number;
-  /**
-   * Nodes suspended on a verdict, waiting for resolve_dag_node. A running row with one of these is waiting on a decision, not working.
-   */
-  exception: number;
-}
-/**
- * Present only on a run a replan superseded, read from graph.json's top-level replan entry. started=false means the successor never began; error says why.
- */
-export interface TaskReplan {
-  /**
-   * The successor run.
-   */
-  run_id: string;
-  from_node?: string | null;
-  reason?: string | null;
-  started: boolean;
-  error?: string | null;
-}
-/**
- * One file a node wrote, as the lane that ran it recorded the tool result. The in-process lane records these; the acp and cli lanes record none yet. The diff body is not here: a client builds it from the node's messages.
- */
-export interface TaskFile {
-  path: string;
-  op: 'write' | 'edit';
-  add: number;
-  del: number;
-  /**
-   * Bytes after the write, when the lane could measure it.
-   */
-  size?: number | null;
-}
-/**
- * One step of a task: a graph node, or a spawn's single node.
- */
-export interface TaskNode {
-  /**
-   * The model's own id for the step, unique across the session.
-   */
-  node_id: string;
-  /**
-   * The step's one-line title. Null on a run written before the field existed.
-   */
-  node_summary?: string | null;
-  /**
-   * The roster name of the agent that runs it.
-   */
-  agent: string;
-  /**
-   * The stateful handle, named or minted. Null for a node of an agent that keeps no session.
-   */
-  instance?: string | null;
-  status: DagSnapshotNodeStatus;
-  /**
-   * May name a node outside this task: node ids are the session's, and a later graph may depend on an earlier run's completed node.
-   */
-  depends_on: string[];
-  /**
-   * Epoch milliseconds.
-   */
-  started_at?: number | null;
-  /**
-   * Epoch milliseconds; null while running, and for an interrupted node nothing recorded an end for.
-   */
-  ended_at?: number | null;
-  /**
-   * Why it failed, capped at 500 characters.
-   */
-  error?: string | null;
-  /**
-   * Null when the lane cannot report usage -- never zero for that.
-   */
-  tokens_in?: number | null;
-  tokens_out?: number | null;
-  /**
-   * Null means zero calls or an unreporting lane; the record cannot tell the two apart.
-   */
-  tool_call_count?: number | null;
-  /**
-   * How many of those calls reported failure. A completed node with all its calls failed is not a clean run.
-   */
-  tool_failure_count?: number | null;
-  /**
-   * Whether the node wrote an output at all. A completed node without one is why a downstream reference of it fails.
-   */
-  has_output?: boolean | null;
-  /**
-   * The template as dispatched, placeholders unexpanded. Null for a spawn.
-   */
-  prompt_template?: string | null;
-  /**
-   * The node's declared inputs, per key: a literal, {file: path} or {node: id}.
-   */
-  inputs?: {
-    [k: string]: JsonValue;
-  };
-  /**
-   * Absent means the agent's own menu; an empty list means none.
-   */
-  skills?: string[];
-  /**
-   * Same three-valued reading as skills.
-   */
-  mcps?: string[];
-  files: TaskFile[];
-}
-/**
- * One unit of delegated work a conversation started, with its nodes inline.
- */
-export interface TaskRow {
-  /**
-   * The run id for a dag; the record (node) id for a spawn.
-   */
-  id: string;
-  kind: TaskKind;
-  /**
-   * What the whole task was dispatched for. Null on a run written before the field existed.
-   */
-  task_summary?: string | null;
-  status: TaskStatus;
-  replan?: TaskReplan;
-  /**
-   * Epoch milliseconds; the earliest node start.
-   */
-  started_at?: number | null;
-  /**
-   * Epoch milliseconds; the latest node end, null while running.
-   */
-  ended_at?: number | null;
-  /**
-   * A spawn's agent. Null for a dag, whose nodes name their own.
-   */
-  agent?: string | null;
-  /**
-   * A spawn's instance handle -- what subagent.cancel_instance takes. Null for a dag; a dag is stopped through subagent.interrupt on its run id.
-   */
-  handle?: string | null;
-  counts: TaskCounts;
-  nodes: TaskNode[];
-}
-/**
  * One round of a plan, as the list needs it.
  */
 export interface StintRoundRow {
@@ -1964,6 +1752,15 @@ export interface StintDetail {
   rounds: StintRoundRow[];
   questions: StintQuestionRow[];
 }
+/**
+ * A stint after a verb opened a round in this engine, with what the driver said about it.
+ */
+export interface StintTakeUp {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+  reply: string;
+}
 export interface SessionListParams {
   /**
    * Max sessions to return.
@@ -1973,10 +1770,6 @@ export interface SessionListParams {
    * Session channels to include; defaults to tui.
    */
   channels?: string[];
-  /**
-   * True lists only archived sessions; absent or false lists the live ones.
-   */
-  archived?: boolean | null;
 }
 export interface SessionListResult {
   sessions: SessionListItem[];
@@ -2300,10 +2093,6 @@ export interface ModelAddModelParams {
   slug: string;
   model: string;
   label?: string;
-  /**
-   * One line about the model; an empty string clears it, as it does for label.
-   */
-  description?: string;
   capabilities?: string[];
   input_modalities?: string[];
   output_modalities?: string[];
@@ -2311,40 +2100,6 @@ export interface ModelAddModelParams {
 }
 export interface ModelAddModelResult {
   provider: ModelOptionProvider;
-}
-export interface ModelAddModelsParams {
-  slug: string;
-  models: string[];
-  session_id?: string;
-}
-export interface ModelAddModelsResult {
-  provider: ModelOptionProvider;
-}
-export interface ModelSetFieldsParams {
-  slug: string;
-  fields: {
-    [k: string]: JsonValue;
-  };
-}
-export interface ModelSetFieldsResult {
-  /**
-   * Previous values, header values redacted.
-   */
-  previous: {
-    [k: string]: JsonValue;
-  };
-}
-export interface ModelOauthLoginParams {
-  slug: string;
-  session_id?: string;
-}
-export interface ModelOauthLoginResult {
-  verification_uri: string;
-  user_code: string;
-  /**
-   * Seconds the code stays valid; the gateway polls until then.
-   */
-  expires_in: number;
 }
 export interface ModelRemoveModelParams {
   slug: string;
@@ -2405,10 +2160,6 @@ export interface ConfigSetResult {
   scope?: 'session' | 'default';
   session_id?: string;
   applies_to_session?: boolean;
-  /**
-   * True when the write landed in a process that has no agent loop: the config is right and this gateway still cannot run a turn on it.
-   */
-  needs_restart?: boolean;
 }
 export interface ConfigUnsetParams {
   key: string;
@@ -2483,15 +2234,6 @@ export interface SubagentsUpdateParams {
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
-  model?: string;
-  /**
-   * The provider whose credential serves model, for the built-in row: the id is stored naming it, the way config.set model stores the host's. Ignored for an acp row, whose values are the agent's own.
-   */
-  provider?: string;
-  /**
-   * Drop the row's own model, reverting to the agent's default. Wins over model when both are sent.
-   */
-  clear_model?: boolean;
 }
 export interface SubagentsUpdateResult {
   updated: boolean;
@@ -2530,7 +2272,7 @@ export interface SubagentsProbeResult {
 }
 export interface SubagentsTestParams {
   name: string;
-  source?: 'config' | 'preset' | 'vendored';
+  source?: 'config' | 'preset';
 }
 export interface SubagentsTestResult {
   ok: boolean;
@@ -2989,14 +2731,6 @@ export interface McpSnapshot1 {
    * The authorization URL this server is parked on, when it is. Carried on the pull because the `oauth.pending` notification that also carries it is dropped when no client is attached, which is every connect started at assembly time.
    */
   auth_url?: string;
-  /**
-   * How the server authenticates (ext.list rows only).
-   */
-  auth?: ('none' | 'apikey' | 'oauth') | null;
-  /**
-   * Whether it holds the credential that mode needs (ext.list rows only).
-   */
-  credentialed?: boolean | null;
 }
 export interface PlugRemoveParams {
   name: string;
@@ -3021,30 +2755,6 @@ export interface PlugAuthParams {
   name: string;
 }
 export interface PlugAuthResult {
-  name: string;
-  mcp?: McpSnapshot;
-}
-export interface PlugRetryParams {
-  name: string;
-}
-export interface PlugRetryResult {
-  name: string;
-  mcp?: McpSnapshot;
-}
-export interface PlugRevokeParams {
-  name: string;
-}
-export interface PlugRevokeResult {
-  name: string;
-  mcp?: McpSnapshot;
-}
-export interface PlugConfigureParams {
-  name: string;
-  form?: {
-    [k: string]: string;
-  };
-}
-export interface PlugConfigureResult {
   name: string;
   mcp?: McpSnapshot;
 }
@@ -3266,10 +2976,6 @@ export interface SettingsSetParams {
 export interface SettingsSetResult {
   applied: boolean;
   previous: JsonValue;
-  /**
-   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
-   */
-  warning?: string | null;
 }
 export interface SettingsUsageParams {
   /**
@@ -3277,23 +2983,9 @@ export interface SettingsUsageParams {
    */
   days?: number;
   session_key?: string | null;
-  /**
-   * First day (YYYY-MM-DD), inclusive; clamped to 90 days back.
-   */
-  from?: string | null;
-  /**
-   * Last day (YYYY-MM-DD), inclusive; today when absent.
-   */
-  to?: string | null;
 }
 export interface SettingsUsageResult {
   days: number;
-  from: string;
-  to: string;
-  /**
-   * One entry per day of the range, zeros for days without a file.
-   */
-  daily: DailyUsage[];
   llm: LlmUsage;
   tools: ToolUsage;
   session_key?: string | null;
@@ -3336,10 +3028,6 @@ export interface SettingsEverosSetParams {
 }
 export interface SettingsEverosSetResult {
   applied: boolean;
-  /**
-   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
-   */
-  warning?: string | null;
 }
 export interface ChannelsStatusParams {}
 export interface ChannelsStatusResult {
@@ -3458,49 +3146,6 @@ export interface FsUploadResult {
   abs_path: string;
   size: number;
 }
-export interface DeckTemplatesListParams {
-  /**
-   * False lists the names alone, without rendering a cover for each.
-   */
-  covers?: boolean;
-}
-export interface DeckTemplatesListResult {
-  templates: DeckTemplateRow[];
-  /**
-   * False when the deck engine is not installed here; the picker then stays hidden.
-   */
-  available: boolean;
-  /**
-   * True while a cover is still being drawn in the background; ask again for it.
-   */
-  pending?: boolean;
-}
-export interface DeckTemplatesPagesParams {
-  /**
-   * A row's name from deck.templates.list.
-   */
-  name: string;
-}
-export interface DeckTemplatesPagesResult {
-  /**
-   * Every page as a JPEG data URL, in order; empty where this host cannot render.
-   */
-  pages: string[];
-}
-export interface DeckTemplatesPickParams {
-  /**
-   * A row's name from deck.templates.list.
-   */
-  name: string;
-}
-export interface DeckTemplatesPickResult {
-  /**
-   * Workspace-relative path to hand the agent; uploads never return bytes.
-   */
-  path: string;
-  abs_path: string;
-  size: number;
-}
 export interface FsRevealParams {
   /**
    * Absolute, or relative to the session's working directory.
@@ -3601,6 +3246,17 @@ export interface MemoryListResult {
    * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
    */
   note?: string | null;
+}
+export interface MemoryDeleteParams {
+  kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
+  id: string;
+}
+export interface MemoryDeleteResult {
+  ok: boolean;
+  /**
+   * Deleting an episode also drops its derived facts and foresight.
+   */
+  removed: number;
 }
 export interface PlaybooksListParams {}
 export interface PlaybooksListResult {
@@ -3798,6 +3454,81 @@ export interface PlaybooksCreateResult {
    * Whether the live library loaded the new file, so it is usable in this process without a restart.
    */
   adopted: boolean;
+}
+export interface PlaybooksStintsListParams {}
+export interface PlaybooksStintsListResult {
+  stints: StintRow[];
+}
+export interface PlaybooksStintsGetParams {
+  stint_id: string;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface PlaybooksStintsGetResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+}
+export interface PlaybooksStintsStopParams {
+  stint_id: string;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface PlaybooksStintsStopResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+}
+export interface PlaybooksStintsPauseParams {
+  stint_id: string;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface PlaybooksStintsPauseResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+}
+export interface PlaybooksStintsResumeParams {
+  stint_id: string;
+}
+/**
+ * A stint after a verb opened a round in this engine, with what the driver said about it.
+ */
+export interface PlaybooksStintsResumeResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+  reply: string;
+}
+export interface PlaybooksStintsExtendParams {
+  stint_id: string;
+  rounds: number;
+}
+/**
+ * A stint after a verb opened a round in this engine, with what the driver said about it.
+ */
+export interface PlaybooksStintsExtendResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+  reply: string;
+}
+export interface PlaybooksStintsAnswerParams {
+  stint_id: string;
+  question: number;
+  text: string;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface PlaybooksStintsAnswerResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
 }
 export interface ApprovalRespondParams {
   approval_id: string;
@@ -4504,15 +4235,11 @@ export interface ShellExecResult {
 }
 export interface SkillsManageParams {
   /**
-   * One of list, inspect, search, browse, install, open.
+   * One of list, inspect, search, browse, install.
    */
   action: string;
   query?: string;
   page?: number;
-  /**
-   * `open`: a file name relative to the skill's directory.
-   */
-  file?: string | null;
 }
 export interface SkillsManageResult {
   /**
@@ -4522,7 +4249,7 @@ export interface SkillsManageResult {
     [k: string]: string[];
   };
   /**
-   * `inspect`: one skill's metadata (name, description, category, path, body, files, always, hub, hub_id, install), {} when unknown.
+   * `inspect`: one skill's metadata, {} when unknown.
    */
   info?: {
     [k: string]: JsonValue;
@@ -4547,10 +4274,6 @@ export interface SkillsManageResult {
    */
   installed?: boolean;
   name?: string;
-  /**
-   * `open`.
-   */
-  opened?: boolean | null;
 }
 export interface SubagentInterruptParams {
   subagent_id: string;
@@ -4576,124 +4299,6 @@ export interface SubagentCancelInstanceResult {
   session_key: string;
   agent: string;
   handle: string;
-}
-export interface TasksListParams {
-  /**
-   * Whose tasks to list. An empty or unknown key answers with an empty list, not an error.
-   */
-  session_key: string;
-  kind?: TaskKind;
-  id?: string;
-}
-export interface TasksListResult {
-  tasks: TaskRow[];
-}
-export interface ImportScanParams {}
-export interface ImportScanResult {
-  ready: boolean;
-  reason: string;
-  platforms: {
-    platform: string;
-    scannable: boolean;
-    memory_files: number;
-    conversations: number;
-    estimated_size: number;
-    skills: number;
-  }[];
-}
-export interface ImportRunParams {
-  platforms: string[];
-  tier: 'memory_files' | 'full';
-}
-export interface ImportRunResult {
-  started: boolean;
-  total: number;
-  detail: string;
-}
-export interface ImportStatusParams {}
-export interface ImportStatusResult {
-  running: boolean;
-  total: number;
-  submitted: number;
-  failed: number;
-  by_platform: {
-    [k: string]: {
-      total: number;
-      submitted: number;
-      failed: number;
-    };
-  };
-  current?: {
-    platform: string;
-    source_key: string;
-    sent: number;
-    total: number;
-  } | null;
-  phase?: {
-    kind: 'profile' | 'skills';
-    current: number;
-    total: number;
-  } | null;
-  phases?: {
-    status: 'pending' | 'done' | 'failed' | 'cancelled';
-    errors: string[];
-  } | null;
-  tier?: 'memory_files' | 'full' | null;
-  platforms?: string[];
-}
-export interface ImportStopParams {}
-export interface ImportStopResult {
-  stopped: boolean;
-}
-export interface MemoryDeleteParams {
-  kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
-  id: string;
-}
-export interface MemoryDeleteResult {
-  ok: boolean;
-  /**
-   * Deleting an episode also drops its derived facts and foresight.
-   */
-  removed: number;
-}
-export interface PlaybooksStintsListParams {}
-export interface PlaybooksStintsListResult {
-  stints: StintRow[];
-}
-export interface PlaybooksStintsGetParams {
-  stint_id: string;
-}
-/**
- * One plan, whole: every round it ran and everything it is waiting on.
- */
-export interface PlaybooksStintsGetResult {
-  stint: StintRow;
-  rounds: StintRoundRow[];
-  questions: StintQuestionRow[];
-}
-export interface PlaybooksStintsStopParams {
-  stint_id: string;
-}
-/**
- * One plan, whole: every round it ran and everything it is waiting on.
- */
-export interface PlaybooksStintsStopResult {
-  stint: StintRow;
-  rounds: StintRoundRow[];
-  questions: StintQuestionRow[];
-}
-export interface PlaybooksStintsAnswerParams {
-  stint_id: string;
-  question: number;
-  text: string;
-}
-/**
- * One plan, whole: every round it ran and everything it is waiting on.
- */
-export interface PlaybooksStintsAnswerResult {
-  stint: StintRow;
-  rounds: StintRoundRow[];
-  questions: StintQuestionRow[];
 }
 
 // ---------------------------------------------------------------------------
@@ -4731,9 +4336,6 @@ export interface RpcMethods {
   'model.disconnect': { params: ModelDisconnectParams; result: ModelDisconnectResult };
   'model.fetch_models': { params: ModelFetchModelsParams; result: ModelFetchModelsResult };
   'model.add_model': { params: ModelAddModelParams; result: ModelAddModelResult };
-  'model.add_models': { params: ModelAddModelsParams; result: ModelAddModelsResult };
-  'model.set_fields': { params: ModelSetFieldsParams; result: ModelSetFieldsResult };
-  'model.oauth_login': { params: ModelOauthLoginParams; result: ModelOauthLoginResult };
   'model.remove_model': { params: ModelRemoveModelParams; result: ModelRemoveModelResult };
   'model.endpoints': { params: ModelEndpointsParams; result: ModelEndpointsResult };
   'model.add_endpoint': { params: ModelAddEndpointParams; result: ModelAddEndpointResult };
@@ -4785,9 +4387,6 @@ export interface RpcMethods {
   'plug.remove': { params: PlugRemoveParams; result: PlugRemoveResult };
   'plug.toggle': { params: PlugToggleParams; result: PlugToggleResult };
   'plug.auth': { params: PlugAuthParams; result: PlugAuthResult };
-  'plug.retry': { params: PlugRetryParams; result: PlugRetryResult };
-  'plug.revoke': { params: PlugRevokeParams; result: PlugRevokeResult };
-  'plug.configure': { params: PlugConfigureParams; result: PlugConfigureResult };
   'skillhub.search': { params: SkillhubSearchParams; result: SkillhubSearchResult };
   'skillhub.detail': { params: SkillhubDetailParams; result: SkillhubDetailResult };
   'skillhub.install': { params: SkillhubInstallParams; result: SkillhubInstallResult };
@@ -4816,14 +4415,12 @@ export interface RpcMethods {
   'fs.dirs': { params: FsDirsParams; result: FsDirsResult };
   'fs.read': { params: FsReadParams; result: FsReadResult };
   'fs.upload': { params: FsUploadParams; result: FsUploadResult };
-  'deck.templates.list': { params: DeckTemplatesListParams; result: DeckTemplatesListResult };
-  'deck.templates.pages': { params: DeckTemplatesPagesParams; result: DeckTemplatesPagesResult };
-  'deck.templates.pick': { params: DeckTemplatesPickParams; result: DeckTemplatesPickResult };
   'fs.reveal': { params: FsRevealParams; result: FsRevealResult };
   'fs.open': { params: FsOpenParams; result: FsOpenResult };
   'deliverables.list': { params: DeliverablesListParams; result: DeliverablesListResult };
   'memory.stats': { params: MemoryStatsParams; result: MemoryStatsResult };
   'memory.list': { params: MemoryListParams; result: MemoryListResult };
+  'memory.delete': { params: MemoryDeleteParams; result: MemoryDeleteResult };
   'playbooks.list': { params: PlaybooksListParams; result: PlaybooksListResult };
   'playbooks.get': { params: PlaybooksGetParams; result: PlaybooksGetResult };
   'playbooks.credentials.get': { params: PlaybooksCredentialsGetParams; result: PlaybooksCredentialsGetResult };
@@ -4836,6 +4433,13 @@ export interface RpcMethods {
   'playbooks.delete': { params: PlaybooksDeleteParams; result: PlaybooksDeleteResult };
   'playbooks.run': { params: PlaybooksRunParams; result: PlaybooksRunResult };
   'playbooks.create': { params: PlaybooksCreateParams; result: PlaybooksCreateResult };
+  'playbooks.stints.list': { params: PlaybooksStintsListParams; result: PlaybooksStintsListResult };
+  'playbooks.stints.get': { params: PlaybooksStintsGetParams; result: PlaybooksStintsGetResult };
+  'playbooks.stints.stop': { params: PlaybooksStintsStopParams; result: PlaybooksStintsStopResult };
+  'playbooks.stints.pause': { params: PlaybooksStintsPauseParams; result: PlaybooksStintsPauseResult };
+  'playbooks.stints.resume': { params: PlaybooksStintsResumeParams; result: PlaybooksStintsResumeResult };
+  'playbooks.stints.extend': { params: PlaybooksStintsExtendParams; result: PlaybooksStintsExtendResult };
+  'playbooks.stints.answer': { params: PlaybooksStintsAnswerParams; result: PlaybooksStintsAnswerResult };
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult };
   'clarify.respond': { params: ClarifyRespondParams; result: ClarifyRespondResult };
   'confirm.respond': { params: ConfirmRespondParams; result: ConfirmRespondResult };
@@ -4889,16 +4493,6 @@ export interface RpcMethods {
   'subagent.interrupt': { params: SubagentInterruptParams; result: SubagentInterruptResult };
   'subagent.cancel_session': { params: SubagentCancelSessionParams; result: SubagentCancelSessionResult };
   'subagent.cancel_instance': { params: SubagentCancelInstanceParams; result: SubagentCancelInstanceResult };
-  'tasks.list': { params: TasksListParams; result: TasksListResult };
-  'import.scan': { params: ImportScanParams; result: ImportScanResult };
-  'import.run': { params: ImportRunParams; result: ImportRunResult };
-  'import.status': { params: ImportStatusParams; result: ImportStatusResult };
-  'import.stop': { params: ImportStopParams; result: ImportStopResult };
-  'memory.delete': { params: MemoryDeleteParams; result: MemoryDeleteResult };
-  'playbooks.stints.list': { params: PlaybooksStintsListParams; result: PlaybooksStintsListResult };
-  'playbooks.stints.get': { params: PlaybooksStintsGetParams; result: PlaybooksStintsGetResult };
-  'playbooks.stints.stop': { params: PlaybooksStintsStopParams; result: PlaybooksStintsStopResult };
-  'playbooks.stints.answer': { params: PlaybooksStintsAnswerParams; result: PlaybooksStintsAnswerResult };
 }
 
 /** The literal union of callable method names. */
@@ -4942,9 +4536,6 @@ export const RPC_METHODS = [
   "cron.set_enabled",
   "dag.get",
   "dag.node",
-  "deck.templates.list",
-  "deck.templates.pages",
-  "deck.templates.pick",
   "delegation.pause",
   "delegation.status",
   "deliverables.list",
@@ -4956,10 +4547,6 @@ export const RPC_METHODS = [
   "fs.reveal",
   "fs.upload",
   "image.attach",
-  "import.run",
-  "import.scan",
-  "import.status",
-  "import.stop",
   "input.detect_drop",
   "knowledge.bases.create",
   "knowledge.bases.delete",
@@ -4983,16 +4570,13 @@ export const RPC_METHODS = [
   "memory.stats",
   "model.add_endpoint",
   "model.add_model",
-  "model.add_models",
   "model.disconnect",
   "model.endpoints",
   "model.fetch_models",
-  "model.oauth_login",
   "model.options",
   "model.remove_endpoint",
   "model.remove_model",
   "model.save_key",
-  "model.set_fields",
   "model.set_protocol",
   "playbooks.create",
   "playbooks.credentials.clear",
@@ -5006,16 +4590,16 @@ export const RPC_METHODS = [
   "playbooks.run",
   "playbooks.set_enabled",
   "playbooks.stints.answer",
+  "playbooks.stints.extend",
   "playbooks.stints.get",
   "playbooks.stints.list",
+  "playbooks.stints.pause",
+  "playbooks.stints.resume",
   "playbooks.stints.stop",
   "playbooks.validate",
   "plug.auth",
-  "plug.configure",
   "plug.install",
   "plug.remove",
-  "plug.retry",
-  "plug.revoke",
   "plug.toggle",
   "plughub.detail",
   "plughub.search",
@@ -5097,7 +4681,6 @@ export const RPC_METHODS = [
   "system.ping",
   "system.upgrade",
   "system.version",
-  "tasks.list",
   "terminal.resize",
   "tools.configure",
   "turn.cancel",

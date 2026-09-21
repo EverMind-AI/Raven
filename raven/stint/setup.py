@@ -40,6 +40,17 @@ class Layout:
     wrote: list[str] = field(default_factory=list)
     """Paths written, relative to the project. Empty when it was already set up."""
 
+    kept: list[str] = field(default_factory=list)
+    """Paths the recipe would have written and found already there.
+
+    Reported because "what this run wrote" is the wrong question on the second
+    attempt: a run refused after the layout -- for a check nobody had answered,
+    for a specification nobody had written -- leaves the layout in the tree,
+    uncommitted, and the attempt after it writes nothing and finds its own
+    files there as somebody's unfinished work. Every fresh project that had to
+    be asked something was refused on the retry, for the files the first try
+    had written."""
+
     spec: str = ""
     """The document the roles will stint from, relative to the project."""
 
@@ -88,6 +99,7 @@ def lay_out(project: Path, recipe: str) -> Layout:
 
     found = Layout(
         wrote=list(done.created),
+        kept=list(done.kept),
         # From the candidate rather than from what `init` recorded: the link it
         # writes is spelled relative to `.stint/`, so on a project already set
         # up that answer comes back as `../docs/PRD.md`. The choice is this

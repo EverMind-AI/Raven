@@ -1,7 +1,7 @@
 """What a stint does to one round of its own graph: measure, undo, hand back.
 
-Three of the four layers of a boundary live here, and they are three because
-one is not enough:
+The three layers of a boundary all live here, and they are three because one
+is not enough:
 
 * the role is **told** what it owns, which the compiler does;
 * what it wrote is **measured** against that when it stops, and what it had no
@@ -9,9 +9,10 @@ one is not enough:
 * its own checks are **run**, and a failure it can fix is handed straight back
   to it rather than to a person -- also here.
 
-The fourth, refusing a write before it happens, is the tool gate, and it only
-sees writes that go through a tool. A role that shells out goes around it, which
-is exactly why the measuring pass exists as well.
+There is no layer that refuses a write before it lands. A charter narrows a
+role's tools only where the playbook declares one, ``owns`` is not turned into a
+charter, and a role that shells out would go around a tool gate anyway -- which
+is why the measuring pass is the boundary rather than a backstop to one.
 
 Everything in this module runs on the graph runner's own hooks, inside the round,
 with no turn and nobody watching. That shapes two decisions:
@@ -29,6 +30,7 @@ with no turn and nobody watching. That shapes two decisions:
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -46,7 +48,7 @@ from raven.stint.git import HistoryError, ProjectGit
 from raven.stint.journal import JOURNAL, append_entry
 from raven.stint.ownership import Role, Roster
 from raven.stint.record import StintRecord, StintStore
-from raven.stint.verify import CheckResult, CheckSpec, resolve_display, run_checks, start_display
+from raven.stint.verify import CheckResult, CheckSpec, resolve_checks, resolve_display, run_checks, start_display
 
 __all__ = ["RoundContext", "roster_from"]
 
@@ -113,8 +115,16 @@ class RoundContext:
         return max((role.max_handbacks for role in (self.spec.roles or [])), default=0)
 
     def role_of(self, node_id: str) -> RoleEntry | None:
-        prefix = f"{self.spec.name}-r{self.index:02d}-"
-        label = node_id[len(prefix) :] if node_id.startswith(prefix) else node_id
+        """The role a node of this round runs as, whatever attempt the round is on.
+
+        A round taken up again submits its nodes as ``<playbook>-r02x1-<role>``
+        (see :func:`raven.playbook.stint.namespace`), and a reader that knew only
+        the first attempt's spelling answered None for every one of them -- so
+        on a resumed round nothing was enforced, no check ran, and no role's
+        work was committed, silently, while the round reported completed.
+        """
+        match = re.match(rf"^{re.escape(self.spec.name)}-r{self.index:02d}(?:x\d+)?-(.+)$", node_id)
+        label = match.group(1) if match else node_id
         for role in self.spec.roles or []:
             if role.label == label:
                 return role
@@ -181,7 +191,7 @@ class RoundContext:
             )
         self._journal(role, output)
         self._commit(node.id, role, report)
-        self._record(report, failures)
+        self._record(report, failures, handbacks=spent, role=role.label, node_id=node.id)
         return Verdict(accomplished=True)
 
     async def adjudicate(self, node_id: str, report: str) -> tuple[str, str]:
@@ -236,15 +246,34 @@ class RoundContext:
                 grade=roster_grader(roster, role.label, self.index),
                 quarantine=quarantine,
                 stage_base=self._bases.get(node_id, ""),
+                allowed=self._still_nobodys(repository, self._bases.get(node_id, "")),
                 artifacts=roster.artifacts(round_index=self.index),
-                commit_revert=lambda: repository.commit(
+                commit_revert=lambda paths: repository.commit(
                     f"revert(round-{self.index:02d}): {role.label} wrote where it may not",
                     author=role.label,
+                    paths=paths,
                 ),
             )
         except (HistoryError, OSError) as exc:
             logger.error("stint {} could not measure what {} wrote: {}", self.record.stint_id, role.label, exc)
             return None
+
+    def _still_nobodys(self, repository: ProjectGit, base: str) -> list[str]:
+        """The paths the stint opened over that no round has committed yet.
+
+        What the tree already held, uncommitted, when the stint opened it -- the
+        standing orders the setup pass wrote -- is nobody's write, and the first
+        role of round one has no earlier commit to be measured from. Without the
+        exemption those files are graded as its writes and quarantined, and the
+        next round cannot read them.
+
+        But the exemption is for as long as the file is uncommitted, not for the
+        stint's life: the first role's commit takes everything in the tree with
+        it, so from the second stage on a change to `.stint/qa.md` has a base to
+        be measured from and is a role's edit like any other. Kept on the record
+        as the list it was, and narrowed here to what the base does not hold.
+        """
+        return [path for path in self.record.untracked_at_start if not repository.known_at(base, path)]
 
     async def _verify(self, role: RoleEntry) -> list[CheckResult]:
         """The role's checks, run off the event loop.
@@ -267,16 +296,20 @@ class RoundContext:
         if not role.verify_after:
             return []
         declared = {entry.name: entry for entry in (self.spec.verify or [])}
-        specs = [
-            CheckSpec(
-                name=name,
-                command=declared[name].run,
-                timeout_sec=declared[name].timeout_sec,
-                needs_display=declared[name].needs_display,
+        wanted = [declared[name] for name in role.verify_after if name in declared]
+        # Against the project, not this round's tree: a check's command is a fact
+        # about the repository, and a worktree is a copy that may not carry the
+        # file it was written into. `start` refuses a run whose checks nobody has
+        # answered, so anything missing here appeared between then and now.
+        project = Path(self.record.project or self.workdir)
+        specs, missing = resolve_checks(project, self.spec.name, wanted)
+        for name in missing:
+            logger.error(
+                "stint {} round {}: nothing says what {!r} runs here, so it was not measured",
+                self.record.stint_id,
+                self.index,
+                name,
             )
-            for name in role.verify_after
-            if name in declared
-        ]
         if not specs:
             return []
         display, screen = self._screen(specs)
@@ -357,14 +390,39 @@ class RoundContext:
         except (HistoryError, OSError) as exc:
             logger.warning("stint {} could not commit {}'s work: {}", self.record.stint_id, role.label, exc)
 
-    def _record(self, report: EnforceReport | None, failures: Sequence[CheckResult]) -> None:
+    def _record(
+        self,
+        report: EnforceReport | None,
+        failures: Sequence[CheckResult],
+        *,
+        handbacks: int = 0,
+        role: str = "",
+        node_id: str = "",
+    ) -> None:
         """Put this role's findings on the round, where the next round reads them.
 
         Written as each role finishes rather than once at the end: the round may
         be interrupted, and a finding only in memory is a finding nobody has.
+
+        The role is written down as finished under the node it ran as, which is
+        what `resume` reads to know what not to run again. The node registry
+        says the same thing, but from a different process -- a terminal, an RPC
+        with no turn -- the registry of the wrong conversation was read, and a
+        finished role was either named where the graph could not see it or run
+        a second time. The record travels with the stint; the registry does not.
+
+        The handbacks a role spent are written down as well, because the report
+        that reaches here is the last attempt's and a clean one says nothing
+        about the two before it: a QA handed back three times for the same
+        append read, on the record, as a QA that stayed inside its paths.
         """
         existing = self.record.round(self.index)
         entry = self.record.open_round(self.index, existing.run_id if existing is not None else "")
+        if node_id and role:
+            entry.finished[role] = node_id
+        if handbacks:
+            self.record.handbacks[f"r{self.index:02d}-{role}"] = handbacks
+            entry.violations.append(f"{role} was handed back {handbacks} time(s) before this attempt")
         if report is not None:
             entry.violations.extend(report.violations)
         entry.verify = [result.to_dict() for result in self._results.values()]

@@ -311,6 +311,11 @@ class PlaybookRuntime:
         return self._executor.dag_tool
 
     @property
+    def rounds(self) -> Any:
+        """The multi-round driver, for a host verb that takes a stint up in this process."""
+        return self._executor.rounds
+
+    @property
     def empty(self) -> bool:
         """Whether there is anything to offer. Disabled entries do not count:
         the tool exists to be called, and one that can only answer "that is

@@ -19,5 +19,7 @@ DS.playbooks = {
   stints: () => rpc.call('playbooks.stints.list', {}).then((r) => (r && r.stints) || []),
   stint: (stint_id) => rpc.call('playbooks.stints.get', { stint_id }),
   stopPlan: (stint_id) => rpc.call('playbooks.stints.stop', { stint_id }),
+  pausePlan: (stint_id) => rpc.call('playbooks.stints.pause', { stint_id }),
+  resumePlan: (stint_id) => rpc.call('playbooks.stints.resume', { stint_id }),
   answerPlan: (stint_id, question, text) => rpc.call('playbooks.stints.answer', { stint_id, question, text }),
 };

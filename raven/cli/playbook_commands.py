@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import sys
 import time
 from collections.abc import Awaitable
 from pathlib import Path
@@ -173,6 +174,70 @@ def _located(path: Path, text: str, error: str) -> str:
     if len(hits) == 1:
         return f"{path}:{hits[0]}: {error}"
     return f"{path}: {error}"
+
+
+def _skeleton_path() -> Path:
+    """The shipped stint skeleton, beside the agent scaffold `agents new` copies."""
+    import raven
+
+    return Path(raven.__file__).resolve().parent / "templates" / "stint_skeleton.md"
+
+
+@playbook_app.command("new-stint")
+def playbook_new_stint(
+    name: str = typer.Argument(..., help="Name for the new playbook (its directory name)"),
+    description: str = typer.Option("", "--description", "-d", help="One line: when to use it"),
+):
+    """Write a `mode: stint` skeleton into the library for you to fill in.
+
+    The other modes are generated -- `playbook create` hands a description to a
+    model and the model writes the spec. A stint is not, and deliberately: its
+    `verify` commands are shell that runs on this machine every round, under one
+    approval that covers the whole run, so nothing a model writes gets to
+    schedule them (`tests/test_playbook_generator.py` holds that line).
+
+    Which left the only way to make one being to copy an existing file and find
+    out field by field what this build accepts. This is the cheap half of the
+    answer: no model, no network, a shape with every field explained and the
+    traps named next to the field that springs them. It validates as written, so
+    the first `raven playbook validate` reports what you changed rather than
+    where you started.
+    """
+    import re
+
+    from raven.playbook.types import NAME_RE
+
+    if not re.fullmatch(NAME_RE, name):
+        err_console.print(f"[red]Playbook names are kebab-case ({escape(NAME_RE)}); got {escape(repr(name))}.[/red]")
+        raise typer.Exit(code=1)
+    config = _load_config()
+    store = _store(config)
+    if (origin := store.origin_of(name)) is not None:
+        err_console.print(f"[red]Playbook {escape(repr(name))} already exists ({escape(origin)}).[/red]")
+        raise typer.Exit(code=1)
+
+    said = description.strip() or f"what {name} is for -- one line, written for retrieval"
+    body = (
+        _skeleton_path()
+        .read_text(encoding="utf-8")
+        .replace("{{name}}", name)
+        .replace("{{description}}", said)
+        .replace("{{task_summary}}", f"one round of {name}")
+    )
+    path = Path(store.root) / name / "playbook.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+    console.print(f"[green]Wrote[/green] {escape(str(path))}")
+    console.print(
+        "Two roles, three rounds, nothing checked -- a shape, not a plan. Fill in the "
+        "promptTemplates and what each role owns, then:"
+    )
+    console.print(f"  raven playbook validate {escape(name)}")
+    console.print(
+        "[dim]It is usable as soon as it validates; no enabling step. Read it before you run it -- "
+        "one approval covers every round.[/dim]"
+    )
 
 
 @playbook_app.command("create")
@@ -426,6 +491,7 @@ def playbook_run(
         guide_skill_id=None,
         state_for=manager.instance_state,
         model_for=manager.session_model_for,
+        ask=ask_at_the_terminal,
     )
     executor = PlaybookExecutor(
         dag_tool=dag_tool,
@@ -493,7 +559,8 @@ def playbook_run(
                 # Inside the pre-flight, not after it: a stint's roles reach the
                 # servers it declared, and holding the process open outside this
                 # scope would hold it open with the connections already closed.
-                if plan is not None and getattr(spec, "mode", "") == "stint":
+                # A refused stint opened nothing, and there is nothing to hold for.
+                if plan is not None and getattr(spec, "mode", "") == "stint" and executor.rounds.holding():
                     console.print(plan.reply, markup=False, soft_wrap=True)
                     console.print(
                         "[dim]Holding this terminal: a stint's rounds run in this process, and nothing "
@@ -501,7 +568,7 @@ def playbook_run(
                         "`raven playbook stints resume` takes it up.[/dim]"
                     )
                     await hold_until_the_stints_end(executor.rounds)
-                    return None
+                    held.append(plan)
                 return plan
             finally:
                 # The source outlives nothing: its connections close with the
@@ -509,10 +576,16 @@ def playbook_run(
                 # grants against a manager that has already let go.
                 manager.set_mcp_source(None)
 
+    held: list = []
     plan = asyncio.run(run_with_mcp())
     if plan is None:
         err_console.print(f"[red]Playbook {escape(repr(name))} did not load; see the log for the parse error.[/red]")
         raise typer.Exit(code=1)
+    if held:
+        # Printed before the hold, and a stint that ran to its end is not a
+        # failure: returning the load sentinel here told a script a finished
+        # stint had not loaded, with exit code 1.
+        return
     if plan.kind == "gaps":
         # Named as an unrunnable-here condition rather than a generic failure: the
         # playbook is fine, this entry point just has nobody to fill it in.
@@ -646,7 +719,10 @@ def plan_list():
         console.print("[dim]No stints have been started here.[/dim]")
         return
     table = Table(title=f"Stints ({len(records)})")
-    table.add_column("Stint", style="cyan")
+    # Folded, never truncated: the id is what every other verb takes, and a
+    # reader who was shown `stint-20260920T08584423470...` has to go and find
+    # the file to learn the rest.
+    table.add_column("Stint", style="cyan", overflow="fold", no_wrap=False)
     table.add_column("Playbook", style="green")
     table.add_column("Round")
     table.add_column("State")
@@ -787,6 +863,7 @@ def _stint_driver(config, home: Path):
         guide_skill_id=None,
         state_for=manager.instance_state,
         session_dir=lambda _key: home,
+        ask=ask_at_the_terminal,
     )
     driver = PlaybookExecutor(dag_tool=dag_tool, workspace=Path.cwd()).rounds
     if driver is None:
@@ -809,14 +886,68 @@ async def hold_until_the_stints_end(driver, *, every_sec: float = 2.0) -> None:
     Ctrl-C leaves the stint where it is. The round in flight dies with this
     process and the record stops being touched, so the next reader marks it
     interrupted and `stints resume` takes it up from the node it reached.
+
+    Asked of the driver, not of the records. A record is `live` whenever *some*
+    process holds it, and after a refusal -- `resume` of a stint another raven
+    is beating for -- that process is not this one: holding on it printed the
+    refusal and then never came back, while the banner told the person to run
+    the command it was blocking. An interrupted record never stops being live
+    at all.
     """
     import asyncio as _asyncio
 
-    store = driver.store_for(None)
     while True:
         await _asyncio.sleep(every_sec)
-        if not [record for record in store.list() if record.live]:
+        if not driver.holding():
             return
+
+
+async def ask_at_the_terminal(_conversation: str, question: str) -> bool:
+    """The graph tool's approval gate, for a run whose person is at this terminal.
+
+    A stint is thirty rounds of shell from a file somebody handed over, and the
+    gate is what stands between that file and running. Built with no ``ask``,
+    the tool took the no-channel branch and approved on the person's behalf --
+    without so much as rendering the text that names the round budget and every
+    command. From a terminal the person is right here, so they are asked; with
+    no terminal to ask at, the answer is no, said out loud.
+    """
+    if not sys.stdin.isatty():
+        err_console.print(
+            "[red]This run asks for approval and there is no terminal to ask at, so it was not run. "
+            "Run it from an interactive terminal, or start it from a conversation.[/red]"
+        )
+        return False
+    console.print(question, markup=False, soft_wrap=True)
+    return await asyncio.to_thread(typer.confirm, "Run it?", default=False)
+
+
+def _relayed(method: str, params: dict) -> bool:
+    """Send a round-opening verb to the raven serving the page, if one is up.
+
+    A round runs in the process that opens it. Opened here, it would run in this
+    terminal, report to nobody, and end when the terminal does -- and when the
+    terminal is a model's shell tool, that is the tool's timeout. The page's
+    raven has the driver, the conversation the stint was started in, and the
+    announcer that conversation reads, so the verb goes there when it can.
+    False means no page is being served and the verb runs here as before.
+    """
+    from raven.cli._hosted_rpc import call, hosted_page
+
+    hosted = hosted_page()
+    if hosted is None:
+        return False
+    port, token = hosted
+    console.print(f"[dim]Sent to the raven serving the page on port {port}; the round runs there.[/dim]")
+    try:
+        result = call(port, token, method, params)
+    except RuntimeError as exc:
+        err_console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(code=1) from exc
+    reply = str((result or {}).get("reply") or "").strip()
+    if reply:
+        console.print(escape(reply))
+    return True
 
 
 def _held_here(driver, awaited: "Awaitable[str]") -> str:
@@ -825,7 +956,7 @@ def _held_here(driver, awaited: "Awaitable[str]") -> str:
 
     async def go() -> str:
         text = await awaited
-        if [record for record in driver.store_for(None).list() if record.live]:
+        if driver.holding():
             console.print(text, markup=False, soft_wrap=True)
             console.print(
                 "[dim]Holding this terminal: a stint's rounds run in this process, and nothing else "
@@ -862,6 +993,8 @@ def plan_extend(
 
     config = _load_config()
     home, _, record = _require_stint(config, stint_id)
+    if _relayed("playbooks.stints.extend", {"stint_id": stint_id, "rounds": rounds}):
+        return
     driver = _stint_driver(config, home)
     answer = _held_here(driver, driver.extend(stint_id, rounds, _stint_session(record)))
     if answer:
@@ -879,14 +1012,27 @@ def stint_sweep():
     """
     config = _load_config()
     taken: list[str] = []
-    for home, _store in _stint_homes(config):
-        driver = _stint_driver(config, home)
-        taken.extend(asyncio.run(driver.sweep(None)))
+
+    async def go() -> None:
+        # One loop for every home: the rounds this takes up run in this process,
+        # and a loop closed per home closed under the rounds it had just opened
+        # -- the receipt said "took up", the record said running, nothing ran.
+        drivers = [_stint_driver(config, home) for home, _store in _stint_homes(config)]
+        for driver in drivers:
+            taken.extend(await driver.sweep(None))
+        for stint_id in taken:
+            console.print(f"[green]took up[/green] {escape(stint_id)}")
+        if any(driver.holding() for driver in drivers):
+            console.print(
+                "[dim]Holding this terminal: the rounds taken up run in this process. "
+                "Ctrl-C stops them where they are; `stints resume` takes them up.[/dim]"
+            )
+            while any(driver.holding() for driver in drivers):
+                await asyncio.sleep(2.0)
+
+    asyncio.run(go())
     if not taken:
         console.print("[dim]Nothing here was left in flight.[/dim]")
-        return
-    for stint_id in taken:
-        console.print(f"[green]took up[/green] {escape(stint_id)}")
 
 
 @stints_app.command("resume")
@@ -905,6 +1051,8 @@ def plan_resume(stint_id: str = typer.Argument(..., help="Stint id, as listed"))
     # it would make that instruction false.
     if not record.unfinished:
         console.print(f"{escape(stint_id)} is {escape(record.status)} and has nothing left to take up.")
+        return
+    if _relayed("playbooks.stints.resume", {"stint_id": stint_id}):
         return
     driver = _stint_driver(config, home)
     answer = _held_here(driver, driver.resume(stint_id, _stint_session(record)))

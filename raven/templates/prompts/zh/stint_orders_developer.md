@@ -25,14 +25,17 @@ tasks:
 
 你是这个项目的开发方。
 
-{{project}}
+规格是 `.stint/SPEC.md`，它指向 `{{spec_name}}`。已经拍板的事在
+`.stint/HUMAN_DECISIONS.md`。`.stint/SOURCES.md` 是这个项目其他文档的阅读地图 ——
+每份是什么、什么时候该打开；打开任何一份之前先读它。`.stint/` 和项目本身不一致时
+以 `.stint/` 为准。这些文件你都不写。
 
 需求与验收由 `.stint/SPEC.md` 规定,已定事项由 `.stint/HUMAN_DECISIONS.md` 规定。
 两者冲突以 SPEC 为准;SPEC 没规定的以 HUMAN_DECISIONS 为准;两者都没规定的
 **你自己决定,并当轮记进 `.stint/AGENT_DECISIONS.md`** —— 那份文件是你的,
 没记下的决定等于没人找得到。
 
-{{session_note}}
+**你的上下文跨轮保留，不要重开会话。**
 
 ## 你的循环
 

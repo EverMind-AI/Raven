@@ -1226,20 +1226,77 @@ function OauthRow({
   )
 }
 
+/* ── the runs a playbook started ────────────────────────────────────── */
+
+/* A run's standing, as one word. The status is the record's own vocabulary and
+   the pill's class, so a new status draws a plain pill rather than nothing. */
+function StatusPill({ status }: { status: string }): JSX.Element {
+  return <span className={`pnstat ${status}`}>{t(`gui.pb.stint_status_${status}`)}</span>
+}
+
+/* Coarse on purpose: a run is measured in rounds of many minutes, and a card
+   that said "3 minutes ago" then "4 minutes ago" would ask to be watched. */
+function ago(ms: number): string {
+  const mins = Math.max(0, Math.round((Date.now() - ms) / 60000))
+  if (mins < 1) return t('gui.pb.when_now')
+  if (mins < 60) return t('gui.pb.when_min', { n: String(mins) })
+  const hours = Math.round(mins / 60)
+  if (hours < 48) return t('gui.pb.when_hour', { n: String(hours) })
+  return t('gui.pb.when_day', { n: String(Math.round(hours / 24)) })
+}
+
+function tail(path: string): string {
+  const parts = path.split('/').filter(Boolean)
+  return parts.length > 2 ? '…/' + parts.slice(-2).join('/') : path
+}
+
+/* How far into its budget a run is. The bar is the whole budget and the fill
+   the rounds opened so far; a run with no budget on record shows a full quiet
+   bar and the count alone, because a fraction of nothing is not a fraction. */
+function Progress({ row }: { row: StintRow }): JSX.Element {
+  const max = row.max_rounds || 0
+  const done = row.round_index
+  const pct = max ? Math.min(100, Math.round((done / max) * 100)) : 100
+  return (
+    <div className="pnprog" role="progressbar" aria-valuenow={done} aria-valuemin={0} aria-valuemax={max || undefined}>
+      <div className="pnbar">
+        <div className={`pnfill${row.live ? ' live' : ''}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="pnround">
+        {max ? t('gui.pb.stint_round', { n: String(done), max: String(max) }) : t('gui.pb.stint_rounds_run', { n: String(done) })}
+      </span>
+    </div>
+  )
+}
+
+function When({ row }: { row: StintRow }): JSX.Element {
+  return (
+    <div className="pnmeta">
+      {t('gui.pb.stint_started', { when: ago(row.started_at_ms) })}
+      {row.ended_at_ms ? ` · ${t('gui.pb.stint_ended', { when: ago(row.ended_at_ms) })}` : ''}
+    </div>
+  )
+}
+
 function PlanCard({ row }: { row: StintRow }): JSX.Element {
   return (
-    <button className={`pbcard pncard${row.live ? ' live' : ''}`} type="button" onClick={() => void store.openStint(row.stint_id)}>
+    <button
+      className={`pbcard pncard ${row.status}${row.live ? ' live' : ''}`}
+      type="button"
+      onClick={() => void store.openStint(row.stint_id)}
+    >
       <div className="pbtop">
         <Tile name={row.playbook} />
         <span className="pbname">{row.playbook}</span>
-        {row.live ? <span className="pnlive">{t('gui.pb.stint_live')}</span> : null}
+        <StatusPill status={row.status} />
       </div>
-      <div className="pnmeta">
-        {row.max_rounds
-          ? t('gui.pb.stint_round', { n: String(row.round_index), max: String(row.max_rounds) })
-          : t('gui.pb.stint_rounds_run', { n: String(row.round_index) })}
+      <Progress row={row} />
+      <When row={row} />
+      <div className="pndim" title={row.workdir}>
+        {tail(row.workdir)}
+        {row.branch ? ` · ${row.branch}` : ''}
       </div>
-      {row.stop_reason ? <div className="pndim">{row.stop_reason}</div> : null}
+      {row.stop_reason ? <div className="pndim pnreason">{row.stop_reason}</div> : null}
       {row.open_questions ? (
         <div className="pnwait">{t('gui.pb.stint_waiting', { n: String(row.open_questions) })}</div>
       ) : null}
@@ -1295,43 +1352,96 @@ function PlanQuestion({
   )
 }
 
+/* One check as the round ran it: `<name>=<status>` off the record, drawn as
+   the name with the outcome as colour and the whole pair on hover. */
+function Check({ text }: { text: string }): JSX.Element {
+  const eq = text.indexOf('=')
+  const name = eq < 0 ? text : text.slice(0, eq)
+  const status = eq < 0 ? '' : text.slice(eq + 1)
+  const tone = /^(ok|pass|passed|success)$/.test(status) ? ' ok' : /^(fail|failed|timeout|error)$/.test(status) ? ' bad' : ''
+  return (
+    <span className={`pncheck${tone}`} title={text}>
+      {name}
+    </span>
+  )
+}
+
 function StintDetailView({ detail }: { detail: StintDetail }): JSX.Element {
   const stint = detail.stint
+  const rounds = detail.rounds
   return (
     <>
-      <div className="pmhero">
+      <div className="pmhero pnhero">
         <button className="mini" type="button" onClick={store.closePlan}>
           {t('gui.pb.stint_back')}
         </button>
-        <h3>{stint.playbook}</h3>
-        {stint.live ? <span className="pnlive">{t('gui.pb.stint_live')}</span> : null}
-        {stint.live ? (
-          <button className="mini" type="button" onClick={() => void store.stopPlan(stint.stint_id)}>
-            {t('gui.pb.stint_stop')}
-          </button>
-        ) : null}
+        <Tile name={stint.playbook} />
+        <div className="pnhead">
+          <h3>{stint.playbook}</h3>
+          <StatusPill status={stint.status} />
+        </div>
+        <div className="pnacts">
+          {stint.live ? (
+            <button className="mini" type="button" onClick={() => void store.pausePlan(stint.stint_id)}>
+              {t('gui.pb.stint_pause')}
+            </button>
+          ) : null}
+          {stint.live ? (
+            <button className="mini" type="button" onClick={() => void store.stopPlan(stint.stint_id)}>
+              {t('gui.pb.stint_stop')}
+            </button>
+          ) : null}
+          {stint.status === 'paused' || stint.status === 'interrupted' ? (
+            <button className="mini gold" type="button" onClick={() => void store.resumePlan(stint.stint_id)}>
+              {t('gui.pb.stint_resume')}
+            </button>
+          ) : null}
+        </div>
       </div>
-      <div className="pndim">
-        {stint.stint_id} - {t('gui.pb.stint_tree')} {stint.workdir}
+      <Progress row={stint} />
+      <When row={stint} />
+      <div className="pndim pnwhere">
+        <span className="pnid">{stint.stint_id}</span> · {t('gui.pb.stint_tree')} {stint.workdir}
         {stint.branch ? ` (${stint.branch})` : ''}
       </div>
-      {stint.stop_reason ? <div className="pndim">{stint.stop_reason}</div> : null}
+      {stint.stop_reason ? <div className="pndim pnreason">{stint.stop_reason}</div> : null}
       {stint.live ? <div className="pndim">{t('gui.pb.stint_stop_note')}</div> : null}
-      <table className="pntable">
-        <tbody>
-          {detail.rounds.map(round => (
-            <tr key={`${round.index}-${round.attempt}`}>
-              <td className="pnnum">{round.index}</td>
-              <td>{round.status}</td>
-              <td className="pndim">{round.checks.join(', ') || '-'}</td>
-              <td className="pndim">
-                {round.violations.length ? t('gui.pb.stint_undone', { n: String(round.violations.length) }) : ''}
-              </td>
+      {rounds.length ? (
+        <table className="pntable">
+          <thead>
+            <tr>
+              <th>{t('gui.pb.stint_col_round')}</th>
+              <th>{t('gui.pb.stint_col_attempt')}</th>
+              <th>{t('gui.pb.stint_col_status')}</th>
+              <th>{t('gui.pb.stint_col_checks')}</th>
+              <th>{t('gui.pb.stint_col_undone')}</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-      {detail.rounds.flatMap(round =>
+          </thead>
+          <tbody>
+            {rounds.map(round => (
+              <tr key={`${round.index}-${round.attempt}`}>
+                <td className="pnnum">{round.index}</td>
+                <td className="pndim">{/* `attempt` counts re-submissions from nought, so the second try is attempt 1. */}
+                  {round.attempt ? t('gui.pb.stint_attempt', { n: String(round.attempt + 1) }) : ''}</td>
+                <td>
+                  <StatusPill status={round.status} />
+                </td>
+                <td>
+                  <div className="pnchecks">
+                    {round.checks.length ? round.checks.map(check => <Check key={check} text={check} />) : <span className="pndim">-</span>}
+                  </div>
+                </td>
+                <td className="pndim">
+                  {round.violations.length ? t('gui.pb.stint_undone', { n: String(round.violations.length) }) : ''}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div className="empty-note">{t('gui.pb.stint_no_rounds')}</div>
+      )}
+      {rounds.flatMap(round =>
         round.violations.map((note, i) => (
           <div className="pnviol" key={`${round.index}-${i}`}>
             {round.index}: {note}
@@ -1378,6 +1488,14 @@ export function PlaybooksApp(): JSX.Element {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [s.detail, s.pickedNode])
+  /* A run moves while its tab is open. Read again while anything is live, and
+     only then: a page of finished runs asks for nothing. */
+  const moving = s.view === 'stints' && !s.openName && ((s.stints || []).some(row => row.live) || Boolean(s.openStint?.stint.live))
+  useEffect(() => {
+    if (!moving) return
+    const id = window.setInterval(() => void store.refreshStints(), 5000)
+    return () => window.clearInterval(id)
+  }, [moving])
 
   if (s.openName && s.detail) return <Detail detail={s.detail} />
   if (s.openName) return <div className="empty-note">{t('gui.pb.reading')}</div>

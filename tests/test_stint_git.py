@@ -512,3 +512,68 @@ def test_a_non_ascii_path_is_stattable_in_the_footprint(project: Path) -> None:
     rows = {name: size for name, size, _mtime in git.footprint()}
 
     assert rows[_QUOTED_NAME] == len(body.encode("utf-8"))
+
+
+def test_the_host_s_own_directory_is_not_part_of_the_tree(tmp_path: Path) -> None:
+    """`.raven/shadow.git/` is the per-turn checkpoint, written into whatever
+    directory the host is working. On the isolation that runs in the project
+    itself that is the tree a round commits, and a whole second git repository
+    went in under `round(01): planner` -- 25 files of hooks and config.
+    """
+    project = tmp_path / "project"
+    (project / ".raven" / "shadow.git" / "hooks").mkdir(parents=True)
+    (project / ".raven" / "shadow.git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (project / "src").mkdir()
+    (project / "src" / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    git = ProjectGit(project)
+    git.ensure_repo()
+
+    assert git.changed() == (), "an untracked host directory would make the tree dirty forever"
+    assert ".raven" not in git._run("ls-files").stdout, "it must not be staged either"
+    assert (project / ".raven" / "shadow.git" / "HEAD").is_file(), "and it must still be there"
+
+
+def test_the_project_s_own_files_are_still_seen(tmp_path: Path) -> None:
+    """The exclusion is one directory, not a habit of ignoring things."""
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "NOTES.md").write_text("hello\n", encoding="utf-8")
+    git = ProjectGit(project)
+    git.ensure_repo()
+    (project / "NOTES.md").write_text("hello again\n", encoding="utf-8")
+    (project / ".raven").mkdir()
+    (project / ".raven" / "junk").write_text("x\n", encoding="utf-8")
+
+    assert git.changed() == ("NOTES.md",)
+
+
+def test_a_path_the_base_carries_is_known_there_and_a_later_one_is_not(project: Path) -> None:
+    git = ProjectGit(project)
+    git.ensure_repo()
+    base = git.head()
+    (project / "later.md").write_text("after the base\n", encoding="utf-8")
+    git.commit("later")
+
+    assert git.known_at(base, "project/main.gd")
+    assert not git.known_at(base, "later.md")
+    assert not git.known_at("", "project/main.gd"), "no base knows nothing"
+
+
+def test_build_litter_stays_out_of_a_commit_whatever_the_ignore_file_says(project: Path) -> None:
+    """The ignore file is written only for a repository this class created. A
+    project the person initialised keeps theirs, and a round's commit carried
+    `src/__pycache__/*.pyc` for having run the code it had just written."""
+    git = ProjectGit(project)
+    git._run("init", "--quiet")
+    (project / "src").mkdir()
+    (project / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (project / "src" / "__pycache__").mkdir()
+    (project / "src" / "__pycache__" / "a.pyc").write_bytes(b"\x00")
+    (project / "node_modules" / "left-pad").mkdir(parents=True)
+    (project / "node_modules" / "left-pad" / "index.js").write_text("", encoding="utf-8")
+
+    git.commit("round(01): developer")
+
+    listed = git._run("ls-files", check=False).stdout.split()
+    assert "src/a.py" in listed and "project/main.gd" in listed
+    assert not any("__pycache__" in path or "node_modules" in path for path in listed), listed

@@ -75,6 +75,15 @@ export interface DagRun {
      wherever it is listed. Absent for a run started before the field existed,
      where the run falls back to its own id. */
   task_summary?: string | null
+  /* The multi-round run this graph is one round of, if it is one. A stint
+     dispatches an ordinary graph a round, so the sheet draws these exactly as
+     it always did and adds one mark saying where the graph came from -- absent
+     on every graph a tool call dispatched, which is most of them. */
+  stint_id?: string | null
+  round_index?: number | null
+  /* Rounds the stint may open in all. Absent when the dispatcher did not say,
+     and then the mark names the round alone rather than inventing a total. */
+  round_budget?: number | null
 }
 
 /* Where one node's box goes, in the graph's own coordinates. */

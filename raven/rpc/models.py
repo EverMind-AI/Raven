@@ -794,6 +794,34 @@ class SubagentStatusEvent(_Strict):
 DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "exception"]
 
 
+class _FromAStint(_Strict):
+    """The three fields a round of a stint adds to a graph's progress.
+
+    A stint dispatches one ordinary graph a round, so every dag event it causes
+    is an ordinary dag event plus these. Absent on the graphs a tool call
+    dispatched, which is most of them -- a reader that does not know the fields
+    sees exactly what it saw before.
+    """
+
+    stint_id: str | None = Field(
+        default=None,
+        description=(
+            "The multi-round run this graph is one round of. Absent on an ordinary graph, "
+            "which is every graph a tool call dispatched."
+        ),
+    )
+    round_index: int | None = Field(
+        default=None, description="Which round of that run this graph is, counting from one."
+    )
+    round_budget: int | None = Field(
+        default=None,
+        description=(
+            'Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening '
+            "the run. Absent when the dispatcher did not say."
+        ),
+    )
+
+
 class DagRunStartedNode(_Strict):
     id: str
     subagent: str
@@ -802,7 +830,7 @@ class DagRunStartedNode(_Strict):
     node_summary: str | None = None
 
 
-class DagRunStartedPayload(_Strict):
+class DagRunStartedPayload(_FromAStint):
     run_id: str
     tool_call_id: str | None = None
     task_summary: str | None = Field(
@@ -820,7 +848,7 @@ class DagRunStartedEvent(_Strict):
     payload: DagRunStartedPayload
 
 
-class DagNodeUpdatedPayload(_Strict):
+class DagNodeUpdatedPayload(_FromAStint):
     run_id: str
     tool_call_id: str | None = None
     node: str
@@ -877,7 +905,7 @@ class DagRunFile(_Strict):
     error: str | None = None
 
 
-class DagRunCompletedPayload(_Strict):
+class DagRunCompletedPayload(_FromAStint):
     run_id: str
     tool_call_id: str | None = None
     dir: str
@@ -4789,6 +4817,30 @@ class PlaybooksStintsStopParams(_Strict):
     stint_id: str
 
 
+class PlaybooksStintsPauseParams(_Strict):
+    stint_id: str
+
+
+class PlaybooksStintsResumeParams(_Strict):
+    stint_id: str
+
+
+class PlaybooksStintsExtendParams(_Strict):
+    stint_id: str
+    rounds: int
+
+
+class StintTakeUp(StintDetail):
+    """A stint after a verb that opened a round in this process, with what the driver said.
+
+    The detail alone would not say whether a round started: a resume that found
+    every role finished, or a stint something else is still working, answers
+    with a sentence and no round, and the sentence is the answer.
+    """
+
+    reply: str
+
+
 class PlaybooksStintsAnswerParams(_Strict):
     stint_id: str
     question: int
@@ -5163,6 +5215,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "playbooks.stints.list": (PlaybooksStintsListParams, PlaybooksStintsListResult),
     "playbooks.stints.get": (PlaybooksStintsGetParams, StintDetail),
     "playbooks.stints.stop": (PlaybooksStintsStopParams, StintDetail),
+    "playbooks.stints.pause": (PlaybooksStintsPauseParams, StintDetail),
+    "playbooks.stints.resume": (PlaybooksStintsResumeParams, StintTakeUp),
+    "playbooks.stints.extend": (PlaybooksStintsExtendParams, StintTakeUp),
     "playbooks.stints.answer": (PlaybooksStintsAnswerParams, StintDetail),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),

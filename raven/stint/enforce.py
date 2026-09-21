@@ -1,10 +1,12 @@
 """Undoing what a role wrote outside the paths it may write.
 
-The pass that makes a boundary a boundary. Layer three of the four -- the
-prompt says what a role owns, the tool gate refuses a call that would cross it,
-this runs after the role has stopped and puts back what got through anyway, and
-what it put back is on the record. Without it the first two are advice: a role
-that shells out past the tool gate leaves no trace the gate can see.
+The pass that makes a boundary a boundary. The last of its three layers: the
+prompt says what a role owns, the role's checks measure what it built, and this
+runs after the role has stopped, puts back what it wrote elsewhere, and puts
+that on the record. Without it the prompt is advice. Nothing refuses a write
+before it lands -- a charter narrows a role's tools only where a playbook
+declares one, and ``owns`` is not derived into one -- so this pass is the
+boundary, not its backstop.
 
 **Two sources, and they are not interchangeable.** Given ``stage_base`` the
 pass reads the stage's own commits as well as the worktree. Without it, a role
@@ -23,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
-from raven.stint.git import ProjectGit
+from raven.stint.git import HOST_STATE, ProjectGit
 from raven.stint.ownership import APPENDS, NEVER, OWNS, Roster, matches_any
 
 __all__ = ["EnforceReport", "enforce", "roster_grader"]
@@ -42,10 +44,10 @@ class EnforceReport:
     quarantined: tuple[str, ...] = ()
     """The subset of ``stray`` whose content was copied aside before it went.
 
-    Not always all of it. A stray write the role *committed* is undone by
-    putting the stage's base back, which removes the file before there is
-    anything left to copy -- there the reverted commit is the copy, and it is
-    a better one, because it also records what else that commit touched.
+    Copied as the role left it, before anything is put back, committed strays
+    included -- a copy taken after the revert held the base's content, which is
+    the one version nobody needed to read. Short of ``stray`` only for a path
+    that was not a file by the time the pass ran.
     """
 
     reverted: bool = False
@@ -83,7 +85,7 @@ def enforce(
     stage_base: str = "",
     allowed: Iterable[str] = (),
     artifacts: Sequence[str] = (),
-    commit_revert: Callable[[], None] | None = None,
+    commit_revert: Callable[[Sequence[str]], None] | None = None,
 ) -> EnforceReport:
     """Put back everything ``role`` wrote that it had no claim to.
 
@@ -103,11 +105,11 @@ def enforce(
         artifacts: Paths with no author. A build writes them, so whichever role
             ran the build is the one that "wrote" them, and grading that by
             ownership reverts a measurement for having been made.
-        commit_revert: Called once, between undoing the stage's commits and
-            copying the strays aside, when the two have to be one step. The
-            caller owns the message; the ordering is owned here, because the
-            copy-aside reads ``HEAD`` and would keep the unreverted content if
-            it ran first.
+        commit_revert: Called once with the stray paths, after the stage's
+            commits are undone and before the worktree is put back. The caller
+            owns the message and is expected to commit those paths and nothing
+            else: a revert that staged the whole tree committed the untracked
+            stray it was undoing.
 
     Returns:
         What was found and undone, empty when the role stayed inside.
@@ -118,7 +120,7 @@ def enforce(
     stray: list[str] = []
     trimmed: list[str] = []
     for path in touched:
-        if path in exempt or matches_any(path, artifacts):
+        if path in exempt or matches_any(path, artifacts) or path.startswith(f"{HOST_STATE}/"):
             continue
         verdict = grade(path)
         if verdict == OWNS:
@@ -137,17 +139,23 @@ def enforce(
     for path in trimmed:
         if stage_base:
             git.restore_from(stage_base, [path])
-        violations.append(f"{role} may only append to {path}, and it removed lines")
+        violations.append(
+            f"{role} may only append to {path}, and its version removed lines -- add at the end and leave "
+            "what is there as it was"
+        )
 
     if not stray:
         return EnforceReport(trimmed=tuple(trimmed), violations=tuple(violations))
 
+    # Copied aside before anything moves, so what is kept is what the role
+    # wrote and not what the base had. Then the stage's commits, then the tree.
+    undone = git.keep(stray, quarantine)
     reverted = bool(stage_base) and any(path in set(git.diff_names(stage_base)) for path in stray)
     if reverted:
         git.restore_from(stage_base, stray)
         if commit_revert is not None:
-            commit_revert()
-    undone = git.restore(stray, quarantine=quarantine)
+            commit_revert(stray)
+    git.restore(stray, quarantine=None)
     # Counted off what the role wrote, not off what could still be copied: a
     # stray write that was committed is gone from the worktree by now, and a
     # note reading "wrote 0 path(s)" about a role that wrote one is worse than

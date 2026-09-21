@@ -658,3 +658,58 @@ class TestTwoRolesAtOnceInOneCheckout:
         ]
 
         assert validate_structure(self._spec(chain), known_agents=["echo"]) == []
+
+
+class TestIsolationAndBoundaries:
+    """`isolation: none` runs in the person's own checkout, on their branch."""
+
+    @staticmethod
+    def _spec(roles, isolation=None):
+        from raven.playbook.types import PlaybookSpec
+
+        body = {
+            "name": "p",
+            "description": "d",
+            "taskSummary": "t",
+            "mode": "stint",
+            "triggers": {"keywords": ["k"]},
+            "roles": roles,
+        }
+        if isolation is not None:
+            body["isolation"] = isolation
+        return PlaybookSpec.model_validate(body)
+
+    def test_a_hard_boundary_over_the_person_s_own_branch_is_refused(self):
+        """Undoing a stray write is putting the tree back, and that tree is
+        theirs -- so their uncommitted work goes back with it."""
+        roles = [{"as": "dev", "name": "echo", "promptTemplate": "p", "owns": ["src/**"]}]
+
+        errors = validate_structure(self._spec(roles, isolation="none"), known_agents=["echo"])
+
+        assert len(errors) == 1
+        assert "isolation: none" in errors[0]
+        assert "isolation: branch" in errors[0] and "enforce.write: soft" in errors[0]
+
+    def test_the_same_roles_are_fine_in_a_branch_of_the_run_s_own(self):
+        roles = [{"as": "dev", "name": "echo", "promptTemplate": "p", "owns": ["src/**"]}]
+
+        assert validate_structure(self._spec(roles, isolation="branch"), known_agents=["echo"]) == []
+
+    def test_a_soft_boundary_may_run_in_the_person_s_own_branch(self):
+        """Nothing is undone, so nothing of theirs can be undone with it."""
+        roles = [
+            {
+                "as": "dev",
+                "name": "echo",
+                "promptTemplate": "p",
+                "owns": ["src/**"],
+                "enforce": {"write": "soft"},
+            }
+        ]
+
+        assert validate_structure(self._spec(roles, isolation="none"), known_agents=["echo"]) == []
+
+    def test_a_playbook_that_declares_nothing_may_run_in_the_person_s_own_branch(self):
+        roles = [{"as": "dev", "name": "echo", "promptTemplate": "p"}]
+
+        assert validate_structure(self._spec(roles, isolation="none"), known_agents=["echo"]) == []

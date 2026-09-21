@@ -252,3 +252,40 @@ def test_a_role_row_is_a_delegate_row_with_the_round_on_it():
     # And the parent stays as narrow as it was: a field here is a field the
     # per-turn worker-table generator could emit.
     assert set(DelegateEntry.model_fields) == {"as_", "name", "playbook"}
+
+
+def test_the_shipped_developer_is_judged_by_every_directory_its_guard_may_grant() -> None:
+    """The guard file grants the Developer whichever of `SOURCE_DIRS` the project
+    has (or the greenfield three); the playbook row is what it is judged by. A
+    row narrower than the grant is the two-rosters trap with a directory in
+    place of a ledger: a Developer that put its checks under `tools/`, where its
+    standing orders said it could, had them undone as a stray write."""
+    from raven.playbook.store import BUILTIN_ROOT, PlaybookStore
+    from raven.stint.bootstrap import GREENFIELD_DIRS, SOURCE_DIRS
+
+    spec = PlaybookStore(BUILTIN_ROOT.parent / "nowhere", builtin_root=BUILTIN_ROOT).load("game-rounds")
+    developer = next(role for role in spec.roles or [] if role.label == "developer")
+    granted = {f"{name}/**" for name in SOURCE_DIRS} | set(GREENFIELD_DIRS)
+    missing = sorted(granted - set(developer.owns))
+    assert missing == [], f"the developer may be told it owns {missing} and would be judged without them"
+
+
+def test_the_shipped_playbook_grades_by_the_same_artifacts_its_guards_name() -> None:
+    """The one list written twice: `OUTPUT_DIRS` generates the guard files a role
+    reads, and `game-rounds` repeats it by hand for the roster it is judged by.
+
+    They drifted. `OUTPUT_DIRS` grew `builds` and `replays`; the playbook did
+    not, so a Developer that put its replay evidence where its own standing
+    orders call an artifact directory had it reverted as a stray write -- by a
+    list the role is never shown. The playbook's own comment warns about exactly
+    this ("two rosters -- the one it is told and the one it is judged by"), which
+    is why this is a test rather than a note.
+    """
+    from raven.playbook.store import BUILTIN_ROOT, PlaybookStore
+    from raven.stint.bootstrap import OUTPUT_DIRS
+
+    spec = PlaybookStore(BUILTIN_ROOT.parent / "nowhere", builtin_root=BUILTIN_ROOT).load("game-rounds")
+
+    for role in spec.roles or []:
+        missing = [f"{name}/**" for name in OUTPUT_DIRS if f"{name}/**" not in role.artifacts]
+        assert missing == [], f"{role.label} is judged without {missing}, and its guard file names them"

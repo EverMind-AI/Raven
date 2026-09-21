@@ -373,7 +373,7 @@ All notable changes to Raven are documented here.
   every round.
 
   What a role may write is declared in the playbook (`owns`, `appends`), rendered
-  into its prompt, refused at the write, and undone afterwards, with the file it
+  into its prompt, and undone afterwards, with the file it
   wrote kept under `violations/`. The undo reads the stage's own commits as well
   as the worktree, so a role that commits a stray write is caught too.
 

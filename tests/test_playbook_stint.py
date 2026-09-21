@@ -94,6 +94,18 @@ class TestCompile:
     def test_a_first_round_says_so_rather_than_leaving_a_hole(self) -> None:
         assert "first round" in compile_round(_spec(), 1)[0]["prompt_template"]
 
+    def test_the_guard_tells_a_role_that_the_tool_running_it_is_not_the_project(self) -> None:
+        """Three roles spent hours of a live stint reading Raven's source, its
+        session directories and the shadow repository, digging for files the
+        enforcement pass had undone. Nothing about the boundary changes from
+        that, so the guard says where the work is and where it is not."""
+        told = compile_round(_spec(), 2)[0]["prompt_template"]
+
+        assert "~/.raven" in told
+        assert ".raven/" in told
+        assert "filesystem root" in told
+        assert "undone is kept outside the project" in told
+
     def test_what_a_role_owns_reaches_the_role_even_when_the_author_forgot_to_ask(self) -> None:
         """One declaration, read twice: here and by the pass that undoes a stray
         write. Leaving the slot out does not opt out of being enforced, so it
@@ -160,10 +172,26 @@ class TestRunning:
             yield
 
     @staticmethod
+    def _project(tmp_path: Path) -> Path:
+        """The repository a stint works, beside the agent's own directories.
+
+        A directory of its own rather than `tmp_path` itself, because the default
+        isolation runs the round *in* the project: with the two collapsed, the
+        run's own node artifacts land inside the tree the boundary is measured
+        against and are undone as writes nobody owns. In production they are
+        always apart -- run dirs hang off the session directory under agent home
+        (`SubAgentDagTool._run_root`), never off the project.
+        """
+        project = tmp_path / "project"
+        project.mkdir(exist_ok=True)
+        ProjectGit(project).ensure_repo()
+        return project
+
+    @staticmethod
     def _executor(tmp_path: Path, announced: list[str], charges: list[str | None]) -> PlaybookExecutor:
-        # A stint that enforces boundaries works a repository, and gets a checkout
-        # of its own out of it -- see `test_a_plan_works_a_checkout_of_its_own`.
-        ProjectGit(tmp_path).ensure_repo()
+        # A stint that enforces boundaries works a repository; which tree it gets
+        # out of it is `isolation` -- see `test_a_plan_asked_for_a_checkout_of_its_own_gets_one`.
+        project = TestRunning._project(tmp_path)
 
         async def announce(run_id: str, text: str, origin: dict) -> None:
             announced.append(text)
@@ -179,7 +207,7 @@ class TestRunning:
             charge=charge,
         )
         tool.set_context("web", "default", "web:stint")
-        return PlaybookExecutor(dag_tool=tool, workspace=tmp_path)
+        return PlaybookExecutor(dag_tool=tool, workspace=project)
 
     @staticmethod
     async def _await_announce(announced: list[str], *, timeout: float = 30.0, count: int = 1) -> str:
@@ -305,9 +333,24 @@ class TestRunning:
         assert len(announced) == 1, announced
         assert "ran 2 round(s) and stopped" in summary
 
-    async def test_a_plan_works_a_checkout_of_its_own(self, tmp_path: Path) -> None:
-        """Sharing the session's tree means the person who started the stint
-        cannot use their own until it is done."""
+    async def test_a_plan_asked_for_a_checkout_of_its_own_gets_one(self, tmp_path: Path) -> None:
+        """`isolation: worktree` means the person who started the stint can keep
+        using their own tree while it runs."""
+        announced: list[str] = []
+        executor = self._executor(tmp_path, announced, [])
+
+        await executor.execute(_spec(confirm=False, isolation="worktree"), {})
+        await self._await_announce(announced)
+
+        record = StintStore(executor.dag_tool.stints_root("web:stint")).list()[0]
+        assert record.workdir != str(tmp_path / "project")
+        assert record.branch == f"stint/{record.stint_id}"
+        assert Path(record.workdir).is_dir()
+
+    async def test_a_plan_that_says_nothing_works_the_project_on_a_branch_of_its_own(self, tmp_path: Path) -> None:
+        """The default. No second checkout to pay for and none left behind, and
+        the work lands where the person will look for it -- their repository, one
+        `git log stint/<id>` away."""
         announced: list[str] = []
         executor = self._executor(tmp_path, announced, [])
 
@@ -315,9 +358,243 @@ class TestRunning:
         await self._await_announce(announced)
 
         record = StintStore(executor.dag_tool.stints_root("web:stint")).list()[0]
-        assert record.workdir != str(tmp_path)
+        assert record.workdir == str(tmp_path / "project")
         assert record.branch == f"stint/{record.stint_id}"
-        assert Path(record.workdir).is_dir()
+        assert ProjectGit(tmp_path / "project").branch() == record.branch
+        # The echo agent hands the prompt back, so the round's summary is what
+        # the role was told about where it stands. A branch is not a checkout:
+        # told it was in one, a role goes looking for the "real" project.
+        told = record.rounds[0].summary
+        assert "the project itself" in told, told
+        assert "checkout of the project made for this stint" not in told
+
+    async def test_the_checks_ledger_the_run_writes_is_not_the_person_s_uncommitted_work(self, tmp_path: Path) -> None:
+        """Resolving a check declared by description writes `.stint/checks.json`
+        after the layout and before the tree is opened, and it is not in the
+        layout's own list of what it wrote -- so a fresh project whose check
+        was detected was refused for a file the run had just written."""
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "pyproject.toml").write_text("[project]\nname = 'thing'\n", encoding="utf-8")
+        ProjectGit(project).ensure_repo()
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: project)
+        spec = _spec(
+            confirm=True,
+            verify=[{"name": "build", "description": "the source compiles"}],
+            roles=[
+                {"as": "planner", "name": "echo", "promptTemplate": "plan", "owns": ["reports/**"]},
+                {
+                    "as": "developer",
+                    "name": "echo",
+                    "dependsOn": ["planner"],
+                    "promptTemplate": "build",
+                    "owns": ["src/**"],
+                    "verifyAfter": ["build"],
+                },
+            ],
+        )
+
+        receipt = await driver.start(spec)
+
+        assert not receipt.startswith("Error"), receipt
+        ledger = json.loads((project / ".stint" / "checks.json").read_text(encoding="utf-8"))
+        assert ledger["game-dev-build"]["from"] == "detected"
+        assert ProjectGit(project).branch().startswith("stint/")
+
+    async def test_a_run_refused_after_its_layout_is_not_refused_again_for_that_layout(self, tmp_path: Path) -> None:
+        """The layout is written before the checks are asked about, and a check
+        nobody has answered refuses the run -- so the second attempt finds
+        `.stint/` in the tree, written by nobody it can name. Read as the
+        person's unfinished work, every fresh project that had to be asked
+        anything was refused on the retry, for the files the first try wrote."""
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "docs").mkdir()
+        (project / "docs" / "PRD.md").write_text(
+            "# The thing\n\n" + "The build must pass. The player must be able to move.\n" * 20, encoding="utf-8"
+        )
+        ProjectGit(project).ensure_repo()
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: project)
+        spec = _spec(
+            confirm=True,
+            setup="stint",
+            verify=[{"name": "build", "description": "the source compiles"}],
+            roles=[
+                {"as": "planner", "name": "echo", "promptTemplate": "plan", "owns": ["reports/**"]},
+                {
+                    "as": "developer",
+                    "name": "echo",
+                    "dependsOn": ["planner"],
+                    "promptTemplate": "build",
+                    "owns": ["src/**"],
+                    "verifyAfter": ["build"],
+                },
+            ],
+        )
+
+        first = await driver.start(spec)
+        assert first.startswith("Error") and "never answered" in first, first
+        assert (project / ".stint" / "planner.md").is_file(), "the layout was written before the refusal"
+
+        from raven.stint.verify import remember_check
+
+        remember_check(project, "game-dev", "build", "true")
+        second = await driver.start(spec)
+
+        assert not second.startswith("Error"), second
+        assert ProjectGit(project).branch().startswith("stint/")
+        record = StintStore(tmp_path / "stints").list()[0]
+        assert ".stint/planner.md" in record.untracked_at_start
+
+    async def test_a_layout_file_the_person_edited_after_committing_it_still_stops_the_run(
+        self, tmp_path: Path
+    ) -> None:
+        """The exemption above is for files nobody committed. One the person
+        committed and then changed is theirs: round one would grade the change
+        as the first role's stray write and put it back."""
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "docs").mkdir()
+        (project / "docs" / "PRD.md").write_text(
+            "# The thing\n\n" + "The build must pass. The player must be able to move.\n" * 20, encoding="utf-8"
+        )
+        git = ProjectGit(project)
+        git.ensure_repo()
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: project)
+        spec = _spec(confirm=True, setup="stint", stop={"maxRounds": 1})
+
+        from raven.stint.setup import lay_out
+
+        lay_out(project, "stint")
+        git.commit("chore: the layout, committed by the person")
+        (project / ".stint" / "planner.md").write_text("my own orders\n", encoding="utf-8")
+
+        receipt = await driver.start(spec)
+
+        assert receipt.startswith("Error") and ".stint/planner.md" in receipt and "Commit or stash" in receipt
+
+    async def test_a_first_round_the_person_refused_closes_the_stint_rather_than_leaving_it_open(
+        self, tmp_path: Path
+    ) -> None:
+        """The denial came back as a sentence that did not begin with `Error`, so
+        the record stayed running with round one open and the beat going. The
+        next `resume` -- which asks nobody, the stint having been approved --
+        ran the graph the person had just refused, shell commands included."""
+        tool = _FakeTool(tmp_path / "stints")
+        tool.deny = True
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = _spec(
+            confirm=True,
+            roles=[
+                {"as": "planner", "name": "echo", "promptTemplate": "plan"},
+                {"as": "developer", "name": "echo", "dependsOn": ["planner"], "promptTemplate": "build"},
+            ],
+        )
+
+        receipt = await driver.start(spec)
+
+        assert receipt.startswith("Error") and "did not approve" in receipt
+        assert tool.submitted == []
+        [record] = StintStore(tool.stints_root("web:stint")).list()
+        assert record.status == "stopped"
+        assert record.stop_reason == "the first round was not approved"
+        assert record.round(1) is None or not record.round(1).run_id
+        assert "nothing left to take up" in await driver.resume(record.stint_id, "web:stint")
+        assert tool.submitted == []
+
+    async def test_a_round_no_role_finished_pauses_the_stint_instead_of_costing_a_round(self, tmp_path: Path) -> None:
+        """Every node failed, so the round left nothing to build on, and the
+        next would hit the same fault. Counted, a stint ran three rounds in two
+        seconds. Paused rather than stopped: the round is still un-done on the
+        record, which is what lets `resume` put it up again once the cause is
+        fixed."""
+        announced: list[str] = []
+        project = self._project(tmp_path)
+
+        async def announce(run_id: str, text: str, origin: dict) -> None:
+            announced.append(text)
+
+        tool = SubAgentDagTool(
+            workspace=tmp_path,
+            agents=[ThirdPartyCliSubagentConfig(name="broken", command="false")],
+            announce=announce,
+        )
+        tool.set_context("web", "default", "web:stint")
+        executor = PlaybookExecutor(dag_tool=tool, workspace=project)
+        spec = _spec(
+            confirm=False,
+            roles=[
+                {"as": "planner", "name": "broken", "promptTemplate": "plan", "owns": ["reports/**"]},
+                {"as": "developer", "name": "broken", "dependsOn": ["planner"], "promptTemplate": "build"},
+            ],
+            stop={"maxRounds": 5},
+        )
+
+        stint = await executor.execute(spec, {})
+        assert stint.kind == "dag", stint.reply
+        said = await self._await_announce(announced)
+
+        record = StintStore(tool.stints_root("web:stint")).list()[0]
+        assert record.status == "paused"
+        assert record.stop_reason == "round 1: no role finished"
+        assert [(entry.index, entry.status) for entry in record.rounds] == [(1, "failed")]
+        assert "no role finished" in said and "stints resume" in said
+
+    async def test_work_the_person_left_in_the_tree_stops_a_plan_that_would_undo_it(self, tmp_path: Path) -> None:
+        """Round one measures its boundary against an empty base, which reads as
+        the whole dirty state -- so their file would be graded as the first
+        role's stray write, reverted and quarantined. Said before anything runs."""
+        announced: list[str] = []
+        executor = self._executor(tmp_path, announced, [])
+        (tmp_path / "project" / "mine.md").write_text("half a thought\n", encoding="utf-8")
+
+        stint = await executor.execute(_spec(confirm=False), {})
+
+        assert stint.kind == "questions"
+        assert "mine.md" in stint.reply and "Commit or stash" in stint.reply
+        assert not StintStore(executor.dag_tool.stints_root("web:stint")).list()
+        assert not ProjectGit(tmp_path / "project").branch().startswith("stint/")
+
+    async def test_the_host_s_own_checkpoint_in_the_tree_does_not_read_as_the_person_s_work(
+        self, tmp_path: Path
+    ) -> None:
+        """`.raven/shadow.git/` is written into whatever directory the host is
+        working, on the turn that asks for the stint. Counting it as uncommitted
+        work refuses every real project at the moment it is asked."""
+        announced: list[str] = []
+        executor = self._executor(tmp_path, announced, [])
+        shadow = tmp_path / "project" / ".raven" / "shadow.git"
+        shadow.mkdir(parents=True)
+        (shadow / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+        stint = await executor.execute(_spec(confirm=False), {})
+        await self._await_announce(announced)
+
+        assert stint.kind == "dag", stint.reply
+        record = StintStore(executor.dag_tool.stints_root("web:stint")).list()[0]
+        assert record.branch == f"stint/{record.stint_id}"
+
+    async def test_a_repository_with_no_commits_is_refused_before_a_boundary_is_promised(self, tmp_path: Path) -> None:
+        """`git init` and nothing else. There is no state to put a stray write
+        back to, so the undo the boundary is made of cannot happen -- and the
+        checkout step would have failed and quietly carried on in place."""
+        project = tmp_path / "fresh"
+        project.mkdir()
+        ProjectGit(project)._run("init", "--quiet")
+        executor = PlaybookExecutor(
+            dag_tool=SubAgentDagTool(
+                workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")]
+            ),
+            workspace=project,
+        )
+
+        stint = await executor.execute(_spec(confirm=False), {})
+
+        assert stint.kind == "questions"
+        assert "no commits" in stint.reply and "Commit something here first" in stint.reply
 
     async def test_a_plan_that_enforces_boundaries_needs_a_repository_to_enforce_them_against(
         self, tmp_path: Path
@@ -456,6 +733,30 @@ def test_the_driver_keeps_no_plan_in_memory(tmp_path: Path) -> None:
     assert not [name for name in vars(driver) if "record" in name or "plan_" in name]
 
 
+def test_the_specification_link_is_carried_into_a_checkout_of_the_run_s_own(tmp_path: Path) -> None:
+    """The layout spells the link `<path> -> <target>` in what it wrote, and the
+    carry looked that string up as a file: the one document every role is told
+    to read was the one thing a worktree stint did not get."""
+    import os
+
+    from raven.playbook.stint import _carry_layout
+    from raven.stint.setup import Layout
+
+    project, tree = tmp_path / "project", tmp_path / "tree"
+    for root in (project, tree):
+        (root / "docs").mkdir(parents=True)
+        (root / "docs" / "PRD.md").write_text("# what it is\n", encoding="utf-8")
+    (project / ".stint").mkdir()
+    (project / ".stint" / "planner.md").write_text("orders\n", encoding="utf-8")
+    os.symlink("../docs/PRD.md", project / ".stint" / "SPEC.md")
+
+    _carry_layout(project, tree, Layout(wrote=[".stint/SPEC.md -> ../docs/PRD.md", ".stint/planner.md"]))
+
+    carried = tree / ".stint" / "SPEC.md"
+    assert carried.is_symlink() and carried.resolve() == (tree / "docs" / "PRD.md").resolve()
+    assert (tree / ".stint" / "planner.md").read_text(encoding="utf-8") == "orders\n"
+
+
 class TestBoundaries:
     """The three layers a round adds to a graph: measure, undo, hand back."""
 
@@ -511,6 +812,62 @@ class TestBoundaries:
         assert not (context.workdir / "reports" / "qa.md").exists()
         violations = context.record.round(1).violations
         assert any("may not write" in note for note in violations), violations
+
+    async def test_a_resumed_round_s_roles_are_still_judged(self, tmp_path: Path) -> None:
+        """A round taken up again runs its nodes as `r01x1-<role>`. The judge
+        read the role off the first attempt's spelling and found none, so on
+        every resumed round a stray write stayed, no check ran and nothing was
+        committed -- while the round reported completed (measured 2026-09-20)."""
+        spec = _spec(
+            roles=[
+                {"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0},
+                {"as": "qa", "name": "echo", "promptTemplate": "check", "owns": ["reports/**"]},
+            ]
+        )
+        context = self._context(tmp_path, spec)
+        node = self._node("game-dev-r01x2-dev")
+        await context.node_started(node.id)
+
+        (context.workdir / "reports").mkdir()
+        (context.workdir / "reports" / "qa.md").write_text("not mine\n", encoding="utf-8")
+        await context.judge(node=node)
+
+        assert not (context.workdir / "reports" / "qa.md").exists(), "the boundary held on the second attempt too"
+        assert any("may not write" in note for note in context.record.round(1).violations)
+
+    async def test_what_the_run_left_uncommitted_is_nobody_s_only_until_a_round_commits_it(
+        self, tmp_path: Path
+    ) -> None:
+        """The standing orders are exempt from the first role's boundary because
+        the setup pass left them uncommitted and there is no base to measure
+        them from. The first role's commit takes them with it, and an exemption
+        that outlived that let any later role rewrite any other's orders unseen."""
+        spec = _spec(
+            roles=[
+                {"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0},
+                {"as": "qa", "name": "echo", "promptTemplate": "check", "owns": ["reports/**"], "maxHandbacks": 0},
+            ]
+        )
+        context = self._context(tmp_path, spec)
+        context.git()
+        orders = context.workdir / ".stint" / "qa.md"
+        orders.parent.mkdir()
+        orders.write_text("judge fairly\n", encoding="utf-8")
+        context.record.untracked_at_start = [".stint/qa.md"]
+
+        dev = self._node("game-dev-r01-dev")
+        await context.node_started(dev.id)
+        await context.judge(node=dev)
+        assert orders.read_text(encoding="utf-8") == "judge fairly\n", "round one's first role left it alone"
+        assert not context.record.round(1).violations
+
+        qa = self._node("game-dev-r01-qa")
+        await context.node_started(qa.id)
+        orders.write_text("judge leniently\n", encoding="utf-8")
+        await context.judge(node=qa)
+
+        assert orders.read_text(encoding="utf-8") == "judge fairly\n"
+        assert any(".stint/qa.md" in note for note in context.record.round(1).violations)
 
     async def test_a_failing_check_is_handed_back_to_the_role_not_to_a_person(self, tmp_path: Path) -> None:
         """There is nobody to ask on an unattended run, and the judge already
@@ -634,6 +991,10 @@ class _FakeTool:
         )
 
     async def run_round(self, nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+        if getattr(self, "deny", False) and kwargs.get("confirm"):
+            from raven.agent.subagent.prompt_errors import RoundNotApprovedError
+
+            raise RoundNotApprovedError("the person did not approve the round")
         self.submitted.append(nodes)
         self.summaries.append(str(kwargs.get("task_summary") or ""))
         return f"DAG run run-{len(self.submitted)} started in the background ({len(nodes)} nodes)."
@@ -1283,7 +1644,8 @@ class TestASecondPlanOnOneProject:
 
         assert refused.startswith("Error"), refused
         assert first.stint_id in refused
-        assert "resume" in refused and "stop" in refused
+        assert "stints stop" in refused and "takes it up" in refused
+        assert "stints resume" not in refused, "a second engine in the caller's process is not the way out"
         assert len(driver.store_for("web:stint").list()) == 1, "nothing was written for the second"
         assert len(tool.submitted) == 1, "and nothing was dispatched"
 
@@ -1403,6 +1765,7 @@ class TestResume:
             playbook="game-dev",
             spec=_spec().model_dump(by_alias=True),
             workdir=str(tmp_path),
+            project=str(tmp_path),
             round_index=1,
             origin=tool.turn_origin(),
         )
@@ -1439,6 +1802,103 @@ class TestResume:
         assert "{{game-dev-r01-planner.output}}" in nodes[0]["prompt_template"]
         assert store.read("stint-x").round(1).attempt == 1
 
+    async def test_resume_reads_who_finished_off_the_record_and_only_confirms_with_the_registry(
+        self, tmp_path: Path
+    ) -> None:
+        """The record travels with the stint; the registry belongs to one
+        conversation's directory. Asked of the registry alone, a resume from a
+        terminal or an RPC with no turn read the wrong one -- and either named a
+        finished role where the graph could not see it (`depends on unknown
+        r03-planner`) or ran a planner that had finished an hour earlier."""
+        from raven.stint.record import PAUSED
+
+        tool = _FakeTool(tmp_path / "stints", readable={"game-dev-r01-planner"})
+        store = self._interrupted(tmp_path, tool)
+        record = store.read("stint-x")
+        record.round(1).finished = {"planner": "game-dev-r01-planner"}
+        record.status = PAUSED
+        store.write(record)
+
+        await self._driver(tmp_path, tool).resume("stint-x", "web:stint")
+
+        [nodes] = tool.submitted
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-developer"]
+        assert nodes[0]["depends_on"] == ["game-dev-r01-planner"]
+
+    async def test_a_role_the_record_says_finished_but_the_registry_cannot_read_runs_again(
+        self, tmp_path: Path
+    ) -> None:
+        """Naming it would fail validation with a reference to nothing."""
+        from raven.stint.record import PAUSED
+
+        tool = _FakeTool(tmp_path / "stints", readable=set())
+        store = self._interrupted(tmp_path, tool)
+        record = store.read("stint-x")
+        record.round(1).finished = {"planner": "game-dev-r01-planner"}
+        record.status = PAUSED
+        store.write(record)
+
+        await self._driver(tmp_path, tool).resume("stint-x", "web:stint")
+
+        [nodes] = tool.submitted
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-planner", "game-dev-r01x1-developer"]
+
+    async def test_a_completed_round_sends_what_it_promised_and_did_not_deliver_back_to_open(
+        self, tmp_path: Path
+    ) -> None:
+        """Both rules lived in `backlog.py` with no caller. A Developer cut off by
+        its turn budget left tasks `assigned` for the rest of the stint, and a
+        task QA never judged stayed `in_review`."""
+        import json
+
+        from raven.stint import backlog as backlog_mod
+
+        tool = _FakeTool(tmp_path / "stints", readable={"game-dev-r01-planner"})
+        store = self._interrupted(tmp_path, tool, quiet_for_sec=0)
+        record = store.read("stint-x")
+        path = backlog_mod.backlog_path(tmp_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "meta": {},
+                    "tasks": [
+                        {"id": 1, "title": "promised", "state": "assigned", "owner": "developer"},
+                        {"id": 2, "title": "unjudged", "state": "in_review"},
+                        {"id": 3, "title": "finished", "state": "done"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        await self._driver(tmp_path, tool).advance(record.ref(1), "run-old", "finished: 2 completed, 0 failed", False)
+
+        backlog = backlog_mod.load(tmp_path)
+        assert [backlog.get(n).state for n in (1, 2, 3)] == ["open", "open", "done"]
+        assert backlog.get(1).owner == ""
+
+    async def test_a_cut_round_keeps_its_tasks_assigned_for_the_developer_that_resumes_it(
+        self, tmp_path: Path
+    ) -> None:
+        import json
+
+        from raven.stint import backlog as backlog_mod
+
+        tool = _FakeTool(tmp_path / "stints", readable={"game-dev-r01-planner"})
+        store = self._interrupted(tmp_path, tool, quiet_for_sec=0)
+        record = store.read("stint-x")
+        path = backlog_mod.backlog_path(tmp_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"meta": {}, "tasks": [{"id": 1, "title": "promised", "state": "assigned"}]}),
+            encoding="utf-8",
+        )
+
+        await self._driver(tmp_path, tool).advance(record.ref(1), "run-old", "cut", True)
+
+        assert backlog_mod.load(tmp_path).get(1).state == "assigned"
+
     async def test_resume_reruns_a_role_that_finished_without_leaving_output(self, tmp_path: Path) -> None:
         """Naming it would hand the round a reference that resolves to nothing."""
         tool = _FakeTool(tmp_path / "stints", readable=set())
@@ -1461,6 +1921,129 @@ class TestResume:
         answer = await self._driver(tmp_path, tool).resume("stint-x", "web:stint")
 
         assert "nothing left to take up" in answer
+        assert tool.submitted == []
+
+    async def test_a_round_cut_short_leaves_the_plan_paused_and_resume_takes_it_up(self, tmp_path: Path) -> None:
+        """`cancel_dag` on a round used to end the stint: recorded stopped, which
+        `resume` refuses, and `extend` re-submitted the round under ids the cut
+        attempt still owns. A person who stops a round wants the round stopped,
+        not the week of rounds before it thrown away."""
+        tool = _FakeTool(tmp_path / "stints", readable={"game-dev-r01-planner"})
+        store = self._interrupted(tmp_path, tool, quiet_for_sec=0)
+        driver = self._driver(tmp_path, tool)
+        record = store.read("stint-x")
+
+        assert await driver.advance(record.ref(1), "run-old", "cut", True) is None
+        record = store.read("stint-x")
+        assert record.status == "paused"
+        assert "stopped before it finished" in record.stop_reason
+        assert record.round(1).status == "stopped"
+
+        await driver.resume("stint-x", "web:stint")
+
+        [nodes] = tool.submitted
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-developer"]
+        assert store.read("stint-x").status == "running"
+
+    async def test_a_plan_told_to_stop_stays_stopped_when_its_last_round_is_cut(self, tmp_path: Path) -> None:
+        from raven.stint.record import STOPPED
+
+        tool = _FakeTool(tmp_path / "stints")
+        store = self._interrupted(tmp_path, tool, quiet_for_sec=0)
+        record = store.read("stint-x")
+        record.status = STOPPED
+        record.stop_reason = "a person stopped the stint"
+        store.write(record)
+
+        await self._driver(tmp_path, tool).advance(record.ref(1), "run-old", "cut", True)
+
+        assert store.read("stint-x").status == "stopped"
+        assert store.read("stint-x").stop_reason == "a person stopped the stint"
+
+    async def test_extend_puts_an_unfinished_round_up_again_under_a_new_attempt(self, tmp_path: Path) -> None:
+        """The round that did not finish is the round `extend` opens, and its
+        first attempt's node ids are claimed for the conversation's life -- so
+        submitting them again was refused at validation and the stint recorded
+        as finished with `round 1 could not start`."""
+        from raven.stint.record import STOPPED
+
+        tool = _FakeTool(tmp_path / "stints", readable={"game-dev-r01-planner"})
+        store = self._interrupted(tmp_path, tool, quiet_for_sec=0)
+        record = store.read("stint-x")
+        record.status = STOPPED
+        record.round(1).status = "stopped"
+        store.write(record)
+
+        answer = await self._driver(tmp_path, tool).extend("stint-x", 1, "web:stint")
+
+        assert not answer.startswith("Error"), answer
+        [nodes] = tool.submitted
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-developer"]
+        assert store.read("stint-x").round(1).attempt == 1
+
+    async def test_a_dead_holder_is_as_good_as_a_quiet_one(self, tmp_path: Path) -> None:
+        """A gateway killed mid-round leaves a stamp that stays fresh for five
+        minutes, and a person who restarts it inside those minutes was told the
+        stint was still being worked. The pid it recorded is not alive, and
+        the kernel answers that at once."""
+        import socket
+        import subprocess
+
+        tool = _FakeTool(tmp_path / "stints", readable={"game-dev-r01-planner"})
+        store = self._interrupted(tmp_path, tool, quiet_for_sec=0)
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        record = store.read("stint-x")
+        record.holder_pid, record.holder_host = gone.pid, socket.gethostname()
+        store.write(record)
+        assert not store.read("stint-x").stale(), "the stamp is fresh; only the pid says otherwise"
+
+        driver = self._driver(tmp_path, tool)
+        assert [found.stint_id for found in driver.adrift("web:stint")] == ["stint-x"]
+        await driver.resume("stint-x", "web:stint")
+
+        [nodes] = tool.submitted
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-developer"]
+
+    async def test_a_live_holder_on_this_machine_keeps_resume_off(self, tmp_path: Path) -> None:
+        import os
+        import socket
+
+        tool = _FakeTool(tmp_path / "stints")
+        store = self._interrupted(tmp_path, tool, quiet_for_sec=0)
+        record = store.read("stint-x")
+        record.holder_pid, record.holder_host = os.getpid(), socket.gethostname()
+        store.write(record)
+
+        answer = await self._driver(tmp_path, tool).resume("stint-x", "web:stint")
+
+        assert "still working it" in answer
+        assert tool.submitted == []
+
+    async def test_asking_for_the_same_playbook_on_an_abandoned_plan_takes_it_up(self, tmp_path: Path) -> None:
+        """The person restarted raven and said "carry on" in the same
+        conversation. The model reaches for the playbook by name, and a start
+        that refused with "resume it yourself" would send them to a terminal;
+        a start that started would redo the stint from an older base."""
+        tool = _FakeTool(tmp_path / "stints", readable={"game-dev-r01-planner"})
+        store = self._interrupted(tmp_path, tool)
+        driver = self._driver(tmp_path, tool)
+
+        receipt = await driver.start(_spec(confirm=False))
+
+        assert not receipt.startswith("Error"), receipt
+        assert "taken up rather than started over" in receipt
+        assert [record.stint_id for record in store.list()] == ["stint-x"], "no second stint was written"
+        [nodes] = tool.submitted
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-developer"]
+
+    async def test_a_plan_somebody_is_still_working_is_not_taken_from_them_by_a_start(self, tmp_path: Path) -> None:
+        tool = _FakeTool(tmp_path / "stints")
+        self._interrupted(tmp_path, tool, quiet_for_sec=0)
+
+        receipt = await self._driver(tmp_path, tool).start(_spec(confirm=False))
+
+        assert receipt.startswith("Error") and "already" in receipt
         assert tool.submitted == []
 
     async def test_a_sweep_takes_up_a_plan_whose_run_is_in_flight_nowhere(self, tmp_path: Path) -> None:
@@ -1581,7 +2164,12 @@ class TestAProjectThatWasNeverSetUp:
         round failing on `{{ref:}}`, for the whole budget."""
         project = self._project(tmp_path)
         tool = _FakeTool(tmp_path / "stints")
-        spec = _spec(confirm=False, setup="stint", roles=[{"as": "planner", "name": "echo", "promptTemplate": "hi"}])
+        spec = _spec(
+            confirm=False,
+            setup="stint",
+            isolation="worktree",
+            roles=[{"as": "planner", "name": "echo", "promptTemplate": "hi"}],
+        )
 
         await self._driver(tool, project).start(spec)
 
@@ -1589,6 +2177,10 @@ class TestAProjectThatWasNeverSetUp:
         tree = Path(record.workdir)
         assert tree != project, "the stint got a checkout of its own"
         assert (tree / ".stint" / "planner.md").is_file(), sorted(p.name for p in tree.iterdir())
+        # And it is named as having been there before any role ran, or the first
+        # role of round one is graded against it and it is quarantined as that
+        # role's stray write -- which is how it went missing for round two.
+        assert ".stint/planner.md" in record.untracked_at_start
 
     async def test_what_setup_writes_is_not_committed_to_the_person_s_branch(self, tmp_path: Path) -> None:
         """Committing to somebody's branch for a run they have not approved yet
@@ -1681,9 +2273,20 @@ class TestWhatAPersonApproves:
         # Every command in full: they run here, and this is the one moment.
         assert "python3 -m compileall -q src" in asked
         assert "uv run pytest -q" in asked
-        assert "stint/stint-x" in asked and "working tree is untouched" in asked
+        assert "stint/stint-x" in asked and "the branch you are on now is left where it is" in asked
         assert "NOTHING-LEFT" in asked
         assert "/home/me/game" in asked
+
+    def test_the_question_says_which_tree_the_run_takes(self) -> None:
+        """The three isolations differ in what the person gives up, and that is
+        the half of the question they cannot get from the round count."""
+        from raven.playbook.stint import approval
+
+        own = approval(_spec(isolation="worktree"), self._record())
+        theirs = approval(_spec(isolation="branch"), self._record())
+
+        assert "in a checkout of its own -- your working tree is untouched" in own
+        assert "the tree is the stint's until it ends" in theirs
 
     def test_a_budget_with_no_way_out_does_not_read_as_a_promise(self) -> None:
         from raven.playbook.stint import approval
@@ -1751,14 +2354,19 @@ class TestWhatAPersonApproves:
         tool = self._asking_tool(tmp_path, asked)
         nodes = [{"id": "a", "subagent": "echo", "node_summary": "s", "prompt_template": "p"}]
 
+        from raven.agent.subagent.prompt_errors import RoundNotApprovedError
+
         await tool.execute(nodes, task_summary="ordinary", confirm=True, background=False)
-        await tool.run_round(
-            nodes,
-            task_summary="a stint",
-            confirm=True,
-            stint=StintRef(stint_id="stint-1", round_index=1, session_key="web:stint"),
-            confirm_question=lambda: "Start a stint? up to 30 rounds",
-        )
+        # A refused round is an exception for the driver, which has a record
+        # to close; the ordinary run above got the sentence a model reads.
+        with pytest.raises(RoundNotApprovedError):
+            await tool.run_round(
+                nodes,
+                task_summary="a stint",
+                confirm=True,
+                stint=StintRef(stint_id="stint-1", round_index=1, session_key="web:stint"),
+                confirm_question=lambda: "Start a stint? up to 30 rounds",
+            )
 
         assert asked[0].startswith("Run this 1 step graph?")
         assert asked[1] == "Start a stint? up to 30 rounds"
@@ -2227,7 +2835,9 @@ class TestStopping:
 
     async def test_a_stopped_round_opens_no_further_one_and_says_nothing(self, tmp_path: Path) -> None:
         """A stop is silent everywhere else, and narrating what somebody just
-        cancelled is what that silence exists to avoid."""
+        cancelled is what that silence exists to avoid. What it leaves is a
+        paused stint, not an ended one: the round was cut, the rounds before it
+        were not, and `resume` puts the cut one up again."""
         tool = _FakeTool(tmp_path / "stints")
         store = self._plan(tmp_path, tool)
         driver = self._driver(tmp_path, tool)
@@ -2237,8 +2847,9 @@ class TestStopping:
         assert announced is None
         assert tool.submitted == [], "no further round was opened"
         record = store.read("stint-s")
-        assert record.status == "stopped"
-        assert record.stop_reason == "the user stopped it"
+        assert record.status == "paused"
+        assert record.stop_reason == "round 1 was stopped before it finished"
+        assert record.round(1).status == "stopped"
 
     async def test_a_plan_stopped_while_a_round_ran_reports_that_round_and_ends(self, tmp_path: Path) -> None:
         """`playbook stint stop` lands on the file; the round in flight is not

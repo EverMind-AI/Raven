@@ -690,47 +690,36 @@ class TestWhoHoldsTheStintOpen:
     loop out from under the round -- the receipt says it started, the record
     says running, and nothing ever ran."""
 
-    async def test_the_hold_returns_once_nothing_is_live(self) -> None:
+    async def test_the_hold_returns_once_this_process_holds_nothing(self) -> None:
         from raven.cli.playbook_commands import hold_until_the_stints_end
-
-        class _Store:
-            @staticmethod
-            def list() -> list:
-                return []
 
         class _Driver:
             @staticmethod
-            def store_for(_key):
-                return _Store()
+            def holding() -> bool:
+                return False
 
         await hold_until_the_stints_end(_Driver(), every_sec=0.01)
 
-    async def test_the_hold_waits_while_a_round_is_still_going(self) -> None:
+    async def test_the_hold_waits_while_a_round_is_still_going_here(self) -> None:
         """The wait is the whole point: without it the command returns between
-        the receipt and the first round."""
+        the receipt and the first round. Asked of the driver and not of the
+        records: a record another process is beating for is live and not this
+        terminal's to wait on, and holding on it hung the refusal it had just
+        printed."""
         from raven.cli.playbook_commands import hold_until_the_stints_end
 
-        class _Live:
-            live = True
-
-        class _Store:
-            def __init__(self) -> None:
-                self.reads = 0
-
-            def list(self) -> list:
-                self.reads += 1
-                return [_Live()] if self.reads < 3 else []
-
-        store = _Store()
-
         class _Driver:
-            @staticmethod
-            def store_for(_key):
-                return store
+            def __init__(self) -> None:
+                self.asked = 0
 
-        await hold_until_the_stints_end(_Driver(), every_sec=0.01)
+            def holding(self) -> bool:
+                self.asked += 1
+                return self.asked < 3
 
-        assert store.reads >= 3, "it stopped waiting while a stint was still live"
+        driver = _Driver()
+        await hold_until_the_stints_end(driver, every_sec=0.01)
+
+        assert driver.asked >= 3, "it stopped waiting while a round was still going here"
 
 
 class TestTheCommandsWeTellPeopleToRun:
@@ -937,6 +926,61 @@ class TestPlanCommands:
         assert result.exit_code == 0, result.output
         assert driver.calls == [("resume", "stint-20260917T000000Z", "tui:abc")]
 
+    def test_resume_goes_to_the_raven_serving_the_page_when_one_is_up(self, stints: Path, monkeypatch) -> None:
+        """A round runs in the process that opens it. Opened here it ran in the
+        terminal -- and when the terminal was a model's shell tool, the tool's
+        timeout killed it with the round half-dispatched (2026-09-20). The page's
+        raven has the driver and the conversation the stint reports to."""
+        _plan_on_disk(stints, status="interrupted", session_key="tui:abc")
+        driver = _CapturingDriver()
+        monkeypatch.setattr("raven.cli.playbook_commands._stint_driver", driver.built_for)
+        sent: list[tuple] = []
+        monkeypatch.setattr("raven.cli._hosted_rpc.hosted_page", lambda: (18792, "tok"))
+        monkeypatch.setattr(
+            "raven.cli._hosted_rpc.call",
+            lambda port, token, method, params, **_: (
+                sent.append((port, method, params))
+                or {"reply": "Stint stint-20260917T000000Z is running round 2 again."}
+            ),
+        )
+
+        result = runner.invoke(app, ["playbook", "stints", "resume", "stint-20260917T000000Z"])
+
+        assert result.exit_code == 0, result.output
+        assert sent == [(18792, "playbooks.stints.resume", {"stint_id": "stint-20260917T000000Z"})]
+        assert driver.calls == [], "no second engine in this terminal"
+        assert "running round 2 again" in result.output and "port 18792" in result.output
+
+    def test_extend_goes_to_the_page_s_raven_too(self, stints: Path, monkeypatch) -> None:
+        _plan_on_disk(stints, status="finished", session_key="tui:abc", group=GROUP)
+        driver = _CapturingDriver()
+        monkeypatch.setattr("raven.cli.playbook_commands._stint_driver", driver.built_for)
+        sent: list[tuple] = []
+        monkeypatch.setattr("raven.cli._hosted_rpc.hosted_page", lambda: (18792, "tok"))
+        monkeypatch.setattr(
+            "raven.cli._hosted_rpc.call", lambda port, token, method, params, **_: sent.append((method, params)) or {}
+        )
+
+        result = runner.invoke(app, ["playbook", "stints", "extend", "stint-20260917T000000Z", "--rounds", "3"])
+
+        assert result.exit_code == 0, result.output
+        assert sent == [("playbooks.stints.extend", {"stint_id": "stint-20260917T000000Z", "rounds": 3})]
+        assert driver.calls == []
+
+    def test_a_refusal_from_the_page_s_raven_is_the_terminal_s_answer(self, stints: Path, monkeypatch) -> None:
+        _plan_on_disk(stints, status="interrupted", session_key="tui:abc")
+        monkeypatch.setattr("raven.cli._hosted_rpc.hosted_page", lambda: (18792, "tok"))
+
+        def refuse(*_a, **_k):
+            raise RuntimeError("no stint stint-20260917T000000Z on this machine")
+
+        monkeypatch.setattr("raven.cli._hosted_rpc.call", refuse)
+
+        result = runner.invoke(app, ["playbook", "stints", "resume", "stint-20260917T000000Z"])
+
+        assert result.exit_code == 1
+        assert "no stint" in result.output
+
     def test_resume_says_so_for_a_plan_that_is_over(self, stints: Path, monkeypatch) -> None:
         _plan_on_disk(stints, status="finished")
         driver = _CapturingDriver()
@@ -947,6 +991,14 @@ class TestPlanCommands:
         assert result.exit_code == 0
         assert "nothing left to take up" in result.output
         assert driver.calls == []
+
+
+@pytest.fixture(autouse=True)
+def _no_page_is_served(monkeypatch):
+    """The relay asks whether a raven serves the page; these tests are about the
+    terminal's own driver unless they say otherwise, so on this machine's real
+    serve.json the answer has to be no."""
+    monkeypatch.setattr("raven.cli._hosted_rpc.hosted_page", lambda: None)
 
 
 class _CapturingDriver:
@@ -968,16 +1020,161 @@ class _CapturingDriver:
         self.calls.append(("resume", stint_id, session_key))
         return f"{stint_id} taken up again."
 
-    def store_for(self, _session_key: str | None):
-        """What the command reads to decide whether to hold the terminal open.
+    def holding(self) -> bool:
+        """What the command asks to decide whether to hold the terminal open.
 
-        Nothing live, so these tests exercise the answer rather than the wait:
-        a double that reported a live stint would hold the runner for ever.
+        Nothing held, so these tests exercise the answer rather than the wait:
+        a double that reported a round in flight would hold the runner for ever.
         """
+        return False
 
-        class _Empty:
-            @staticmethod
-            def list() -> list:
-                return []
 
-        return _Empty()
+class _SweepingDriver(_CapturingDriver):
+    """A driver that takes one stint up and holds a round of it for two asks."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.asked = 0
+
+    async def sweep(self, session_key: str | None) -> list[str]:
+        self.calls.append(("sweep", session_key))
+        return ["stint-20260917T000000Z"]
+
+    def holding(self) -> bool:
+        self.asked += 1
+        return self.asked <= 2
+
+
+class TestSweepHoldsForWhatItTookUp:
+    def test_sweep_stays_until_the_rounds_it_opened_are_done(self, stints: Path, monkeypatch) -> None:
+        """Rounds are dispatched onto the loop the verb ran on, and `asyncio.run`
+        per home closed that loop under them: the receipt said "took up", the
+        record said running, nothing ran."""
+        _plan_on_disk(stints, status="running", session_key="tui:abc")
+        driver = _SweepingDriver()
+        monkeypatch.setattr("raven.cli.playbook_commands._stint_driver", driver.built_for)
+        monkeypatch.setattr("raven.cli.playbook_commands.asyncio.sleep", _no_sleep)
+
+        result = runner.invoke(app, ["playbook", "stints", "sweep"])
+
+        assert result.exit_code == 0, result.output
+        assert ("sweep", None) in driver.calls
+        assert "took up stint-20260917T000000Z" in result.output
+        assert "Holding this terminal" in result.output
+        assert driver.asked >= 3, "it returned while the round it took up was still going"
+
+    def test_a_refusal_does_not_hold_the_terminal(self, stints: Path, monkeypatch) -> None:
+        """`resume` of a stint another raven is beating for is refused, and the
+        record is still live -- somebody else's. Holding on that hung the
+        refusal, under a banner telling the person to run the command it was
+        blocking."""
+        _plan_on_disk(stints, status="running", session_key="tui:abc")
+        driver = _CapturingDriver()
+        monkeypatch.setattr("raven.cli.playbook_commands._stint_driver", driver.built_for)
+
+        result = runner.invoke(app, ["playbook", "stints", "resume", "stint-20260917T000000Z"])
+
+        assert result.exit_code == 0, result.output
+        assert "taken up again" in result.output
+        assert "Holding this terminal" not in result.output
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None
+
+
+class TestTheTerminalIsAskedBeforeAStintRuns:
+    """The graph tool built here had no route to a person, and its gate approves
+    when it has nobody to ask -- without rendering the text that names the round
+    budget and every command. Thirty rounds of shell from a file on one absent
+    yes is the case the gate exists for."""
+
+    async def test_with_a_terminal_the_question_is_shown_and_the_answer_is_theirs(self, monkeypatch) -> None:
+        from raven.cli import playbook_commands as pc
+
+        shown: list[str] = []
+        monkeypatch.setattr(pc.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(pc.console, "print", lambda text, **_kw: shown.append(str(text)))
+        monkeypatch.setattr(pc.typer, "confirm", lambda _prompt, default=False: True)
+
+        assert await pc.ask_at_the_terminal("conv", "Run 3 rounds of `make test`?") is True
+        assert any("make test" in line for line in shown)
+
+        monkeypatch.setattr(pc.typer, "confirm", lambda _prompt, default=False: False)
+        assert await pc.ask_at_the_terminal("conv", "Run it?") is False
+
+    async def test_with_no_terminal_the_answer_is_no_and_says_so(self, monkeypatch) -> None:
+        from raven.cli import playbook_commands as pc
+
+        said: list[str] = []
+        monkeypatch.setattr(pc.sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(pc.err_console, "print", lambda text, **_kw: said.append(str(text)))
+
+        assert await pc.ask_at_the_terminal("conv", "Run it?") is False
+        assert any("no terminal to ask at" in line for line in said)
+
+
+class TestScaffoldingAStint:
+    """`playbook new-stint` -- the one mode a model may not write for you.
+
+    The generator is held to `dag` and `prompt` because a stint's `verify` lines
+    are shell that runs here every round under a single approval. That left the
+    only way to make one being to copy an existing file and discover the schema
+    a validation error at a time.
+    """
+
+    @staticmethod
+    def _home(tmp_path, monkeypatch) -> Path:
+        monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+        return tmp_path / "workspace" / "playbooks"
+
+    def test_what_it_writes_validates_as_written(self, tmp_path, monkeypatch) -> None:
+        """A skeleton that does not load would report where you started rather
+        than what you changed."""
+        from raven.playbook.store import PlaybookStore
+        from raven.playbook.validate import validate_structure
+
+        root = self._home(tmp_path, monkeypatch)
+        written = runner.invoke(app, ["playbook", "new-stint", "qa-loop"])
+        assert written.exit_code == 0, written.output
+
+        spec = PlaybookStore(root).load("qa-loop")
+        assert spec.mode == "stint"
+        assert validate_structure(spec, known_agents=[role.name for role in spec.roles or []]) == []
+
+    def test_the_comments_are_the_point_and_they_survive(self, tmp_path, monkeypatch) -> None:
+        """Written as a file rather than saved through the serializer: a round
+        trip through the model keeps the fields and drops every comment."""
+        root = self._home(tmp_path, monkeypatch)
+        runner.invoke(app, ["playbook", "new-stint", "qa-loop"])
+
+        body = (root / "qa-loop" / "playbook.md").read_text(encoding="utf-8")
+        assert "isolation: branch" in body, "the choice a run cannot be un-made is explained"
+        assert "refused at load" in body, "and so is the trap that refuses one"
+        assert body.count("#") > 20
+
+    def test_it_is_usable_without_an_enabling_step(self, tmp_path, monkeypatch) -> None:
+        self._home(tmp_path, monkeypatch)
+        runner.invoke(app, ["playbook", "new-stint", "qa-loop"])
+
+        listed = runner.invoke(app, ["playbook", "list"])
+
+        assert "qa-loop" in listed.output
+        assert "disabled" not in listed.output
+
+    def test_a_name_the_library_already_has_is_refused(self, tmp_path, monkeypatch) -> None:
+        self._home(tmp_path, monkeypatch)
+        runner.invoke(app, ["playbook", "new-stint", "qa-loop"])
+
+        again = runner.invoke(app, ["playbook", "new-stint", "qa-loop"])
+
+        assert again.exit_code == 1
+        assert "already exists" in again.output
+
+    def test_a_name_that_could_not_be_a_directory_is_refused(self, tmp_path, monkeypatch) -> None:
+        self._home(tmp_path, monkeypatch)
+
+        result = runner.invoke(app, ["playbook", "new-stint", "QA Loop"])
+
+        assert result.exit_code == 1
+        assert "kebab-case" in result.output

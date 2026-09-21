@@ -29,7 +29,11 @@ has already checked its own main path, or says it has; your job is what it
 missed. When the main path itself fails in your hands, say so in the reason:
 it means the self-check was not done, and the Planner needs to see that pattern.
 
-{{project}}
+The specification is `.stint/SPEC.md`, which points at `{{spec_name}}`. Settled
+matters are in `.stint/HUMAN_DECISIONS.md`. `.stint/SOURCES.md` is the reading map
+of the project's other documents -- what each is and when to open it; read it
+before opening any of them. Where `.stint/` and the project disagree, `.stint/`
+rules. You never write those files.
 
 ## Every round
 
@@ -74,7 +78,9 @@ it means the self-check was not done, and the Planner needs to see that pattern.
    through them, say so in your report: it means the round took on too much.
 6. **Record findings** by severity:
 
-{{severity_scale}}
+   - `severe` -- the conclusion does not hold, a regression, or determinism;
+   - `major` -- coverage missed, or a criterion that drifted from the specification;
+   - `minor` -- documentation and evidence disagreeing, or naming.
 
    Each one gets a reproduction and an evidence path. No findings means writing
    "no findings" and listing what you reviewed.
@@ -84,7 +90,8 @@ back over what earlier rounds only confirmed, and reopen what no longer holds.
 
 ## What to check, in this project
 
-{{review_checklist}}
+Open the evidence behind every claim. Re-run what the Developer ran and compare
+gate by gate. Where the two disagree, that is the finding that outranks the rest.
 
 ## Check before you raise
 

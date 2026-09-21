@@ -1124,7 +1124,11 @@ describe('the runs a playbook started', () => {
     await act(async () => {})
     expect(screen.getByText('stint-a')).toBeTruthy()
     expect(screen.getByText('gui.pb.stint_round {"n":"3","max":"30"}')).toBeTruthy()
-    expect(screen.getByText('gui.pb.stint_live')).toBeTruthy()
+    expect(screen.getByText('gui.pb.stint_status_running')).toBeTruthy()
+    /* The bar is the budget and the fill the rounds opened: 3 of 30. */
+    const bar = document.querySelector('.pnfill') as HTMLElement
+    expect(bar.style.width).toBe('10%')
+    expect(bar.className).toContain('live')
   })
 
   it('says how many answers a run is waiting on, because that is the one thing only a person can clear', async () => {
@@ -1142,7 +1146,11 @@ describe('the runs a playbook started', () => {
     await act(async () => {})
     fireEvent.click(screen.getByText('stint-a'))
     await act(async () => {})
-    expect(screen.getByText('build=failed')).toBeTruthy()
+    /* A check is drawn as its name, with the outcome as colour and the pair on hover. */
+    expect(screen.getByTitle('build=failed').className).toContain('bad')
+    expect(screen.getByTitle('build=ok').className).toContain('ok')
+    expect(screen.getAllByText('gui.pb.stint_status_completed')).toHaveLength(2)
+    expect(document.querySelectorAll('.pntable th')).toHaveLength(5)
     expect(screen.getByText('gui.pb.stint_undone {"n":"1"}')).toBeTruthy()
     expect(screen.getByText('1: dev wrote reports/qa.md')).toBeTruthy()
   })
@@ -1164,6 +1172,78 @@ describe('the runs a playbook started', () => {
     fireEvent.click(screen.getByText('gui.pb.stint_stop'))
     await act(async () => {})
     expect(screen.queryByText('gui.pb.stint_stop')).toBeNull()
+  })
+
+  it('offers to take a paused or interrupted run up again, and not a live one', async () => {
+    /* The button for the run raven was restarted under. It opens the round in
+       the engine serving this page, so the row it comes back with is live again
+       and the driver's sentence is what the person is told. */
+    const interrupted = { ...planDetail(), stint: planRow({ stint_id: 'stint-a', live: false, status: 'interrupted' }) }
+    const taken = {
+      ...planDetail(),
+      stint: planRow({ stint_id: 'stint-a', live: true, status: 'running' }),
+      reply: 'Stint stint-a is running round 2 again.'
+    }
+    const resumed: string[] = []
+    install({
+      stints: async () => [interrupted.stint],
+      stint: async () => interrupted,
+      resumePlan: async (id: string) => {
+        resumed.push(id)
+        return taken
+      }
+    })
+    await mount()
+    fireEvent.click(screen.getByText('gui.pb.tab_plans'))
+    await act(async () => {})
+    fireEvent.click(screen.getByText('stint-a'))
+    await act(async () => {})
+    expect(screen.queryByText('gui.pb.stint_pause')).toBeNull()
+
+    fireEvent.click(screen.getByText('gui.pb.stint_resume'))
+    await act(async () => {})
+
+    expect(resumed).toEqual(['stint-a'])
+    expect(screen.queryByText('gui.pb.stint_resume')).toBeNull()
+    expect(screen.getByText('gui.pb.stint_pause')).toBeTruthy()
+  })
+
+  it('offers a pause beside the stop, and keeps the run takeable afterwards', async () => {
+    /* The difference the two buttons are for: a stopped run is over, a paused
+       one is what `resume` acts on. Both leave the round in flight alone. */
+    const paused = { ...planDetail(), stint: planRow({ stint_id: 'stint-a', live: false, status: 'paused' }) }
+    install({
+      stints: async () => [planRow({ stint_id: 'stint-a' })],
+      stint: async () => planDetail(),
+      pausePlan: async () => paused
+    })
+    await mount()
+    fireEvent.click(screen.getByText('gui.pb.tab_plans'))
+    await act(async () => {})
+    fireEvent.click(screen.getByText('stint-a'))
+    await act(async () => {})
+
+    fireEvent.click(screen.getByText('gui.pb.stint_pause'))
+    await act(async () => {})
+
+    expect(screen.queryByText('gui.pb.stint_pause')).toBeNull()
+    expect(screen.queryByText('gui.pb.stint_stop')).toBeNull()
+  })
+
+  it('draws no pause where the host has no such method', async () => {
+    /* Every verb on this seam is optional: a host may carry an older method set,
+       and a button that answers nothing is worse than no button. */
+    install({ stints: async () => [planRow({ stint_id: 'stint-a' })], stint: async () => planDetail() })
+    await mount()
+    fireEvent.click(screen.getByText('gui.pb.tab_plans'))
+    await act(async () => {})
+    fireEvent.click(screen.getByText('stint-a'))
+    await act(async () => {})
+
+    fireEvent.click(screen.getByText('gui.pb.stint_pause'))
+    await act(async () => {})
+
+    expect(screen.getByText('gui.pb.stint_pause')).toBeTruthy()
   })
 
   it('takes an answer and shows it where the question was', async () => {

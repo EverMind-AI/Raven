@@ -21,9 +21,14 @@ The standing orders are referenced rather than pasted (`{{ref:...}}`): a round
 that inlined every rule into every prompt is how the reply ceiling was reached
 the first time.
 
-What it does *not* carry, and why: no role runs in a worktree of its own (the
-plan has one, and the roles share it), and there is one developer rather than
-three.
+Where it works: this repository, on a branch of its own (`stint/<id>`), which is
+the default `isolation`. The tree is the run's until it ends and your own branch
+is left where it is; `git log stint/<id>` is where the work lands. A project that
+would rather keep its checkout usable meanwhile adds `isolation: worktree`, and
+pays a second copy of the repository for it.
+
+What it does *not* carry, and why: no role runs in a tree of its own (the run has
+one and the roles share it), and there is one developer rather than three.
 
 ```yaml playbook-spec
 version: 1
@@ -42,9 +47,14 @@ memory:
     recentRounds: 2
     maxChars: 16000
 
+# Declared by what it proves, not by a command: this file travels, and the
+# command that builds a Godot project is nothing on a Node one. The project
+# answers once -- `raven playbook stint check set game-rounds build --run "..."`
+# -- and the answer is kept in `.stint/checks.json`. A project the tree plainly
+# affords a build for is answered for you; a fresh one is asked before the run.
 verify:
   - name: build
-    run: "python3 -m compileall -q src"
+    description: the project builds from a clean tree, and a build that cannot fail proves nothing
     timeoutSec: 300
 
 # Every role below mirrors the frontmatter of the guard file it reads. Those
@@ -56,7 +66,7 @@ verify:
 
 roles:
   - as: planner
-    name: Raven-Research
+    name: Raven-Code
     nodeSummary: pick this round's work
     owns:
       - "reports/brief_{NN}.md"
@@ -65,13 +75,21 @@ roles:
       - .stint/HUMAN_DECISIONS.md
       - .stint/FIXLOG.md
       - "reports/qa_{NN-1}.md"
+    # Every output directory the layout's own guards name, and the two ledgers.
+    # Held equal to `raven.stint.bootstrap.OUTPUT_DIRS` by a test: the guard
+    # files are generated from that tuple and this list is written by hand, so
+    # the two drifted the moment it grew -- and a Developer that wrote its replay
+    # evidence where its standing orders said to had the work reverted by a list
+    # it could not see.
     artifacts: &ledger
       - .stint/backlog.json
       - .stint/HUMAN_DECISIONS.md
       - "build/**"
+      - "builds/**"
       - "dist/**"
       - "out/**"
       - "demo_outputs/**"
+      - "replays/**"
     journalSection: Plan
     promptTemplate: |
       {{ref:.stint/planner.md}}
@@ -94,7 +112,22 @@ roles:
       - .stint/FIXLOG.md
       - .stint/PLAYBOOK.md
       - "reports/round_{NN}.md"
+      # Every directory the layout's guard may grant the Developer, not the one
+      # this project happens to use: the guard file is written per project from
+      # `raven.stint.bootstrap.SOURCE_DIRS` (a fresh project gets `src/`,
+      # `project/` and `tools/`), and this row is what the Developer is judged
+      # by. Held a superset by a test. Written narrower than the guard, a
+      # Developer that put its checks under `tools/` where its orders said it
+      # could had them undone as a stray write.
       - "src/**"
+      - "project/**"
+      - "lib/**"
+      - "app/**"
+      - "pkg/**"
+      - "cmd/**"
+      - "tools/**"
+      - "scripts/**"
+      - "assets/**"
     reads:
       - "reports/brief_{NN}.md"
       - .stint/SPEC.md
@@ -118,7 +151,7 @@ roles:
       {{round.guard}}
 
   - as: qa
-    name: Raven-Research
+    name: Raven-Code
     dependsOn: [developer]
     nodeSummary: judge what the developer left
     owns:

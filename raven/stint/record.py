@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 from collections.abc import Collection, Sequence
 from dataclasses import asdict, dataclass, field
@@ -102,7 +103,9 @@ def mark_adrift(
     Judged on the stamp rather than on any process's recollection, which is what
     makes it safe to run anywhere: a stint another host is working has a fresh
     stamp and is left alone, where "its run id is not in my active set" would
-    have called it dead and invited a second host to take it up.
+    have called it dead and invited a second host to take it up. On the machine
+    the holder ran on, a dead pid is taken as the same answer sooner -- see
+    :meth:`StintRecord.holder_gone`.
 
     ``held`` names the stints the caller knows it is working itself, and is
     checked *before* the write rather than filtered out of the answer: a caller
@@ -117,7 +120,7 @@ def mark_adrift(
     found: list[StintRecord] = []
     for store in stores:
         for record in store.list():
-            if record.stint_id in mine or record.status != RUNNING or not record.stale(now_ms):
+            if record.stint_id in mine or record.status != RUNNING or not record.abandoned(now_ms):
                 continue
             logger.warning("stint {} was left in flight by a process that is gone", record.stint_id)
             record.status = INTERRUPTED
@@ -158,6 +161,14 @@ class StintRef:
 
     stint_id: str
     round_index: int
+    rounds: int = 0
+    """The budget this round is one of, for a reader that is shown the round.
+
+    Carried rather than looked up for the same reason the rest of this is: the
+    number is known where the round is submitted, and a surface drawing "round 3
+    of 30" should not have to open the stint file to learn the 30. Zero means
+    nobody said, and a reader shows the round alone."""
+
     workdir: str = ""
     session_key: str = ""
     """Whose stint directory holds this stint.
@@ -186,6 +197,15 @@ class RoundRecord:
     summary: str = ""
     verify: list[dict[str, Any]] = field(default_factory=list)
     violations: list[str] = field(default_factory=list)
+    finished: dict[str, str] = field(default_factory=dict)
+    """Each role that was judged and committed this round, by the node id it ran as.
+
+    Written as roles finish, so a round cut short says which of its roles are
+    done. `resume` names those nodes as met dependencies instead of running the
+    roles again, and reads them here rather than off the node registry alone:
+    the registry belongs to one conversation's directory, and a resume from a
+    terminal or an RPC call reads the wrong one.
+    """
 
 
 @dataclass
@@ -208,6 +228,23 @@ class StintRecord:
     branch: str = ""
     round_index: int = 0
     status: str = RUNNING
+
+    untracked_at_start: list[str] = field(default_factory=list)
+    """Paths already in the tree, uncommitted, when the stint opened it.
+
+    Nobody's writes: the layout the setup pass just wrote, and whatever else the
+    checkout carried. The first role judged in a round is graded against the
+    whole dirty tree -- there is no earlier commit to measure it from -- so
+    without this list the run's own standing orders are attributed to the
+    Planner and quarantined as its stray writes, and the round after cannot read
+    the file it was told to read.
+
+    The list as it was at the start; the round applies it only while a path is
+    still absent from the commit a role is measured from. The first role's
+    commit takes the whole tree with it, standing orders included, and from
+    then on an edit to one of them is that role's edit -- an exemption that
+    outlived the commit would let any role rewrite any other's orders unseen.
+    """
     stop_reason: str = ""
     origin: dict[str, Any] = field(default_factory=dict)
     rounds: list[RoundRecord] = field(default_factory=list)
@@ -216,6 +253,22 @@ class StintRecord:
     stage_base: str = ""
     started_at_ms: int = 0
     ended_at_ms: int = 0
+    holder_pid: int = 0
+    holder_host: str = ""
+    """Which process last held a round of this stint, and on which machine.
+
+    The stamp above says *when* the holder last spoke; this says *who*, so a
+    reader on the same machine can ask the kernel instead of waiting out the
+    stamp. A gateway killed with a stint in flight leaves a fresh stamp for five
+    minutes, and a person who restarts it and says "carry on" inside those
+    minutes was told the stint was still being worked. A pid that is not alive
+    on this host is an answer the clock cannot give.
+
+    Stamped by the driver when it submits a round and on every beat, never by
+    the CLI or the RPC layer: those write the file from processes that are not
+    holding anything, and a claim from one of them would be believed.
+    """
+
     touched_at_ms: int = 0
     """When a process last said it still holds this stint, by the wall clock.
 
@@ -226,10 +279,9 @@ class StintRecord:
     can read: a stale stamp means the holder is gone, where "this run id is not
     in my own active set" only ever meant "not mine".
 
-    Wall clock rather than monotonic for the same reason the dispatch ledger uses
-    one: a monotonic reading is measured from a zero that changes every time a
-    process starts, so no other process can compare it and a restart cannot read
-    its own.
+    Wall clock rather than monotonic: a monotonic reading is measured from a
+    zero that changes every time a process starts, so no other process can
+    compare it and a restart cannot read its own.
     """
 
     @property
@@ -251,6 +303,32 @@ class StintRecord:
         now = int(time.time() * 1000) if now_ms is None else now_ms
         return now - self.touched_at_ms > STALE_AFTER_SEC * 1000
 
+    def holder_gone(self) -> bool:
+        """The process that held this stint is known, on this machine, and not alive.
+
+        False whenever the question cannot be answered here: no holder recorded,
+        a holder on another host, or a pid this process may not signal (which is
+        a pid that exists). Only a `ProcessLookupError` says gone.
+        """
+        if self.holder_pid <= 0 or self.holder_host != socket.gethostname():
+            return False
+        try:
+            os.kill(self.holder_pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        return False
+
+    def abandoned(self, now_ms: int | None = None) -> bool:
+        """Nothing is advancing this stint: its holder went quiet, or is known to be dead."""
+        return self.stale(now_ms) or self.holder_gone()
+
+    def claim(self) -> None:
+        """Say that this process holds a round of this stint."""
+        self.holder_pid = os.getpid()
+        self.holder_host = socket.gethostname()
+
     @property
     def unfinished(self) -> bool:
         """This stint is not over -- running, interrupted or paused alike.
@@ -261,10 +339,11 @@ class StintRecord:
         """
         return self.status not in (FINISHED, STOPPED)
 
-    def ref(self, round_index: int | None = None) -> StintRef:
+    def ref(self, round_index: int | None = None, *, rounds: int = 0) -> StintRef:
         return StintRef(
             stint_id=self.stint_id,
             round_index=self.round_index if round_index is None else round_index,
+            rounds=rounds,
             workdir=self.workdir,
             session_key=str(self.origin.get("session_key") or ""),
         )

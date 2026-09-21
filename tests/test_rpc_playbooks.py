@@ -1562,6 +1562,93 @@ class TestPlans:
 
         assert detail["stint"]["stop_reason"] == "the round budget of 30 is spent"
 
+    async def test_a_pause_leaves_the_stint_unfinished_so_it_can_be_taken_up(self, stints) -> None:
+        """The whole difference between this and `stop`: what `resume` acts on.
+        Both let the round in flight finish and neither opens another."""
+        detail = await mod.playbooks_stints_pause({"stint_id": "stint-a"})
+
+        assert detail["stint"]["status"] == "paused"
+        assert stints.read("stint-a").unfinished is True
+        assert stints.read("stint-a").stop_reason == "a person paused the stint"
+        assert [entry["run_id"] for entry in detail["rounds"]] == ["run-1", "run-2"]
+
+    async def test_a_stopped_stint_is_not_reopened_by_pausing_it(self, stints) -> None:
+        """`live` is the guard on both verbs, so the later call is a read. Without
+        it, pausing something already over would make it unfinished again -- and
+        an unfinished stint on a project is what refuses the next one."""
+        await mod.playbooks_stints_stop({"stint_id": "stint-a"})
+
+        detail = await mod.playbooks_stints_pause({"stint_id": "stint-a"})
+
+        assert detail["stint"]["status"] == "stopped"
+        assert stints.read("stint-a").unfinished is False
+
+    @staticmethod
+    def _engine(driver):
+        """An agent loop as the handlers see it: a playbook runtime carrying the driver."""
+
+        class Runtime:
+            rounds = driver
+
+        class Loop:
+            _playbooks = Runtime()
+
+            def session_workdir(self, _key):
+                return None
+
+            def binding_for_session(self, _key):
+                return None
+
+        return lambda: Loop()
+
+    @staticmethod
+    def _driver():
+        class Driver:
+            calls: list[tuple] = []
+
+            async def resume(self, stint_id, session_key):
+                self.calls.append(("resume", stint_id, session_key))
+                return f"Stint {stint_id} is running round 2 again."
+
+            async def extend(self, stint_id, rounds, session_key):
+                self.calls.append(("extend", stint_id, rounds, session_key))
+                return f"Stint {stint_id} may now run {rounds} more."
+
+        return Driver()
+
+    async def test_resume_takes_the_stint_up_in_the_engine_answering_the_call(self, stints) -> None:
+        """A round runs in the process that opens it. A terminal running its own
+        driver put the round in a shell nobody watched; this puts it in the
+        engine whose conversation started the stint, and hands back what the
+        driver said beside the detail, because "nothing left to take up" is an
+        answer too."""
+        record = stints.read("stint-a")
+        record.origin = {"session_key": "web:abc"}
+        stints.write(record)
+        driver = self._driver()
+
+        result = await mod.playbooks_stints_resume({"stint_id": "stint-a"}, agent_loop_factory=self._engine(driver))
+
+        assert driver.calls == [("resume", "stint-a", "web:abc")]
+        assert result["reply"] == "Stint stint-a is running round 2 again."
+        assert result["stint"]["stint_id"] == "stint-a" and "rounds" in result
+
+    async def test_extend_hands_the_count_to_the_same_engine(self, stints) -> None:
+        driver = self._driver()
+
+        result = await mod.playbooks_stints_extend(
+            {"stint_id": "stint-a", "rounds": 3}, agent_loop_factory=self._engine(driver)
+        )
+
+        assert driver.calls == [("extend", "stint-a", 3, None)]
+        assert "3 more" in result["reply"]
+
+    async def test_a_host_with_no_engine_refuses_to_take_a_stint_up(self, stints) -> None:
+        """Unlike pause and stop, which only write the file, this opens a round --
+        and a driver built for the call would run it in the RPC handler."""
+        with pytest.raises(RpcError):
+            await mod.playbooks_stints_resume({"stint_id": "stint-a"}, agent_loop_factory=None)
+
     async def test_an_answer_is_kept_and_the_badge_drops(self, stints) -> None:
         detail = await mod.playbooks_stints_answer({"stint_id": "stint-a", "question": 0, "text": "the second one"})
 
@@ -1577,13 +1664,63 @@ class TestPlans:
         for method, params in (
             ("playbooks.stints.list", {}),
             ("playbooks.stints.get", {"stint_id": "stint-a"}),
+            ("playbooks.stints.pause", {"stint_id": "stint-a"}),
             ("playbooks.stints.stop", {"stint_id": "stint-a"}),
             ("playbooks.stints.answer", {"stint_id": "stint-a", "question": 0, "text": "ok"}),
         ):
             handler = {
                 "playbooks.stints.list": mod.playbooks_stints_list,
                 "playbooks.stints.get": mod.playbooks_stints_get,
+                "playbooks.stints.pause": mod.playbooks_stints_pause,
                 "playbooks.stints.stop": mod.playbooks_stints_stop,
                 "playbooks.stints.answer": mod.playbooks_stints_answer,
             }[method]
             METHOD_MODELS[method][1].model_validate(await handler(params))
+
+
+class TestTheMethodSurface:
+    """What the page can reach, pinned as a list.
+
+    A canary rather than a description. The `playbooks.*` family grew a
+    `stints.*` sub-family that acts on a running multi-round run, and the
+    difference between the two halves matters: the library methods read and
+    write files in the playbook store, and the stint methods reach the engine.
+    A method added to either half should be a decision somebody took, not a line
+    that arrived with a feature -- and a method that disappears should fail here
+    rather than in a page that stops working.
+    """
+
+    @staticmethod
+    def _registered() -> list[str]:
+        from raven.rpc.dispatcher import Dispatcher
+
+        d = Dispatcher()
+        mod.register_playbooks_methods(d)
+        return [name for name in d.methods() if name.startswith("playbooks.")]
+
+    def test_the_library_half(self) -> None:
+        assert [name for name in self._registered() if not name.startswith("playbooks.stints.")] == [
+            "playbooks.create",
+            "playbooks.credentials.clear",
+            "playbooks.credentials.get",
+            "playbooks.credentials.set",
+            "playbooks.delete",
+            "playbooks.get",
+            "playbooks.list",
+            "playbooks.oauth.authorize",
+            "playbooks.oauth.clear",
+            "playbooks.run",
+            "playbooks.set_enabled",
+            "playbooks.validate",
+        ]
+
+    def test_the_stint_half(self) -> None:
+        assert [name for name in self._registered() if name.startswith("playbooks.stints.")] == [
+            "playbooks.stints.answer",
+            "playbooks.stints.extend",
+            "playbooks.stints.get",
+            "playbooks.stints.list",
+            "playbooks.stints.pause",
+            "playbooks.stints.resume",
+            "playbooks.stints.stop",
+        ]

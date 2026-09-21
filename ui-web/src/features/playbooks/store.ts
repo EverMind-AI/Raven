@@ -342,6 +342,25 @@ export async function openStint(stintId: string): Promise<void> {
   }
 }
 
+/* The list and the open run read again, in place. A run moves while the tab is
+   open -- a round finishes, a question lands -- and a page that showed round 1
+   of a run on round 3 until the person clicked away read as a stalled run.
+   Nothing here touches `plansBusy`, so a refresh never flickers the page. */
+export async function refreshStints(): Promise<void> {
+  const list = source().stints
+  if (!list) return
+  try {
+    const stints = await list.call(source())
+    const open = state.openStint
+    const one = source().stint
+    const openStint = open && one ? await one.call(source(), open.stint.stint_id) : open
+    if (state.openStint !== open) return
+    set({ stints, openStint })
+  } catch {
+    /* The next tick asks again; an error here is not the page's to show. */
+  }
+}
+
 export function closePlan(): void {
   set({ openStint: null })
 }
@@ -356,6 +375,44 @@ export async function stopPlan(stintId: string): Promise<void> {
        re-reading would move the reader's place in a list that is sorted by
        when each run started. */
     set({ openStint: detail, stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
+  } catch (e) {
+    toast((e as Error)?.message || String(e))
+  } finally {
+    set({ plansBusy: false })
+  }
+}
+
+export async function pausePlan(stintId: string): Promise<void> {
+  /* `stop` and this differ in what is left behind, not in what happens now:
+     both let the round in flight finish and neither opens another, and only a
+     paused stint is one `resume` can take up. The list is patched rather than
+     re-read for the same reason `stopPlan` patches it -- one row changed, and a
+     re-read would move the reader's place in a list sorted by start time. */
+  const pause = source().pausePlan
+  if (!pause) return
+  set({ plansBusy: true })
+  try {
+    const detail = await pause.call(source(), stintId)
+    set({ openStint: detail, stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
+  } catch (e) {
+    toast((e as Error)?.message || String(e))
+  } finally {
+    set({ plansBusy: false })
+  }
+}
+
+export async function resumePlan(stintId: string): Promise<void> {
+  /* The verb for a run raven was restarted under, or one somebody paused. The
+     round opens in the engine serving this page, so its reports land in the
+     conversation that started the run. The driver's sentence is shown as a
+     toast: a resume that found nothing to take up says so there. */
+  const resume = source().resumePlan
+  if (!resume) return
+  set({ plansBusy: true })
+  try {
+    const detail = await resume.call(source(), stintId)
+    set({ openStint: detail, stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
+    if (detail.reply) toast(detail.reply)
   } catch (e) {
     toast((e as Error)?.message || String(e))
   } finally {

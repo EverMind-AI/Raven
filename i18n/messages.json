@@ -9550,6 +9550,94 @@
     "gui.pb.stints_none": {
       "en": "No multi-round run has been started here.",
       "zh": "这里还没有启动过多轮运行。"
+    },
+    "gui.dag.stint_open": {
+      "en": "Open this multi-round run",
+      "zh": "打开这个多轮运行"
+    },
+    "gui.pb.stint_pause": {
+      "en": "Pause",
+      "zh": "暂停"
+    },
+    "gui.pb.stint_resume": {
+      "en": "Resume",
+      "zh": "继续"
+    },
+    "gui.pb.stint_status_running": {
+      "en": "running",
+      "zh": "进行中"
+    },
+    "gui.pb.stint_status_paused": {
+      "en": "paused",
+      "zh": "已暂停"
+    },
+    "gui.pb.stint_status_interrupted": {
+      "en": "interrupted",
+      "zh": "已中断"
+    },
+    "gui.pb.stint_status_completed": {
+      "en": "completed",
+      "zh": "已完成"
+    },
+    "gui.pb.stint_status_stopped": {
+      "en": "stopped",
+      "zh": "已停止"
+    },
+    "gui.pb.stint_status_failed": {
+      "en": "failed",
+      "zh": "失败"
+    },
+    "gui.pb.stint_started": {
+      "en": "started {when}",
+      "zh": "{when}开始"
+    },
+    "gui.pb.stint_ended": {
+      "en": "ended {when}",
+      "zh": "{when}结束"
+    },
+    "gui.pb.stint_attempt": {
+      "en": "attempt {n}",
+      "zh": "第 {n} 次尝试"
+    },
+    "gui.pb.stint_no_rounds": {
+      "en": "No round has run yet.",
+      "zh": "还没有跑过一轮。"
+    },
+    "gui.pb.stint_col_round": {
+      "en": "Round",
+      "zh": "轮次"
+    },
+    "gui.pb.stint_col_attempt": {
+      "en": "Attempt",
+      "zh": "尝试"
+    },
+    "gui.pb.stint_col_status": {
+      "en": "Status",
+      "zh": "状态"
+    },
+    "gui.pb.stint_col_checks": {
+      "en": "Checks",
+      "zh": "检查"
+    },
+    "gui.pb.stint_col_undone": {
+      "en": "Undone",
+      "zh": "撤销"
+    },
+    "gui.pb.when_now": {
+      "en": "just now",
+      "zh": "刚刚"
+    },
+    "gui.pb.when_min": {
+      "en": "{n} min ago",
+      "zh": "{n} 分钟前"
+    },
+    "gui.pb.when_hour": {
+      "en": "{n} h ago",
+      "zh": "{n} 小时前"
+    },
+    "gui.pb.when_day": {
+      "en": "{n} d ago",
+      "zh": "{n} 天前"
     }
   }
 }

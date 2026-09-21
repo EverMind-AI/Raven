@@ -187,6 +187,23 @@ def test_a_project_that_has_everything_passes_preflight(tmp_path: Path) -> None:
     assert roster_mod.preflight(_ready(tmp_path)) == []
 
 
+def test_a_driver_whose_planner_writes_the_backlog_can_leave_the_backlog_gates_off(tmp_path: Path) -> None:
+    """The two backlog gates belong to a flow where a person plans before round
+    one. A playbook whose Planner plans *in* round one has an empty, unconfirmed
+    backlog by design at the start, and the roster, specification and harness
+    checks are still worth having there."""
+    project = _project(tmp_path)
+    (project / ".stint" / "SPEC.md").write_text("# spec\n", encoding="utf-8")
+
+    assert any("no backlog" in reason for reason in roster_mod.preflight(project))
+    assert roster_mod.preflight(project, require_backlog=False) == [], "the Planner files the first backlog itself"
+    _seed_backlog(project, confirmed=False, tasks=[])
+    assert roster_mod.preflight(project) != []
+    assert roster_mod.preflight(project, require_backlog=False) == []
+    (project / ".stint" / "SPEC.md").unlink()
+    assert any("no specification" in reason for reason in roster_mod.preflight(project, require_backlog=False))
+
+
 def test_preflight_reports_every_reason_at_once(tmp_path: Path) -> None:
     """One pass to fix a project, rather than one refusal per attempt."""
     project = _project(tmp_path)

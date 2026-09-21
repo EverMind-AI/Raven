@@ -231,11 +231,15 @@ def test_a_task_log_that_cannot_be_written_does_not_cost_the_transition(tmp_path
     assert _read(project)["tasks"][0]["state"] == "assigned"
 
 
-def test_listing_a_project_with_no_backlog_says_how_to_get_one(tmp_path) -> None:
+def test_listing_a_project_with_no_backlog_answers_that_the_pool_is_empty(tmp_path) -> None:
+    """It used to refuse, with the same "no backlog" message every writing verb
+    gets. Looking at the pool is a Planner's first action on a project's first
+    round, and an error there read as something having gone wrong: one went off
+    reading this program's own installation to find out what. Nothing had."""
     result = runner.invoke(stint_app, ["task", "list", "--project", str(tmp_path / "nowhere")])
 
-    assert result.exit_code == 1
-    assert "raven playbook stint task add" in " ".join(result.output.split())
+    assert result.exit_code == 0, result.output
+    assert "no backlog" not in result.output
 
 
 def test_listing_can_be_narrowed_to_one_state_or_to_what_keeps_being_put_off(tmp_path) -> None:
@@ -396,3 +400,21 @@ def test_init_refuses_an_enforcement_grade_it_cannot_apply(tmp_path, flag) -> No
 
     assert result.exit_code != 0
     assert not (project / ".stint" / "planner.md").exists()
+
+
+def test_listing_an_empty_pool_writes_nothing_on_the_way_past(tmp_path) -> None:
+    """A read that laid a project out would be a read with a side effect."""
+    runner.invoke(stint_app, ["task", "list", "--project", str(tmp_path)])
+
+    assert not (tmp_path / ".stint").exists()
+
+
+def test_listing_a_backlog_that_is_there_and_unreadable_still_refuses(tmp_path) -> None:
+    """Answering an empty pool is not the same as forgiving a broken one."""
+    path = tmp_path / ".stint" / "backlog.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{not json", encoding="utf-8")
+
+    result = runner.invoke(stint_app, ["task", "list", "--project", str(tmp_path)])
+
+    assert result.exit_code == 1

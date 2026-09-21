@@ -257,6 +257,27 @@ def load(project: Path) -> Backlog:
     return Backlog(tasks=tasks, meta=dict(raw.get("meta") or {}))
 
 
+def start(project: Path) -> Backlog:
+    """The project's backlog, or an empty one for the verb that files the first task.
+
+    ``load`` refuses a project with no backlog and names ``task add`` as the
+    cure -- and ``task add`` went through ``load``, so the cure was refused by
+    the message recommending it and the first task could never be filed.
+
+    Only ``add`` gets this. Every other verb acts on a task that has to exist
+    already, so for those a missing file is the true answer rather than an
+    obstacle. And a file that is *there* and unreadable still raises: starting
+    empty on a malformed backlog would file the new task into a document that
+    silently dropped every task before it.
+    """
+    try:
+        return load(project)
+    except BacklogError:
+        if backlog_path(project).exists():
+            raise
+        return Backlog()
+
+
 def save(project: Path, backlog: Backlog) -> Path:
     path = backlog_path(project)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -444,6 +465,30 @@ def sweep_unverified(backlog: Backlog, round_index: int) -> list[Task]:
         _note(task, round_index, OPEN, "runtime", "unverified: the round ended before QA judged it")
         swept.append(task)
     return swept
+
+
+def release_unimplemented(backlog: Backlog, round_index: int) -> list[Task]:
+    """Round's end: a task the Developer never took goes back to open.
+
+    Assigned is a promise for this round. A round that ended with the promise
+    unkept -- the Developer ran out of turns, or never reached the task -- left
+    it `assigned` for ever: the next Planner read it as somebody's, and the next
+    Developer was handed only what that round's Planner assigned. Open again, it
+    is the Planner's to assign or defer.
+
+    Called at a round's completion and not when a round is cut short: the cut
+    round is taken up again with its Developer re-run, and that Developer picks
+    up exactly what was assigned.
+    """
+    released: list[Task] = []
+    for task in backlog.tasks:
+        if task.state != ASSIGNED:
+            continue
+        task.state = OPEN
+        task.owner = ""
+        _note(task, round_index, OPEN, "runtime", "unimplemented: the round ended before the Developer took it")
+        released.append(task)
+    return released
 
 
 def render(tasks: Iterable[Task]) -> str:
