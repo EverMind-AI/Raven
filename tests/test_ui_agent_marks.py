@@ -131,21 +131,30 @@ def test_the_own_mark_ships() -> None:
     assert (_ASSETS / f"{_own_mark()}.svg").is_file()
 
 
-def test_the_own_mark_answers_the_theme_from_inside_the_file() -> None:
+def test_the_own_mark_carries_its_own_plate() -> None:
     """The two halves of that are one fact, and neither is safe alone.
 
-    A raven is black, and the dark theme's surface is ``#1e1c14`` -- 1.2:1, a
-    silhouette that leaves two white eyes floating in an empty frame. The mark
-    cannot be filtered into legibility the way a ``mono`` one is, because it is
-    not one colour, so it carries a ``prefers-color-scheme`` rule of its own,
-    as miromind.svg does; an ``<img>`` resolves that against the embedding
-    element's used colour-scheme, which the stylesheet pins to the chosen
-    theme.
+    A raven is dark, and the dark theme's surface is ``#1e1c14``. Measured at
+    the roster's render size, the bird against that surface is 1.07:1 -- gone,
+    leaving the halo alone in an empty frame. The mark cannot be filtered into
+    legibility the way a ``mono`` one is, because it is not one colour to
+    invert, so it answers the theme by not participating in it: an opaque plate
+    behind every shape, which renders the same on either surface.
 
-    The tone must therefore stay absent: a ``mono`` or ``hybrid`` here would
-    invert the file on top of the answer it already gave, which lands back at
-    black on black in exactly one theme -- and no DOM assertion sees a colour.
+    That is why the plate is asserted rather than a ``prefers-color-scheme``
+    rule. The file used to carry one, as miromind.svg still does; a plate makes
+    the rule redundant, and the stylesheet's ``color-scheme`` lines no longer
+    decide anything for this mark. Either mechanism is a fact about the file,
+    and a file with neither is the failure this guards.
+
+    The tone must stay absent for the same reason it always did: a ``mono`` or
+    ``hybrid`` here would invert the plate along with the bird, which lands at
+    dark-on-dark in exactly one theme -- and no DOM assertion sees a colour.
     """
     svg = (_ASSETS / f"{_own_mark()}.svg").read_text(encoding="utf-8")
-    assert "prefers-color-scheme: dark" in svg
+    root = svg[: svg.index(">") + 1]
+    shapes = _SHAPE.findall(svg)
+    plate = [el for el in shapes if el.startswith("<rect") and 'fill="#FFFFFF"' in el]
+    assert plate, "the own mark carries neither a plate nor a prefers-color-scheme rule"
+    assert "fill=\"none\"" in root, "a root fill would paint outside the plate"
     assert _tone_of(_own_mark()) is None

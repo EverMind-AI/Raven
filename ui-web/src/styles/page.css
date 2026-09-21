@@ -5068,9 +5068,14 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   overflow: hidden; color: var(--muted); }
 .agent-mark svg { display: block; width: 14px; height: 14px; stroke-linecap: round; stroke-linejoin: round; }
 .agent-mark img { display: block; width: 14px; height: 14px; object-fit: contain; }
-/* The one mark that IS a tile: MiroMind's file is a favicon and carries its own
-   rounded card, so it fills the frame instead of sitting a card inside one. */
+/* The two marks that ARE tiles fill the frame instead of sitting a card inside
+   one. MiroMind's file is a favicon and carries its own rounded card. */
 .agent-mark img[data-agent="mirothinker"] { width: 100%; height: 100%; }
+/* The second mark that is a tile: raven.svg carries an opaque plate of its own,
+   for the reason the color-scheme comment below records. Keyed by file, because
+   `data-agent` carries the preset and raven's own rows have none -- the same
+   reason agent-mark.tsx holds it outside MARKS. */
+.agent-mark img[src$="agents/raven.svg"] { width: 100%; height: 100%; }
 /* Only the marks that draw in currentColor, which an <img> resolves against its
    own document and so renders black. `mono` is every shape, so the whole file
    inverts, as the provider marks already do. `hybrid` is qoder alone: brand
@@ -5085,15 +5090,17 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   :root:not([data-theme="light"]) .agent-mark img[data-tone="mono"] { filter: invert(1); }
   :root:not([data-theme="light"]) .agent-mark img[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
 }
-/* Two marks answer the theme from inside their own file, each with a
-   prefers-color-scheme rule: miromind.svg, which is a favicon, and raven.svg,
-   which is a black bird and would otherwise sit at 1.2:1 on the dark surface --
-   no tone filter can help it, because it is not one colour to invert. An
+/* miromind.svg answers the theme from inside its own file, with a
+   prefers-color-scheme rule of its own. An
    <img>'s SVG evaluates that rule against the used color-scheme of the element
    embedding it, NOT against this page's data-theme, so without these two lines
-   both follow the operating system while the rest of the roster follows the
+   it follows the operating system while the rest of the roster follows the
    switch -- and since the app's default is explicitly light, a fresh install on
    a dark OS is a normal way to see it.
+   raven.svg once needed the same treatment for the opposite reason: a black bird
+   sits at 1.2:1 on the dark surface and no tone filter can lift it, because it is
+   not one colour to invert. It now carries an opaque plate, which is theme
+   independent, so these two lines no longer decide anything for it.
    Declared on the tile rather than on :root: there it would also hand every
    native scrollbar and form control to the dark palette, which is a change to
    the whole page and not to a mark. */
