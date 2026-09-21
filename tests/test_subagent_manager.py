@@ -1424,6 +1424,16 @@ class _OneBackendRegistry:
     def backend(self, agent: str) -> Any:
         return self._backend
 
+    def get(self, name: str) -> Any:
+        """No row, the way the real table answers for a name it never registered.
+
+        The manager asks this on the paths that read an agent's memory scope,
+        modes and model choices, and every one of them takes ``None`` for "this
+        stand-in table holds no such row" -- which is what these tests want, since
+        they pin the backend directly rather than through a row.
+        """
+        return None
+
 
 def test_dispatch_hands_a_binding_backend_the_session_dir_rule(tmp_path: Path) -> None:
     """Every test that wanted a non-default backend stubbed _resolve_backend
@@ -4460,7 +4470,9 @@ async def test_a_cancelled_run_is_announced_to_its_parent_with_the_reason(tmp_pa
 
     (req,) = submitted
     assert req.conversation == "tui:s1"
-    assert req.delegated == {"kind": "spawn", "label": "poster", "status": "cancelled"}
+    # `spawn()` mints a node id for every run (`node_id or task_id`), so the mark a
+    # cancellation draws carries it too -- the page links the mark to the run by it.
+    assert req.delegated == {"kind": "spawn", "label": "poster", "status": "cancelled", "node_id": task_id}
     assert "[Subagent 'poster' was cancelled]" in req.text
     assert "Cancelled: a test stopped it" in req.text
     assert f"Working directory: {tmp_path}" in req.text
@@ -4578,7 +4590,9 @@ async def test_a_run_cancelled_before_its_first_step_is_still_announced(tmp_path
 
     assert entered == [], "the body never ran, so this is the unstarted case, not the one the inner handler covers"
     (req,) = submitted
-    assert req.delegated == {"kind": "spawn", "label": "poster", "status": "cancelled"}
+    # `spawn()` mints a node id for every run (`node_id or task_id`), so the mark a
+    # cancellation draws carries it too -- the page links the mark to the run by it.
+    assert req.delegated == {"kind": "spawn", "label": "poster", "status": "cancelled", "node_id": task_id}
     assert "[Subagent 'poster' was cancelled]" in req.text
     assert "Cancelled: a test stopped it at once" in req.text
     statuses = [e["payload"]["status"] for e in events if e["type"] == "subagent.status"]

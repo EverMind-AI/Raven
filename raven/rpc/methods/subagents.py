@@ -353,7 +353,7 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 # things. Always present, never omitted -- a client cannot tell
                 # a missing key from a false one, and one day it will mean
                 # "this server predates the field".
-                "needs_auth": bool(getattr(caps, "needs_auth", False)),
+                "needs_auth": bool(getattr(snapshot, "needs_auth", False)),
                 "mcps": list(getattr(cfg, "mcps", None) or []),
                 "allow_mcp_secrets": bool(getattr(cfg, "allow_mcp_secrets", False)),
                 "last_test_ok": None if last is None else last.ok,

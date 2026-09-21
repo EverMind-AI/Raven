@@ -547,10 +547,12 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     # and this module must not name it at import time (binding-time debt).
     from raven.acp_client.capabilities import verify_agent
 
-    # Presets are templates, not entries: recording a snapshot for one would
-    # key it to a name no config claims, and the roster would then read
-    # capabilities off a preset the user never installed.
-    snapshot = await record_capabilities(cfg) if source != "preset" else await verify_agent(cfg)
+    # A preset's snapshot is recorded too, and has to be: the page draws a
+    # preset row's verdict from it -- a recorded credential refusal is what puts
+    # "Unauthorized" there -- so Test is that row's only way back. The store
+    # keys on a fingerprint of the launch fields, so a record under a preset's
+    # name is returned only to a config that launches the same way.
+    snapshot = await record_capabilities(cfg)
     reply = ", ".join(snapshot.available_models[:5]) or None
     return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
 

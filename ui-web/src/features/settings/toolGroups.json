@@ -15,7 +15,15 @@
     "web_search",
     "web_fetch",
     "image_search",
-    "deep_research"
+    "deep_research",
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_click",
+    "browser_type",
+    "browser_press",
+    "browser_scroll",
+    "browser_tabs",
+    "browser_screenshot"
   ],
   "generate": [
     "image_generate",
