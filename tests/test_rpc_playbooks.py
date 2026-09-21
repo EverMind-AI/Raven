@@ -266,7 +266,7 @@ async def test_a_definition_with_neither_command_nor_url_never_reaches_the_detai
     assert carried["real"]["type"] == "streamableHttp"
 
 
-def _rounds_spec(name: str = "game-rounds") -> PlaybookSpec:
+def _rounds_spec(name: str = "rounds") -> PlaybookSpec:
     return PlaybookSpec.model_validate(
         {
             "name": name,
@@ -285,7 +285,7 @@ def _rounds_spec(name: str = "game-rounds") -> PlaybookSpec:
                     "owns": ["reports/brief_{NN}.md"],
                 },
                 {
-                    "as": "qa",
+                    "as": "verifier",
                     "name": "Raven",
                     "dependsOn": ["planner"],
                     "promptTemplate": "judge",
@@ -305,10 +305,10 @@ async def test_get_carries_what_a_multi_round_run_asks_to_be_approved(library: P
     full of roles and shell commands."""
     library.save(_rounds_spec())
 
-    got = (await mod.playbooks_get({"name": "game-rounds"}))["playbook"]
+    got = (await mod.playbooks_get({"name": "rounds"}))["playbook"]
 
     stint = got["stint"]
-    assert [role["label"] for role in stint["roles"]] == ["planner", "qa"]
+    assert [role["label"] for role in stint["roles"]] == ["planner", "verifier"]
     assert stint["roles"][1]["depends_on"] == ["planner"]
     assert stint["roles"][0]["owns"] == ["reports/brief_{NN}.md"]
     assert stint["roles"][1]["appends"] == [".stint/FIXLOG.md"]
@@ -328,9 +328,9 @@ async def test_get_marks_only_the_role_that_can_end_the_plan(library: PlaybookSt
     A page that marked every role would say two of them can end it."""
     library.save(_rounds_spec())
 
-    stint = (await mod.playbooks_get({"name": "game-rounds"}))["playbook"]["stint"]
+    stint = (await mod.playbooks_get({"name": "rounds"}))["playbook"]["stint"]
 
-    assert {role["label"]: role["terminal"] for role in stint["roles"]} == {"planner": False, "qa": True}
+    assert {role["label"]: role["terminal"] for role in stint["roles"]} == {"planner": False, "verifier": True}
 
 
 async def test_get_says_nothing_about_rounds_for_a_playbook_that_has_none(library: PlaybookStore) -> None:
@@ -351,7 +351,7 @@ async def test_list_draws_a_multi_round_playbook_from_its_roles(library: Playboo
 
     [row] = (await mod.playbooks_list({}))["playbooks"]
 
-    assert row["nodes"] == [{"id": "planner", "depends_on": []}, {"id": "qa", "depends_on": ["planner"]}]
+    assert row["nodes"] == [{"id": "planner", "depends_on": []}, {"id": "verifier", "depends_on": ["planner"]}]
     METHOD_MODELS["playbooks.list"][1].model_validate({"playbooks": [row]})
 
 
@@ -1509,13 +1509,13 @@ class TestPlans:
             round_index=2,
             questions=[
                 {"round": 1, "role": "planner", "text": "which of the two?", "answer": ""},
-                {"round": 1, "role": "qa", "text": "is this good enough?", "answer": "yes"},
+                {"round": 1, "role": "verifier", "text": "is this good enough?", "answer": "yes"},
             ],
         )
         first = record.open_round(1, "run-1")
         first.status = "completed"
         first.verify = [{"name": "build", "status": "failed"}, {"name": "tests", "status": "ok"}]
-        first.violations = ["developer wrote 1 path(s) it may not write: reports/qa.md"]
+        first.violations = ["builder wrote 1 path(s) it may not write: reports/verifier.md"]
         record.open_round(2, "run-2")
         store.write(record)
         return store

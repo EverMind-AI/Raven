@@ -166,7 +166,7 @@ def _rounds(**over):
         roles=[
             {"as": "planner", "name": "research-raven", "promptTemplate": "pick the work", "owns": ["reports/**"]},
             {
-                "as": "developer",
+                "as": "builder",
                 "name": "code-raven",
                 "dependsOn": ["planner"],
                 "promptTemplate": "do the work",
@@ -183,7 +183,7 @@ def _rounds(**over):
 
 def test_rounds_requires_roles_and_forbids_a_graph():
     spec = _rounds()
-    assert [role.label for role in spec.roles] == ["planner", "developer"]
+    assert [role.label for role in spec.roles] == ["planner", "builder"]
     with pytest.raises(ValidationError, match="requires non-empty roles"):
         _rounds(roles=[])
     with pytest.raises(ValidationError, match="carries roles, not nodes or prompts"):
@@ -255,27 +255,27 @@ def test_a_role_row_is_a_delegate_row_with_the_round_on_it():
 
 
 def test_the_shipped_developer_is_judged_by_every_directory_its_guard_may_grant() -> None:
-    """The guard file grants the Developer whichever of `SOURCE_DIRS` the project
+    """The guard file grants the Builder whichever of `SOURCE_DIRS` the project
     has (or the greenfield three); the playbook row is what it is judged by. A
     row narrower than the grant is the two-rosters trap with a directory in
-    place of a ledger: a Developer that put its checks under `tools/`, where its
+    place of a ledger: a Builder that put its checks under `tools/`, where its
     standing orders said it could, had them undone as a stray write."""
     from raven.playbook.store import BUILTIN_ROOT, PlaybookStore
     from raven.stint.bootstrap import GREENFIELD_DIRS, SOURCE_DIRS
 
-    spec = PlaybookStore(BUILTIN_ROOT.parent / "nowhere", builtin_root=BUILTIN_ROOT).load("game-rounds")
-    developer = next(role for role in spec.roles or [] if role.label == "developer")
+    spec = PlaybookStore(BUILTIN_ROOT.parent / "nowhere", builtin_root=BUILTIN_ROOT).load("rounds")
+    builder = next(role for role in spec.roles or [] if role.label == "builder")
     granted = {f"{name}/**" for name in SOURCE_DIRS} | set(GREENFIELD_DIRS)
-    missing = sorted(granted - set(developer.owns))
-    assert missing == [], f"the developer may be told it owns {missing} and would be judged without them"
+    missing = sorted(granted - set(builder.owns))
+    assert missing == [], f"the builder may be told it owns {missing} and would be judged without them"
 
 
 def test_the_shipped_playbook_grades_by_the_same_artifacts_its_guards_name() -> None:
     """The one list written twice: `OUTPUT_DIRS` generates the guard files a role
-    reads, and `game-rounds` repeats it by hand for the roster it is judged by.
+    reads, and `rounds` repeats it by hand for the roster it is judged by.
 
     They drifted. `OUTPUT_DIRS` grew `builds` and `replays`; the playbook did
-    not, so a Developer that put its replay evidence where its own standing
+    not, so a Builder that put its replay evidence where its own standing
     orders call an artifact directory had it reverted as a stray write -- by a
     list the role is never shown. The playbook's own comment warns about exactly
     this ("two rosters -- the one it is told and the one it is judged by"), which
@@ -284,7 +284,7 @@ def test_the_shipped_playbook_grades_by_the_same_artifacts_its_guards_name() -> 
     from raven.playbook.store import BUILTIN_ROOT, PlaybookStore
     from raven.stint.bootstrap import OUTPUT_DIRS
 
-    spec = PlaybookStore(BUILTIN_ROOT.parent / "nowhere", builtin_root=BUILTIN_ROOT).load("game-rounds")
+    spec = PlaybookStore(BUILTIN_ROOT.parent / "nowhere", builtin_root=BUILTIN_ROOT).load("rounds")
 
     for role in spec.roles or []:
         missing = [f"{name}/**" for name in OUTPUT_DIRS if f"{name}/**" not in role.artifacts]

@@ -69,7 +69,7 @@ belonged to a component being removed.
 
 | # | Scenario | Status |
 |---|---|---|
-| 29 | `game-rounds` is in the library on a fresh install, with nothing copied | held -- it ships under `raven/playbook/builtin/` |
+| 29 | `rounds` is in the library on a fresh install, with nothing copied | held -- it ships under `raven/playbook/builtin/` |
 | 30 | A playbook that names a layout gets one written when the project lacks it | held |
 | 31 | The layout reaches the checkout the rounds actually run in | held -- a worktree is cut from `HEAD` and setup does not commit, so without the carry every round failed on `{{ref:}}` for the whole budget |
 | 32 | Nothing is committed to the person's branch; they get untracked files and the choice | held |
@@ -130,7 +130,7 @@ The eight in the PRD, plus what this list added:
 12. Paused and resumed continues rather than repeating
 13. One repository holds one live plan, whichever verb tried to make a second
 14. A rounds playbook is legible in the web UI before it is approved
-15. A fresh repository goes from "run game-rounds" to a first round without the
+15. A fresh repository goes from "run rounds" to a first round without the
     person running a setup command, or is told the one thing only they can give
 
 ## Roles running at once
@@ -196,7 +196,7 @@ Not built. The design, so the next person does not start from the reproduction:
      it today.
    * **A clean merge is not a correct one.** Two roles appending to different
      parts of `FIXLOG.md` merge without conflict and may leave two entries that
-     contradict each other. No handback catches that; only QA reads for it. So
+     contradict each other. No handback catches that; only Verifier reads for it. So
      a merge that succeeded must not be reported as a round that went well.
 4. **`artifacts` paths need a rule.** They are ungraded by design because a
    build writes them; in separate trees each role builds its own, and merging
@@ -222,7 +222,7 @@ role that is is a runtime fact no role can see, so it would need a channel that
 exists for nothing else -- and the role it names is the one with the least
 context on the conflict.
 
-Until then the shipped shape is a chain, which is what `game-rounds` declares
+Until then the shipped shape is a chain, which is what `rounds` declares
 and what the validation now holds every enforced playbook to.
 
 ## What went offline with the loop this replaced, and what did not come with it

@@ -52,7 +52,7 @@ def journal_tail(journal: str, rounds: int = JOURNAL_ROUNDS_IN_PROMPT) -> str:
     return journal[marks[-rounds].start() :].strip()
 
 
-def round_entry(journal: str, index: int, subsection: str = "### Dev") -> str:
+def round_entry(journal: str, index: int, subsection: str = "### Build") -> str:
     """One role's entry for one round, which is what the next role in it reads."""
     heading = round_heading(index)
     if heading not in journal:

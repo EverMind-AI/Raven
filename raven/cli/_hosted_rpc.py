@@ -30,14 +30,15 @@ def hosted_page() -> tuple[int, str] | None:
     pid and a port, the pid is alive, and the port's ``/health`` answers as
     ``raven-serve``. A stale file left by a killed serve reads as None.
     """
-    from raven.cli.serve_commands import _pid_alive, _state_path
+    from raven.config.loader import raven_home
+    from raven.utils.pid import pid_alive
 
     try:
-        data = json.loads(_state_path().read_text(encoding="utf-8"))
+        data = json.loads((raven_home() / "serve.json").read_text(encoding="utf-8"))
         pid, port, token = int(data["pid"]), int(data["port"]), str(data["token"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    if pid <= 0 or port <= 0 or not token or not _pid_alive(pid):
+    if pid <= 0 or port <= 0 or not token or not pid_alive(pid):
         return None
     if not asyncio.run(_healthy(port)):
         return None

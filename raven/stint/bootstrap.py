@@ -65,16 +65,16 @@ _SAYS_WHAT_IS_REQUIRED = (
 _ENOUGH_TO_PLAN_FROM = 200
 
 #: Directories that hold the thing being built, where a project has one of them.
-#: Detected rather than assumed: a guard that hands the Developer ``src/**`` in a
+#: Detected rather than assumed: a guard that hands the Builder ``src/**`` in a
 #: project whose code is in ``project/`` gives it ownership of nothing it writes,
 #: and every write it makes is then undone as a violation.
 SOURCE_DIRS = ("src", "project", "lib", "app", "pkg", "cmd", "tools", "scripts", "assets")
 
 #: Where a round's work lands rather than where the source lives. Not owned by
-#: anyone: a build directory and a game's own log are written by whichever role
+#: anyone: a build directory and a program's own log are written by whichever role
 #: last ran the thing, and the specification here has the build write
 #: `demo_outputs/feel_log.jsonl` every time it runs in test mode. Granting them
-#: to the Developer meant QA's measurements were reverted for having been made,
+#: to the Builder meant Verifier's measurements were reverted for having been made,
 #: so they are declared as artifacts and left ungraded.
 OUTPUT_DIRS = ("build", "builds", "dist", "out", "demo_outputs", "replays")
 
@@ -172,7 +172,7 @@ def project_documents(project: Path, *, spec: Path | None = None) -> list[str]:
     """Every Markdown document the project carried before H*, as paths relative to it.
 
     The root's own files and everything under `docs/`, at any depth -- the
-    role folders a project grew up with (`docs/planner/`, `docs/qa/`) are where
+    role folders a project grew up with (`docs/planner/`, `docs/verifier/`) are where
     a half-built project keeps what it learned, and a plan that never opened
     them re-derives it wrong. `.stint/` and `reports/` are H*'s own and are not
     documents to absorb; the specification is linked, not absorbed.
@@ -200,7 +200,7 @@ def project_documents(project: Path, *, spec: Path | None = None) -> list[str]:
 
 #: Granted when a project has no source tree yet. A greenfield handover is the
 #: normal way a stint starts, and its first round is the one that creates the
-#: source -- so a guard listing only what exists today would have the Developer's
+#: source -- so a guard listing only what exists today would have the Builder's
 #: very first write undone as a violation.
 GREENFIELD_DIRS = ("src/**", "project/**", "tools/**")
 
@@ -208,7 +208,7 @@ GREENFIELD_DIRS = ("src/**", "project/**", "tools/**")
 def source_dirs(project: Path) -> list[str]:
     """The directories this project keeps its work in, or the ones it is about to.
 
-    Detected rather than assumed, because a guard that hands the Developer
+    Detected rather than assumed, because a guard that hands the Builder
     ``src/**`` in a project whose code lives in ``project/`` grants it nothing it
     writes. Where nothing is there yet, the conventional set is granted and the
     note asks a person to check it -- an empty grant is the one answer that
@@ -236,8 +236,8 @@ def _project_root(workspace: Path) -> Path | None:
 def detect_checks(workspace: Path, timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> list[CheckSpec]:
     """The checks this tree affords, without being told.
 
-    Godot first, because the specification this runtime was written against is a
-    Godot project; then whatever assertion and capture scripts the project ships
+    Godot first, because it is the one build this layout can recognise with no
+    manifest to read; then whatever assertion and capture scripts the project ships
     under ``tools/``, which are the only things that measure timing or a frame.
     """
     checks: list[CheckSpec] = []
@@ -329,26 +329,26 @@ def _detected_commands(project: Path) -> str:
 
 def _slots(project: Path, role: str, *, enforce_read: str, enforce_write: str, spec_name: str) -> dict[str, str]:
     reads = {
-        "planner": [".stint/SPEC.md", ".stint/HUMAN_DECISIONS.md", ".stint/FIXLOG.md", "reports/qa_{NN-1}.md"],
-        "developer": [
+        "planner": [".stint/SPEC.md", ".stint/HUMAN_DECISIONS.md", ".stint/FIXLOG.md", "reports/verify_{NN-1}.md"],
+        "builder": [
             "reports/brief_{NN}.md",
             ".stint/SPEC.md",
             ".stint/HUMAN_DECISIONS.md",
             ".stint/PLAYBOOK.md",
             ".stint/FIXLOG.md",
         ],
-        "qa": ["reports/round_{NN}.md", "reports/brief_{NN}.md", ".stint/SPEC.md", ".stint/HUMAN_DECISIONS.md"],
+        "verifier": ["reports/round_{NN}.md", "reports/brief_{NN}.md", ".stint/SPEC.md", ".stint/HUMAN_DECISIONS.md"],
     }[role]
     detected = source_dirs(project)
     owns = {
         "planner": [],
-        "developer": [f"  - {item}" for item in detected],
-        "qa": ["  - reports/evidence/round_{NN}/**"],
+        "builder": [f"  - {item}" for item in detected],
+        "verifier": ["  - reports/evidence/round_{NN}/**"],
     }[role]
     # Declared on every guard rather than one: the paths are the project's, and
     # a set one role could write and another could not is the same trap again.
     artifacts = [f"  - {name}/**" for name in OUTPUT_DIRS]
-    session = {"planner": "fresh", "developer": "continue", "qa": "fresh"}[role]
+    session = {"planner": "fresh", "builder": "continue", "verifier": "fresh"}[role]
     del session  # named above for the reader; the note it chose now lives in the template
     return {
         # Data, not prose. What used to be here was a paragraph of English that a
@@ -451,15 +451,15 @@ def init(
     )
     _write(
         home / AGENT_DECISIONS_FILE,
-        "# AGENT_DECISIONS\n\nThe Developer's. Anything the specification and HUMAN_DECISIONS both leave\n"
+        "# AGENT_DECISIONS\n\nThe Builder's. Anything the specification and HUMAN_DECISIONS both leave\n"
         "open, decided here the same round it is decided in practice.\n",
         result,
         force=force,
     )
     _write(
         home / FIXLOG_FILE,
-        "# FIXLOG\n\nDefects the automated checks caught and the Developer fixed. QA appends with\n"
-        "`QA found`. The root cause column is the one the Planner reads.\n\n"
+        "# FIXLOG\n\nDefects the automated checks caught and the Builder fixed. Verifier appends with\n"
+        "`Verifier found`. The root cause column is the one the Planner reads.\n\n"
         "| # | round | caught by | symptom | root cause | fix | commit |\n"
         "|---|-------|-----------|---------|-----------|-----|--------|\n",
         result,
@@ -469,7 +469,7 @@ def init(
         home / PLAYBOOK_FILE,
         "# PLAYBOOK\n\nWhat this project learned the hard way. It outranks any general skill a role\n"
         "was given: where the two disagree, follow this.\n\n"
-        "## QA proposals\n\n_QA appends here; the Developer promotes an entry into the body above._\n",
+        "## Verifier proposals\n\n_QA appends here; the Builder promotes an entry into the body above._\n",
         result,
         force=force,
     )
@@ -513,10 +513,10 @@ def init(
     existing = [item for item in granted if (project / item.split("/")[0]).is_dir()]
     if len(existing) < len(granted):
         result.notes.append(
-            "the Developer is granted "
+            "the Builder is granted "
             + ", ".join(granted)
             + f", some of which do not exist yet -- check them against where this project's work "
-            f"will actually go, in {home / 'developer.md'}"
+            f"will actually go, in {home / 'builder.md'}"
         )
     return result
 
@@ -560,7 +560,7 @@ Read every one of them, and move what they hold by kind:
   of the same pages, which is not what a reference is for;
 - a reference image -- a scene reference, a concept sheet, anything under
   `refs/` -- is a document too, and the one a brief about it can never stand
-  in for. It gets its own row, naming the tasks whose Developer and QA must
+  in for. It gets its own row, naming the tasks whose Builder and Verifier must
   open the image itself before building or judging, and what to look for in
   it. Put the same instruction in those tasks' notes.
 
@@ -590,7 +590,7 @@ its own convention, not to anyone's template, so look rather than assume:
   `pyproject.toml`, `project.godot`, a CI file, a `tools/` or `scripts/`
   directory of checks -- and run what runs, keeping the output;
 - find any record of earlier work -- a changelog, notes, evidence folders, and
-  the briefs and QA reports of earlier rounds if this project ran under H*
+  the briefs and Verifier reports of earlier rounds if this project ran under H*
   before (by default under `reports/`) -- and read it: it says what was tried,
   what was verified, and what came back.
 
@@ -635,8 +635,8 @@ the only thing standing between the loop and thirty rounds of drift.
 - **`state`** is `open` for work that is not in the tree. Work that already is
   goes in as `in_review`, with `"implements": [{{"round": 0, "commit": "<the sha
   it lives at>", "verdict": null, "evidence": "<the evidence path, if any>"}}]`,
-  so the first round's QA verifies what the project inherited instead of the
-  loop trusting it. Nothing is `done`: only QA, holding evidence, says that --
+  so the first round's Verifier verifies what the project inherited instead of the
+  loop trusting it. Nothing is `done`: only Verifier, holding evidence, says that --
   the person confirming this plan may overrule by hand.
 
 ## What makes this plan good rather than a list

@@ -575,7 +575,7 @@ class TestTwoRolesAtOnceInOneCheckout:
         chain = [
             {"as": "planner", "name": "echo", "promptTemplate": "p", "owns": ["reports/**"]},
             {"as": "dev", "name": "echo", "dependsOn": ["planner"], "promptTemplate": "p", "owns": ["src/**"]},
-            {"as": "qa", "name": "echo", "dependsOn": ["dev"], "promptTemplate": "p", "owns": ["qa/**"]},
+            {"as": "verifier", "name": "echo", "dependsOn": ["dev"], "promptTemplate": "p", "owns": ["verifier/**"]},
         ]
 
         assert validate_structure(self._spec(chain), known_agents=["echo"]) == []
@@ -606,7 +606,7 @@ class TestTwoRolesAtOnceInOneCheckout:
         spec = self._spec(
             [
                 {
-                    "as": "qa",
+                    "as": "verifier",
                     "name": "echo",
                     "promptTemplate": "p",
                     "reads": ["src/**"],
@@ -617,13 +617,13 @@ class TestTwoRolesAtOnceInOneCheckout:
 
         [error] = validate_structure(spec, known_agents=["echo"])
 
-        assert "qa asks for enforce.read: hard" in error
+        assert "verifier asks for enforce.read: hard" in error
         assert "nothing enforces yet" in error and "Use soft" in error
 
     def test_the_soft_default_is_what_the_shipped_shape_uses(self):
         assert (
             validate_structure(
-                self._spec([{"as": "qa", "name": "echo", "promptTemplate": "p", "reads": ["src/**"]}]),
+                self._spec([{"as": "verifier", "name": "echo", "promptTemplate": "p", "reads": ["src/**"]}]),
                 known_agents=["echo"],
             )
             == []
@@ -649,12 +649,12 @@ class TestTwoRolesAtOnceInOneCheckout:
         assert validate_structure(self._spec(fan), known_agents=["echo"]) != []
 
     def test_an_indirect_order_counts_as_an_order(self):
-        """`qa` waits on `dev` which waits on `planner`, so qa and planner never
-        overlap even though qa does not name planner."""
+        """`verifier` waits on `dev` which waits on `planner`, so verifier and planner never
+        overlap even though verifier does not name planner."""
         chain = [
             {"as": "planner", "name": "echo", "promptTemplate": "p", "owns": ["reports/**"]},
             {"as": "dev", "name": "echo", "dependsOn": ["planner"], "promptTemplate": "p", "owns": ["src/**"]},
-            {"as": "qa", "name": "echo", "dependsOn": ["dev"], "promptTemplate": "p", "owns": ["qa/**"]},
+            {"as": "verifier", "name": "echo", "dependsOn": ["dev"], "promptTemplate": "p", "owns": ["verifier/**"]},
         ]
 
         assert validate_structure(self._spec(chain), known_agents=["echo"]) == []

@@ -154,10 +154,10 @@ def task_add(
     ),
     project: Path | None = _PROJECT,
     role: str | None = _ROLE,
-    source: str = typer.Option("", "--source", help="Where it came from: spec:7.4, qa_02, round_03, human"),
+    source: str = typer.Option("", "--source", help="Where it came from: spec:7.4, verify_02, round_03, human"),
     gates: list[str] = typer.Option([], "--gates", help="Acceptance gate this task should move; repeatable"),
     depends_on: list[int] = typer.Option([], "--depends-on", help="Task that must settle first; repeatable"),
-    severity: str = typer.Option("", "--severity", help="severe / major / minor, for a QA finding"),
+    severity: str = typer.Option("", "--severity", help="severe / major / minor, for a Verifier finding"),
     note: str = typer.Option("", "--note", help="Why the stint did not already have it"),
 ):
     """Register a task."""
@@ -181,8 +181,8 @@ def task_assign(
     to: str = typer.Option(
         "",
         "--to",
-        help="Which Developer instance does it (developer-a, developer-b, developer-c). "
-        "Leave it out when the round runs one Developer; with several, a task assigned to nobody "
+        help="Which Builder instance does it (builder-a, builder-b, builder-c). "
+        "Leave it out when the round runs one Builder; with several, a task assigned to nobody "
         "is shown to all of them and two of them may then edit one file",
     ),
     project: Path | None = _PROJECT,
@@ -206,7 +206,7 @@ def task_defer(
 @task_app.command("reject")
 def task_reject(
     task_id: int,
-    reason: str = typer.Option(..., "--reason", help="Why it will not be done; QA reads this before re-raising"),
+    reason: str = typer.Option(..., "--reason", help="Why it will not be done; Verifier reads this before re-raising"),
     project: Path | None = _PROJECT,
     role: str | None = _ROLE,
 ):
@@ -261,7 +261,7 @@ def check_set(
     shell on whoever opens it. This is where the project answers, once: written
     to `.stint/checks.json` and read by every round after.
     """
-    from raven.stint.verify import remember_check
+    from raven.stint.checks import remember_check
 
     workspace, _, _ = _task_context(project, None)
     path = remember_check(workspace, playbook, name, run, found="person")
@@ -274,7 +274,7 @@ def check_list(project: Path | None = _PROJECT):
     """Every check this project has an answer for."""
     import json as _json
 
-    from raven.stint.verify import checks_path
+    from raven.stint.checks import checks_path
 
     workspace, _, _ = _task_context(project, None)
     path = checks_path(workspace)
@@ -346,7 +346,7 @@ def task_implement(
     project: Path | None = _PROJECT,
     role: str | None = _ROLE,
 ):
-    """Submit an attempt for review. Developer only -- it does not mark the task done."""
+    """Submit an attempt for review. Builder only -- it does not mark the task done."""
     _task_change("implement", project, role, task_id, commit=commit)
 
 
@@ -360,7 +360,7 @@ def task_verdict(
     project: Path | None = _PROJECT,
     role: str | None = _ROLE,
 ):
-    """Judge an attempt. QA only -- it is the one holding evidence."""
+    """Judge an attempt. Verifier only -- it is the one holding evidence."""
     if proven == not_proven:
         raise typer.BadParameter("give exactly one of --proven or --not-proven")
     _task_change("proven" if proven else "not_proven", project, role, task_id, evidence=evidence, reason=reason)
@@ -373,7 +373,7 @@ def task_reopen(
     project: Path | None = _PROJECT,
     role: str | None = _ROLE,
 ):
-    """A finished task is not finished any more. QA only."""
+    """A finished task is not finished any more. Verifier only."""
     _task_change("reopen", project, role, task_id, reason=reason)
 
 

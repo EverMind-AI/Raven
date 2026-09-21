@@ -2,11 +2,11 @@
 
 Everything else a stint writes is prose, because prose is what a role writes
 well. This file is structured because three roles have to change different parts
-of one row -- the Planner schedules, the Developer submits, and only QA may say
+of one row -- the Planner schedules, the Builder submits, and only Verifier may say
 a thing is done -- and "one file, one owner" cannot hold for a prose file three
 roles must edit. Per-field ownership can, and only structure makes it checkable.
 
-Two levels. A **task** is a unit of work; an **implement** is one Developer
+Two levels. A **task** is a unit of work; an **implement** is one Builder
 attempt at it. One task has many implements, which is what makes "this was
 attempted three times" readable -- repeated failure is the signal most worth
 surfacing, and a round report cannot show it.
@@ -36,8 +36,8 @@ DECISIONS_FILE = "HUMAN_DECISIONS.md"
 SOURCES_FILE = "SOURCES.md"
 
 PLANNER = "planner"
-DEVELOPER = "developer"
-QA = "qa"
+BUILDER = "builder"
+VERIFIER = "verifier"
 HUMAN = "human"
 BOOTSTRAP = "bootstrap"
 
@@ -63,10 +63,10 @@ TRANSITIONS: dict[str, dict[str, Any]] = {
     # the last of them lifts.
     "block": {"by": (PLANNER,), "from": (OPEN, ASSIGNED, IN_REVIEW, BLOCKED), "to": BLOCKED},
     "unblock": {"by": (PLANNER, HUMAN), "from": (BLOCKED,), "to": None},
-    "implement": {"by": (DEVELOPER,), "from": (ASSIGNED,), "to": IN_REVIEW},
-    "proven": {"by": (QA,), "from": (IN_REVIEW,), "to": DONE, "says": "give a verdict on"},
-    "not_proven": {"by": (QA,), "from": (IN_REVIEW,), "to": OPEN, "says": "give a verdict on"},
-    "reopen": {"by": (QA,), "from": (DONE,), "to": OPEN},
+    "implement": {"by": (BUILDER,), "from": (ASSIGNED,), "to": IN_REVIEW},
+    "proven": {"by": (VERIFIER,), "from": (IN_REVIEW,), "to": DONE, "says": "give a verdict on"},
+    "not_proven": {"by": (VERIFIER,), "from": (IN_REVIEW,), "to": OPEN, "says": "give a verdict on"},
+    "reopen": {"by": (VERIFIER,), "from": (DONE,), "to": OPEN},
     "drop": {"by": (HUMAN,), "from": (OPEN, ASSIGNED, BLOCKED, DONE), "to": DROPPED},
 }
 
@@ -86,8 +86,8 @@ class Task:
     with_: list[int] = field(default_factory=list)
     blocked_by: list[str] = field(default_factory=list)
     state: str = OPEN
-    # Which Developer instance holds this task, when a round runs more than one.
-    # Empty is every Developer's: a round with one of them has no split to make,
+    # Which Builder instance holds this task, when a round runs more than one.
+    # Empty is every Builder's: a round with one of them has no split to make,
     # and a task assigned before the split existed still reads correctly.
     owner: str = ""
     deferred: int = 0
@@ -416,7 +416,7 @@ def apply(
         return task
 
     if verb in ("reject", "drop") and not reason.strip():
-        raise BacklogError(f"{verb} needs --reason: it is the record of why, and QA reads it before re-raising")
+        raise BacklogError(f"{verb} needs --reason: it is the record of why, and Verifier reads it before re-raising")
     if verb == "reopen" and not reason.strip():
         raise BacklogError("reopen needs --reason: what regressed, and where it was seen")
 
@@ -440,9 +440,9 @@ def _note(task: Task, round_index: int, state: str, role: str, reason: str, **ex
 
 
 def held_by(tasks: Sequence[Task], instance: str) -> list[Task]:
-    """The assigned tasks one Developer instance is to do.
+    """The assigned tasks one Builder instance is to do.
 
-    A task with no owner belongs to whoever asks: a round with one Developer
+    A task with no owner belongs to whoever asks: a round with one Builder
     makes no split, and a Planner that assigned without naming an instance has
     said nothing about who does it -- showing it to all of them is the reading
     that loses no work. A task owned by another instance is that instance's
@@ -452,32 +452,32 @@ def held_by(tasks: Sequence[Task], instance: str) -> list[Task]:
 
 
 def sweep_unverified(backlog: Backlog, round_index: int) -> list[Task]:
-    """Round's end: a task QA never judged goes back to open.
+    """Round's end: a task Verifier never judged goes back to open.
 
     Not verified is not done. The rule doubles as a capacity signal -- tasks
-    bouncing back every round mean the round took on more than QA can review.
+    bouncing back every round mean the round took on more than Verifier can review.
     """
     swept: list[Task] = []
     for task in backlog.tasks:
         if task.state != IN_REVIEW:
             continue
         task.state = OPEN
-        _note(task, round_index, OPEN, "runtime", "unverified: the round ended before QA judged it")
+        _note(task, round_index, OPEN, "runtime", "unverified: the round ended before Verifier judged it")
         swept.append(task)
     return swept
 
 
 def release_unimplemented(backlog: Backlog, round_index: int) -> list[Task]:
-    """Round's end: a task the Developer never took goes back to open.
+    """Round's end: a task the Builder never took goes back to open.
 
     Assigned is a promise for this round. A round that ended with the promise
-    unkept -- the Developer ran out of turns, or never reached the task -- left
+    unkept -- the Builder ran out of turns, or never reached the task -- left
     it `assigned` for ever: the next Planner read it as somebody's, and the next
-    Developer was handed only what that round's Planner assigned. Open again, it
+    Builder was handed only what that round's Planner assigned. Open again, it
     is the Planner's to assign or defer.
 
     Called at a round's completion and not when a round is cut short: the cut
-    round is taken up again with its Developer re-run, and that Developer picks
+    round is taken up again with its Builder re-run, and that Builder picks
     up exactly what was assigned.
     """
     released: list[Task] = []
@@ -486,7 +486,7 @@ def release_unimplemented(backlog: Backlog, round_index: int) -> list[Task]:
             continue
         task.state = OPEN
         task.owner = ""
-        _note(task, round_index, OPEN, "runtime", "unimplemented: the round ended before the Developer took it")
+        _note(task, round_index, OPEN, "runtime", "unimplemented: the round ended before the Builder took it")
         released.append(task)
     return released
 

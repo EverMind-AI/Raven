@@ -7,7 +7,7 @@ them, so grading them by ownership would revert a measurement for having been
 made.
 
 Globs overlap by design, in two different ways. One role owns ``tools/**``
-while another owns ``tools/gate_checks/check_qa_*.py``: there **the more
+while another owns ``tools/gate_checks/check_verify_*.py``: there **the more
 specific pattern wins**, the way ``.gitignore`` resolves the same question. But
 one role owning ``FIXLOG.md`` while another appends to it is not a contest at
 all -- it is the shape the ownership table is built on, so both keep their
@@ -97,11 +97,11 @@ class Roster:
         A role loses only to a *strictly more specific* claim by another role
         **at the same grade**. Two owners of one path is a contest and the
         exact name beats the wildcard, the way ``.gitignore`` resolves it: the
-        Developer owns ``tools/**`` but not ``tools/gate_checks/check_qa_*.py``,
-        which QA names outright.
+        Builder owns ``tools/**`` but not ``tools/gate_checks/check_verify_*.py``,
+        which Verifier names outright.
 
         Across grades there is no contest at all, at any specificity. That is
-        the shape the whole table is built on -- "the Developer owns FIXLOG, QA
+        the shape the whole table is built on -- "the Builder owns FIXLOG, Verifier
         may append to it" -- and ``appends`` is by definition a claim on
         somebody else's file, so letting it outrank ``owns`` inverts the thing
         it exists to express. Compared across grades, one role appending to
@@ -126,10 +126,10 @@ class Roster:
         """Paths no role owns because they are not anyone's writing.
 
         The three grades are about documents and source -- things with an author.
-        A game's own output has none: the specification here has the build write
-        `demo_outputs/feel_log.jsonl` whenever it runs in test mode, so whichever
+        A program's own output has none: a build that writes a log or a replay
+        whenever it runs in test mode is written by no author, so whichever
         role ran it is the one that "wrote" the file, and grading that by
-        ownership means QA's measurements are reverted for having been made.
+        ownership means Verifier's measurements are reverted for having been made.
 
         Declared per role and applied to all of them: the paths are a property
         of the project, and a set one role could write and another could not

@@ -139,7 +139,7 @@ class RoleEntry(DelegateEntry):
     """Skills for this role's step, three-valued on the same terms."""
 
     journal_section: str = ""
-    """The journal subsection this role writes, e.g. ``Dev``. A role with none
+    """The journal subsection this role writes, e.g. ``Build``. A role with none
     is not asked to leave anything for the rounds after it."""
 
     verify_after: list[str] = Field(default_factory=list)

@@ -376,7 +376,7 @@ def test_the_packaged_library_ships_only_what_cannot_be_generated(tmp_path):
     ``create_playbook`` tool. Packaging those puts demo content into every
     install and into the public release, so none are shipped.
 
-    ``game-rounds`` is the exception the rule needs, and the reason is the
+    ``rounds`` is the exception the rule needs, and the reason is the
     generator's own refusal: a ``mode: stint`` playbook is the one kind it may
     never write (``test_the_generator_cannot_write_a_rounds_playbook``), because
     ``verify`` is shell and one approval covers every round. Withheld from the
@@ -388,8 +388,8 @@ def test_the_packaged_library_ships_only_what_cannot_be_generated(tmp_path):
     from raven.playbook.store import BUILTIN_ROOT
 
     store = PlaybookStore(tmp_path / "empty-user", builtin_root=BUILTIN_ROOT)
-    assert store.list_ids() == ["game-rounds"]
-    assert store.load("game-rounds").mode == "stint"
+    assert store.list_ids() == ["rounds"]
+    assert store.load("rounds").mode == "stint"
 
 
 def test_every_packaged_playbook_names_an_agent_raven_ships(tmp_path):
@@ -403,7 +403,7 @@ def test_every_packaged_playbook_names_an_agent_raven_ships(tmp_path):
     ``Raven-Code``; nothing read the two together.
 
     The manifests rather than a live roster: what a machine has depends on what
-    is installed and configured there, and a developer's own config is the one
+    is installed and configured there, and a builder's own config is the one
     place this mistake is invisible.
     """
     import json

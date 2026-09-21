@@ -677,7 +677,7 @@ def _plan_on_disk(
     entry = record.open_round(1, "run-a")
     entry.status = "completed"
     entry.verify = [{"name": "build", "status": "failed", "command": "make", "returncode": 1, "duration_sec": 1.0}]
-    entry.violations = ["developer wrote 1 path(s) it may not write: reports/qa.md"]
+    entry.violations = ["builder wrote 1 path(s) it may not write: reports/verifier.md"]
     record.open_round(2, "run-b")
     store.write(record)
     return store, record
@@ -1135,10 +1135,10 @@ class TestScaffoldingAStint:
         from raven.playbook.validate import validate_structure
 
         root = self._home(tmp_path, monkeypatch)
-        written = runner.invoke(app, ["playbook", "new-stint", "qa-loop"])
+        written = runner.invoke(app, ["playbook", "new-stint", "verifier-loop"])
         assert written.exit_code == 0, written.output
 
-        spec = PlaybookStore(root).load("qa-loop")
+        spec = PlaybookStore(root).load("verifier-loop")
         assert spec.mode == "stint"
         assert validate_structure(spec, known_agents=[role.name for role in spec.roles or []]) == []
 
@@ -1146,27 +1146,27 @@ class TestScaffoldingAStint:
         """Written as a file rather than saved through the serializer: a round
         trip through the model keeps the fields and drops every comment."""
         root = self._home(tmp_path, monkeypatch)
-        runner.invoke(app, ["playbook", "new-stint", "qa-loop"])
+        runner.invoke(app, ["playbook", "new-stint", "verifier-loop"])
 
-        body = (root / "qa-loop" / "playbook.md").read_text(encoding="utf-8")
+        body = (root / "verifier-loop" / "playbook.md").read_text(encoding="utf-8")
         assert "isolation: branch" in body, "the choice a run cannot be un-made is explained"
         assert "refused at load" in body, "and so is the trap that refuses one"
         assert body.count("#") > 20
 
     def test_it_is_usable_without_an_enabling_step(self, tmp_path, monkeypatch) -> None:
         self._home(tmp_path, monkeypatch)
-        runner.invoke(app, ["playbook", "new-stint", "qa-loop"])
+        runner.invoke(app, ["playbook", "new-stint", "verifier-loop"])
 
         listed = runner.invoke(app, ["playbook", "list"])
 
-        assert "qa-loop" in listed.output
+        assert "verifier-loop" in listed.output
         assert "disabled" not in listed.output
 
     def test_a_name_the_library_already_has_is_refused(self, tmp_path, monkeypatch) -> None:
         self._home(tmp_path, monkeypatch)
-        runner.invoke(app, ["playbook", "new-stint", "qa-loop"])
+        runner.invoke(app, ["playbook", "new-stint", "verifier-loop"])
 
-        again = runner.invoke(app, ["playbook", "new-stint", "qa-loop"])
+        again = runner.invoke(app, ["playbook", "new-stint", "verifier-loop"])
 
         assert again.exit_code == 1
         assert "already exists" in again.output
@@ -1174,7 +1174,7 @@ class TestScaffoldingAStint:
     def test_a_name_that_could_not_be_a_directory_is_refused(self, tmp_path, monkeypatch) -> None:
         self._home(tmp_path, monkeypatch)
 
-        result = runner.invoke(app, ["playbook", "new-stint", "QA Loop"])
+        result = runner.invoke(app, ["playbook", "new-stint", "Verifier Loop"])
 
         assert result.exit_code == 1
         assert "kebab-case" in result.output

@@ -171,7 +171,9 @@ def test_the_skill_is_placed_inside_the_step_s_working_directory_and_the_menu_po
     work.mkdir()
     spec = _spec({"id": "a", "subagent": "coder", "prompt_template": "go", "skills": ["game-testing"]})
 
-    folded, notices = fold_skills(spec, {"coder": AgentCapabilities(injectable_skills=False)}, _real_catalog(tmp_path), workdir=work)
+    folded, notices = fold_skills(
+        spec, {"coder": AgentCapabilities(injectable_skills=False)}, _real_catalog(tmp_path), workdir=work
+    )
 
     copy = work / SKILLS_DIR / "game-testing"
     assert (copy / "SKILL.md").read_text(encoding="utf-8").endswith("Run the demo.\n")
@@ -205,5 +207,8 @@ def test_a_copy_that_cannot_be_made_falls_back_to_the_catalog_path_and_says_so(t
         spec, {"coder": AgentCapabilities(injectable_skills=False)}, _real_catalog(tmp_path), workdir=not_a_dir
     )
 
-    assert f"<location>{tmp_path / 'home' / 'skills' / 'game-testing' / 'SKILL.md'}</location>" in folded.nodes[0].prompt_template
+    assert (
+        f"<location>{tmp_path / 'home' / 'skills' / 'game-testing' / 'SKILL.md'}</location>"
+        in folded.nodes[0].prompt_template
+    )
     assert len(notices) == 1 and "could not be copied into the working directory" in notices[0]

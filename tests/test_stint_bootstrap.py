@@ -41,7 +41,7 @@ def test_init_lays_out_the_directory_and_links_the_specification(tmp_path: Path)
     assert (home / "SPEC.md").resolve() == (project / "docs" / "PRD-arena.md").resolve()
     for name in ("HUMAN_DECISIONS.md", "AGENT_DECISIONS.md", "FIXLOG.md", "PLAYBOOK.md"):
         assert (home / name).is_file(), name
-    for role in ("planner", "developer", "qa"):
+    for role in ("planner", "builder", "verifier"):
         assert (home / f"{role}.md").is_file(), role
     assert (project / "reports").is_dir()
     assert result.spec.endswith("PRD-arena.md")
@@ -60,25 +60,25 @@ def test_the_guard_files_it_writes_are_a_roster_the_runtime_can_read(tmp_path: P
     bootstrap.init(project)
 
     roster = roster_mod.load(project)
-    assert [role.name for role in roster.in_round()] == ["planner", "developer", "qa"]
-    assert roster.get("developer").session == roster_mod.CONTINUE
+    assert [role.name for role in roster.in_round()] == ["planner", "builder", "verifier"]
+    assert roster.get("builder").session == roster_mod.CONTINUE
     assert roster.get("planner").session == roster_mod.CONTINUE, "the Planner holds the whole project across rounds"
     assert roster.conflicts() == []
     assert roster.grade("planner", "reports/brief_01.md", round_index=1) == roster_mod.OWNS
-    assert roster.grade("qa", "reports/brief_01.md", round_index=1) == roster_mod.NEVER
+    assert roster.grade("verifier", "reports/brief_01.md", round_index=1) == roster_mod.NEVER
 
 
 def test_no_slot_is_left_unfilled_in_a_generated_guard(tmp_path: Path) -> None:
     project = _project(tmp_path)
     bootstrap.init(project)
-    for role in ("planner", "developer", "qa"):
+    for role in ("planner", "builder", "verifier"):
         assert "{{" not in (project / ".stint" / f"{role}.md").read_text(encoding="utf-8"), role
 
 
 def test_the_enforcement_grade_is_the_operator_s_to_choose(tmp_path: Path) -> None:
     project = _project(tmp_path)
     bootstrap.init(project, enforce_read="hard", enforce_write="soft")
-    role = roster_mod.load(project).get("qa")
+    role = roster_mod.load(project).get("verifier")
     assert role.enforce_read == roster_mod.HARD
     assert role.enforce_write == roster_mod.SOFT
 
@@ -183,17 +183,17 @@ def test_review_reports_the_gates_no_task_covers(tmp_path: Path) -> None:
 def test_the_documents_a_project_carried_are_found_at_any_depth_under_docs(tmp_path: Path) -> None:
     """A half-built project keeps what it learned in the role folders it grew up with."""
     project = _project(tmp_path, docs={"PRD-arena.md": PRD, "DECISIONS.md": "- settled: one boss\n"})
-    (project / "docs" / "qa").mkdir()
-    (project / "docs" / "qa" / "QA.md").write_text("# QA\n", encoding="utf-8")
+    (project / "docs" / "verifier").mkdir()
+    (project / "docs" / "verifier" / "Verifier.md").write_text("# Verifier\n", encoding="utf-8")
     (project / "CLAUDE.md").write_text("# instructions\n", encoding="utf-8")
     (project / "AGENTS.md").symlink_to("CLAUDE.md")
     (project / "reports").mkdir()
-    (project / "reports" / "qa_01.md").write_text("# not a document\n", encoding="utf-8")
+    (project / "reports" / "verify_01.md").write_text("# not a document\n", encoding="utf-8")
     bootstrap.init(project)
 
     found = bootstrap.project_documents(project, spec=project / ".stint" / "SPEC.md")
 
-    assert found == ["CLAUDE.md", "docs/DECISIONS.md", "docs/qa/QA.md"], (
+    assert found == ["CLAUDE.md", "docs/DECISIONS.md", "docs/verifier/Verifier.md"], (
         "the spec, README, .stint/ and reports/ are not documents to absorb"
     )
 
@@ -211,10 +211,10 @@ def test_the_plan_prompt_asks_for_the_carry_over_and_the_ledger(tmp_path: Path) 
     assert "the reading map" in prompt, "reference material is mapped, not copied"
     assert "is **not**\n  copied" in prompt
     assert "a reference image" in prompt and "open the image itself" in prompt, (
-        "a picture gets a row that sends the Developer and QA to look at it"
+        "a picture gets a row that sends the Builder and Verifier to look at it"
     )
     assert "a reference image" in prompt and "open the image itself" in prompt, (
-        "a picture gets a row that sends the Developer and QA to look at it"
+        "a picture gets a row that sends the Builder and Verifier to look at it"
     )
 
 
@@ -252,13 +252,13 @@ def test_the_plan_is_told_what_the_tree_already_holds(tmp_path: Path) -> None:
     (project / "project").mkdir()
     (project / "project" / "project.godot").write_text("[application]\n", encoding="utf-8")
     (project / "reports").mkdir()
-    (project / "reports" / "qa_02.md").write_text("# qa 02\n", encoding="utf-8")
+    (project / "reports" / "verify_02.md").write_text("# verifier 02\n", encoding="utf-8")
     bootstrap.init(project)
 
     prompt = bootstrap.plan_prompt(project)
 
     assert "## Then, look at the tree" in prompt
-    assert "`project/`" in prompt and "`qa_02.md`" in prompt
+    assert "`project/`" in prompt and "`verify_02.md`" in prompt
     assert "checks detected: `import`" in prompt
     assert "look rather than assume" in prompt, "the layout is the repository's own, so the prompt guides a search"
     assert "Work that already is\n  goes in as `in_review`" in prompt

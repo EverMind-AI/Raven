@@ -26,8 +26,8 @@ def test_task_commands_walk_a_task_through_the_three_roles(tmp_path, monkeypatch
 
     for role, args in (
         ("planner", ["task", "assign", "1"]),
-        ("developer", ["task", "implement", "1", "--commit", "abc1234"]),
-        ("qa", ["task", "verdict", "1", "--proven", "--evidence", "demo/round_04/"]),
+        ("builder", ["task", "implement", "1", "--commit", "abc1234"]),
+        ("verifier", ["task", "verdict", "1", "--proven", "--evidence", "demo/round_04/"]),
     ):
         monkeypatch.setenv("STINT_ROLE", role)
         result = runner.invoke(stint_app, [*args, "--project", str(project)])
@@ -42,7 +42,7 @@ def test_task_commands_walk_a_task_through_the_three_roles(tmp_path, monkeypatch
 
 def test_a_role_calling_a_transition_it_does_not_own_is_refused(tmp_path, monkeypatch) -> None:
     project = _backlog_project(tmp_path, [{"id": 1, "title": "the work", "state": "in_review"}])
-    monkeypatch.setenv("STINT_ROLE", "developer")
+    monkeypatch.setenv("STINT_ROLE", "builder")
 
     result = runner.invoke(
         stint_app, ["task", "verdict", "1", "--proven", "--evidence", "x", "--project", str(project)]
@@ -60,13 +60,13 @@ def test_every_attempt_lands_in_the_run_s_task_log(tmp_path, monkeypatch) -> Non
     monkeypatch.setenv("STINT_STATE_DIR", str(state_dir))
     monkeypatch.setenv("STINT_ROUND", "2")
 
-    monkeypatch.setenv("STINT_ROLE", "qa")
+    monkeypatch.setenv("STINT_ROLE", "verifier")
     runner.invoke(stint_app, ["task", "assign", "1", "--project", str(project)])
     monkeypatch.setenv("STINT_ROLE", "planner")
     runner.invoke(stint_app, ["task", "assign", "1", "--project", str(project)])
 
     lines = [json.loads(line) for line in (state_dir / "tasks.log").read_text(encoding="utf-8").splitlines()]
-    assert [entry["role"] for entry in lines] == ["qa", "planner"]
+    assert [entry["role"] for entry in lines] == ["verifier", "planner"]
     assert lines[0]["outcome"].startswith("refused:")
     assert lines[1]["outcome"] == "assigned"
     assert lines[1]["round"] == 2
@@ -74,7 +74,7 @@ def test_every_attempt_lands_in_the_run_s_task_log(tmp_path, monkeypatch) -> Non
 
 def test_the_verdict_needs_exactly_one_of_proven_or_not_proven(tmp_path, monkeypatch) -> None:
     project = _backlog_project(tmp_path, [{"id": 1, "title": "the work", "state": "in_review"}])
-    monkeypatch.setenv("STINT_ROLE", "qa")
+    monkeypatch.setenv("STINT_ROLE", "verifier")
     for extra in ([], ["--proven", "--not-proven"]):
         result = runner.invoke(stint_app, ["task", "verdict", "1", *extra, "--project", str(project)])
         assert result.exit_code != 0
@@ -285,14 +285,14 @@ def test_only_qa_can_say_a_finished_task_is_not_finished(tmp_path, monkeypatch) 
     """Not verified is not done, and the role that verified is the one that can undo it."""
     project = _backlog_project(tmp_path, [{"id": 1, "title": "the work", "state": "done"}])
 
-    monkeypatch.setenv("STINT_ROLE", "developer")
+    monkeypatch.setenv("STINT_ROLE", "builder")
     refused = runner.invoke(
         stint_app, ["task", "reopen", "1", "--reason", "the camera regressed", "--project", str(project)]
     )
     assert refused.exit_code == 1
     assert _read(project)["tasks"][0]["state"] == "done"
 
-    monkeypatch.setenv("STINT_ROLE", "qa")
+    monkeypatch.setenv("STINT_ROLE", "verifier")
     result = runner.invoke(
         stint_app, ["task", "reopen", "1", "--reason", "round 08 regression, demo/round_08/", "--project", str(project)]
     )
@@ -351,7 +351,7 @@ def test_init_lays_out_the_directory_and_says_what_it_wrote(tmp_path) -> None:
     result = runner.invoke(stint_app, ["init", "--project", str(project)])
 
     assert result.exit_code == 0, result.output
-    for role in ("planner", "developer", "qa"):
+    for role in ("planner", "builder", "verifier"):
         assert (project / ".stint" / f"{role}.md").is_file(), role
     assert (project / ".stint" / "SPEC.md").resolve() == (project / "docs" / "PRD-arena.md").resolve()
     output = " ".join(result.output.split())

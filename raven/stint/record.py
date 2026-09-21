@@ -19,10 +19,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import time
 from collections.abc import Collection, Sequence
-import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path

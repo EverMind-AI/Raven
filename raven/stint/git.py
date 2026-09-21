@@ -289,7 +289,7 @@ class ProjectGit:
         """What the working tree looks like now, content included.
 
         `changed()` answers with names alone, and a turn that rewrites a file it
-        already created moves no name: a Developer spending two turns filling in
+        already created moves no name: a Builder spending two turns filling in
         a thirty-kilobyte report looked exactly like one doing nothing, and the
         stall detector ended its round saying it changed nothing in the tree.
         Size and mtime are what make an in-place edit visible, and both come
@@ -374,7 +374,7 @@ class ProjectGit:
 
         Asked of the text before it is asked of the diff: a file whose last line
         had no newline gains one when anything is added after it, and git counts
-        that line as removed and added back. A QA that appended two rows to a
+        that line as removed and added back. A Verifier that appended two rows to a
         table ending that way was told it had removed lines, three times, and
         gave up on the file.
         """
@@ -480,7 +480,7 @@ class ProjectGit:
         losing it makes the violation unreadable. That was only honoured for
         untracked files: a tracked one went straight back to HEAD and its
         content was gone, which is the case where "what did it try to change"
-        is the whole question. Measured 2026-09-10: a Developer's edit to
+        is the whole question. Measured 2026-09-10: a Builder's edit to
         `docs/EVENTS.md` was reverted, the log said a copy was kept, and the
         quarantine directory was empty.
         """

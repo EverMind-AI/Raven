@@ -59,13 +59,13 @@ from raven.agent.subagent.dag_adjudication import (
     Stopped,
 )
 from raven.agent.subagent.dag_capabilities import AgentCapabilities, validate_capabilities
-from raven.agent.subagent.dag_skills import fold_skills
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, parse_dag_spec, validate_and_order
 from raven.agent.subagent.dag_mcp_scope import run_mcp_scope
 from raven.agent.subagent.dag_reader import read_node as _read_node
 from raven.agent.subagent.dag_reader import read_run as _read_run
 from raven.agent.subagent.dag_reader import run_dir_of
 from raven.agent.subagent.dag_runner import DagRunResult, ExceptionAnnouncer, ProgressPublisher, run_dag
+from raven.agent.subagent.dag_skills import fold_skills
 from raven.agent.subagent.dag_store import (
     RUNNING,
     DagRunStore,
@@ -1325,7 +1325,9 @@ class SubAgentDagTool(Tool):
         except Exception as exc:  # noqa: BLE001 - the fold is a courtesy to the step, not its gate
             logger.warning("DAG skills could not be handed to the nodes that named them: {}", exc)
             named = [node.id for node in spec.nodes if node.skills]
-            return spec, [f"the skills named on {', '.join(named)} could not be read from this machine's catalog ({exc})"] if named else []
+            return spec, [
+                f"the skills named on {', '.join(named)} could not be read from this machine's catalog ({exc})"
+            ] if named else []
 
     def _skill_catalog(self) -> Any:
         """This machine's skill catalog, for the skills a node names.

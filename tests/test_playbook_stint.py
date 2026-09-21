@@ -42,7 +42,7 @@ def _spec(**over: Any) -> PlaybookSpec:
                 "owns": ["reports/brief_{NN}.md"],
             },
             {
-                "as": "developer",
+                "as": "builder",
                 "name": "echo",
                 "dependsOn": ["planner"],
                 "promptTemplate": "do this: {{planner.output}}",
@@ -61,7 +61,7 @@ class TestCompile:
         conversation, and one stint submits thirty graphs into one."""
         nodes = compile_round(_spec(), 12)
 
-        assert [node["id"] for node in nodes] == ["game-dev-r12-planner", "game-dev-r12-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r12-planner", "game-dev-r12-builder"]
         assert nodes[1]["depends_on"] == ["game-dev-r12-planner"]
         assert nodes[0]["subagent"] == "echo"
 
@@ -84,7 +84,7 @@ class TestCompile:
         assert "{{planner.output}}" not in nodes[1]["prompt_template"]
 
     def test_the_round_s_own_facts_are_filled_in_before_the_graph_is_submitted(self) -> None:
-        nodes = compile_round(_spec(), 7, journal="## Round 06\n\n### Dev\n\nlast round's note\n")
+        nodes = compile_round(_spec(), 7, journal="## Round 06\n\n### Build\n\nlast round's note\n")
 
         prompt = nodes[0]["prompt_template"]
         assert "round 7" in prompt
@@ -142,7 +142,7 @@ class TestCompile:
         graph contract treats a dependency an earlier run completed as met."""
         nodes = compile_round(_spec(), 5, satisfied={"planner": "game-dev-r05-planner-old"})
 
-        assert [node["id"] for node in nodes] == ["game-dev-r05-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r05-builder"]
         assert nodes[0]["depends_on"] == ["game-dev-r05-planner-old"]
         assert "{{game-dev-r05-planner-old.output}}" in nodes[0]["prompt_template"]
 
@@ -155,7 +155,7 @@ class TestCompile:
 
     def test_a_role_s_servers_and_skills_travel_to_its_node(self) -> None:
         spec = _spec(
-            roles=[{"as": "qa", "name": "echo", "promptTemplate": "check", "mcps": ["godot"], "skills": []}],
+            roles=[{"as": "verifier", "name": "echo", "promptTemplate": "check", "mcps": ["godot"], "skills": []}],
         )
         node = compile_round(spec, 1)[0]
 
@@ -385,7 +385,7 @@ class TestRunning:
             roles=[
                 {"as": "planner", "name": "echo", "promptTemplate": "plan", "owns": ["reports/**"]},
                 {
-                    "as": "developer",
+                    "as": "builder",
                     "name": "echo",
                     "dependsOn": ["planner"],
                     "promptTemplate": "build",
@@ -424,7 +424,7 @@ class TestRunning:
             roles=[
                 {"as": "planner", "name": "echo", "promptTemplate": "plan", "owns": ["reports/**"]},
                 {
-                    "as": "developer",
+                    "as": "builder",
                     "name": "echo",
                     "dependsOn": ["planner"],
                     "promptTemplate": "build",
@@ -438,7 +438,7 @@ class TestRunning:
         assert first.startswith("Error") and "never answered" in first, first
         assert (project / ".stint" / "planner.md").is_file(), "the layout was written before the refusal"
 
-        from raven.stint.verify import remember_check
+        from raven.stint.checks import remember_check
 
         remember_check(project, "game-dev", "build", "true")
         second = await driver.start(spec)
@@ -530,7 +530,7 @@ class TestRunning:
             confirm=True,
             roles=[
                 {"as": "planner", "name": "echo", "promptTemplate": "plan"},
-                {"as": "developer", "name": "echo", "dependsOn": ["planner"], "promptTemplate": "build"},
+                {"as": "builder", "name": "echo", "dependsOn": ["planner"], "promptTemplate": "build"},
             ],
         )
 
@@ -568,7 +568,7 @@ class TestRunning:
             confirm=False,
             roles=[
                 {"as": "planner", "name": "broken", "promptTemplate": "plan", "owns": ["reports/**"]},
-                {"as": "developer", "name": "broken", "dependsOn": ["planner"], "promptTemplate": "build"},
+                {"as": "builder", "name": "broken", "dependsOn": ["planner"], "promptTemplate": "build"},
             ],
             stop={"maxRounds": 5},
         )
@@ -837,7 +837,7 @@ class TestBoundaries:
         spec = _spec(
             roles=[
                 {"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0},
-                {"as": "qa", "name": "echo", "promptTemplate": "check", "owns": ["reports/**"]},
+                {"as": "verifier", "name": "echo", "promptTemplate": "check", "owns": ["reports/**"]},
             ]
         )
         context = self._context(tmp_path, spec)
@@ -845,11 +845,11 @@ class TestBoundaries:
         await context.node_started(node.id)
 
         (context.workdir / "reports").mkdir()
-        (context.workdir / "reports" / "qa.md").write_text("not mine\n", encoding="utf-8")
+        (context.workdir / "reports" / "verifier.md").write_text("not mine\n", encoding="utf-8")
         verdict = await context.judge(node=node)
 
         assert verdict.accomplished, "past its budget the round moves on rather than failing the node"
-        assert not (context.workdir / "reports" / "qa.md").exists()
+        assert not (context.workdir / "reports" / "verifier.md").exists()
         violations = context.record.round(1).violations
         assert any("may not write" in note for note in violations), violations
 
@@ -861,7 +861,7 @@ class TestBoundaries:
         spec = _spec(
             roles=[
                 {"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0},
-                {"as": "qa", "name": "echo", "promptTemplate": "check", "owns": ["reports/**"]},
+                {"as": "verifier", "name": "echo", "promptTemplate": "check", "owns": ["reports/**"]},
             ]
         )
         context = self._context(tmp_path, spec)
@@ -869,10 +869,10 @@ class TestBoundaries:
         await context.node_started(node.id)
 
         (context.workdir / "reports").mkdir()
-        (context.workdir / "reports" / "qa.md").write_text("not mine\n", encoding="utf-8")
+        (context.workdir / "reports" / "verifier.md").write_text("not mine\n", encoding="utf-8")
         await context.judge(node=node)
 
-        assert not (context.workdir / "reports" / "qa.md").exists(), "the boundary held on the second attempt too"
+        assert not (context.workdir / "reports" / "verifier.md").exists(), "the boundary held on the second attempt too"
         assert any("may not write" in note for note in context.record.round(1).violations)
 
     async def test_what_the_run_left_uncommitted_is_nobody_s_only_until_a_round_commits_it(
@@ -885,15 +885,21 @@ class TestBoundaries:
         spec = _spec(
             roles=[
                 {"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0},
-                {"as": "qa", "name": "echo", "promptTemplate": "check", "owns": ["reports/**"], "maxHandbacks": 0},
+                {
+                    "as": "verifier",
+                    "name": "echo",
+                    "promptTemplate": "check",
+                    "owns": ["reports/**"],
+                    "maxHandbacks": 0,
+                },
             ]
         )
         context = self._context(tmp_path, spec)
         context.git()
-        orders = context.workdir / ".stint" / "qa.md"
+        orders = context.workdir / ".stint" / "verifier.md"
         orders.parent.mkdir()
         orders.write_text("judge fairly\n", encoding="utf-8")
-        context.record.untracked_at_start = [".stint/qa.md"]
+        context.record.untracked_at_start = [".stint/verifier.md"]
 
         dev = self._node("game-dev-r01-dev")
         await context.node_started(dev.id)
@@ -901,13 +907,13 @@ class TestBoundaries:
         assert orders.read_text(encoding="utf-8") == "judge fairly\n", "round one's first role left it alone"
         assert not context.record.round(1).violations
 
-        qa = self._node("game-dev-r01-qa")
-        await context.node_started(qa.id)
+        verifier = self._node("game-dev-r01-verifier")
+        await context.node_started(verifier.id)
         orders.write_text("judge leniently\n", encoding="utf-8")
-        await context.judge(node=qa)
+        await context.judge(node=verifier)
 
         assert orders.read_text(encoding="utf-8") == "judge fairly\n"
-        assert any(".stint/qa.md" in note for note in context.record.round(1).violations)
+        assert any(".stint/verifier.md" in note for note in context.record.round(1).violations)
 
     async def test_a_failing_check_is_handed_back_to_the_role_not_to_a_person(self, tmp_path: Path) -> None:
         """There is nobody to ask on an unattended run, and the judge already
@@ -1168,7 +1174,7 @@ class TestAScreenForTheChecks:
             verify=[{"name": "build", "run": "true"}],
             roles=[
                 {
-                    "as": "developer",
+                    "as": "builder",
                     "name": "echo",
                     "promptTemplate": "do it",
                     "owns": ["src/**"],
@@ -1207,7 +1213,7 @@ class TestAScreenForTheChecks:
             verify=[{"name": "render", "run": "true", "needsDisplay": True}],
             roles=[
                 {
-                    "as": "developer",
+                    "as": "builder",
                     "name": "echo",
                     "promptTemplate": "do it",
                     "owns": ["src/**"],
@@ -1839,7 +1845,7 @@ class TestResume:
         await self._driver(tmp_path, tool).resume("stint-x", "web:stint")
 
         [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r01x1-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-builder"]
         assert nodes[0]["depends_on"] == ["game-dev-r01-planner"]
         assert "{{game-dev-r01-planner.output}}" in nodes[0]["prompt_template"]
         assert store.read("stint-x").round(1).attempt == 1
@@ -1864,7 +1870,7 @@ class TestResume:
         await self._driver(tmp_path, tool).resume("stint-x", "web:stint")
 
         [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r01x1-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-builder"]
         assert nodes[0]["depends_on"] == ["game-dev-r01-planner"]
 
     async def test_a_role_the_record_says_finished_but_the_registry_cannot_read_runs_again(
@@ -1883,14 +1889,14 @@ class TestResume:
         await self._driver(tmp_path, tool).resume("stint-x", "web:stint")
 
         [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r01x1-planner", "game-dev-r01x1-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-planner", "game-dev-r01x1-builder"]
 
     async def test_a_completed_round_sends_what_it_promised_and_did_not_deliver_back_to_open(
         self, tmp_path: Path
     ) -> None:
-        """Both rules lived in `backlog.py` with no caller. A Developer cut off by
+        """Both rules lived in `backlog.py` with no caller. A Builder cut off by
         its turn budget left tasks `assigned` for the rest of the stint, and a
-        task QA never judged stayed `in_review`."""
+        task Verifier never judged stayed `in_review`."""
         import json
 
         from raven.stint import backlog as backlog_mod
@@ -1905,7 +1911,7 @@ class TestResume:
                 {
                     "meta": {},
                     "tasks": [
-                        {"id": 1, "title": "promised", "state": "assigned", "owner": "developer"},
+                        {"id": 1, "title": "promised", "state": "assigned", "owner": "builder"},
                         {"id": 2, "title": "unjudged", "state": "in_review"},
                         {"id": 3, "title": "finished", "state": "done"},
                     ],
@@ -1920,9 +1926,7 @@ class TestResume:
         assert [backlog.get(n).state for n in (1, 2, 3)] == ["open", "open", "done"]
         assert backlog.get(1).owner == ""
 
-    async def test_a_cut_round_keeps_its_tasks_assigned_for_the_developer_that_resumes_it(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_a_cut_round_keeps_its_tasks_assigned_for_the_developer_that_resumes_it(self, tmp_path: Path) -> None:
         import json
 
         from raven.stint import backlog as backlog_mod
@@ -1949,7 +1953,7 @@ class TestResume:
         await self._driver(tmp_path, tool).resume("stint-x", "web:stint")
 
         [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r01x1-planner", "game-dev-r01x1-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-planner", "game-dev-r01x1-builder"]
 
     async def test_resuming_a_finished_plan_says_so_rather_than_starting_a_round(self, tmp_path: Path) -> None:
         from raven.stint.record import FINISHED
@@ -1984,7 +1988,7 @@ class TestResume:
         await driver.resume("stint-x", "web:stint")
 
         [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r01x1-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-builder"]
         assert store.read("stint-x").status == "running"
 
     async def test_a_plan_told_to_stop_stays_stopped_when_its_last_round_is_cut(self, tmp_path: Path) -> None:
@@ -2020,7 +2024,7 @@ class TestResume:
 
         assert not answer.startswith("Error"), answer
         [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r01x1-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-builder"]
         assert store.read("stint-x").round(1).attempt == 1
 
     async def test_a_dead_holder_is_as_good_as_a_quiet_one(self, tmp_path: Path) -> None:
@@ -2045,7 +2049,7 @@ class TestResume:
         await driver.resume("stint-x", "web:stint")
 
         [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r01x1-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-builder"]
 
     async def test_a_live_holder_on_this_machine_keeps_resume_off(self, tmp_path: Path) -> None:
         import os
@@ -2077,7 +2081,7 @@ class TestResume:
         assert "taken up rather than started over" in receipt
         assert [record.stint_id for record in store.list()] == ["stint-x"], "no second stint was written"
         [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r01x1-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-builder"]
 
     async def test_a_plan_somebody_is_still_working_is_not_taken_from_them_by_a_start(self, tmp_path: Path) -> None:
         tool = _FakeTool(tmp_path / "stints")
@@ -2115,10 +2119,10 @@ class TestTheWordThatEndsItEarly:
         return _spec(stop={"maxRounds": 9, "until": "NOTHING-LEFT"}, **over)
 
     def test_the_last_role_is_told_the_word(self) -> None:
-        [_planner, developer] = compile_round(self._chain(), 3)
+        [_planner, builder] = compile_round(self._chain(), 3)
 
-        assert "NOTHING-LEFT" in developer["prompt_template"]
-        assert "last role of this round" in developer["prompt_template"]
+        assert "NOTHING-LEFT" in builder["prompt_template"]
+        assert "last role of this round" in builder["prompt_template"]
 
     def test_a_role_something_waits_on_is_not(self) -> None:
         """Only a terminal node's output reaches the check, so the word would be
@@ -2311,7 +2315,7 @@ class TestWhatAPersonApproves:
 
         asked = approval(spec, self._record())
 
-        assert "up to 30 round(s) of: planner -> developer" in asked
+        assert "up to 30 round(s) of: planner -> builder" in asked
         # Every command in full: they run here, and this is the one moment.
         assert "python3 -m compileall -q src" in asked
         assert "uv run pytest -q" in asked
@@ -2480,14 +2484,14 @@ class TestTakingAPlanUpAgain:
         recorded, and no further one opens. Taking it up again therefore means
         the next round -- re-running the finished one finds every role already
         done and nothing left to run."""
-        tool = _FakeTool(tmp_path / "stints", readable={"game-dev-r01-planner", "game-dev-r01-developer"})
+        tool = _FakeTool(tmp_path / "stints", readable={"game-dev-r01-planner", "game-dev-r01-builder"})
         store = self._plan(tmp_path, tool, status="paused")
 
         answer = await self._driver(tmp_path, tool).resume("stint-x", "web:stint")
 
         assert not answer.startswith("Error"), answer
         [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r02-planner", "game-dev-r02-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r02-planner", "game-dev-r02-builder"]
         assert store.read("stint-x").status == "running"
 
     async def test_a_plan_paused_on_its_last_round_is_sent_to_the_verb_that_can_help(self, tmp_path: Path) -> None:
@@ -2511,7 +2515,7 @@ class TestTakingAPlanUpAgain:
         await self._driver(tmp_path, tool).resume("stint-x", "web:stint")
 
         [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r01x1-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r01x1-builder"]
 
     async def test_an_answer_given_after_the_plan_ended_reaches_the_round_that_follows(self, tmp_path: Path) -> None:
         """The order a person actually works in: read the question the stint left,
@@ -2662,7 +2666,7 @@ class TestMoreRounds:
         await self._driver(tmp_path, tool).extend("stint-x", 3, "web:stint")
 
         [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r03-planner", "game-dev-r03-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r03-planner", "game-dev-r03-builder"]
         record = store.read("stint-x")
         assert (record.status, record.round_index, record.stop_reason) == ("running", 3, "")
         assert record.spec["stop"]["maxRounds"] == 5
@@ -2751,7 +2755,7 @@ class TestMoreRounds:
         await self._driver(tmp_path, tool).extend("stint-x", 1, "web:stint")
 
         [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r01-planner", "game-dev-r01-developer"]
+        assert [node["id"] for node in nodes] == ["game-dev-r01-planner", "game-dev-r01-builder"]
 
     async def test_no_more_rounds_is_not_more_rounds(self, tmp_path: Path) -> None:
         tool = _FakeTool(tmp_path / "stints")
@@ -2788,7 +2792,7 @@ class TestPreCallRefusals:
         return _spec(
             roles=[
                 {
-                    "as": "developer",
+                    "as": "builder",
                     "name": "echo",
                     "promptTemplate": "work",
                     "owns": ["src/**"],
@@ -2807,7 +2811,7 @@ class TestPreCallRefusals:
                         },
                     },
                 },
-                {"as": "qa", "name": "echo", "promptTemplate": "check", "dependsOn": ["developer"]},
+                {"as": "verifier", "name": "echo", "promptTemplate": "check", "dependsOn": ["builder"]},
             ]
         )
 
@@ -2816,9 +2820,9 @@ class TestPreCallRefusals:
 
         charters = charters_for(self._charter_spec(), 7)
 
-        assert set(charters) == {"game-dev-r07-developer"}, "a role with no playbook block carries no charter"
-        assert charters["game-dev-r07-developer"]["tools"] == ["read_file", "write_file"]
-        assert charters["game-dev-r07-developer"]["checks"][0]["pathPrefix"] == "src/"
+        assert set(charters) == {"game-dev-r07-builder"}, "a role with no playbook block carries no charter"
+        assert charters["game-dev-r07-builder"]["tools"] == ["read_file", "write_file"]
+        assert charters["game-dev-r07-builder"]["checks"][0]["pathPrefix"] == "src/"
 
     def test_the_charter_is_built_by_the_same_code_a_delegate_row_uses(self) -> None:
         """One worker description, so a role briefed for thirty rounds and a
@@ -2828,7 +2832,7 @@ class TestPreCallRefusals:
 
         role = self._charter_spec().roles[0]
 
-        assert charters_for(self._charter_spec(), 7)["game-dev-r07-developer"] == build_payload("", role.playbook)
+        assert charters_for(self._charter_spec(), 7)["game-dev-r07-builder"] == build_payload("", role.playbook)
 
     async def test_the_charter_reaches_the_worker_s_own_process(self, tmp_path: Path) -> None:
         """It travels as the context variable a spawn's charter travels on, so
@@ -2966,14 +2970,14 @@ def test_the_shipped_example_is_a_playbook_that_would_actually_run() -> None:
     from raven.agent.subagent.builtin_agents import BUILTIN_AGENT_NAMES
     from raven.playbook.validate import validate_structure
 
-    text = Path("raven/playbook/builtin/game-rounds/playbook.md").read_text(encoding="utf-8")
+    text = Path("raven/playbook/builtin/rounds/playbook.md").read_text(encoding="utf-8")
     front = yaml.safe_load(re.match(r"\A---\n(.*?)\n---\n", text, re.DOTALL).group(1))
     block = yaml.safe_load(re.search(r"```yaml playbook-spec\n(.*?)```", text, re.DOTALL).group(1))
 
     spec = PlaybookSpec.model_validate({**block, "name": front["name"], "description": front["description"]})
 
     assert spec.mode == "stint"
-    assert [role.label for role in spec.roles] == ["planner", "developer", "qa"]
+    assert [role.label for role in spec.roles] == ["planner", "builder", "verifier"]
     # The roster Raven ships, read from the agent manifests. Handing this the
     # names the file already contains is what let it ship naming three agents
     # that exist nowhere: the assertion passed by construction.
@@ -2985,11 +2989,11 @@ def test_the_shipped_example_is_a_playbook_that_would_actually_run() -> None:
 
     nodes = compile_round(spec, 1)
     assert [node["id"] for node in nodes] == [
-        "game-rounds-r01-planner",
-        "game-rounds-r01-developer",
-        "game-rounds-r01-qa",
+        "rounds-r01-planner",
+        "rounds-r01-builder",
+        "rounds-r01-verifier",
     ]
     # The standing orders are referenced, not pasted: a round that inlined every
     # rule into every prompt is how the reply ceiling was reached the first time.
     assert "{{ref:.stint/planner.md}}" in nodes[0]["prompt_template"]
-    assert "undone" in nodes[1]["prompt_template"], "the developer is told what it owns"
+    assert "undone" in nodes[1]["prompt_template"], "the builder is told what it owns"

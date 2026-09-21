@@ -22,7 +22,7 @@ with no turn and nobody watching. That shapes two decisions:
   complete instruction;
 * once the handback budget is spent, the round **moves on with the failure
   recorded**. It does not fail the node: a failed node cascades a skip through
-  everything downstream, so a developer who could not make the build pass would
+  everything downstream, so a builder who could not make the build pass would
   take the reviewer down with it, and a round that ends with a known defect
   written down is worth more than a round that ends with nothing.
 """
@@ -43,12 +43,13 @@ from raven.i18n import t
 from raven.playbook.stint_prompt import render
 from raven.playbook.stint_spec import RoleEntry
 from raven.playbook.types import PlaybookSpec
+from raven.stint.checks import resolve_checks
 from raven.stint.enforce import EnforceReport, enforce, roster_grader
 from raven.stint.git import HistoryError, ProjectGit
 from raven.stint.journal import JOURNAL, append_entry
 from raven.stint.ownership import Role, Roster
 from raven.stint.record import StintRecord, StintStore
-from raven.stint.verify import CheckResult, CheckSpec, resolve_checks, resolve_display, run_checks, start_display
+from raven.stint.verify import CheckResult, CheckSpec, resolve_display, run_checks, start_display
 
 __all__ = ["RoundContext", "roster_from"]
 
@@ -270,7 +271,7 @@ class RoundContext:
 
         But the exemption is for as long as the file is uncommitted, not for the
         stint's life: the first role's commit takes everything in the tree with
-        it, so from the second stage on a change to `.stint/qa.md` has a base to
+        it, so from the second stage on a change to `.stint/verifier.md` has a base to
         be measured from and is a role's edit like any other. Kept on the record
         as the list it was, and narrowed here to what the base does not hold.
         """
@@ -414,8 +415,8 @@ class RoundContext:
 
         The handbacks a role spent are written down as well, because the report
         that reaches here is the last attempt's and a clean one says nothing
-        about the two before it: a QA handed back three times for the same
-        append read, on the record, as a QA that stayed inside its paths.
+        about the two before it: a Verifier handed back three times for the same
+        append read, on the record, as a Verifier that stayed inside its paths.
         """
         existing = self.record.round(self.index)
         entry = self.record.open_round(self.index, existing.run_id if existing is not None else "")

@@ -52,11 +52,11 @@ def _guard(project: Path, name: str, *, owns=(), appends=(), order: int | None =
 def _project(tmp_path: Path) -> Path:
     project = tmp_path / "game"
     _guard(project, "planner", owns=["reports/brief_{NN}.md"], order=1)
-    _guard(project, "developer", owns=[".stint/FIXLOG.md", "project/**", "tools/**"], order=2, session=CONTINUE)
+    _guard(project, "builder", owns=[".stint/FIXLOG.md", "project/**", "tools/**"], order=2, session=CONTINUE)
     _guard(
         project,
-        "qa",
-        owns=["reports/qa_{NN}.md", "tools/gate_checks/check_qa_*.py"],
+        "verifier",
+        owns=["reports/verify_{NN}.md", "tools/gate_checks/check_verify_*.py"],
         appends=[".stint/FIXLOG.md"],
         order=3,
     )
@@ -65,8 +65,8 @@ def _project(tmp_path: Path) -> Path:
 
 def test_a_roster_reads_the_order_and_the_session_policy(tmp_path: Path) -> None:
     roster = roster_mod.load(_project(tmp_path))
-    assert [role.name for role in roster.in_round()] == ["planner", "developer", "qa"]
-    assert roster.get("developer").session == CONTINUE
+    assert [role.name for role in roster.in_round()] == ["planner", "builder", "verifier"]
+    assert roster.get("builder").session == CONTINUE
     assert roster.get("planner").session == "fresh"
 
 
@@ -74,24 +74,24 @@ def test_a_role_with_no_order_is_not_in_the_round(tmp_path: Path) -> None:
     """That is how a one-shot phase or a parallel role is declared."""
     project = _project(tmp_path)
     _guard(project, "asset", owns=["assets_raw/**"], order=None)
-    roster = roster_mod.load(project, names=("planner", "developer", "qa", "asset"))
+    roster = roster_mod.load(project, names=("planner", "builder", "verifier", "asset"))
     assert "asset" not in [role.name for role in roster.in_round()]
     assert roster.get("asset").in_round is False
 
 
 def test_the_more_specific_glob_wins(tmp_path: Path) -> None:
     roster = roster_mod.load(_project(tmp_path))
-    assert roster.grade("developer", "tools/run_round.py") == OWNS
-    assert roster.grade("developer", "tools/gate_checks/check_qa_7.py") == NEVER
-    assert roster.grade("qa", "tools/gate_checks/check_qa_7.py") == OWNS
-    assert roster.grade("qa", "tools/run_round.py") == NEVER
+    assert roster.grade("builder", "tools/run_round.py") == OWNS
+    assert roster.grade("builder", "tools/gate_checks/check_verify_7.py") == NEVER
+    assert roster.grade("verifier", "tools/gate_checks/check_verify_7.py") == OWNS
+    assert roster.grade("verifier", "tools/run_round.py") == NEVER
 
 
 def test_one_role_owning_while_another_appends_is_not_a_contest(tmp_path: Path) -> None:
-    """The shape the ownership table is built on: the Developer writes it, QA adds to it."""
+    """The shape the ownership table is built on: the Builder writes it, Verifier adds to it."""
     roster = roster_mod.load(_project(tmp_path))
-    assert roster.grade("developer", ".stint/FIXLOG.md") == OWNS
-    assert roster.grade("qa", ".stint/FIXLOG.md") == APPENDS
+    assert roster.grade("builder", ".stint/FIXLOG.md") == OWNS
+    assert roster.grade("verifier", ".stint/FIXLOG.md") == APPENDS
     assert roster.grade("planner", ".stint/FIXLOG.md") == NEVER
     assert roster.conflicts() == []
 
@@ -106,30 +106,30 @@ def test_two_roles_owning_one_pattern_is_refused(tmp_path: Path) -> None:
 
 def test_a_path_nobody_claims_is_nobody_s(tmp_path: Path) -> None:
     roster = roster_mod.load(_project(tmp_path))
-    for role in ("planner", "developer", "qa"):
+    for role in ("planner", "builder", "verifier"):
         assert roster.grade(role, ".stint/SPEC.md") == NEVER
 
 
 def test_the_round_number_is_substituted_into_a_pattern(tmp_path: Path) -> None:
     roster = roster_mod.load(_project(tmp_path))
-    assert roster.grade("qa", "reports/qa_04.md", round_index=4) == OWNS
-    assert roster.grade("qa", "reports/qa_03.md", round_index=4) == NEVER
+    assert roster.grade("verifier", "reports/verify_04.md", round_index=4) == OWNS
+    assert roster.grade("verifier", "reports/verify_03.md", round_index=4) == NEVER
 
 
 def test_a_reading_list_can_name_the_round_before(tmp_path: Path) -> None:
     project = _project(tmp_path)
     path = project / ".stint" / "planner.md"
     path.write_text(
-        path.read_text(encoding="utf-8").replace("  - .stint/SPEC.md", "  - reports/qa_{NN-1}.md"), encoding="utf-8"
+        path.read_text(encoding="utf-8").replace("  - .stint/SPEC.md", "  - reports/verify_{NN-1}.md"), encoding="utf-8"
     )
     role = roster_mod.load(project).get("planner")
-    assert roster_mod.reading_list(role, round_index=4) == ("reports/qa_03.md",)
+    assert roster_mod.reading_list(role, round_index=4) == ("reports/verify_03.md",)
 
 
 @pytest.mark.parametrize(
     "frontmatter, needle",
     [
-        ("role: qa\norder: 1", "guard file for"),
+        ("role: verifier\norder: 1", "guard file for"),
         ("role: planner\nsession: sometimes", "session is"),
         ("role: planner\nenforce:\n  read: maybe", "enforce.read is"),
         ("role: planner\n  bad: [", "readable YAML"),
@@ -154,8 +154,8 @@ def test_a_missing_guard_file_says_how_to_get_one(tmp_path: Path) -> None:
 
 
 def test_the_prose_half_is_kept_for_the_prompt(tmp_path: Path) -> None:
-    role = roster_mod.load(_project(tmp_path)).get("qa")
-    assert role.guard.startswith("# qa")
+    role = roster_mod.load(_project(tmp_path)).get("verifier")
+    assert role.guard.startswith("# verifier")
     assert "---" not in role.guard
 
 
@@ -243,8 +243,8 @@ def test_two_roles_appending_to_one_file_is_not_a_conflict(tmp_path: Path) -> No
 
     assert roster.conflicts() == []
     assert roster.grade("planner", ".stint/FIXLOG.md") == APPENDS
-    assert roster.grade("qa", ".stint/FIXLOG.md") == APPENDS
-    assert roster.grade("developer", ".stint/FIXLOG.md") == OWNS
+    assert roster.grade("verifier", ".stint/FIXLOG.md") == APPENDS
+    assert roster.grade("builder", ".stint/FIXLOG.md") == OWNS
 
 
 def test_a_game_s_own_output_is_nobody_s_writing(tmp_path: Path) -> None:
@@ -256,8 +256,8 @@ def test_a_game_s_own_output_is_nobody_s_writing(tmp_path: Path) -> None:
     made, so it is declared and left ungraded.
     """
     project = tmp_path / "game"
-    for name, owns in (("developer", ["project/**"]), ("qa", ["reports/qa_{NN}.md"])):
-        path = _guard(project, name, owns=owns, order=2 if name == "developer" else 3)
+    for name, owns in (("builder", ["project/**"]), ("verifier", ["reports/verify_{NN}.md"])):
+        path = _guard(project, name, owns=owns, order=2 if name == "builder" else 3)
         text = path.read_text(encoding="utf-8")
         path.write_text(text.replace("reads:\n", "artifacts:\n  - demo_outputs/**\nreads:\n", 1), encoding="utf-8")
     _guard(project, "planner", owns=["reports/brief_{NN}.md"], order=1)
@@ -268,7 +268,7 @@ def test_a_game_s_own_output_is_nobody_s_writing(tmp_path: Path) -> None:
     assert roster.conflicts() == []
     # Still nobody's by the three grades -- which is why the runtime consults
     # the artifact list separately rather than reading a grade off it.
-    for role in ("planner", "developer", "qa"):
+    for role in ("planner", "builder", "verifier"):
         assert roster.grade(role, "demo_outputs/feel_log.jsonl") == NEVER, role
     assert roster_mod.matches_any("demo_outputs/round_01/shot.png", roster.artifacts())
     assert not roster_mod.matches_any("project/main.gd", roster.artifacts())
@@ -276,7 +276,7 @@ def test_a_game_s_own_output_is_nobody_s_writing(tmp_path: Path) -> None:
 
 def test_an_artifact_path_can_name_the_round(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    path = project / ".stint" / "qa.md"
+    path = project / ".stint" / "verifier.md"
     text = path.read_text(encoding="utf-8")
     path.write_text(text.replace("reads:\n", "artifacts:\n  - demo_outputs/round_{NN}/**\nreads:\n", 1), "utf-8")
 

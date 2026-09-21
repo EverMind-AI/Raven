@@ -31,7 +31,7 @@ def git(project: Path) -> ProjectGit:
 def _roster() -> Roster:
     return Roster(
         roles=[
-            Role(name="developer", owns=("src/**",), appends=("NOTES.md",)),
+            Role(name="builder", owns=("src/**",), appends=("NOTES.md",)),
             Role(name="reviewer", owns=("reports/round_{NN}.md",)),
         ]
     )
@@ -52,7 +52,7 @@ def test_a_role_writing_inside_what_it_owns_is_left_alone(git: ProjectGit, proje
     base = git.head()
     (project / "src" / "main.py").write_text("print('changed')\n", encoding="utf-8")
 
-    report = _run(git, project, "developer", base)
+    report = _run(git, project, "builder", base)
 
     assert report.clean
     assert (project / "src" / "main.py").read_text(encoding="utf-8") == "print('changed')\n"
@@ -63,13 +63,13 @@ def test_a_stray_write_is_undone_and_kept_where_a_person_can_read_it(git: Projec
     (project / "reports").mkdir()
     (project / "reports" / "round_00.md").write_text("the reviewer's, not mine\n", encoding="utf-8")
 
-    report = _run(git, project, "developer", base)
+    report = _run(git, project, "builder", base)
 
     assert report.quarantined == ("reports/round_00.md",)
     assert not (project / "reports" / "round_00.md").exists()
-    kept = project.parent / "violations" / "developer" / "reports" / "round_00.md"
+    kept = project.parent / "violations" / "builder" / "reports" / "round_00.md"
     assert kept.read_text(encoding="utf-8") == "the reviewer's, not mine\n"
-    assert "developer wrote 1 path(s) it may not write" in report.violations[-1]
+    assert "builder wrote 1 path(s) it may not write" in report.violations[-1]
 
 
 def test_a_stray_write_the_role_committed_is_undone_too(git: ProjectGit, project: Path) -> None:
@@ -82,14 +82,14 @@ def test_a_stray_write_the_role_committed_is_undone_too(git: ProjectGit, project
     base = git.head()
     (project / "reports").mkdir()
     (project / "reports" / "round_00.md").write_text("committed, so `git status` is clean\n", encoding="utf-8")
-    git.commit("feat: work the developer did")
+    git.commit("feat: work the builder did")
     assert not git.changed(), "the stray write is invisible to a worktree-only check"
 
     reverts: list[str] = []
     report = _run(
         git,
         project,
-        "developer",
+        "builder",
         base,
         commit_revert=lambda paths: reverts.append(git.commit("revert: stray", paths=paths)),
     )
@@ -101,9 +101,9 @@ def test_a_stray_write_the_role_committed_is_undone_too(git: ProjectGit, project
     # Copied aside before the base was put back, so what is kept is the role's
     # version and not the base's -- which for a committed stray is "no file".
     assert report.quarantined == ("reports/round_00.md",)
-    kept = project.parent / "violations" / "developer" / "reports" / "round_00.md"
+    kept = project.parent / "violations" / "builder" / "reports" / "round_00.md"
     assert kept.read_text(encoding="utf-8") == "committed, so `git status` is clean\n"
-    assert "developer wrote 1 path(s) it may not write" in report.violations[-1]
+    assert "builder wrote 1 path(s) it may not write" in report.violations[-1]
 
 
 def test_a_mixed_stray_set_is_undone_whole_and_the_revert_commits_only_the_revert(
@@ -124,7 +124,7 @@ def test_a_mixed_stray_set_is_undone_whole_and_the_revert_commits_only_the_rever
     report = _run(
         git,
         project,
-        "developer",
+        "builder",
         base,
         commit_revert=lambda paths: git.commit("revert: stray", paths=paths),
     )
@@ -139,7 +139,7 @@ def test_a_mixed_stray_set_is_undone_whole_and_the_revert_commits_only_the_rever
     assert "src/main.py" not in shown, "the revert commit carried the role's own uncommitted work"
     # and what it owned is still as it left it
     assert (project / "src" / "main.py").read_text(encoding="utf-8") == "print('mine')\n"
-    kept = project.parent / "violations" / "developer" / "reports"
+    kept = project.parent / "violations" / "builder" / "reports"
     assert (kept / "extra.md").read_text(encoding="utf-8") == "left untracked\n"
     assert (kept / "round_00.md").read_text(encoding="utf-8") == "committed\n"
 
@@ -148,9 +148,9 @@ def test_without_a_stage_base_a_committed_stray_write_escapes(git: ProjectGit, p
     """The negative half of the rule above, so the reason for `stage_base` stays visible."""
     (project / "reports").mkdir()
     (project / "reports" / "round_00.md").write_text("committed\n", encoding="utf-8")
-    git.commit("feat: work the developer did")
+    git.commit("feat: work the builder did")
 
-    report = _run(git, project, "developer", "")
+    report = _run(git, project, "builder", "")
 
     assert report.clean
     assert (project / "reports" / "round_00.md").exists()
@@ -160,7 +160,7 @@ def test_an_append_only_file_may_grow(git: ProjectGit, project: Path) -> None:
     base = git.head()
     (project / "NOTES.md").write_text("# Notes\n\nfirst line\nsecond line\n", encoding="utf-8")
 
-    report = _run(git, project, "developer", base)
+    report = _run(git, project, "builder", base)
 
     assert report.clean
     assert "second line" in (project / "NOTES.md").read_text(encoding="utf-8")
@@ -170,23 +170,23 @@ def test_an_append_only_file_that_lost_a_line_is_put_back(git: ProjectGit, proje
     base = git.head()
     (project / "NOTES.md").write_text("# Notes\n\nrewritten\n", encoding="utf-8")
 
-    report = _run(git, project, "developer", base)
+    report = _run(git, project, "builder", base)
 
     assert report.trimmed == ("NOTES.md",)
     assert (project / "NOTES.md").read_text(encoding="utf-8") == "# Notes\n\nfirst line\n"
-    assert report.violations[0].startswith("developer may only append to NOTES.md, and its version removed lines")
+    assert report.violations[0].startswith("builder may only append to NOTES.md, and its version removed lines")
 
 
 def test_appending_to_a_file_with_no_final_newline_is_still_an_append(git: ProjectGit, project: Path) -> None:
     """Git counts the last line as removed and added back when it gains its
-    newline. A QA that appended two rows to a table ending that way was told
+    newline. A Verifier that appended two rows to a table ending that way was told
     it had removed lines, three times, and gave up on the file."""
     (project / "NOTES.md").write_text("# Notes\n\nfirst line", encoding="utf-8")
     git.commit("notes without a final newline")
     base = git.head()
     (project / "NOTES.md").write_text("# Notes\n\nfirst line\nsecond line\n", encoding="utf-8")
 
-    report = _run(git, project, "developer", base)
+    report = _run(git, project, "builder", base)
 
     assert report.clean, report.violations
     assert (project / "NOTES.md").read_text(encoding="utf-8").endswith("second line\n")
@@ -196,7 +196,7 @@ def test_what_the_caller_wrote_before_the_role_started_is_not_the_role_s_doing(g
     base = git.head()
     (project / "JOURNAL.md").write_text("## Round 00\n", encoding="utf-8")
 
-    report = _run(git, project, "developer", base, allowed=["JOURNAL.md"])
+    report = _run(git, project, "builder", base, allowed=["JOURNAL.md"])
 
     assert report.clean
     assert (project / "JOURNAL.md").exists()
@@ -208,7 +208,7 @@ def test_a_path_with_no_author_is_not_graded_by_ownership(git: ProjectGit, proje
     (project / "build").mkdir()
     (project / "build" / "out.log").write_text("ran\n", encoding="utf-8")
 
-    report = _run(git, project, "developer", base, artifacts=["build/**"])
+    report = _run(git, project, "builder", base, artifacts=["build/**"])
 
     assert report.clean
     assert (project / "build" / "out.log").exists()
@@ -222,7 +222,7 @@ def test_a_grade_the_pass_does_not_know_is_refused_rather_than_guessed(git: Proj
     with pytest.raises(ValueError, match="is not a grade"):
         enforce(
             git,
-            role="developer",
+            role="builder",
             grade=lambda _path: "maybe",
             quarantine=project.parent / "violations",
             stage_base=base,
@@ -245,7 +245,7 @@ class TestWhatWasAlreadyThere:
         orders.mkdir()
         (orders / "planner.md").write_text("read this before planning\n", encoding="utf-8")
 
-        report = _run(git, project, "developer", "", allowed=[".stint/planner.md"])
+        report = _run(git, project, "builder", "", allowed=[".stint/planner.md"])
 
         assert report.stray == ()
         assert (orders / "planner.md").is_file(), "the round after this one has to read it"
@@ -257,7 +257,7 @@ class TestWhatWasAlreadyThere:
         orders.mkdir()
         (orders / "planner.md").write_text("read this before planning\n", encoding="utf-8")
 
-        report = _run(git, project, "developer", "")
+        report = _run(git, project, "builder", "")
 
         assert report.stray == (".stint/planner.md",)
         assert not (orders / "planner.md").exists()
@@ -271,7 +271,7 @@ class TestWhatWasAlreadyThere:
         shadow.mkdir(parents=True)
         (shadow / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
 
-        report = _run(git, project, "developer", "")
+        report = _run(git, project, "builder", "")
 
         assert report.stray == ()
         assert (shadow / "HEAD").is_file()

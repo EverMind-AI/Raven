@@ -9,10 +9,10 @@ Target: `feat/playbook_rounds_mode` (`mode: stint`, `.stint/`, `raven playbook
 stint*`). The `feat/playbook_rounds_extension` worktree is a separate
 implementation under `mode: rounds` and none of this applies to it unchanged.
 
-**On the name.** There is no `game-stint`. The shipped builtin is `game-rounds`
-(`raven/playbook/builtin/game-rounds/playbook.md`), whose `mode` is `stint`. The
+**On the name.** There is no `game-stint`. The shipped builtin is `rounds`
+(`raven/playbook/builtin/rounds/playbook.md`), whose `mode` is `stint`. The
 acceptance doc already owns the rename question; everything below says
-`game-rounds`, and if the builtin is renamed the fixture name is the only thing
+`rounds`, and if the builtin is renamed the fixture name is the only thing
 that moves.
 
 ---
@@ -25,7 +25,7 @@ Three separate fixtures, because one cannot serve all eight scenarios.
 
 | Fixture | What it is | Used by |
 |---|---|---|
-| `game-rounds` | the shipped builtin, verbatim | anything that asserts on the real product surface: the web card, the detail page, the approval text, the library listing |
+| `rounds` | the shipped builtin, verbatim | anything that asserts on the real product surface: the web card, the detail page, the approval text, the library listing |
 | `echo-rounds` | the same shape, three roles pointing at `ThirdPartyCliSubagentConfig(name="echo", command="cat")` | every test that must not spend a model: the whole state machine, both UIs' round rendering |
 | `probe-rounds` | `echo-rounds` plus one role whose `verify` command writes a sentinel file | boundary/undo and check-handback assertions |
 
@@ -55,7 +55,7 @@ biggest trap in scenario 1. To reach round one a project needs **all** of:
    (`raven/stint/bootstrap.py:44-65,119-163`). Without it the run is refused
    with "write what this project is into `.stint/SPEC.md`";
 4. **a source directory the guards can name** -- one of `src`, `project`, `lib`,
-   `app`, `pkg`, `cmd`, `tools`, `scripts`, `assets`, or the Developer owns
+   `app`, `pkg`, `cmd`, `tools`, `scripts`, `assets`, or the Builder owns
    `src/**` and every write it makes is undone as a violation.
 
 So the fixture builder is:
@@ -93,8 +93,8 @@ can see, and -- where it matters -- what today does **not** do.
    `workdir=<repo>` (`raven/cli/_tui_relay.py`), which is what makes the repo
    the project: `_stint_workspace` resolves the stint's project through the
    session's workdir (`raven/agent/loop/wiring.py:1523`).
-2. Person: "run game-rounds" (or the Chinese equivalent).
-3. Model calls `load_playbook(name="game-rounds")`, optionally with
+2. Person: "run rounds" (or the Chinese equivalent).
+3. Model calls `load_playbook(name="rounds")`, optionally with
    `max_rounds`.
 4. Approval question appears, answered "Run it".
 
@@ -102,13 +102,13 @@ can see, and -- where it matters -- what today does **not** do.
 
 | # | Where | What |
 |---|---|---|
-| 1.1 | the repo | `.stint/` now holds `HUMAN_DECISIONS.md`, `AGENT_DECISIONS.md`, `FIXLOG.md`, `PLAYBOOK.md`, `planner.md`, `developer.md`, `qa.md`, and `SPEC.md` as a symlink to the picked document |
+| 1.1 | the repo | `.stint/` now holds `HUMAN_DECISIONS.md`, `AGENT_DECISIONS.md`, `FIXLOG.md`, `PLAYBOOK.md`, `planner.md`, `builder.md`, `verifier.md`, and `SPEC.md` as a symlink to the picked document |
 | 1.2 | `git status` | all of it **untracked**; nothing committed to the person's branch (acceptance 32) |
-| 1.3 | the approval | `Start "game-rounds" on <repo>?`, `up to 30 round(s) of: planner -> developer -> qa`, `on branch stint/<id>, in a checkout of its own -- your working tree is untouched`, the literal `python3 -m compileall -q src`, one `writes` line per role, `it stops early only if the last role writes NOTHING-LEFT`, then `it has just written N file(s) here, untracked -- ...`, `the roles stint from docs/PRD.md`, `N task(s) in the backlog` |
+| 1.3 | the approval | `Start "rounds" on <repo>?`, `up to 30 round(s) of: planner -> builder -> verifier`, `on branch stint/<id>, in a checkout of its own -- your working tree is untouched`, the literal `python3 -m compileall -q src`, one `writes` line per role, `it stops early only if the last role writes NOTHING-LEFT`, then `it has just written N file(s) here, untracked -- ...`, `the roles stint from docs/PRD.md`, `N task(s) in the backlog` |
 | 1.4 | the transcript | the tool returns a receipt at once; the conversation is free (acceptance end-to-end 1) |
 | 1.5 | git | a worktree at `<run root>/stints/<id>/tree` on branch `stint/<id>`, carrying a copy of what setup wrote |
 | 1.6 | the record | `<run root>/stints/<id>.json`: status `running`, `round_index` 1, `project` = the repo, `workdir` = the tree |
-| 1.7 | the transcript, per round | `Stint <id> (game-rounds) finished round K of at most 30: build=passed. The next round is starting.` plus the "this is progress, not a request" paragraph |
+| 1.7 | the transcript, per round | `Stint <id> (rounds) finished round K of at most 30: build=passed. The next round is starting.` plus the "this is progress, not a request" paragraph |
 | 1.8 | the transcript, at the end | `ran N round(s) and stopped: <reason>`, the branch, `which nothing has merged`, and the `extend` command |
 | 1.9 | the repo | the person's working tree is byte-identical apart from the untracked `.stint/` |
 
@@ -331,7 +331,7 @@ real builtin.
 only matches for "stint" are in generated RPC types. So in the TUI a playbook is
 legible only inside the conversation, through `load_playbook`'s description and
 `PlaybookRuntime._detail`. Assert that much -- "what playbooks do you have"
-lists `game-rounds` with its description -- and record the rest as a gap, or
+lists `rounds` with its description -- and record the rest as a gap, or
 build a TUI page. Asserting a card that does not exist is how a test suite
 starts lying.
 
@@ -345,7 +345,7 @@ agent and starts a turn there (`raven/agent/subagent/dag_tool.py:811`).
 **Assert, on both surfaces:** after each round, one assistant message shaped
 
 ```
-Stint <id> (game-rounds) finished round 2 of at most 30: build=passed
+Stint <id> (rounds) finished round 2 of at most 30: build=passed
 [; N boundary violation(s) undone][; N unanswered question(s)].
 The next round is starting.
 ```
@@ -460,7 +460,7 @@ New file: `tests/integration/test_stint_conversation_e2e.py`.
 | each finished round arrives as its own assistant message of the documented shape | S8, both surfaces |
 | "Not now" writes no record and no worktree | S9 |
 | a second `turn.send "run it"` while one is live returns the refusal text with both verbs in it | S3a |
-| `playbooks.get` for `game-rounds` carries the `stint` section with roles, checks and budget | S7 web data |
+| `playbooks.get` for `rounds` carries the `stint` section with roles, checks and budget | S7 web data |
 | `playbooks.stints.{list,get,answer,stop}` over the wire against a live stint | S8 panel data, S10 |
 
 ### L3 -- the TUI, in a pty
@@ -509,7 +509,7 @@ tests/integration/test_stint_web_e2e.py
 
 | Check | Scenario |
 |---|---|
-| the playbooks page draws a `game-rounds` card whose graph has three cells | S7 |
+| the playbooks page draws a `rounds` card whose graph has three cells | S7 |
 | its detail page shows the stint tab: budget, `NOTHING-LEFT`, report cadence, three roles with their paths, the literal check command, the carried memory rows | S7 |
 | in the chat, sending the message renders the approval and "Run it" is clickable | S2, S9 |
 | round messages appear in the transcript as they land | S8 |
@@ -524,8 +524,8 @@ is what runs unattended, because a screenshot nobody diffs is not a test.
 
 `tests/integration/test_stint_real_llm.py` (naming per AGENTS.md 5.2:
 `real_<resource>`), marked and skipped unless configured. One round of the real
-`game-rounds` on a tiny real repo, asserting only that the planner produced a
-brief at its owned path, the developer wrote under `src/`, QA wrote a verdict,
+`rounds` on a tiny real repo, asserting only that the planner produced a
+brief at its owned path, the builder wrote under `src/`, Verifier wrote a verdict,
 and the check ran. This is the only layer that can catch "the standing orders do
 not actually produce a brief", and it is the only one worth paying for.
 
@@ -656,7 +656,7 @@ the only one, and whether it is the right default is a live question.
 **And today every stage is one node.** An enforced playbook is held to a chain:
 `_concurrent_and_enforced` (`raven/playbook/validate.py:221`) refuses two roles
 with no dependency path between them where either declares `owns`/`appends`, and
-`game-rounds` declares planner -> developer -> qa. (A stint that enforces nothing
+`rounds` declares planner -> builder -> verifier. (A stint that enforces nothing
 may still fan out, capped at `STINT_MAX_PARALLEL = 2`,
 `raven/agent/subagent/dag_tool.py:335`.)
 
@@ -746,7 +746,7 @@ two have different specs, different state and different names.
 | `raven/playbook/rounds/chat.py:20,63` | `project` as a run parameter, with a refusal that tells the model to ask the user | decision 2 |
 | `raven/rpc/methods/rounds.py:67` | `rounds.{list,get,start,pause,cancel,resume,answer}` -- the whole verb set over RPC, including the three this branch keeps on the terminal | decision 3 |
 | `ui-web/src/features/playbooks/RoundsPanel.tsx` (376 lines) | a run console on the page | S8's web half, acceptance 46 |
-| `raven/playbook/rounds/parallel.py` (245 lines) | isolated Developer candidates and a retained integration barrier | the checkout-per-role design the acceptance doc writes out and nobody built |
+| `raven/playbook/rounds/parallel.py` (245 lines) | isolated Builder candidates and a retained integration barrier | the checkout-per-role design the acceptance doc writes out and nobody built |
 
 The last one is the valuable one and the least portable: it is the answer to
 "three developers a round", which this branch refuses at load

@@ -57,6 +57,7 @@ from raven.playbook.stint_spec import (
 from raven.playbook.types import PlaybookSpec
 from raven.stint import backlog as backlog_mod
 from raven.stint.backlog import STINT_DIR
+from raven.stint.checks import CHECKS_FILE, resolve_checks
 from raven.stint.git import HistoryError, ProjectGit
 from raven.stint.journal import JOURNAL
 from raven.stint.record import (
@@ -71,12 +72,11 @@ from raven.stint.record import (
     StintRef,
     StintStore,
     make_stint_id,
-    stint_token,
     mark_adrift,
     peer_stores,
+    stint_token,
 )
 from raven.stint.setup import Layout, lay_out
-from raven.stint.verify import CHECKS_FILE, resolve_checks
 
 __all__ = [
     "StintDriver",
@@ -294,7 +294,7 @@ class StintDriver:
             return {}
         spec = PlaybookSpec.model_validate(record.spec)
         # The attempt this round is on, not nought. A round taken up again
-        # compiles its nodes under an attempt suffix (`...-r01x1-developer`),
+        # compiles its nodes under an attempt suffix (`...-r01x1-builder`),
         # and the tool wraps a backend only on an exact node-id match -- so a
         # charter keyed for attempt nought reaches nothing, and every role still
         # pending after a restart runs with no charter at all. The layer that
@@ -1022,9 +1022,7 @@ class StintDriver:
             logger.warning("stint {} could not read what its last round finished: {}", record.stint_id, exc)
             return {}
         prefix = namespace(spec.name, index, previous.attempt, record.token)
-        candidates = dict(previous.finished) or {
-            role.label: f"{prefix}-{role.label}" for role in (spec.roles or [])
-        }
+        candidates = dict(previous.finished) or {role.label: f"{prefix}-{role.label}" for role in (spec.roles or [])}
         done = {label: node_id for label, node_id in candidates.items() if nodes.is_readable(node_id)}
         if skipped := sorted(set(candidates) - set(done)):
             logger.info(
@@ -1123,9 +1121,9 @@ def _preflight_layout(project: Path, spec: PlaybookSpec) -> list[str]:
 def _release_tasks(record: StintRecord, index: int) -> None:
     """A round is over: what it promised and did not deliver goes back to open.
 
-    Two promises. A task in review that QA never judged is not done, and a task
-    assigned that the Developer never took is nobody's. Both rules lived in
-    `backlog.py` with no caller, so a Developer cut off by its turn budget left
+    Two promises. A task in review that Verifier never judged is not done, and a task
+    assigned that the Builder never took is nobody's. Both rules lived in
+    `backlog.py` with no caller, so a Builder cut off by its turn budget left
     tasks `assigned` for the rest of the stint, where the next Planner read them
     as somebody's.
     """

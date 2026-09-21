@@ -8,17 +8,15 @@ from pathlib import Path
 import pytest
 
 from raven.stint.bootstrap import detect_checks
+from raven.stint.checks import checks_path, remember_check, resolve_checks
 from raven.stint.verify import (
     CheckResult,
     CheckSpec,
     CheckSummary,
     Display,
     build_status,
-    checks_path,
     parse_check_spec,
-    remember_check,
     render_checks,
-    resolve_checks,
     resolve_display,
     run_check,
     run_checks,
@@ -338,7 +336,7 @@ class TestWhatThisProjectRuns:
         return VerifyEntry(name=name, **over)
 
     def test_a_playbook_that_names_its_command_asks_nobody(self, tmp_path: Path) -> None:
-        specs, missing = resolve_checks(tmp_path, "qa-loop", [self._entry("build", run="make")])
+        specs, missing = resolve_checks(tmp_path, "verifier-loop", [self._entry("build", run="make")])
 
         assert [(s.name, s.command) for s in specs] == [("build", "make")]
         assert missing == []
@@ -347,16 +345,18 @@ class TestWhatThisProjectRuns:
     def test_a_description_with_no_answer_yet_comes_back_as_a_name(self, tmp_path: Path) -> None:
         """Returned rather than skipped: a declared check that silently does not
         run is a gate the round reports and nobody measured."""
-        specs, missing = resolve_checks(tmp_path, "qa-loop", [self._entry("tests", description="the suite passes")])
+        specs, missing = resolve_checks(
+            tmp_path, "verifier-loop", [self._entry("tests", description="the suite passes")]
+        )
 
         assert specs == []
         assert missing == ["tests"]
 
     def test_the_answer_is_written_down_and_read_back(self, tmp_path: Path) -> None:
         entry = self._entry("tests", description="the suite passes")
-        remember_check(tmp_path, "qa-loop", "tests", "uv run pytest -q")
+        remember_check(tmp_path, "verifier-loop", "tests", "uv run pytest -q")
 
-        specs, missing = resolve_checks(tmp_path, "qa-loop", [entry])
+        specs, missing = resolve_checks(tmp_path, "verifier-loop", [entry])
 
         assert [(s.name, s.command) for s in specs] == [("tests", "uv run pytest -q")]
         assert missing == []
@@ -365,9 +365,9 @@ class TestWhatThisProjectRuns:
         """Keyed by both: two playbooks may each want a `build` and mean
         different things, and the second must not inherit the first's answer."""
         entry = self._entry("build", description="the source compiles")
-        remember_check(tmp_path, "qa-loop", "build", "make")
+        remember_check(tmp_path, "verifier-loop", "build", "make")
 
-        assert resolve_checks(tmp_path, "qa-loop", [entry])[1] == []
+        assert resolve_checks(tmp_path, "verifier-loop", [entry])[1] == []
         assert resolve_checks(tmp_path, "other-loop", [entry])[1] == ["build"]
 
     def test_a_person_s_answer_outlives_the_run_that_asked(self, tmp_path: Path) -> None:
@@ -375,9 +375,9 @@ class TestWhatThisProjectRuns:
         re-derived every time can change between two rounds of one stint with
         nobody having decided that it should."""
         entry = self._entry("tests", description="the suite passes")
-        remember_check(tmp_path, "qa-loop", "tests", "uv run pytest -q")
+        remember_check(tmp_path, "verifier-loop", "tests", "uv run pytest -q")
 
-        first = resolve_checks(tmp_path, "qa-loop", [entry])[0][0].command
-        second = resolve_checks(tmp_path, "qa-loop", [entry])[0][0].command
+        first = resolve_checks(tmp_path, "verifier-loop", [entry])[0][0].command
+        second = resolve_checks(tmp_path, "verifier-loop", [entry])[0][0].command
 
         assert first == second == "uv run pytest -q"

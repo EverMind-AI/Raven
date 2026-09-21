@@ -424,7 +424,7 @@ describe('the playbook library', () => {
             roles: [
               rounds_role({ label: 'planner', agent: 'research-raven', owns: ['reports/brief_{NN}.md'] }),
               rounds_role({
-                label: 'qa',
+                label: 'verifier',
                 agent: 'research-raven',
                 depends_on: ['planner'],
                 terminal: true,
@@ -1100,7 +1100,7 @@ function planDetail(over: Partial<StintDetail> = {}): StintDetail {
   return {
     stint: planRow({ stint_id: 'stint-a' }),
     rounds: [
-      { index: 1, run_id: 'run-1', attempt: 0, status: 'completed', checks: ['build=failed'], violations: ['dev wrote reports/qa.md'] },
+      { index: 1, run_id: 'run-1', attempt: 0, status: 'completed', checks: ['build=failed'], violations: ['dev wrote reports/verifier.md'] },
       { index: 2, run_id: 'run-2', attempt: 0, status: 'completed', checks: ['build=ok'], violations: [] }
     ],
     questions: [],
@@ -1152,7 +1152,7 @@ describe('the runs a playbook started', () => {
     expect(screen.getAllByText('gui.pb.stint_status_completed')).toHaveLength(2)
     expect(document.querySelectorAll('.pntable th')).toHaveLength(5)
     expect(screen.getByText('gui.pb.stint_undone {"n":"1"}')).toBeTruthy()
-    expect(screen.getByText('1: dev wrote reports/qa.md')).toBeTruthy()
+    expect(screen.getByText('1: dev wrote reports/verifier.md')).toBeTruthy()
   })
 
   it('offers a stop only while a run is live, and says what a stop does', async () => {

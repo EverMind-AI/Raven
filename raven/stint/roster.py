@@ -12,7 +12,7 @@ The frontmatter answers four questions the loop has to ask:
   declared without the loop having to know about it.
 * **session** -- ``fresh`` opens a new conversation each round, ``continue``
   keeps one across the whole run. The roles genuinely differ: a Planner picking
-  from a backlog needs last round's reports and nothing else, while a Developer
+  from a backlog needs last round's reports and nothing else, while a Builder
   carrying an implementation in its head is worse off starting over.
 * **owns / appends / reads** -- three grades of access, per path glob.
 * **enforce** -- whether those are checked by the program or only stated in the
@@ -57,13 +57,13 @@ __all__ = [
     "APPENDS",
     "CONTINUE",
     "DEFAULT_ROLES",
-    "DEVELOPER",
+    "BUILDER",
     "FRESH",
     "HARD",
     "NEVER",
     "OWNS",
     "PLANNER",
-    "QA",
+    "VERIFIER",
     "SOFT",
     "Role",
     "Roster",
@@ -81,9 +81,9 @@ __all__ = [
 ]
 
 PLANNER = "planner"
-DEVELOPER = "developer"
-QA = "qa"
-DEFAULT_ROLES = (PLANNER, DEVELOPER, QA)
+BUILDER = "builder"
+VERIFIER = "verifier"
+DEFAULT_ROLES = (PLANNER, BUILDER, VERIFIER)
 
 _FRONTMATTER = re.compile(r"\A---\n(?P<data>.*?)\n---\n(?P<body>.*)\Z", re.DOTALL)
 

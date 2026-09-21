@@ -11,13 +11,13 @@ from raven.stint import backlog as backlog_mod
 from raven.stint.backlog import (
     ASSIGNED,
     BLOCKED,
-    DEVELOPER,
+    BUILDER,
     DONE,
     HUMAN,
     IN_REVIEW,
     OPEN,
     PLANNER,
-    QA,
+    VERIFIER,
     Backlog,
     BacklogError,
     Task,
@@ -44,9 +44,9 @@ def test_a_task_walks_from_open_to_done_through_the_three_roles() -> None:
     backlog = _backlog(Task(id=1, title="the work"))
     backlog_mod.apply(backlog, "assign", role=PLANNER, task_id=1, round_index=1)
     assert backlog.get(1).state == ASSIGNED
-    backlog_mod.apply(backlog, "implement", role=DEVELOPER, task_id=1, round_index=1, commit="abc1234")
+    backlog_mod.apply(backlog, "implement", role=BUILDER, task_id=1, round_index=1, commit="abc1234")
     assert backlog.get(1).state == IN_REVIEW
-    backlog_mod.apply(backlog, "proven", role=QA, task_id=1, round_index=1, evidence="demo/round_01/")
+    backlog_mod.apply(backlog, "proven", role=VERIFIER, task_id=1, round_index=1, evidence="demo/round_01/")
     assert backlog.get(1).state == DONE
     assert backlog.get(1).implements[0]["verdict"] == "proven"
     assert backlog.get(1).implements[0]["evidence"] == "demo/round_01/"
@@ -55,12 +55,12 @@ def test_a_task_walks_from_open_to_done_through_the_three_roles() -> None:
 @pytest.mark.parametrize(
     "verb, role, extra",
     [
-        ("assign", QA, {}),
-        ("assign", DEVELOPER, {}),
-        ("proven", DEVELOPER, {"evidence": "x"}),
+        ("assign", VERIFIER, {}),
+        ("assign", BUILDER, {}),
+        ("proven", BUILDER, {"evidence": "x"}),
         ("proven", PLANNER, {"evidence": "x"}),
         ("reopen", PLANNER, {"reason": "x"}),
-        ("implement", QA, {"commit": "abc"}),
+        ("implement", VERIFIER, {"commit": "abc"}),
         ("drop", PLANNER, {"reason": "x"}),
     ],
 )
@@ -74,21 +74,21 @@ def test_a_role_cannot_make_a_transition_it_does_not_own(verb, role, extra) -> N
 
 def test_only_qa_can_reopen_a_finished_task() -> None:
     backlog = _backlog(Task(id=1, title="the work", state=DONE))
-    backlog_mod.apply(backlog, "reopen", role=QA, task_id=1, round_index=8, reason="round 08 regression")
+    backlog_mod.apply(backlog, "reopen", role=VERIFIER, task_id=1, round_index=8, reason="round 08 regression")
     task = backlog.get(1)
     assert task.state == OPEN
-    assert task.history[-1] == {"round": 8, "to": OPEN, "by": QA, "reason": "round 08 regression"}
+    assert task.history[-1] == {"round": 8, "to": OPEN, "by": VERIFIER, "reason": "round 08 regression"}
 
 
 def test_a_verb_applied_from_the_wrong_state_is_refused() -> None:
     backlog = _backlog(Task(id=1, title="the work", state=OPEN))
     with pytest.raises(BacklogError) as caught:
-        backlog_mod.apply(backlog, "implement", role=DEVELOPER, task_id=1, commit="abc")
+        backlog_mod.apply(backlog, "implement", role=BUILDER, task_id=1, commit="abc")
     assert "is open" in str(caught.value)
 
 
 def test_a_rejection_and_a_deferral_both_need_a_reason() -> None:
-    """A rejection with no reason is the one QA cannot argue with, or learn from."""
+    """A rejection with no reason is the one Verifier cannot argue with, or learn from."""
     backlog = _backlog(Task(id=1, title="the work"))
     with pytest.raises(BacklogError):
         backlog_mod.apply(backlog, "reject", role=PLANNER, task_id=1, reason="  ")
@@ -107,10 +107,10 @@ def test_deferring_counts_and_leaves_the_task_open() -> None:
 def test_a_proven_verdict_needs_evidence_and_a_failing_one_needs_a_reason() -> None:
     backlog = _backlog(Task(id=1, title="the work", state=IN_REVIEW, implements=[{"round": 1, "verdict": None}]))
     with pytest.raises(BacklogError):
-        backlog_mod.apply(backlog, "proven", role=QA, task_id=1, evidence="")
+        backlog_mod.apply(backlog, "proven", role=VERIFIER, task_id=1, evidence="")
     with pytest.raises(BacklogError):
-        backlog_mod.apply(backlog, "not_proven", role=QA, task_id=1, reason="")
-    backlog_mod.apply(backlog, "not_proven", role=QA, task_id=1, reason="one hit location only")
+        backlog_mod.apply(backlog, "not_proven", role=VERIFIER, task_id=1, reason="")
+    backlog_mod.apply(backlog, "not_proven", role=VERIFIER, task_id=1, reason="one hit location only")
     assert backlog.get(1).state == OPEN
 
 
@@ -167,12 +167,12 @@ def test_an_unjudged_task_goes_back_to_open_at_the_end_of_a_round() -> None:
 
 def test_a_task_assigned_and_never_taken_goes_back_to_open_when_the_round_ends() -> None:
     """Assigned is a promise for the round. Kept past it, the next Planner read
-    the task as somebody's and the next Developer was handed only what that
-    round's Planner assigned, so a Developer cut off by its turn budget parked
+    the task as somebody's and the next Builder was handed only what that
+    round's Planner assigned, so a Builder cut off by its turn budget parked
     tasks for the rest of the stint (measured 2026-09-20: three of them)."""
     backlog = _backlog(
         Task(id=1, title="taken", state=IN_REVIEW),
-        Task(id=2, title="promised", state=ASSIGNED, owner="developer-2"),
+        Task(id=2, title="promised", state=ASSIGNED, owner="builder-2"),
         Task(id=3, title="not this round", state=OPEN),
         Task(id=4, title="finished", state=DONE),
     )
@@ -180,7 +180,7 @@ def test_a_task_assigned_and_never_taken_goes_back_to_open_when_the_round_ends()
     assert [task.id for task in released] == [2]
     assert backlog.get(2).state == OPEN and backlog.get(2).owner == ""
     assert "unimplemented" in backlog.get(2).history[-1]["reason"]
-    assert backlog.get(1).state == IN_REVIEW, "a task the Developer took is QA's to judge, not this verb's"
+    assert backlog.get(1).state == IN_REVIEW, "a task the Builder took is Verifier's to judge, not this verb's"
     assert [backlog.get(3).state, backlog.get(4).state] == [OPEN, DONE]
 
 

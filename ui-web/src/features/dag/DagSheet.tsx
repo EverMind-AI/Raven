@@ -110,7 +110,7 @@ export function Sheet({ sess, host, onClose }: { sess: string; host: HTMLElement
  *
  * It is a button because the thing it names has a page, and that page is where
  * the rounds before this one are. The title line does carry the round in prose
- * (`game-rounds: round 3 of at most 30`, the dispatcher's own task summary) --
+ * (`rounds: round 3 of at most 30`, the dispatcher's own task summary) --
  * this is the same fact where a reader's eye already goes for status, and it
  * leads somewhere.
  */

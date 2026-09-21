@@ -1,11 +1,11 @@
 ---
-name: game-rounds
-description: push a game project forward one round at a time, with a planner, a developer and a reviewer
+name: rounds
+description: push a project forward one round at a time, with a planner, a builder and a verifier
 ---
 
-A planner, a developer and a reviewer, pushing one project forward a round at
-a time. Ships with Raven: say "run game-rounds" in the project, or
-`raven playbook run game-rounds` from it.
+A planner, a builder and a verifier, pushing one project forward a round at
+a time. Ships with Raven: say "run rounds" in the project, or
+`raven playbook run rounds` from it.
 
 What it needs from the project, and what happens when it is not there:
 
@@ -13,7 +13,7 @@ What it needs from the project, and what happens when it is not there:
   putting the tree back, and there is nothing to put back without one, so a
   directory that is not a repository is refused rather than run unguarded;
 * `.stint/` -- the standing orders each role reads (`planner.md`,
-  `developer.md`, `qa.md`), the specification they plan from, and the backlog
+  `builder.md`, `verifier.md`), the specification they plan from, and the backlog
   they move work through. **Laid out for you** when it is missing, before the
   run is put to you for approval.
 
@@ -28,7 +28,7 @@ would rather keep its checkout usable meanwhile adds `isolation: worktree`, and
 pays a second copy of the repository for it.
 
 What it does *not* carry, and why: no role runs in a tree of its own (the run has
-one and the roles share it), and there is one developer rather than three.
+one and the roles share it), and there is one builder rather than three.
 
 ```yaml playbook-spec
 version: 1
@@ -38,7 +38,7 @@ confirm: true
 setup: stint
 taskSummary: push the project forward by one round of planning, work and review
 triggers:
-  keywords: [game, round, backlog, rounds]
+  keywords: [round, rounds, backlog, stint]
 
 memory:
   - path: .stint/backlog.json
@@ -49,7 +49,7 @@ memory:
 
 # Declared by what it proves, not by a command: this file travels, and the
 # command that builds a Godot project is nothing on a Node one. The project
-# answers once -- `raven playbook stint check set game-rounds build --run "..."`
+# answers once -- `raven playbook stint check set rounds build --run "..."`
 # -- and the answer is kept in `.stint/checks.json`. A project the tree plainly
 # affords a build for is answered for you; a fresh one is asked before the run.
 verify:
@@ -74,11 +74,11 @@ roles:
       - .stint/SPEC.md
       - .stint/HUMAN_DECISIONS.md
       - .stint/FIXLOG.md
-      - "reports/qa_{NN-1}.md"
+      - "reports/verify_{NN-1}.md"
     # Every output directory the layout's own guards name, and the two ledgers.
     # Held equal to `raven.stint.bootstrap.OUTPUT_DIRS` by a test: the guard
     # files are generated from that tuple and this list is written by hand, so
-    # the two drifted the moment it grew -- and a Developer that wrote its replay
+    # the two drifted the moment it grew -- and a Builder that wrote its replay
     # evidence where its standing orders said to had the work reverted by a list
     # it could not see.
     artifacts: &ledger
@@ -103,7 +103,7 @@ roles:
 
       {{round.guard}}
 
-  - as: developer
+  - as: builder
     name: Raven-Code
     dependsOn: [planner]
     nodeSummary: do the assigned work
@@ -112,12 +112,12 @@ roles:
       - .stint/FIXLOG.md
       - .stint/PLAYBOOK.md
       - "reports/round_{NN}.md"
-      # Every directory the layout's guard may grant the Developer, not the one
+      # Every directory the layout's guard may grant the Builder, not the one
       # this project happens to use: the guard file is written per project from
       # `raven.stint.bootstrap.SOURCE_DIRS` (a fresh project gets `src/`,
-      # `project/` and `tools/`), and this row is what the Developer is judged
+      # `project/` and `tools/`), and this row is what the Builder is judged
       # by. Held a superset by a test. Written narrower than the guard, a
-      # Developer that put its checks under `tools/` where its orders said it
+      # Builder that put its checks under `tools/` where its orders said it
       # could had them undone as a stray write.
       - "src/**"
       - "project/**"
@@ -133,11 +133,11 @@ roles:
       - .stint/SPEC.md
       - .stint/HUMAN_DECISIONS.md
     artifacts: *ledger
-    journalSection: Dev
+    journalSection: Build
     verifyAfter: [build]
     maxHandbacks: 2
     promptTemplate: |
-      {{ref:.stint/developer.md}}
+      {{ref:.stint/builder.md}}
 
       ## What the planner assigned
 
@@ -146,16 +146,16 @@ roles:
       {{round.verify}}
 
       Move each task you finish with `raven playbook stint task implement <id> --role
-      developer`.
+      builder`.
 
       {{round.guard}}
 
-  - as: qa
+  - as: verifier
     name: Raven-Code
-    dependsOn: [developer]
-    nodeSummary: judge what the developer left
+    dependsOn: [builder]
+    nodeSummary: judge what the builder left
     owns:
-      - "reports/qa_{NN}.md"
+      - "reports/verify_{NN}.md"
       - "reports/evidence/round_{NN}/**"
     appends:
       - .stint/FIXLOG.md
@@ -166,18 +166,18 @@ roles:
       - .stint/SPEC.md
       - .stint/HUMAN_DECISIONS.md
     artifacts: *ledger
-    journalSection: QA
+    journalSection: Verifier
     promptTemplate: |
-      {{ref:.stint/qa.md}}
+      {{ref:.stint/verifier.md}}
 
-      ## What the developer says it did
+      ## What the builder says it did
 
-      {{developer.output}}
+      {{builder.output}}
 
       {{round.verify}}
 
       Give a verdict per task in review with `raven playbook stint task verdict <id>
-      --role qa --proven --evidence <path>` or `--not-proven --reason "..."`. A
+      --role verifier --proven --evidence <path>` or `--not-proven --reason "..."`. A
       verdict with no evidence behind it is an opinion, not a verdict.
 
       {{round.guard}}

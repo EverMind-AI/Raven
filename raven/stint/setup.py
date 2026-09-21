@@ -2,7 +2,7 @@
 
 A playbook names a layout (``setup: stint``) and this writes the missing half
 of it. It exists because the alternative was seven commands: a person who said
-"run game-rounds" in a repository that had never been set up got a stint whose
+"run rounds" in a repository that had never been set up got a stint whose
 every round failed on a file reference, thirty times, because ``{{ref:}}``
 resolves at node render and nothing checked earlier.
 

@@ -1,6 +1,6 @@
 """Laying out a project that has never run a stint, before the stint starts.
 
-The case this exists for: somebody says "run game-rounds" in a repository that
+The case this exists for: somebody says "run rounds" in a repository that
 was never set up. Before, that cost seven commands to discover; without them
 the stint started and every round failed rendering a file reference, for as many
 rounds as its budget allowed.
@@ -108,7 +108,7 @@ class TestWhatALayoutLeavesBehind:
         found = lay_out(project, "stint")
 
         assert found.ready
-        for name in ("planner.md", "developer.md", "qa.md", "HUMAN_DECISIONS.md"):
+        for name in ("planner.md", "builder.md", "verifier.md", "HUMAN_DECISIONS.md"):
             assert (project / ".stint" / name).is_file(), name
         assert all(name.startswith(".stint/") for name in found.wrote), found.wrote
 

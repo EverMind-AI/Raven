@@ -100,8 +100,8 @@ def test_a_stray_edit_to_a_tracked_file_goes_back_to_head(project: Path) -> None
 
 
 def test_a_stray_edit_to_a_tracked_file_is_kept_before_it_is_undone(project: Path) -> None:
-    """Measured 2026-09-10: a Developer's edit to `docs/EVENTS.md` was reverted,
-    the log said a copy was kept under `violations/developer`, and the directory
+    """Measured 2026-09-10: a Builder's edit to `docs/EVENTS.md` was reverted,
+    the log said a copy was kept under `violations/builder`, and the directory
     was empty -- only untracked files were ever kept. An edit to a file that
     already exists is the case where "what did it try to change" is the whole
     question, so it is the one that most needs keeping."""
@@ -136,8 +136,8 @@ def test_a_read_only_path_is_restored_from_the_stage_base(project: Path) -> None
     (project / "refs" / "brief.md").write_text("the brief\n", encoding="utf-8")
     base = git.commit("chore: the brief")
 
-    (project / "refs" / "brief.md").write_text("edited by the developer\n", encoding="utf-8")
-    (project / "refs" / "new.md").write_text("added by the developer\n", encoding="utf-8")
+    (project / "refs" / "brief.md").write_text("edited by the builder\n", encoding="utf-8")
+    (project / "refs" / "new.md").write_text("added by the builder\n", encoding="utf-8")
     git.commit("feat(round-01): work that touched a read-only path")
 
     assert set(git.diff_names(base)) == {"refs/brief.md", "refs/new.md"}
@@ -383,7 +383,7 @@ def test_a_renamed_file_is_reported_under_the_name_it_now_has(project: Path) -> 
 
 
 def test_a_turn_that_rewrites_a_file_it_already_created_is_visible(project: Path) -> None:
-    """`changed()` answers with names alone, so a Developer spending a second turn
+    """`changed()` answers with names alone, so a Builder spending a second turn
     filling in a thirty-kilobyte report looked exactly like one doing nothing, and
     the stall detector ended its round saying it changed nothing in the tree."""
     git = ProjectGit(project)
@@ -572,7 +572,7 @@ def test_build_litter_stays_out_of_a_commit_whatever_the_ignore_file_says(projec
     (project / "node_modules" / "left-pad").mkdir(parents=True)
     (project / "node_modules" / "left-pad" / "index.js").write_text("", encoding="utf-8")
 
-    git.commit("round(01): developer")
+    git.commit("round(01): builder")
 
     listed = git._run("ls-files", check=False).stdout.split()
     assert "src/a.py" in listed and "project/main.gd" in listed
