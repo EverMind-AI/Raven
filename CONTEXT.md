@@ -1636,9 +1636,12 @@ the click two ways. `allow_session` remembers the still-asking parts of the
 action on the conversation (`permissions/session.py`: for `exec` one key per
 segment no rule covers, with the machine and the directory it runs in; for a
 file tool its path), and a later call whose every such part was granted runs
-without asking. `allow_always` also writes the prefix rule the human confirmed
--- suggested by the gate, editable, validated the same way -- into
-`permissions.tools.exec`, which the gate reads live. One tool defaults to allow without being
+without asking. `allow_always` writes the prefix rule the human confirmed --
+suggested by the gate, validated the same way -- into `permissions.tools.exec`,
+which the gate reads live, and adds no session grant beside it: the rule alone
+carries the grant, so taking it back (`approval.revoke`) means being asked
+again, and the session grant is the fallback only when the rule could not be
+written. One tool defaults to allow without being
 a read: `deliver_files`, whose recipient is the user themself and which is the
 only route a finished file has to them, so asking there loses the file rather
 than guarding it. A user rule still outranks the default in both directions.

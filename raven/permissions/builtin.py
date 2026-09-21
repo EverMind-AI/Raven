@@ -5,8 +5,9 @@ list holds catastrophe-class commands only -- disk devices, fork bombs, power
 control, and a recursive delete aimed at the filesystem root or the home tree;
 it outranks everything including a user allow rule, in every mode. The
 command families the running surface declared via
-``shell_policy.set_surface_approval_families`` (none by default; the ACP editor
-declares deletion and the external-effect families) do not decide anything:
+``shell_policy.set_surface_approval_families`` (none by default; the runtime
+and the ACP editor both declare deletion and the external-effect families
+before building their loop) do not decide anything:
 they name the prompt -- "Publish or push work to a remote" rather than the bare
 command -- when the tiers land the call on one. Every mutation, deletes
 included, answers to the permission tiers.

@@ -31,23 +31,20 @@ export function SheetRack(): JSX.Element {
 }
 
 /* One numbered row, which all three get wear: the number the keyboard picks
-   it by, the wording, and for the approval sheet's persisted grant the prefix
-   field that rides inside the row. Shared rather than drawn three times, for the
-   reason components/Ico.tsx gives about its glyphs. */
+   it by and the wording. Shared rather than drawn three times, for the reason
+   components/Ico.tsx gives about its glyphs. */
 export interface SheetOptionRow {
   readonly label: string
   readonly run: () => void
   /** The default answer, which the sheet marks. */
   readonly go?: boolean
-  /** The row carrying the prefix rule. */
-  readonly rule?: boolean
 }
 
 export function SheetOption(
   { n, row, children }: { n: number; row: SheetOptionRow; children?: ReactNode },
 ): JSX.Element {
   return (
-    <button className={`opt${row.go ? ' go' : ''}${row.rule ? ' rule' : ''}`} onClick={row.run}>
+    <button className={`opt${row.go ? ' go' : ''}`} onClick={row.run}>
       <span className="n">{n}</span>
       <span>{row.label}</span>
       {children}

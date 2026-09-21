@@ -5,10 +5,12 @@ import { resetTranslator, setTranslator } from '../../i18n/t'
 import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import { _resetForTests as draftsReset, read, slot } from '../../state/sheetDrafts'
-import { _resetForTests, forget, session, sync } from '../../state/sheetRack'
+import { _resetForTests as draftsReset } from '../../state/sheetDrafts'
+import { _resetForTests, add as rackAdd, forget, remove as rackRemove, session, sync } from '../../state/sheetRack'
 import { mountPageRoot } from '../../test/pageRoot'
-import { closeApproval, open, openApproval } from './approve'
+import { _resetForTests as approveReset, closeApproval, LANDED_MS, open, openApproval } from './approve'
+
+import type { ApprovalHandlers } from './approve'
 
 
 function wire(): void {
@@ -44,6 +46,7 @@ beforeEach(() => {
 afterEach(() => {
   if (unmount) unmount()
   unmount = null
+  approveReset()
   sessionReset()
   resetTranslator()
   document.body.innerHTML = ''
@@ -351,118 +354,159 @@ describe('the approval sheet', () => {
 })
 
 describe('the permission approval sheet', () => {
-  const req = { approvalId: 'ap-1', command: 'rm file.txt', description: 'Delete files' }
-  const suggested = { ...req, command: 'git push origin HEAD', suggestedPattern: 'git push *' }
-  const sheets = () => [...document.querySelectorAll('.csheet')]
-  const opts = () => [...document.querySelectorAll<HTMLButtonElement>('.csheet .opt')]
-  const patternBox = () => document.querySelector<HTMLInputElement>('.csheet .pattern-in')!
-
-  it('offers allow once, allow for the session and the two refusals, in that order', () => {
-    openApproval(req, () => {})
-    expect(opts().map((b) => b.textContent)).toEqual([
-      '1gui.confirm.allow',
-      '2gui.confirm.allow_session',
-      '3gui.confirm.deny',
-      '4gui.confirm.deny_stop',
-    ])
-  })
-
-  it('offers the persisted grant only with a suggestion, before the refusals', () => {
-    openApproval(suggested, () => {})
-    expect(opts().map((b) => b.querySelector('span:nth-child(2)')!.textContent)).toEqual([
-      'gui.confirm.allow',
-      'gui.confirm.allow_session',
-      'gui.confirm.allow_always',
-      'gui.confirm.deny',
-      'gui.confirm.deny_stop',
-    ])
-    expect(patternBox().value).toBe('git push *')
-  })
-
-  it('reports the session grant', () => {
-    const said: unknown[] = []
-    openApproval(req, (choice, feedback, pattern) => said.push([choice, feedback, pattern]))
-    opts()[1]!.click()
-    expect(said).toEqual([['allow_session', '', undefined]])
-    expect(sheets().length).toBe(0)
-  })
-
-  it('sends the prefix as the reader left it, and nothing when they emptied it', () => {
-    const said: unknown[] = []
-    openApproval(suggested, (choice, feedback, pattern) => said.push([choice, feedback, pattern]))
-    patternBox().value = ' git push origin * '
-    opts()[2]!.click()
-    expect(said).toEqual([['allow_always', '', 'git push origin *']])
-    expect(sheets().length).toBe(0)
-
-    openApproval(suggested, (choice, feedback, pattern) => said.push([choice, feedback, pattern]))
-    patternBox().value = '   '
-    opts()[2]!.click()
-    expect(said.length).toBe(1)
-    expect(sheets().length).toBe(1)
-  })
-
-  it('reports the choice, with the typed note riding a refusal', () => {
-    const said: Array<[string, string]> = []
-    openApproval(req, (choice, feedback) => said.push([choice, feedback]))
-    document.querySelector<HTMLInputElement>('.csheet .note-in')!.value = ' move it aside '
-    opts()[2]!.click()
-    expect(said).toEqual([['deny', 'move it aside']])
-    expect(sheets().length).toBe(0)
-  })
-
-  it('answers deny_stop from its own button', () => {
-    const said: Array<[string, string]> = []
-    openApproval(req, (choice, feedback) => said.push([choice, feedback]))
-    opts()[3]!.click()
-    expect(said).toEqual([['deny_stop', '']])
-  })
-
-  const noteBox = () => document.querySelector<HTMLInputElement>('.csheet .note-in:not(.pattern-in)')!
-  const typeIn = (el: HTMLInputElement, v: string): void => {
-    el.value = v
-    el.dispatchEvent(new Event('input'))
+  const base = {
+    approvalId: 'ap-1', command: 'rm file.txt', description: 'Delete files',
+    kind: 'shell.exec', family: 'delete_command', origin: { kind: 'user', name: '' },
+    evidence: { command: 'rm file.txt', cwd: '/w' },
   }
+  const suggested = {
+    ...base, approvalId: 'ap-s', command: 'git push origin HEAD', family: 'publish_command', suggestedPattern: 'git push *',
+    evidence: { command: 'git push origin HEAD', cwd: '/w' },
+  }
+  /* One sheet per request id, so a case that opens several gives each its own. */
+  let n = 0
+  const fresh = <T extends { approvalId: string }>(req: T): T => ({ ...req, approvalId: `${req.approvalId}-${++n}` })
+  const sheets = () => [...document.querySelectorAll<HTMLElement>('.csheet')]
+  const opts = () => [...document.querySelectorAll<HTMLButtonElement>('.csheet .opt')]
+  const landed = () => document.querySelector<HTMLElement>('.cp-land')
+  const said: Array<[string, string, string | undefined]> = []
+  const handlers = (more: Partial<ApprovalHandlers> = {}): ApprovalHandlers => ({
+    onChoice: (c, f, p) => { said.push([c, f, p]) },
+    ...more,
+  })
+  const tick = () => new Promise((r) => setTimeout(r, 0))
 
-  /* The note and the prefix are state, not DOM leftovers: the sheet's interior
-     is unmounted while the reader is in another conversation. */
-  it('keeps the typed note and prefix in the draft store', () => {
-    openApproval(suggested, () => {})
-    typeIn(noteBox(), 'hold on')
-    typeIn(patternBox(), 'git push origin *')
-    expect(read(slot(session(), 'ap-1'))).toEqual({ note: 'hold on', pattern: 'git push origin *' })
+  beforeEach(() => { said.length = 0 })
+
+  it('words the question by the family and quotes the command as the evidence', () => {
+    openApproval(base, handlers())
+    expect(sheets()[0]!.getAttribute('aria-label')).toBe('gui.confirm.title.delete_command')
+    expect(document.querySelector('.csheet .q')!.textContent).toBe('gui.confirm.title.delete_command')
+    expect(document.querySelector('.cp-why')!.textContent).toBe('gui.confirm.why.delete_command')
+    expect(document.querySelector('.csheet .what')!.textContent).toBe('rm file.txt')
+    expect(sheets()[0]!.dataset.asks).toBe('1')
   })
 
-  it('still has them after a conversation switch and back', () => {
-    openApproval(suggested, () => {})
-    typeIn(noteBox(), 'hold on')
-    typeIn(patternBox(), 'git push origin *')
-    setCurrent('b')
-    sync()
-    setCurrent('a')
-    sync()
-    expect(noteBox().value).toBe('hold on')
-    expect(patternBox().value).toBe('git push origin *')
+  it('offers deny first and focused, allow once last, and the saved rule only with a suggestion', () => {
+    openApproval(base, handlers())
+    expect(opts().map((b) => b.textContent)).toEqual(['1gui.confirm.deny', '2gui.confirm.allow'])
+    expect(opts()[0]!.className).toContain('go')
+    expect(document.activeElement).toBe(opts()[0])
+
+    openApproval(suggested, handlers())
+    expect(opts().map((b) => b.textContent)).toEqual(['1gui.confirm.deny', '2gui.confirm.always', '3gui.confirm.allow'])
   })
 
-  /* An emptied prefix stays emptied: re-offering the server's suggestion on the
-     way back would save a rule the reader had just declined. */
-  it('comes back emptied when that is how the reader left the prefix', () => {
-    openApproval(suggested, () => {})
-    typeIn(patternBox(), '')
-    setCurrent('b')
-    sync()
-    setCurrent('a')
-    sync()
-    expect(patternBox().value).toBe('')
+  it('lays out a write as its path and diff, an MCP call as its tool and input, the rest as arguments', () => {
+    const diff = '--- a\n+++ b\n@@ -1 +1 @@\n-x = 1\n+x = 2'
+    openApproval(fresh({ ...base, kind: 'file.write', family: '', evidence: { path: '/w/a.py', created: false, diff } }), handlers())
+    expect(document.querySelector('.csheet .q')!.textContent).toBe('gui.confirm.title.file_write')
+    expect(document.querySelector('.cp-ev-path')!.textContent).toBe('/w/a.py')
+    expect([...document.querySelectorAll('.cp-diff .cp-add')].map((e) => e.textContent!.trim())).toEqual(['+x = 2'])
+    expect([...document.querySelectorAll('.cp-diff .cp-del')].map((e) => e.textContent!.trim())).toEqual(['-x = 1'])
+    /* The file header repeats the path line; the room goes to the change. */
+    expect(document.querySelector('.cp-diff')!.textContent).not.toContain('--- a')
+
+    openApproval(fresh({ ...base, kind: 'file.write', family: '', evidence: { path: '/w/new.py', created: true } }), handlers())
+    expect(document.querySelector('.cp-ev-path')!.textContent).toBe('/w/new.py · gui.confirm.ev.created')
+    expect(document.querySelector('.cp-ev-none')!.textContent).toBe('gui.confirm.ev.nodiff')
+
+    openApproval(fresh({
+      ...base, kind: 'mcp.call', family: '',
+      evidence: { server: 'notion', tool: 'create_page', input: { title: 'weekly' } },
+    }), handlers())
+    expect(document.querySelector('.csheet .q')!.textContent).toBe('gui.confirm.title.mcp_call')
+    expect(document.querySelector('.cp-ev-path')!.textContent).toBe('notion.create_page')
+    expect(document.querySelector('.cp-json')!.textContent).toContain('"title": "weekly"')
+
+    openApproval(fresh({ ...base, kind: 'unknown', family: '', evidence: { input: { n: 3 } } }), handlers())
+    expect(document.querySelector('.csheet .q')!.textContent).toBe('gui.confirm.title.unknown')
+    expect(document.querySelector('.cp-json')!.textContent).toContain('"n": 3')
   })
 
-  /* The same keyboard rules the preview variant has, on the sheet that carries
-     two fields: a parked request is not answerable, an empty note still lets the
-     digits through, and a note with anything in it owns them. */
+  it('names a sub-agent as the one asking, and Raven otherwise', () => {
+    setTranslator((key, vars) => `${key}|${String(vars?.who ?? '')}`)
+    openApproval(fresh({ ...base, origin: { kind: 'subagent', name: 'raven-code' } }), handlers())
+    expect(document.querySelector('.cp-why')!.textContent).toBe('gui.confirm.why.delete_command|raven-code')
+    openApproval(fresh(base), handlers())
+    expect(document.querySelector('.cp-why')!.textContent).toBe('gui.confirm.why.delete_command|Raven')
+  })
+
+  it('answers at once and lands: allow once says so and leaves after a while', () => {
+    vi.useFakeTimers()
+    try {
+      openApproval(base, handlers())
+      opts()[1]!.click()
+      expect(said).toEqual([['allow', '', undefined]])
+      expect(document.querySelector('.csheet[role="dialog"]')).toBeNull()
+      expect(landed()!.textContent).toBe('gui.confirm.land.once')
+      /* Landed, not asking: the rail's light and the elsewhere line go out. */
+      expect(sheets()[0]!.dataset.asks).toBeUndefined()
+      vi.advanceTimersByTime(LANDED_MS + 1)
+      expect(sheets().length).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sends the suggested rule with a saved grant, and the landed sheet can take it back', async () => {
+    const revoked: string[] = []
+    openApproval(suggested, handlers({ onRevoke: async (p: string) => { revoked.push(p); return true } }))
+    opts()[1]!.click()
+    expect(said).toEqual([['allow_always', '', 'git push *']])
+    expect(landed()!.querySelector('.cp-land-text')!.textContent).toBe('gui.confirm.land.always')
+
+    landed()!.querySelector<HTMLButtonElement>('.cp-undo')!.click()
+    await tick()
+    expect(revoked).toEqual(['git push *'])
+    expect(landed()!.textContent).toBe('gui.confirm.land.revoked')
+    expect(landed()!.querySelector('.cp-undo')).toBeNull()
+  })
+
+  it('says so when the rule could not be taken back', async () => {
+    openApproval(suggested, handlers({ onRevoke: async () => false }))
+    opts()[1]!.click()
+    landed()!.querySelector<HTMLButtonElement>('.cp-undo')!.click()
+    await tick()
+    expect(landed()!.textContent).toBe('gui.confirm.land.revoke_failed')
+  })
+
+  it('lands a refusal with a place for a sentence, sent on as the next message', () => {
+    const notes: string[] = []
+    openApproval(base, handlers({ onNote: (text: string) => { notes.push(text) } }))
+    opts()[0]!.click()
+    expect(said).toEqual([['deny', '', undefined]])
+    expect(landed()!.querySelector('.cp-land-text')!.textContent).toBe('gui.confirm.land.deny')
+
+    const note = landed()!.querySelector<HTMLInputElement>('.cp-note')!
+    note.value = ' use git clean instead '
+    note.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(notes).toEqual(['use git clean instead'])
+    expect(landed()!.textContent).toBe('gui.confirm.land.deny_note')
+    expect(landed()!.querySelector('.cp-note')).toBeNull()
+  })
+
+  it('reads Escape and the digits, deny being the default', () => {
+    openApproval(fresh(suggested), handlers())
+    key('Escape')
+    openApproval(fresh(suggested), handlers())
+    key('3')
+    openApproval(fresh(suggested), handlers())
+    key('2')
+    expect(said.map(([c]) => c)).toEqual(['deny', 'allow', 'allow_always'])
+  })
+
+  it('answers once, whichever door is used twice', () => {
+    openApproval(base, handlers())
+    const [deny, allow] = opts()
+    allow!.click()
+    deny!.click()
+    key('Escape')
+    expect(said.map(([c]) => c)).toEqual(['allow'])
+  })
+
   it('ignores the keyboard while its conversation is not the open one', () => {
-    const said: string[] = []
-    openApproval(req, (choice) => said.push(choice))
+    openApproval(base, handlers())
     setCurrent('b')
     sync()
     key('1')
@@ -470,48 +514,72 @@ describe('the permission approval sheet', () => {
     expect(said).toEqual([])
     setCurrent('a')
     sync()
-    key('1')
-    expect(said).toEqual(['allow'])
+    key('2')
+    expect(said.map(([c]) => c)).toEqual(['allow'])
   })
 
-  it('keeps the digits working while the note is empty, and not once it is not', () => {
-    const said: string[] = []
-    openApproval(suggested, (choice) => said.push(choice))
-    noteBox().focus()
-    key('1')
-    expect(said).toEqual(['allow'])
-
-    openApproval(suggested, (choice) => said.push(choice))
-    typeIn(noteBox(), '2 is not a choice here')
-    noteBox().focus()
-    key('1')
-    expect(said).toEqual(['allow'])
-    /* And the prefix field is text from the first key, empty or not. */
-    patternBox().focus()
-    key('1')
-    expect(said).toEqual(['allow'])
-  })
-
-  /* The prefix field sits inside the row that saves it, so the row's own click
-     would answer the request the moment the reader put the caret in the field. */
-  it('lets the reader edit the prefix without picking its row', () => {
-    const said: unknown[] = []
-    openApproval(suggested, (choice) => said.push(choice))
-    patternBox().click()
-    expect(said).toEqual([])
-    expect(sheets().length).toBe(1)
-    /* Enter there saves it, which is the row's other door. */
-    typeIn(patternBox(), 'git push origin *')
-    patternBox().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    expect(said).toEqual(['allow_always'])
-  })
-
-  it('withdraws silently when the server closes the request', () => {
-    const said: Array<[string, string]> = []
-    openApproval(req, (choice, feedback) => said.push([choice, feedback]))
+  it('withdraws silently when the server closes the request, and leaves a landed answer alone', () => {
+    openApproval(base, handlers())
     closeApproval('ap-1')
     expect(sheets().length).toBe(0)
     expect(said).toEqual([])
+
+    openApproval(base, handlers())
+    opts()[1]!.click()
     closeApproval('ap-1')
+    expect(landed()).not.toBeNull()
+  })
+
+  it('takes a landed sheet down with the next request in the same conversation', () => {
+    openApproval(base, handlers())
+    opts()[1]!.click()
+    expect(landed()).not.toBeNull()
+    openApproval({ ...base, approvalId: 'ap-2' }, handlers())
+    expect(landed()).toBeNull()
+    expect(sheets().length).toBe(1)
+  })
+
+  it('says so when the engine did not take the answer, instead of landing as allowed', async () => {
+    openApproval(base, handlers({ onChoice: () => Promise.resolve(false) }))
+    opts()[1]!.click()
+    expect(landed()!.textContent).toBe('gui.confirm.land.once')
+    await tick()
+    expect(landed()!.textContent).toBe('gui.confirm.land.unsent')
+
+    openApproval({ ...base, approvalId: 'ap-2' }, handlers({ onChoice: () => Promise.reject(new Error('socket')) }))
+    opts()[1]!.click()
+    await tick()
+    expect(landed()!.textContent).toBe('gui.confirm.land.unsent')
+  })
+
+  it('reads no digit typed into a field, where it is text -- Escape still refuses', () => {
+    const ta = document.createElement('textarea')
+    document.body.appendChild(ta)
+    openApproval(suggested, handlers())
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }))
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true }))
+    expect(said).toEqual([])
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(said.map(([c]) => c)).toEqual(['deny'])
+  })
+
+  it('leaves the keyboard to a sheet docked above it, and takes it back when that one goes', () => {
+    openApproval(base, handlers())
+    const above = document.createElement('div')
+    above.className = 'csheet'
+    rackAdd(above, session())
+    key('2')
+    expect(said).toEqual([])
+    rackRemove(above)
+    key('2')
+    expect(said.map(([c]) => c)).toEqual(['allow'])
+  })
+
+  it('opens one sheet per request, so a replay after a reload does not stack a second', () => {
+    openApproval(base, handlers())
+    openApproval(base, handlers())
+    expect(sheets().length).toBe(1)
+    opts()[1]!.click()
+    expect(said.map(([c]) => c)).toEqual(['allow'])
   })
 })

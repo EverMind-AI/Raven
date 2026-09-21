@@ -40,6 +40,10 @@ class PermissionTurn:
     responder: ApprovalResponder | None = None
     conversation_id: str = ""
     turn_id: str = ""
+    # Who this turn speaks for, as the approval prompt names it: the request's
+    # origin ("user", "subagent", ...) and, for a sub-agent, the agent's name.
+    origin: str = ""
+    origin_name: str = ""
     denied_digests: set[str] = field(default_factory=set)
     lapsed_digests: set[str] = field(default_factory=set)
     # Purely presentational: lets a watching surface say "the reviewer is
@@ -63,6 +67,8 @@ def start_permission_turn(
     conversation_id: str,
     turn_id: str,
     on_review: Callable[[str, str], Awaitable[None]] | None = None,
+    origin: str = "",
+    origin_name: str = "",
 ) -> None:
     """Bind or revoke the asking capability for the current turn's task."""
     _TURN.set(
@@ -70,6 +76,8 @@ def start_permission_turn(
             responder=responder,
             conversation_id=conversation_id,
             turn_id=turn_id,
+            origin=origin,
+            origin_name=origin_name,
             on_review=on_review,
         )
     )

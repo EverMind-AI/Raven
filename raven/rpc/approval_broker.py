@@ -1,32 +1,41 @@
-"""Runtime-owned approval round-trip for protected shell commands.
+"""Runtime-owned approval round-trip for protected tool calls.
 
 The permission gate reaches this broker when a call lands on the ask tier.
-The broker mints an ``approval_id``, emits ``approval.request`` to the TUI, and
-blocks that tool call until the user answers or the backend hard limit expires.
-The broker grants nothing itself: it carries the human's choice back -- once,
-for this session, or a prefix rule to persist -- and the gate is what remembers
-or writes. ``suggested_pattern`` on the request is the prefix the gate found
-safe to offer; a client that shows no editor for it simply never sends
-``allow_always``.
+The broker mints an ``approval_id``, emits ``approval.request`` to the client,
+and blocks that tool call until the user answers. The broker grants nothing
+itself: it carries the human's choice back -- once, for this session, or a
+prefix rule to persist -- and the gate is what remembers or writes.
+``suggested_pattern`` on the request is the prefix the gate found safe to
+offer; a client that shows no editor for it simply never sends ``allow_always``.
 
-Timeouts have two layers:
+The request carries what a prompt is drawn from, beside the action line the
+gate already wrote: ``kind`` picks the layout, ``family`` the wording,
+``origin`` names who is asking, and ``evidence`` is the tool's own account of
+the call. The broker forwards them as given.
 
-* ``visible_timeout_s`` is serialized as ``expires_at``. The TUI owns the
-  countdown and fail-closes its overlay at that deadline.
-* ``hard_timeout_s`` is the backend ceiling. It is slightly longer so a choice
-  made before the visible deadline can survive event-loop or RPC transport lag.
+A request has no working deadline: it stays open until a person answers it,
+the connection goes away (``cancel_all``) or the turn is cancelled. The default
+``hard_timeout_s`` is a day -- a floor nobody present ever reaches, there so
+that "waits forever" is not a state the runtime can be in -- and a host may set
+a shorter ceiling; when it fires the outcome is a deny nobody chose. Every
+backend outcome emits ``approval.closed`` in ``finally``, so a client can retire
+an overlay whatever ended the request; the client matches the id before
+clearing, so a delayed close cannot dismiss a newer request.
 
-The frontend timer is not authoritative cleanup: the process may be suspended,
-the socket may disconnect, or a notification may arrive late. Therefore every
-backend outcome emits ``approval.closed`` in ``finally``. The frontend matches
-the id before clearing, so a delayed close cannot dismiss a newer request.
+``pending`` lists the requests still open, as they were sent: a page that
+reloaded lost its sheets, and this is how it draws them again.
+
+One question per conversation at a time. Both surfaces draw one prompt per
+conversation and replace it when another lands, so a second request sent while
+the first is open would take the first off the screen with nobody having
+answered it -- and with no deadline behind it, that call would wait forever. A
+background sub-agent asking while the main agent's prompt is up is the ordinary
+way this happens. The second request is sent once the first is answered.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -39,30 +48,37 @@ from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
 SendFrame = Callable[[dict[str, Any]], Awaitable[None]]
 
 
+#: The floor. A day, not an hour: a person may step away from an open prompt
+#: for an afternoon and find it still waiting; nobody waits a day on one.
+DEFAULT_HARD_TIMEOUT_S = 24 * 3600.0
+
+
 @dataclass
 class _PendingApproval:
     conversation_id: str
     future: asyncio.Future[tuple[str, str, str]]
+    #: The ``approval.request`` params as sent, so ``pending`` can hand a fresh
+    #: page the very frame it missed.
+    params: dict[str, Any]
 
 
 class ApprovalBroker:
-    """Coordinate one-shot TUI approvals without delegating authority to the model."""
+    """Coordinate one-shot client approvals without delegating authority to the model."""
 
     def __init__(
         self,
         send_frame: SendFrame,
         *,
-        visible_timeout_s: float = 30.0,
-        hard_timeout_s: float = 35.0,
+        hard_timeout_s: float | None = DEFAULT_HARD_TIMEOUT_S,
     ) -> None:
-        if visible_timeout_s <= 0 or hard_timeout_s < visible_timeout_s:
-            raise ValueError("approval timeouts must satisfy 0 < visible <= hard")
-        # The frontend expires first; the extra backend window lets a response
-        # chosen before the visible deadline survive transport/event-loop lag.
+        if hard_timeout_s is not None and hard_timeout_s <= 0:
+            raise ValueError("hard_timeout_s must be positive when set")
         self._send_frame = send_frame
-        self._visible_timeout_s = visible_timeout_s
         self._hard_timeout_s = hard_timeout_s
         self._pending: dict[str, _PendingApproval] = {}
+        # The queue behind each conversation's one prompt; an entry per
+        # conversation ever asked, which is a lock object each.
+        self._lanes: dict[str, asyncio.Lock] = {}
 
     async def await_approval(
         self,
@@ -73,45 +89,76 @@ class ApprovalBroker:
         command: str,
         description: str,
         suggested_pattern: str = "",
+        kind: str = "",
+        family: str = "",
+        origin: str = "",
+        origin_name: str = "",
+        evidence: dict[str, Any] | None = None,
     ) -> ApprovalOutcome:
         """Wait for an approval decision and fail closed on every error path.
 
         A grant comes back as the human chose it: once, for this session, or
-        with the pattern to persist. User denial, visible timeout forwarded by
-        the TUI, backend timeout, connection failure, and broker cancellation
-        all resolve to a deny; ``DENY_STOP`` is the one choice that additionally
-        ends the turn, and only a human's click can produce it. Exceptions are
-        contained here because an approval transport failure must never turn
-        into tool execution or leave the agent loop waiting indefinitely.
+        with the pattern to persist. User denial, the host's ceiling if it has
+        one, connection failure, and broker cancellation all resolve to a deny;
+        ``DENY_STOP`` is the one choice that additionally ends the turn, and
+        only a human's click can produce it. Exceptions are contained here
+        because an approval transport failure must never turn into tool
+        execution.
         """
+        async with self._lanes.setdefault(conversation_id, asyncio.Lock()):
+            return await self._ask(
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                tool_call_id=tool_call_id,
+                command=command,
+                description=description,
+                suggested_pattern=suggested_pattern,
+                kind=kind,
+                family=family,
+                origin=origin,
+                origin_name=origin_name,
+                evidence=evidence,
+            )
+
+    async def _ask(
+        self,
+        *,
+        conversation_id: str,
+        turn_id: str,
+        tool_call_id: str,
+        command: str,
+        description: str,
+        suggested_pattern: str,
+        kind: str,
+        family: str,
+        origin: str,
+        origin_name: str,
+        evidence: dict[str, Any] | None,
+    ) -> ApprovalOutcome:
         approval_id = uuid4().hex
         future = asyncio.get_running_loop().create_future()
-        created_at = time.time()
         close_reason = "cancelled"
         request_sent = False
+        params = {
+            "approval_id": approval_id,
+            "conversation_id": conversation_id,
+            "turn_id": turn_id,
+            "tool_call_id": tool_call_id,
+            "command": command,
+            "description": description,
+            "suggested_pattern": suggested_pattern,
+            "kind": kind or "unknown",
+            "family": family,
+            "origin": {"kind": origin, "name": origin_name},
+            "evidence": evidence if evidence is not None else {},
+        }
         self._pending[approval_id] = _PendingApproval(
             conversation_id=conversation_id,
             future=future,
+            params=params,
         )
         try:
-            await self._send_frame(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "approval.request",
-                    "params": {
-                        "approval_id": approval_id,
-                        "conversation_id": conversation_id,
-                        "turn_id": turn_id,
-                        "tool_call_id": tool_call_id,
-                        "command": command,
-                        "description": description,
-                        "action_digest": hashlib.sha256(command.encode()).hexdigest(),
-                        "suggested_pattern": suggested_pattern,
-                        "created_at": created_at,
-                        "expires_at": created_at + self._visible_timeout_s,
-                    },
-                }
-            )
+            await self._send_frame({"jsonrpc": "2.0", "method": "approval.request", "params": params})
             request_sent = True
             choice, feedback, pattern = await asyncio.wait_for(future, self._hard_timeout_s)
             close_reason = choice
@@ -135,8 +182,8 @@ class ApprovalBroker:
             self._pending.pop(approval_id, None)
             if request_sent:
                 try:
-                    # Frontend timers are best-effort (a suspended terminal may
-                    # never fire), so every backend outcome closes the overlay.
+                    # Whatever ended the request, the client hears it, so an
+                    # overlay never outlives the question it was asking.
                     await self._send_frame(
                         {
                             "jsonrpc": "2.0",
@@ -179,6 +226,18 @@ class ApprovalBroker:
         pending.future.set_result((choice, feedback[:2000], pattern.strip()[:500]))
         return True
 
+    def pending(self, conversation_id: str | None = None) -> list[dict[str, Any]]:
+        """The requests still waiting, as their ``approval.request`` params were sent.
+
+        All of them, or one conversation's. Copies, so a caller cannot reach
+        the broker's own record through the answer.
+        """
+        return [
+            dict(p.params)
+            for p in self._pending.values()
+            if conversation_id is None or p.conversation_id == conversation_id
+        ]
+
     def cancel_all(self) -> None:
         """Fail-close pending approvals during RPC teardown or TUI disconnect.
 
@@ -190,4 +249,4 @@ class ApprovalBroker:
                 pending.future.set_result(("cancelled", "", ""))
 
 
-__all__ = ["ApprovalBroker", "SendFrame"]
+__all__ = ["DEFAULT_HARD_TIMEOUT_S", "ApprovalBroker", "SendFrame"]

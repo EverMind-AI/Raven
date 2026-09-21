@@ -36,11 +36,11 @@ from raven.acp import protocol
 DEFAULT_REQUEST_TIMEOUT_S = 300.0
 """How long to wait for a client to answer, by default.
 
-Five minutes, not the thirty-five seconds the RPC approval broker uses. That
-ceiling exists because a terminal overlay owns a visible countdown; here the
-person is reading a diff in an editor, and a permission prompt that expires
-itself after half a minute reads as an agent that gave up. Long, but finite: a
-client that has stopped answering must not hold a turn open forever.
+Five minutes. The RPC approval broker sets no deadline of its own -- a request
+there stays until a person answers it -- but this wire is an editor process
+that can stop answering, and a client that has stopped answering must not hold
+a turn open forever. Long enough that a person reading a diff is never the one
+timed out.
 """
 
 

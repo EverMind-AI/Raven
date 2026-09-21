@@ -1014,19 +1014,77 @@ async def test_a_session_grant_on_a_file_tool_is_the_path(no_grants):
 
 
 @pytest.mark.asyncio
-async def test_allow_always_writes_the_confirmed_pattern_and_grants_the_session(no_grants, monkeypatch):
+async def test_allow_always_writes_the_confirmed_pattern_and_the_rule_alone_carries_the_grant(no_grants, monkeypatch):
+    """No session grant beside a rule that reached the file: config is read
+    live, so the rule holds from the next call -- and taking the rule back means
+    being asked again, which is the promise the prompt's undo makes."""
     from raven.permissions import gate as gate_module
 
+    config = PermissionsConfig()
     written: list[str] = []
-    monkeypatch.setattr(gate_module, "allow_exec_pattern", lambda pattern: written.append(pattern) or True)
-    gate = gate_for(PermissionsConfig())
+
+    def write(pattern: str) -> bool:
+        written.append(pattern)
+        config.tools.setdefault("exec", {})[pattern] = "allow"
+        return True
+
+    monkeypatch.setattr(gate_module, "allow_exec_pattern", write)
+    gate = gate_for(config)
     responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW_ALWAYS, pattern="git push *"))
     bind(responder)
 
     assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
     assert written == ["git push *"]
-    # Config is read live and the rule holds from the next call; until the
-    # reload lands, the session grant covers the same action.
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert len(responder.calls) == 1
+    del config.tools["exec"]["git push *"]
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert len(responder.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_allow_always_still_covers_the_call_when_a_stricter_rule_outranks_the_new_one(no_grants, monkeypatch):
+    """The rule reached the file and does nothing for this call: the user's own
+    ``git *: ask`` outranks the ``git push *`` just saved, because the strictest
+    matching rule wins. The human still said yes, so the session grant stays
+    and the next identical call runs without asking."""
+    from raven.permissions import gate as gate_module
+
+    config = PermissionsConfig(tools={"exec": {"git *": "ask"}})
+    written: list[str] = []
+
+    def write(pattern: str) -> bool:
+        written.append(pattern)
+        config.tools["exec"][pattern] = "allow"
+        return True
+
+    monkeypatch.setattr(gate_module, "allow_exec_pattern", write)
+    gate = gate_for(config)
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW_ALWAYS, pattern="git push *"))
+    bind(responder)
+
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert written == ["git push *"]
+    assert exec_rule_tier("git push origin HEAD", config.tools["exec"]) is Tier.ASK, "the file alone would ask again"
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert len(responder.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_allow_always_keeps_the_session_grant_when_the_rule_could_not_be_written(no_grants, monkeypatch):
+    """The human did say yes. A config file that refuses the write -- ``exec``
+    set to a plain tier -- must not turn that into being asked again."""
+    from raven.permissions import gate as gate_module
+
+    def refuse(pattern: str) -> bool:
+        raise ValueError("permissions.tools.exec is 'ask', a tier for the whole tool, not a table of patterns")
+
+    monkeypatch.setattr(gate_module, "allow_exec_pattern", refuse)
+    gate = gate_for(PermissionsConfig())
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW_ALWAYS, pattern="git push *"))
+    bind(responder)
+
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
     assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
     assert len(responder.calls) == 1
 
@@ -1228,3 +1286,71 @@ def test_a_flag_is_not_dressed_up_as_a_string():
     """`append=False` and a string reading "False" are different answers."""
     line = action_line("write_file", {"path": "/tmp/x", "append": False})
     assert "append=False" in line
+
+
+# ---------------------------------------------------------------------------
+# What the prompt is drawn from: the tool's own view of the call
+# ---------------------------------------------------------------------------
+
+
+class _Viewed:
+    """A tool that knows how to show itself, the way exec and the file tools do."""
+
+    approval_kind = "file.write"
+
+    def approval_evidence(self, params):
+        return {"path": params["path"], "diff": "-a\n+b"}
+
+
+class _Broken:
+    approval_kind = "mcp.call"
+
+    def approval_evidence(self, params):
+        raise RuntimeError("no server")
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_carries_the_tools_view_and_the_turns_origin():
+    gate = gate_for(PermissionsConfig())
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
+    start_permission_turn(
+        responder, conversation_id="conv-1", turn_id="turn-1", origin="subagent", origin_name="raven-code"
+    )
+
+    assert await gate.enforce("write_file", {"path": "a.py", "content": "b"}, tool=_Viewed()) is None
+
+    call = responder.calls[0]
+    assert call["kind"] == "file.write"
+    assert call["evidence"] == {"path": "a.py", "diff": "-a\n+b"}
+    assert (call["origin"], call["origin_name"]) == ("subagent", "raven-code")
+    assert call["family"] == ""
+
+
+@pytest.mark.asyncio
+async def test_a_declared_family_rides_on_the_prompt():
+    from raven.permissions.shell_policy import DELETE_MATCHERS
+
+    gate = gate_for(PermissionsConfig(), families=DELETE_MATCHERS)
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
+    bind(responder)
+
+    await gate.enforce("exec", {"command": "rm coverage.xml"})
+
+    assert responder.calls[0]["family"] == "delete_command"
+
+
+@pytest.mark.asyncio
+async def test_a_view_that_fails_or_is_missing_falls_back_to_the_arguments():
+    gate = gate_for(PermissionsConfig())
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
+    bind(responder)
+
+    await gate.enforce("notion_create", {"title": "weekly"}, tool=_Broken())
+    await gate.enforce("notion_create", {"title": "weekly"})
+
+    # The kind goes with the evidence: a layout keyed to `mcp.call` would draw
+    # the bare arguments as blanks, so a failed hook reads as unknown too.
+    assert [(c["kind"], c["evidence"]) for c in responder.calls] == [
+        ("unknown", {"input": {"title": "weekly"}}),
+        ("unknown", {"input": {"title": "weekly"}}),
+    ]

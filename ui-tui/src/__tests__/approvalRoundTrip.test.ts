@@ -1,8 +1,7 @@
 import { renderSync } from '@hermes/ink'
-import { render } from 'ink-testing-library'
 import React from 'react'
 import { PassThrough } from 'stream'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Msg } from '../types.js'
 
@@ -15,7 +14,6 @@ import {
   ALWAYS_OPTION,
   APPROVAL_OPTIONS,
   approvalOptionsFor,
-  approvalRemainingSeconds,
   approvalResponseAccepted,
   buildApprovalRespond
 } from '../lib/approval.js'
@@ -73,8 +71,7 @@ describe('approval round-trip', () => {
         approval_id: 'approval-a',
         command: 'rm file.txt',
         conversation_id: 'session-a',
-        description: 'Delete files',
-        expires_at: 1735689630
+        description: 'Delete files'
       },
       session_id: 'session-a',
       type: 'approval.request'
@@ -84,8 +81,7 @@ describe('approval round-trip', () => {
       approvalId: 'approval-a',
       command: 'rm file.txt',
       conversationId: 'session-a',
-      description: 'Delete files',
-      expiresAt: 1735689630000
+      description: 'Delete files'
     })
   })
 
@@ -97,8 +93,7 @@ describe('approval round-trip', () => {
         approval_id: 'approval-a',
         command: 'rm file.txt',
         conversation_id: 'session-a',
-        description: 'Delete files',
-        expires_at: 1735689630
+        description: 'Delete files'
       },
       session_id: 'session-a',
       type: 'approval.request'
@@ -154,7 +149,6 @@ describe('approval round-trip', () => {
         command: 'git push origin HEAD',
         conversation_id: 'session-a',
         description: 'Push',
-        expires_at: 1735689630,
         suggested_pattern: 'git push *'
       },
       session_id: 'session-a',
@@ -168,7 +162,6 @@ describe('approval round-trip', () => {
         command: 'uv run pytest',
         conversation_id: 'session-a',
         description: 'Run',
-        expires_at: 1735689630,
         suggested_pattern: ''
       },
       session_id: 'session-a',
@@ -240,46 +233,6 @@ describe('approval round-trip', () => {
     expect(approvalResponseAccepted(null)).toBe(false)
   })
 
-  it('derives the visible countdown from the runtime deadline', () => {
-    expect(approvalRemainingSeconds(31_000, 1_000)).toBe(30)
-    expect(approvalRemainingSeconds(1_001, 1_000)).toBe(1)
-    expect(approvalRemainingSeconds(999, 1_000)).toBe(0)
-  })
-
-  it('answers nothing at the visible deadline, because a lapse is not a refusal', async () => {
-    /* It used to send `deny` here, and that was the one place a lapse became a
-       refusal. The runtime's hard ceiling sits a few seconds past this deadline
-       so that it can be the party that decides; answering first took the
-       decision away from it and told the model the user had said no. The
-       overlay is cleared by the runtime's own `approval.closed`. */
-    vi.useFakeTimers()
-    vi.setSystemTime(1_000)
-    const onChoice = vi.fn()
-    const rendered = render(
-      React.createElement(ApprovalPrompt, {
-        onChoice,
-        req: {
-          approvalId: 'approval-a',
-          command: 'rm file.txt',
-          conversationId: 'session-a',
-          description: 'Delete files',
-          expiresAt: 2_000
-        },
-        t: DEFAULT_THEME
-      })
-    )
-
-    try {
-      await vi.advanceTimersByTimeAsync(1_000)
-      expect(onChoice).not.toHaveBeenCalled()
-      // And well past it: the prompt stays put rather than answering late.
-      await vi.advanceTimersByTimeAsync(10_000)
-      expect(onChoice).not.toHaveBeenCalled()
-    } finally {
-      rendered.unmount()
-      vi.useRealTimers()
-    }
-  })
 })
 
 describe('an approval outlives the turn that opened it', () => {
@@ -298,8 +251,7 @@ describe('an approval outlives the turn that opened it', () => {
         approvalId: 'a-1',
         command: 'write_file {"path": "notes.md"}',
         conversationId: 'tui:1',
-        description: 'Approve this action',
-        expiresAt: Date.now() + 30_000
+        description: 'Approve this action'
       },
       clarify: null
     })
@@ -315,51 +267,6 @@ describe('an approval outlives the turn that opened it', () => {
     resetFlowOverlays()
 
     expect(getOverlayState().sudo).toBeNull()
-  })
-})
-
-describe('an answer names the request that produced it', () => {
-  beforeEach(() => {
-    resetOverlayState()
-    vi.useFakeTimers()
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('cannot answer a replacement request, because the countdown answers nothing', () => {
-    // The hazard this pinned: the countdown was armed against the request on
-    // screen, and if a second one took the slot before the callback ran -- a
-    // sub-agent asking a second after the spawn that created it was allowed --
-    // the expiry refused the new one, which nobody had been shown. Carrying the
-    // rendered prompt's id was the guard against that.
-    //
-    // The expiry no longer answers at all, so there is no callback to mis-target
-    // and no id for it to carry. The runtime's own ceiling decides, and it knows
-    // which request it is deciding about. Kept as the case that says so: a
-    // countdown that starts answering again brings the whole hazard back.
-    const answered: Array<[string, string | undefined]> = []
-    const req = {
-      approvalId: 'a-1',
-      command: 'rm notes.md',
-      conversationId: 'tui:1',
-      description: 'Approve this action',
-      expiresAt: Date.now() + 30_000
-    }
-    const app = render(
-      React.createElement(ApprovalPrompt, {
-        cols: 80,
-        onChoice: (choice: string, _feedback?: string, approvalId?: string) => answered.push([choice, approvalId]),
-        req,
-        t: DEFAULT_THEME
-      })
-    )
-
-    vi.advanceTimersByTime(31_000)
-    app.unmount()
-
-    expect(answered).toEqual([])
   })
 })
 
@@ -388,7 +295,6 @@ describe('one prompt per request', () => {
       command: 'git push origin HEAD',
       conversationId: 'session-a',
       description: 'Push',
-      expiresAt: Date.now() + 60_000,
       suggestedPattern: 'git push *'
     }
     const node = (req: typeof first) => React.createElement(ApprovalPrompt, { onChoice, req, t: DEFAULT_THEME })

@@ -1,120 +1,137 @@
-/* The permission gate's approval sheet: the command, a note that rides a
- * refusal, and the five answers -- allow once, allow for this session, allow and
- * save a prefix rule, deny, deny and stop.
+/* The permission gate's approval sheet: why the agent is asking, what it wants
+ * to do, and the three answers -- deny, allow always (only when the runtime
+ * offered a rule to save), allow once. After an answer the sheet lands: one
+ * line saying what happened, with the undo a saved rule earns and the note a
+ * refusal invites.
  *
  * The sheet element, the answers and the document key handler belong to
  * features/composer/approve.ts; this renders its children, for the reason
- * src/chrome/SheetRack.tsx gives.
- *
- * Both fields are uncontrolled and listened to natively -- a component owning
- * the value re-renders a field the reader is typing into -- and both are read
- * from and written to state/sheetDrafts.ts on every keystroke, because the
- * interior is unmounted while the reader is in another conversation. The opener
- * still reads the elements themselves when an answer is sent: what it owes the
- * model is what stands in the field at that moment.
+ * src/chrome/SheetRack.tsx gives. The wording arrives as props: the opener
+ * reads the catalogue once when the request lands, so a language flip does not
+ * re-word a question already on screen.
  */
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 
 import { SheetOption } from '../../chrome/SheetRack'
-import * as drafts from '../../state/sheetDrafts'
 import { SheetHead } from './AskApproveSheet'
+import { composing } from './store'
 
 import type { SheetOptionRow } from '../../chrome/SheetRack'
 import type { JSX } from 'react'
 
-/* What the opener reads when it answers: the note the refusal carries, and the
-   prefix as the reader left it. Elements rather than values, because the two are
-   the same fields the reader is typing into and an answer takes their contents
-   at the moment it is sent. */
-export interface ApprovalControls {
-  note: HTMLInputElement | null
-  pattern: HTMLInputElement | null
-}
+/** The tool's own account of the call, as the engine sent it (raven/contracts/tool.py). */
+export type Evidence = Record<string, unknown>
 
-export interface ApprovalWords {
+export interface GateWords {
   readonly title: string
+  readonly why: string
   readonly deny: string
-  readonly notePh: string
-  readonly patternFor: string
+  readonly created: string
+  readonly nodiff: string
 }
 
-export interface ApprovalProps {
-  readonly ctl: ApprovalControls
-  readonly draft: string
+export interface GateProps {
+  readonly kind: string
+  readonly evidence: Evidence
   readonly command: string
-  readonly words: ApprovalWords
+  readonly words: GateWords
   readonly opts: readonly SheetOptionRow[]
-  /** The prefix the runtime offered, which a draft overrides. */
-  readonly suggested?: string
   readonly onDeny: () => void
-  readonly onSaveRule: () => void
 }
 
-export function GateSheet(
-  { ctl, draft, command, words, opts, suggested, onDeny, onSaveRule }: ApprovalProps,
+const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+
+const diffClass = (line: string): string =>
+  line.startsWith('+') ? 'cp-add' : line.startsWith('-') ? 'cp-del' : line.startsWith('@@') ? 'cp-hunk' : ''
+
+/* What is being judged, by kind: the command verbatim, a path and the diff the
+   write would make, an MCP tool and its input -- or, for a tool the page has no
+   layout for, the arguments as they are. */
+function EvidenceBlock(
+  { kind, evidence, command, words }: { kind: string; evidence: Evidence; command: string; words: GateWords },
 ): JSX.Element {
-  const note = useRef<HTMLInputElement | null>(null)
-  const pattern = useRef<HTMLInputElement | null>(null)
+  if (kind === 'file.write') {
+    /* The file header names the path the line above already shows, and a
+       two-line change should not spend its room on it. */
+    const lines = str(evidence.diff).split('\n').filter((l) => !l.startsWith('--- ') && !l.startsWith('+++ '))
+    return (
+      <div className="what cp-ev">
+        <div className="cp-ev-path">{str(evidence.path)}{evidence.created ? ` · ${words.created}` : ''}</div>
+        {str(evidence.diff)
+          ? (
+            <pre className="cp-diff">
+              {lines.map((line, i) => <span key={i} className={diffClass(line)}>{line}{'\n'}</span>)}
+            </pre>
+          )
+          : <div className="cp-ev-none">{words.nodiff}</div>}
+      </div>
+    )
+  }
+  if (kind === 'mcp.call') {
+    return (
+      <div className="what cp-ev">
+        <div className="cp-ev-path">{str(evidence.server)}.{str(evidence.tool)}</div>
+        <pre className="cp-json">{JSON.stringify(evidence.input ?? {}, null, 2)}</pre>
+      </div>
+    )
+  }
+  if (kind === 'shell.exec') return <div className="what">{str(evidence.command) || command}</div>
+  return <pre className="what cp-json">{JSON.stringify(evidence.input ?? evidence, null, 2)}</pre>
+}
 
-  /* Before the effects below, so an answer given in the same task as the mount
-     already has the fields to read. */
-  useLayoutEffect(() => {
-    ctl.note = note.current
-    ctl.pattern = pattern.current
-  }, [ctl])
-
-  useEffect(() => {
-    const el = note.current
-    if (!el) return undefined
-    el.value = drafts.read(draft).note || ''
-    const onInput = (): void => drafts.write(draft, { note: el.value })
-    el.addEventListener('input', onInput)
-    return () => el.removeEventListener('input', onInput)
-  }, [draft])
-
-  useEffect(() => {
-    const el = pattern.current
-    if (!el) return undefined
-    /* The suggestion is the served value; a draft beats it, the empty string
-       included -- an emptied prefix saves nothing, and re-offering the
-       suggestion on the way back would undo that. */
-    el.value = drafts.read(draft).pattern ?? (suggested || '')
-    const onInput = (): void => drafts.write(draft, { pattern: el.value })
-    const onClick = (e: Event): void => e.stopPropagation()
-    const onKeyDown = (e: KeyboardEvent): void => {
-      /* Typing in the prefix must not pick the row, and Enter there saves. */
-      if (e.key === 'Enter') {
-        e.preventDefault()
-        onSaveRule()
-      }
-    }
-    el.addEventListener('input', onInput)
-    el.addEventListener('click', onClick)
-    el.addEventListener('keydown', onKeyDown)
-    return () => {
-      el.removeEventListener('input', onInput)
-      el.removeEventListener('click', onClick)
-      el.removeEventListener('keydown', onKeyDown)
-    }
-  }, [draft, suggested, onSaveRule])
-
+export function GateSheet({ kind, evidence, command, words, opts, onDeny }: GateProps): JSX.Element {
   return (
     <>
       <SheetHead title={words.title} deny={words.deny} onDeny={onDeny} />
       <div className="body">
-        <div className="what">{command}</div>
-        <input className="note-in" placeholder={words.notePh} aria-label={words.notePh} ref={note} />
-        {opts.map((row, i) => (
-          <SheetOption key={i} n={i + 1} row={row}>
-            {/* The persisted grant's prefix rides inside its own row: an input
-                the reader may edit, and an emptied one saves nothing. */}
-            {row.rule
-              ? <input className="note-in pattern-in" aria-label={words.patternFor}
-                  title={words.patternFor} ref={pattern} />
-              : null}
-          </SheetOption>
-        ))}
+        <div className="cp-why">{words.why}</div>
+        <EvidenceBlock kind={kind} evidence={evidence} command={command} words={words} />
+        <div className="cp-acts">
+          {opts.map((row, i) => <SheetOption key={i} n={i + 1} row={row} />)}
+        </div>
       </div>
     </>
+  )
+}
+
+export interface LandedWords {
+  readonly text: string
+  readonly undo?: string
+  readonly notePh?: string
+}
+
+export interface LandedProps {
+  readonly words: LandedWords
+  /** Takes back the rule a saved grant wrote. */
+  readonly onUndo?: () => void
+  /** Sends the sentence typed after a refusal. */
+  readonly onNote?: (text: string) => void
+}
+
+/* What the sheet becomes once answered. The note field is uncontrolled and
+   listened to natively, for the reasons ClarifySheet gives: a component owning
+   the value re-renders a field the reader is typing into, and the keydown has
+   to stop at the input so the page's shortcuts do not read what is typed. */
+export function LandedSheet({ words, onUndo, onNote }: LandedProps): JSX.Element {
+  const field = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    const el = field.current
+    if (!el || !onNote) return undefined
+    const onKeyDown = (e: KeyboardEvent): void => {
+      e.stopPropagation()
+      if (composing(e)) return
+      if (e.key === 'Enter' && el.value.trim()) onNote(el.value.trim())
+    }
+    el.addEventListener('keydown', onKeyDown)
+    return () => el.removeEventListener('keydown', onKeyDown)
+  }, [onNote])
+
+  return (
+    <div className="cp-land" role="status">
+      <span className="cp-land-text">{words.text}</span>
+      {onUndo && words.undo ? <button className="cp-undo" onClick={onUndo}>{words.undo}</button> : null}
+      {onNote ? <input className="cp-note" placeholder={words.notePh} aria-label={words.notePh} ref={field} /> : null}
+    </div>
   )
 }

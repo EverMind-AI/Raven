@@ -15,7 +15,7 @@
 
 import { closeApproval as approvalClose, open as approveSheet, openApproval as approvalSheet } from '../../features/composer/approve'
 import { close as clarifyClose, open as clarifySheet } from '../../features/composer/clarify'
-import { drawMeter, goPaint as goState } from '../../features/composer/mount'
+import { drawMeter, goPaint as goState, say as composerSay } from '../../features/composer/mount'
 import { touchSession } from '../../features/rail/source'
 import { draw as sessionDraw } from '../../features/rail/store'
 import { t } from '../../i18n/t'
@@ -108,14 +108,18 @@ export function confirmRequest(frame: unknown): void {
 }
 
 /* The permission gate's ask. Same docking rules as confirm above; what an
- answer is differs: allow once, deny (the agent reads the refusal and keeps
- going), or deny and stop the turn, with an optional note that rides to the
- model as the refusal's reason. The engine fails closed on its own deadline,
- and approval.closed below is how this sheet learns the question is over. */
+ answer is differs: deny (the agent reads the refusal and keeps going), allow
+ and save the rule the runtime suggested, or allow once. The request carries
+ what the sheet is drawn from -- the layout, the family that words it, who is
+ asking, the tool's own account of the call -- and the sheet reads those; the
+ transport here only answers. approval.closed below is how the sheet learns
+ the question is over without an answer from this page. */
 export function approvalRequest(frame: unknown): void {
   const p = frame as {
     approval_id: string; command?: string; description?: string
     suggested_pattern?: string; conversation_id?: string
+    kind?: string; family?: string; origin?: { kind: string; name: string }
+    evidence?: Record<string, unknown>
   }
   const owner = p.conversation_id || sessionCurrent()!
   notify(owner, { type: 'wait' })
@@ -125,17 +129,43 @@ export function approvalRequest(frame: unknown): void {
       command: p.command || '',
       description: p.description || '',
       suggestedPattern: p.suggested_pattern || '',
+      kind: p.kind || 'unknown',
+      family: p.family || '',
+      origin: p.origin || { kind: '', name: '' },
+      evidence: p.evidence || {},
     },
-    (choice: string, feedback: string, pattern?: string) => {
-      notify(owner, { type: 'resume' })
-      gateway().call('approval.respond', {
-        approval_id: p.approval_id, choice, session_id: owner,
-        ...(feedback ? { feedback } : {}),
-        ...(pattern ? { pattern } : {}),
-      }).catch(() => {})
+    {
+      onChoice: (choice: string, feedback: string, pattern?: string) => {
+        notify(owner, { type: 'resume' })
+        /* Whether the engine took it: a stale id or a dropped socket answers
+           false, and the sheet says the turn is still waiting. */
+        return gateway().call('approval.respond', {
+          approval_id: p.approval_id, choice, session_id: owner,
+          ...(feedback ? { feedback } : {}),
+          ...(pattern ? { pattern } : {}),
+        }).then((r) => !!(r as { ok?: boolean } | null)?.ok, () => false)
+      },
+      /* The rule a saved grant wrote is the reader's to take back; the call
+         that was allowed has run, and nothing else about it changes. */
+      onRevoke: (pattern: string) => gateway().call('approval.revoke', { pattern })
+        .then((r) => !!(r as { ok?: boolean } | null)?.ok, () => false),
+      /* A sentence typed after a refusal goes on as the reader's next message:
+         the refusal itself has already reached the model. */
+      onNote: (text: string) => composerSay(text),
     },
     owner,
   )
+}
+
+/* The requests still open on the engine, drawn again. A page that reloaded, or
+ came back on a fresh socket, has no sheet for a question its conversation is
+ still stopped on -- and with no deadline behind the question, nothing would
+ ever move again. Each is filed under its own conversation, so one the reader
+ is not looking at parks and lights the waiting line. */
+export async function replayPendingApprovals(): Promise<void> {
+  const r = await gateway().call('approval.pending', {}).catch(() => null)
+  const requests = (r as { requests?: unknown[] } | null)?.requests || []
+  for (const frame of requests) approvalRequest(frame)
 }
 
 export function approvalClosed(frame: unknown): void {

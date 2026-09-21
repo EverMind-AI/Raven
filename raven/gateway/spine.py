@@ -103,6 +103,7 @@ class GatewayTurnRunner(AgentTurnRunner):
             ApprovalViaAsk(asker, cid) if asker is not None else None,
             conversation_id=cid,
             turn_id=req.turn_id or "",
+            origin=req.origin.value,
         )
         start_ask_turn(
             asker,

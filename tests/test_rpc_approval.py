@@ -1,4 +1,4 @@
-"""The approval.respond RPC method: resolution, validation, and registration."""
+"""The approval.respond and approval.revoke RPC methods: resolution, validation, and registration."""
 
 from __future__ import annotations
 
@@ -6,7 +6,12 @@ import asyncio
 
 from raven.rpc.approval_broker import ApprovalBroker
 from raven.rpc.dispatcher import Dispatcher
-from raven.rpc.methods.approval import approval_respond, register_approval_methods
+from raven.rpc.methods.approval import (
+    approval_pending,
+    approval_respond,
+    approval_revoke,
+    register_approval_methods,
+)
 
 
 async def test_approval_respond_resolves_matching_request() -> None:
@@ -65,6 +70,33 @@ def test_register_approval_methods_adds_real_handler() -> None:
     register_approval_methods(dispatcher, approval_broker=ApprovalBroker(send))
 
     assert "approval.respond" in dispatcher.methods()
+    assert "approval.revoke" in dispatcher.methods()
+    assert "approval.pending" in dispatcher.methods()
+
+
+async def test_approval_revoke_removes_the_rule_and_says_whether_it_was_there(monkeypatch) -> None:
+    from raven.config import update
+
+    removed: list[str] = []
+    monkeypatch.setattr(
+        update, "remove_exec_pattern", lambda pattern: removed.append(pattern) or pattern == "git push *"
+    )
+
+    assert await approval_revoke({"pattern": " git push * "}) == {"ok": True}
+    assert await approval_revoke({"pattern": "rm *"}) == {"ok": False}
+    assert await approval_revoke({"pattern": ""}) == {"ok": False}
+    assert removed == ["git push *", "rm *"]
+
+
+async def test_approval_revoke_reports_a_failed_write_rather_than_raising(monkeypatch) -> None:
+    from raven.config import update
+
+    def boom(pattern: str) -> bool:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(update, "remove_exec_pattern", boom)
+
+    assert await approval_revoke({"pattern": "git push *"}) == {"ok": False}
 
 
 async def test_approval_respond_forwards_the_pattern() -> None:
@@ -87,3 +119,35 @@ async def test_approval_respond_forwards_the_pattern() -> None:
     assert broker.calls == [
         {"id": "a1", "choice": "allow_always", "conv": "s1", "feedback": "", "pattern": "git push *"}
     ]
+
+
+async def test_approval_pending_lists_what_is_still_open_as_it_was_sent() -> None:
+    frames: list[dict] = []
+
+    async def send(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = ApprovalBroker(send)
+    waiting = asyncio.create_task(
+        broker.await_approval(
+            conversation_id="session-a",
+            turn_id="turn-a",
+            tool_call_id="call-a",
+            command="rm file.txt",
+            description="Delete files",
+            kind="shell.exec",
+        )
+    )
+    for _ in range(20):
+        if frames:
+            break
+        await asyncio.sleep(0)
+
+    everything = await approval_pending({}, approval_broker=broker)
+    assert everything == {"requests": [frames[0]["params"]]}
+    assert await approval_pending({"session_id": "session-a"}, approval_broker=broker) == everything
+    assert await approval_pending({"session_id": "session-b"}, approval_broker=broker) == {"requests": []}
+
+    broker.resolve(frames[0]["params"]["approval_id"], "deny", conversation_id="session-a")
+    await waiting
+    assert await approval_pending({}, approval_broker=broker) == {"requests": []}

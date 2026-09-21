@@ -12,6 +12,10 @@ from raven.contracts.tool import FileChange, Tool, ToolResult
 from raven.utils.images import detect_image_mime
 
 _DIFF_MAX_LINES = 400
+# The approval preview reads the target before the call runs, on the gate's
+# path; a file this large is not read at all (the diff would be dropped by the
+# line cap anyway) and the prompt shows the path alone.
+_PREVIEW_MAX_BYTES = 256 * 1024
 
 
 def _write_text_bytes(content: str) -> bytes:
@@ -294,9 +298,31 @@ class ReadFileTool(_FsTool):
 class WriteFileTool(_FsTool):
     """Write content to a file."""
 
+    approval_kind = "file.write"
+
     @property
     def name(self) -> str:
         return "write_file"
+
+    def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any]:
+        """The write as a diff against the file as it stands, before it happens."""
+        path = str(params.get("path") or "")
+        content = str(params.get("content") or "")
+        try:
+            fp = self._resolve(path)
+        except PermissionError:
+            return {"path": path}
+        exists = fp.is_file()
+        before = ""
+        if exists:
+            try:
+                if fp.stat().st_size > _PREVIEW_MAX_BYTES:
+                    return {"path": str(fp), "created": False}
+                before = fp.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                return {"path": str(fp), "created": False}
+        after = before + content if params.get("mode") == "append" else content
+        return {"path": str(fp), "created": not exists, "diff": _unified(before, after, str(fp))}
 
     @property
     def description(self) -> str:
@@ -456,9 +482,24 @@ def _find_match(content: str, old_text: str) -> tuple[str | None, int]:
 class EditFileTool(_FsTool):
     """Edit a file by replacing text with fallback matching."""
 
+    approval_kind = "file.write"
+
     @property
     def name(self) -> str:
         return "edit_file"
+
+    def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any]:
+        """The replacement as a diff of the two snippets.
+
+        The snippets, not the file: the file is read only if the edit runs, and
+        what the reader is asked to allow is exactly this substitution."""
+        path = str(params.get("path") or "")
+        try:
+            shown = str(self._resolve(path))
+        except PermissionError:
+            shown = path
+        old, new = str(params.get("old_text") or ""), str(params.get("new_text") or "")
+        return {"path": shown, "created": False, "diff": _unified(old, new, shown)}
 
     @property
     def description(self) -> str:
