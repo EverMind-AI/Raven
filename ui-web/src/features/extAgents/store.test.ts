@@ -174,6 +174,20 @@ describe('the wizard verbs keep their toast', () => {
   })
 })
 
+describe('a stage the reader cannot act on', () => {
+  /* The button is disabled, but the store is reached from the row, the sheet
+     and the wizard step, and its op mapping sends anything that is not `add`
+     or `stale` as a `toggle`. A barred row arriving here would therefore turn a
+     refused add into a toggle of an entry that does not exist. */
+  it('sends nothing for a row whose handshake refused a credential', async () => {
+    const r = row({ needs_auth: true })
+    const { acts } = install([r])
+    await store.connect(r)
+    store.connectRow(r)
+    expect(acts).toEqual([])
+  })
+})
+
 describe('the model verbs', () => {
   it('sends a host pick with its provider, an agent pick alone, and a clear on its own', async () => {
     const r = row()

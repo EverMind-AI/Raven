@@ -51,6 +51,12 @@ export interface ExtAgentRow {
   probe_status: ExtAgentProbe | string
   probe_detail: string
   has_api_key: boolean
+  /* The agent answered the handshake and refused to open a session without a
+     credential it names. Only an acp row carries it: an openai row's key is
+     settled by the free `/models` probe, and a cli row has no handshake to be
+     refused in. Absent from a server that predates it, which reads as "not
+     refused" -- the same default as a row nobody has contacted. */
+  needs_auth?: boolean
   description: string
   test_running: boolean
   last_test_ok: boolean | null

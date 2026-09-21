@@ -214,6 +214,34 @@ describe('the three sections', () => {
     expect(namesIn('gui.agent.g_missing')).toEqual(['codex'])
   })
 
+  /* #554's contract. The probe has already been refused by this agent, so the
+     press would spend a launch to arrive at the same sentence the label
+     carries. The row and its sheet read one decision, so they cannot disagree. */
+  it('offers no press on a row whose handshake refused a credential', async () => {
+    install([
+      row({
+        name: 'hermes',
+        preset: 'hermes',
+        kind: 'acp',
+        configured: false,
+        enabled: false,
+        probe_status: 'attention',
+        needs_auth: true,
+      }),
+    ])
+    await mount()
+    expect(controlOf('hermes')).toBe('gui.agent.unauthorized')
+    expect(buttonOf('hermes')!.disabled).toBe(true)
+    await openSheet('hermes')
+    expect(sheetActs()).toEqual(['gui.agent.unauthorized'])
+  })
+
+  it('keeps the disconnect verb on a connected row whose credential has since lapsed', async () => {
+    install([row({ name: 'hermes', preset: 'hermes', kind: 'acp', enabled: true, needs_auth: true })])
+    await mount()
+    expect(controlOf('hermes')).toBe('gui.agent.disconnect')
+  })
+
   it('always draws the connected section, and the other two only with rows in them', async () => {
     install([row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' })])
     await mount()

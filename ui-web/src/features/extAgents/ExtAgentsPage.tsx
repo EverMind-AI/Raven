@@ -11,11 +11,11 @@ import * as lang from '../../state/lang'
 import { loadDefaultProviders, providers as hostProviders } from '../model/source'
 import { offered } from '../model/types'
 import { byOf, installOf, isOwnRow, shortOf } from './catalogue'
-import { sectionOf, stageOf } from './source'
+import { sectionOf, isBarred, stageOf } from './source'
 import * as store from './store'
 
 import type { PickerProvider } from '../../components/ModelPicker'
-import type { Section } from './source'
+import type { Section, Stage } from './source'
 import type { ExtAgentsState } from './store'
 import type { ExtAgentRow } from './types'
 import type { JSX } from 'react'
@@ -120,6 +120,18 @@ function connect(row: ExtAgentRow): void {
 
 /* The one control a row carries. Exactly one, or none for the built-in loop,
    which is always on and has nothing to do. */
+/* The control for a stage the reader cannot act on: the probe already knows the
+   press would fail -- no command on PATH, or a handshake the agent refused --
+   so the label says which, and there is nothing to press. The way back is the
+   sheet's own Test, which re-measures and lets the row return to Connect. */
+function BarredControl({ stage }: { stage: Stage }): JSX.Element {
+  return (
+    <button className="mini" disabled>
+      {t(stage === 'absent' ? 'gui.agent.not_installed' : 'gui.agent.unauthorized')}
+    </button>
+  )
+}
+
 function RowControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
   if (shown === 'pending') return <span className="extAgents-state">{t('gui.agent.setup_connecting')}</span>
   if (shown === 'failed') {
@@ -144,6 +156,8 @@ function RowControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Ele
       </button>
     )
   }
+  const stage = stageOf(row)
+  if (isBarred(stage)) return <BarredControl stage={stage} />
   return (
     <button className="mini go" onClick={() => connect(row)}>
       {t('gui.agent.connect')}
@@ -528,6 +542,8 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
         ) : null}
       </>
     )
+  } else if (isBarred(stage)) {
+    actions = <BarredControl stage={stage} />
   } else {
     actions = (
       <button className="mini go" disabled={primaryDisabled} onClick={primary}>

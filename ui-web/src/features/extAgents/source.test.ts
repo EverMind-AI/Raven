@@ -303,6 +303,34 @@ describe('the wizard step buckets', () => {
     expect(isAvailable(row)).toBe(available)
   })
 
+  /* #554's contract, which the rebuilt domain has to keep: the probe already
+     knows why a Connect would fail, so the row says so instead of offering a
+     press that spends a launch to arrive at the same sentence. */
+  it('maps the handshake credential refusal onto the row', () => {
+    expect(extAgentRowOf(wire({ needs_auth: true } as Partial<ExtAgentRowWire>)).needs_auth).toBe(true)
+    expect(extAgentRowOf(wire({})).needs_auth).toBe(false)
+  })
+
+  it('offers no Connect for an acp row whose handshake refused a credential', () => {
+    expect(stageOf(fullRow({ kind: 'acp', configured: false, enabled: false, needs_auth: true }))).toBe('unauthorized')
+  })
+
+  it('offers no Connect for a cli or acp row whose command is not on PATH', () => {
+    expect(stageOf(fullRow({ kind: 'acp', configured: false, enabled: false, probe_status: 'missing' }))).toBe('absent')
+    expect(stageOf(fullRow({ kind: 'cli', configured: false, enabled: false, probe_status: 'missing' }))).toBe('absent')
+  })
+
+  it('leaves a connected row its disconnect verb whatever its credential has since done', () => {
+    expect(stageOf(fullRow({ kind: 'acp', configured: true, enabled: true, needs_auth: true }))).toBe('live')
+  })
+
+  it('settles an openai row by its key alone, never by the handshake gate', () => {
+    expect(stageOf(fullRow({ kind: 'openai', configured: false, enabled: false, has_api_key: false }))).toBe('key')
+    expect(
+      stageOf(fullRow({ kind: 'openai', configured: false, enabled: false, has_api_key: true, probe_status: 'missing' })),
+    ).toBe('add')
+  })
+
   it('still exports the settings page classifiers', () => {
     expect(typeof stageOf).toBe('function')
     expect(typeof sectionOf).toBe('function')

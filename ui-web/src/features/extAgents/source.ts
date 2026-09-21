@@ -45,6 +45,11 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
        a build was in flight. */
     building: hasBuildFlag(r),
     enabled: !!r.enabled,
+    /* The handshake's own verdict, which `stageOf` turns into a stage the
+       reader cannot press. Carried explicitly because this mapper is a
+       whitelist: unmapped, the page would go on offering Connect to an agent
+       the probe has already been refused by. */
+    needs_auth: !!r.needs_auth,
     probe_status: r.probe_status || 'unknown',
     upgrade_to: r.upgrade_to || null,
     probe_detail: r.probe_detail || '',
@@ -71,7 +76,23 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
  * and they are not the same job: a folder whose venv was never built needs the
  * installer (minutes, hundreds of MB), while one that was switched off needs
  * its manifest flag back. The probe verdict is what separates them. */
-export type Stage = 'builtin' | 'building' | 'install' | 'add' | 'key' | 'stale' | 'off' | 'live'
+/* The last two are the ones the reader cannot act on from here. Every other
+   stage names a write this page can make; these name why it would fail, and the
+   probe knows both before anything is pressed -- `absent` from resolving the
+   command on PATH, `unauthorized` from the handshake the agent refused. Stages
+   rather than a flag on the button, for the reason the others are: one row, one
+   decision, so the row and its sheet cannot disagree. */
+export type Stage =
+  | 'builtin'
+  | 'building'
+  | 'install'
+  | 'add'
+  | 'key'
+  | 'stale'
+  | 'off'
+  | 'live'
+  | 'absent'
+  | 'unauthorized'
 
 export function stageOf(row: ExtAgentRow): Stage {
   if (row.builtin) return 'builtin'
@@ -84,6 +105,16 @@ export function stageOf(row: ExtAgentRow): Stage {
      writing an entry -- the key is the missing part, whether the entry exists
      yet or not. */
   if (row.kind === 'openai' && !row.has_api_key) return 'key'
+  /* Before the write stages, and only for a row that is not already on the
+     roster: a connected agent keeps Disconnect whatever its credential has
+     since done, or an expired token would leave it with no verb at all. The
+     openai kinds are excluded above and deliberately -- `missing` there means
+     an endpoint did not answer, which is a network fact with nothing to install
+     behind it, and its credential is settled by the free probe instead. */
+  if (!row.enabled && (row.kind === 'cli' || row.kind === 'acp')) {
+    if (row.probe_status === 'missing') return 'absent'
+    if (row.needs_auth) return 'unauthorized'
+  }
   if (!row.configured) return 'add'
   if (row.enabled) return 'live'
   /* Out of service and its preset has moved to another transport. Connecting it
@@ -110,6 +141,13 @@ export function stageOf(row: ExtAgentRow): Stage {
    whose engine wheel is not installed -- is connected from here, and is one
    section. */
 export type Section = 'on' | 'avail' | 'missing'
+/* The stages that name why a write would fail rather than a write to make.
+   Read by the page, which draws a disabled label instead of a button, and by
+   the store, which refuses the call outright: `connectRow` maps anything that
+   is not `add` or `stale` onto `toggle`, so a barred row that reached it would
+   turn a refused add into a toggle of an entry that does not exist. */
+export const isBarred = (stage: Stage): boolean => stage === 'absent' || stage === 'unauthorized'
+
 export function sectionOf(row: ExtAgentRow): Section {
   const stage = stageOf(row)
   if (stage === 'live' || stage === 'builtin') return 'on'

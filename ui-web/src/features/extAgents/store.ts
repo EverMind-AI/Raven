@@ -4,7 +4,7 @@ import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
-import { isFound, sectionOf, stageOf } from './source'
+import { isFound, sectionOf, isBarred, stageOf } from './source'
 
 import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource } from './types'
 
@@ -188,6 +188,7 @@ export function retry(row: ExtAgentRow): void {
    credential is typed in the sheet and saved from there. */
 export function connectRow(row: ExtAgentRow): void {
   const stage = stageOf(row)
+  if (isBarred(stage)) return
   if (stage === 'add') {
     const description = get().drafts[row.name]
     void act(row, 'connect', description ? { description } : {})
@@ -250,6 +251,7 @@ export async function recheck(row: ExtAgentRow): Promise<void> {
    refuse. */
 export async function connect(row: ExtAgentRow): Promise<void> {
   const stage = stageOf(row)
+  if (isBarred(stage)) return
   const op: ExtAgentOp = stage === 'add' ? 'connect' : stage === 'stale' ? 'migrate' : 'toggle'
   set({ joining: [...get().joining, row.name] })
   try {
