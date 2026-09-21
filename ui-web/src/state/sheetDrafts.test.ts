@@ -28,22 +28,21 @@ describe('the sheet drafts', () => {
     expect(read(slot('a', 'q1'))).toEqual({})
   })
 
-  it('keeps the other fields when one is written', () => {
-    const key = slot('a', 'ap-1')
-    write(key, { note: 'hold on' })
-    write(key, { pattern: 'git push *' })
-    expect(read(key)).toEqual({ note: 'hold on', pattern: 'git push *' })
-    write(key, { note: 'changed' })
-    expect(read(key)).toEqual({ note: 'changed', pattern: 'git push *' })
+  it('overwrites a field with what was written last', () => {
+    const key = slot('a', 'q1')
+    write(key, { text: 'hold on' })
+    write(key, { text: 'changed' })
+    expect(read(key)).toEqual({ text: 'changed' })
   })
 
-  /* An emptied field is a decision, not an absence: the approval sheet saves no
-     rule for an emptied prefix, and re-offering the server's suggestion after a
-     conversation switch would undo it. */
+  /* An emptied field is a decision, not an absence: an answer the reader
+     deleted must come back deleted after a conversation switch, not as the
+     text they had removed. */
   it('records an emptied field rather than dropping it', () => {
-    const key = slot('a', 'ap-1')
-    write(key, { pattern: '' })
-    expect(read(key).pattern).toBe('')
+    const key = slot('a', 'q1')
+    write(key, { text: 'draft' })
+    write(key, { text: '' })
+    expect(read(key).text).toBe('')
   })
 
   it('forgets one sheet without touching the others', () => {

@@ -39,8 +39,7 @@ const approvalReq: ApprovalReq = {
   approvalId: 'demo-approval',
   command: 'rm -rf dist\nnpm ci\nnpm run build',
   conversationId: 'demo-session',
-  description: 'run a shell command',
-  expiresAt: Date.now() + 30_000
+  description: 'run a shell command'
 }
 
 const clarifyChoicesReq: ClarifyReq = {

@@ -590,8 +590,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* A disc inside a halo, which is neither of the two shapes above: `ask` is the
    only one of the four that is a request rather than a report, and it is the one
    mark that has to be found without being looked for -- the request behind it
-   expires in half a minute and its own sheet is drawn only on its own
-   conversation. A fourth hue alone would not do that; the two shapes together
+   holds its turn until it is answered, and its own sheet is drawn only on its
+   own conversation. A fourth hue alone would not do that; the two shapes together
    read as louder than either. Legible with no animation at all, which is what
    the reduced-motion block below leaves it with. */
 .sess .w[data-sig="ask"] i {
@@ -4647,6 +4647,19 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   overflow-wrap: anywhere; max-height: 168px; overflow-y: auto;
 }
 .csheet.perm .opt.go .n { background: var(--amber-dp); color: var(--amber); }
+/* The permission sheet's answers in one row: deny on the left, allow once as
+   the primary on the right. The row's own name is the composer's; what it lays
+   out is the rack's `.opt`, so the rule lives with the rack's. */
+.csheet.perm .cp-acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 4px; }
+.csheet.perm .cp-acts .opt { width: auto; flex: none; }
+.csheet.perm .cp-acts .opt:first-child { margin-right: auto; }
+.csheet.perm .cp-acts .opt:last-child { background: var(--text); color: var(--surface); }
+.csheet.perm .cp-acts .opt:last-child:hover, .csheet.perm .cp-acts .opt:last-child:focus-visible {
+  background: var(--text); opacity: .88;
+}
+.csheet.perm .cp-acts .opt:last-child .n {
+  background: color-mix(in oklab, var(--surface) 25%, transparent); color: var(--surface);
+}
 
 .veil { position: fixed; inset: 0; background: var(--scrim); display: none; place-items: center; z-index: var(--z-veil); }
 .veil[data-open="true"] { display: grid; }

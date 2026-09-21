@@ -258,15 +258,12 @@ class TestTheFourClientFailures:
         assert await _ask(broker) is False
         assert broker.outcomes == {"timeout": 1}, "a silent client is not a decision, and the tally says so"
 
-    async def test_the_default_deadline_is_generous_rather_than_the_rpc_ceiling(self):
+    async def test_the_default_deadline_is_generous(self):
         from raven.acp.outbound import DEFAULT_REQUEST_TIMEOUT_S
-        from raven.rpc.approval_broker import ApprovalBroker
 
         assert DEFAULT_REQUEST_TIMEOUT_S > 60.0, (
-            "the 35s RPC ceiling exists because a terminal owns a visible countdown; "
-            "reusing it here silently denies anyone who read the diff"
+            "a person is reading a diff on the other side; a short deadline silently denies them"
         )
-        assert ApprovalBroker(send_frame=None)._hard_timeout_s < DEFAULT_REQUEST_TIMEOUT_S
 
     async def test_an_error_reply_is_a_refusal(self):
         _, _, broker = _rig({"error": {"code": -32601, "message": "session/request_permission is not implemented"}})

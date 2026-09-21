@@ -31,6 +31,7 @@ const EXEMPT = {
      behaviour anyway (src/state/session/pipeline.ts). */
   'confirm.respond': 'no scripted turn asks for a confirmation',
   'approval.respond': 'no scripted turn asks for an approval',
+  'approval.revoke': 'no scripted turn saves a rule there would be to take back',
   'clarify.respond': 'no scripted turn asks a clarifying question',
   /* A spawned run's own record. The scripted conversations carry their tool
      calls as frames rather than as spawned runs, so no call id on this page has

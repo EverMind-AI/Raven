@@ -26,18 +26,17 @@
 import { createElement } from 'react'
 
 import { t } from '../../i18n/t'
-import * as drafts from '../../state/sheetDrafts'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
 import { AskApproveSheet } from './AskApproveSheet'
-import { GateSheet } from './GateSheet'
+import { GateSheet, LandedSheet } from './GateSheet'
 import { composing } from './store'
 
 import type { SheetOptionRow } from '../../chrome/SheetRack'
-import type { ApprovalControls } from './GateSheet'
+import type { Evidence, GateWords, LandedProps, LandedWords } from './GateSheet'
 
 /* The permission gate's approval, keyed so approval.closed can withdraw the
-   exact request it retires (a timeout, a teardown, an answer from another
-   surface) without touching a newer one. */
+   exact request it retires (a teardown, an answer from another surface)
+   without touching a newer one. */
 const openApprovals = new Map<string, () => void>()
 
 export interface Approval {
@@ -105,8 +104,9 @@ export function open(
        destroying it so the reader comes back to the same question. Only the
        mounted one may be answered from the keyboard, or "1" typed here would
        allow something another conversation asked. */
-    if (!sheet.isConnected || composing(e)) return
+    if (!sheet.isConnected || composing(e) || !topmost(sheet)) return
     if (e.key === 'Escape') { e.preventDefault(); close(onDeny); return }
+    if (typing(e)) return
     const n = Number(e.key)
     if (n === 1 || n === 2) { e.preventDefault(); opts[n - 1]!.run() }
   }
@@ -128,6 +128,12 @@ export function open(
 }
 
 
+export interface ApprovalOrigin {
+  kind: string
+  name: string
+}
+
+/** raven/rpc/approval_broker.py's request, as the sheet reads it. */
 export interface ApprovalReq {
   approvalId: string
   command: string
@@ -135,104 +141,231 @@ export interface ApprovalReq {
   /* The prefix rule the runtime found safe to offer for persisting; absent
      when there is none, and then the sheet offers no such choice. */
   suggestedPattern?: string
+  /* The prompt's view, as the engine sent it: the layout (`shell.exec`,
+     `file.write`, `mcp.call`, `unknown`), the shell command family that words
+     it, who is asking, and the tool's own account of the call. */
+  kind?: string
+  family?: string
+  origin?: ApprovalOrigin
+  evidence?: Evidence
 }
 
-/* The permission gate's ask: allow once, allow for this session, allow and
-   save a prefix rule (only when the runtime suggested one; the prefix is
-   editable before it is sent), deny (the agent reads the refusal and goes
-   on), or deny and stop the turn. A note typed before a refusal rides to the
-   model as the reason. Same sheet clothes as open() above -- this variant
-   differs in what an answer is, so it reports a choice string instead of
-   calling one of two thunks. */
-export function openApproval(
-  req: ApprovalReq,
-  onChoice: (choice: string, feedback: string, pattern?: string) => void,
-  owner?: string,
-): Approval {
+export interface ApprovalHandlers {
+  /** The answer: allow, allow_always (with the rule to save), or deny. Resolving
+      false means the engine did not take it -- the request had gone, or the
+      connection dropped -- and the landed line says so. */
+  onChoice: (choice: string, feedback: string, pattern?: string) => void | Promise<boolean>
+  /** Takes back the rule `allow_always` saved; resolves to whether it was there. */
+  onRevoke?: (pattern: string) => Promise<boolean>
+  /** A sentence typed after a refusal, sent on as the reader's next message. */
+  onNote?: (text: string) => void
+}
+
+/* How long a landed sheet stays: long enough to read, and for a saved rule or
+   an invited note long enough to act on. */
+export const LANDED_MS = 4000
+export const LINGER_MS = 12000
+
+/* The timers taking landed sheets down, so a test can clear what it started. */
+const landings = new Set<ReturnType<typeof setTimeout>>()
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+
+/* A key pressed into a field is text, not an answer: the composer sits under
+   every sheet, and a message that starts with a digit must not allow a command
+   -- or, worse, save a rule. Escape is not guarded: leaving a field and refusing
+   the question is what it has always done. */
+const typing = (e: KeyboardEvent): boolean => {
+  const el = e.target as HTMLElement | null
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+}
+
+/* The newest sheet owns the keyboard: a question docked above this one takes
+   the digits until it is answered, or "1" would answer both. */
+const topmost = (sheet: HTMLElement): boolean =>
+  !sheet.parentElement || sheet.parentElement.firstElementChild === sheet
+
+/* The words a request is asked in. The family names the sentence when the
+   engine sent one; a bare shell command, a file write, an MCP call and a tool
+   the page has no layout for each have a sentence of their own. */
+function wordsFor(req: ApprovalReq): GateWords {
+  const kind = req.kind || 'unknown'
+  const ev = req.evidence || {}
+  const path = str(ev.path)
+  const vars = {
+    who: req.origin?.kind === 'subagent' && req.origin.name ? req.origin.name : 'Raven',
+    cwd: str(ev.cwd) || str(ev.machine),
+    path,
+    name: path.slice(path.lastIndexOf('/') + 1) || path,
+    server: str(ev.server),
+    tool: str(ev.tool),
+  }
+  const slot = kind === 'shell.exec' ? (req.family || 'shell')
+    : kind === 'file.write' ? 'file_write'
+      : kind === 'mcp.call' ? 'mcp_call' : 'unknown'
+  return {
+    title: t('gui.confirm.title.' + slot, vars, t('gui.confirm.title.unknown', vars)),
+    why: t('gui.confirm.why.' + slot, vars, t('gui.confirm.why.unknown', vars)),
+    deny: t('gui.confirm.deny'),
+    created: t('gui.confirm.ev.created'),
+    nodiff: t('gui.confirm.ev.nodiff'),
+  }
+}
+
+/* The permission gate's ask: deny (the agent reads the refusal and goes on),
+   allow and save the rule the runtime suggested (only when it did), or allow
+   once. Deny is the default and takes the focus, so an accidental Enter never
+   grants. The answer is sent the moment it is chosen; what follows is the
+   landed sheet, where a saved rule can be taken back and a refusal can carry a
+   sentence -- sent on as the reader's next message, since the refusal itself
+   has already reached the model. */
+export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner?: string): Approval {
+  /* One sheet per request: a replay after a reload may name a request that is
+     already on screen, and a second sheet for it would be answered twice. */
+  const already = openApprovals.get(req.approvalId)
+  if (already) return { close: already }
   const key = owner || session()
-  /* Read before the sweep, written on every keystroke: the note and the prefix
-     the reader is editing have to outlive the elements they are typed into. */
-  const draft = drafts.slot(key, req.approvalId)
+  /* This sweep takes a pending clarify question down, while clarify's spares a
+     pending approval. The asymmetry is the deadline: a question ends on its own
+     after ten minutes (raven/rpc/question_broker.py), an approval waits for the
+     person. Two of this conversation's own approvals cannot meet here -- the
+     broker sends the second only once the first is answered. */
   dropClass('csheet', key)
 
+  const words = wordsFor(req)
   const sheet = document.createElement('div')
   sheet.className = 'csheet perm'
+  sheet.dataset.asks = '1'
   sheet.setAttribute('role', 'dialog')
   sheet.setAttribute('aria-modal', 'true')
-  sheet.setAttribute('aria-label', t('gui.confirm.title'))
-
-  /* The two fields, once the interior has mounted: what the model is told is
-     what stands in them at the moment an answer is sent, so they are read then
-     rather than mirrored here. */
-  const ctl: ApprovalControls = { note: null, pattern: null }
+  sheet.setAttribute('aria-label', words.title)
 
   let answered = false
-  const close = (choice?: string, pattern?: string): void => {
-    if (answered) return
+  const leave = (): void => {
     answered = true
     openApprovals.delete(req.approvalId)
     document.removeEventListener('keydown', onKey, true)
     sheetRemove(sheet)
-    /* The drafts go with the sheet, and only here: this runs on the exits that
-       settle the request, never on the conversation switch they outlive. */
-    drafts.forget(draft)
-    if (choice) onChoice(choice, ctl.note ? ctl.note.value.trim() : '', pattern)
   }
-  const withdraw = (): void => close()
+  const withdraw = (): void => {
+    if (!answered) leave()
+  }
+  const answer = (choice: string, pattern?: string): void => {
+    if (answered) return
+    leave()
+    land(key, choice, pattern, handlers, handlers.onChoice(choice, '', pattern))
+  }
   openApprovals.set(req.approvalId, withdraw)
 
-  /* The persisted grant sits after the session one and before the refusals,
-     so the two refusals keep the last two numbers whatever was suggested. Its
-     prefix is an input the reader may edit; an emptied input saves nothing. */
-  const saveRule = (): void => {
-    const rule = ctl.pattern ? ctl.pattern.value.trim() : ''
-    if (rule) close('allow_always', rule)
-  }
   const opts: SheetOptionRow[] = [
-    { label: t('gui.confirm.allow'), run: () => close('allow'), go: true },
-    { label: t('gui.confirm.allow_session'), run: () => close('allow_session') },
+    { label: t('gui.confirm.deny'), run: () => answer('deny'), go: true },
     ...(req.suggestedPattern
-      ? [{ label: t('gui.confirm.allow_always', { pattern: '' }), run: saveRule, rule: true }]
+      ? [{
+        label: t('gui.confirm.always', { pattern: req.suggestedPattern }),
+        run: () => answer('allow_always', req.suggestedPattern),
+      }]
       : []),
-    { label: t('gui.confirm.deny'), run: () => close('deny') },
-    { label: t('gui.confirm.deny_stop'), run: () => close('deny_stop') },
+    { label: t('gui.confirm.allow'), run: () => answer('allow') },
   ]
 
   function onKey(e: KeyboardEvent): void {
-    if (!sheet.isConnected || composing(e)) return
-    if (e.key === 'Escape') { e.preventDefault(); close('deny'); return }
-    /* Digits keep working while the note field is focused only when it is
-       empty: a typed note starts with whatever the reader types, digits
-       included. The prefix field is text from the first key. */
-    if (ctl.pattern && document.activeElement === ctl.pattern) return
-    if (ctl.note && document.activeElement === ctl.note && ctl.note.value) return
+    if (!sheet.isConnected || composing(e) || !topmost(sheet)) return
+    if (e.key === 'Escape') { e.preventDefault(); answer('deny'); return }
+    if (typing(e)) return
     const n = Number(e.key)
     if (n >= 1 && n <= opts.length) { e.preventDefault(); opts[n - 1]!.run() }
   }
   document.addEventListener('keydown', onKey, true)
 
   sheetAdd(sheet, key, withdraw, createElement(GateSheet, {
-    ctl,
-    draft,
+    kind: req.kind || 'unknown',
+    evidence: req.evidence || {},
     command: req.command || '',
-    words: {
-      title: `${t('gui.confirm.title')} · ${req.description}`,
-      deny: t('gui.confirm.deny'),
-      notePh: t('gui.confirm.note_ph'),
-      patternFor: t('gui.confirm.pattern_for'),
-    },
+    words,
     opts,
-    suggested: req.suggestedPattern,
-    onDeny: () => close('deny'),
-    onSaveRule: saveRule,
+    onDeny: () => answer('deny'),
   }))
   const first = sheet.querySelector<HTMLElement>('.opt')
   if (first && sheet.isConnected) first.focus()
   return { close: withdraw }
 }
 
-/* approval.closed: the server retired this request (timeout, teardown, or an
-   answer from another surface). Nothing is sent back -- the question is over. */
+/* The sheet an answer leaves behind. Docked as a sheet of its own rather than
+   the asking one re-dressed, so the rack's count of who is asking drops the
+   moment the answer is given, and a new request's sweep takes it down. */
+function land(
+  key: string, choice: string, pattern: string | undefined, handlers: ApprovalHandlers,
+  sent: void | Promise<boolean>,
+): void {
+  const el = document.createElement('div')
+  el.className = 'csheet perm'
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const drop = (): void => {
+    if (timer) {
+      clearTimeout(timer)
+      landings.delete(timer)
+    }
+    timer = null
+  }
+  const gone = (): void => {
+    drop()
+    sheetRemove(el)
+  }
+  const stay = (ms: number): void => {
+    drop()
+    timer = setTimeout(gone, ms)
+    landings.add(timer)
+  }
+  const show = (words: LandedWords, more: Omit<LandedProps, 'words'> = {}): void =>
+    sheetAdd(el, key, drop, createElement(LandedSheet, { words, ...more }))
+  /* Landed on the reader's click, corrected if the engine never took the
+     answer: the request had gone, or the socket dropped mid-call. The turn is
+     then still waiting, which the line has to say rather than "allowed". */
+  const undelivered = (): void => {
+    show({ text: t('gui.confirm.land.unsent') })
+    stay(LINGER_MS)
+  }
+  void Promise.resolve(sent).then((ok) => { if (ok === false) undelivered() }, undelivered)
+
+  if (choice === 'allow_always' && pattern) {
+    const onUndo = handlers.onRevoke
+      ? (): void => {
+        void handlers.onRevoke!(pattern).then((ok) => {
+          show({ text: t(ok ? 'gui.confirm.land.revoked' : 'gui.confirm.land.revoke_failed') })
+          stay(LANDED_MS)
+        })
+      }
+      : undefined
+    show({ text: t('gui.confirm.land.always', { pattern }), undo: t('gui.confirm.land.revoke') }, { onUndo })
+    stay(LINGER_MS)
+    return
+  }
+  if (choice === 'deny') {
+    const onNote = handlers.onNote
+      ? (text: string): void => {
+        handlers.onNote!(text)
+        show({ text: t('gui.confirm.land.deny_note', { text }) })
+        stay(LANDED_MS)
+      }
+      : undefined
+    show({ text: t('gui.confirm.land.deny'), notePh: t('gui.confirm.note_ph') }, { onNote })
+    stay(onNote ? LINGER_MS : LANDED_MS)
+    return
+  }
+  show({ text: t('gui.confirm.land.once') })
+  stay(LANDED_MS)
+}
+
+/* approval.closed: the server retired this request (a teardown, or an answer
+   from another surface). Nothing is sent back -- the question is over. A
+   request already answered here has left this map, so its landed sheet stays. */
 export function closeApproval(approvalId: string): void {
   openApprovals.get(approvalId)?.()
+}
+
+/* Test seam only: the landing timers outlive a test file's DOM. */
+export function _resetForTests(): void {
+  landings.forEach((timer) => clearTimeout(timer))
+  landings.clear()
+  openApprovals.clear()
 }

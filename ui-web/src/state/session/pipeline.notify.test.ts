@@ -21,7 +21,13 @@ import type { Sources } from '../sources'
 type Pipeline = typeof import('./pipeline')
 
 interface Row { id: string; status?: string | null }
-interface Sheet { kind: string; owner: string | null; answer: (...args: unknown[]) => void }
+interface Sheet {
+  kind: string
+  owner: string | null
+  answer: (...args: unknown[]) => void
+  req?: unknown
+  handlers?: { onRevoke?: (pattern: string) => Promise<boolean>; onNote?: (text: string) => void }
+}
 
 async function harness({ rows = [] as Row[], current = 'tui:open' as string | null } = {}) {
   const seen = {
@@ -33,6 +39,8 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
     events: [] as unknown[],
     sheets: [] as Sheet[],
     sent: [] as Array<[string, unknown]>,
+    said: [] as string[],
+    pendingOnEngine: [] as unknown[],
   }
   /* The modules under test are imported deepest first, which is the order that
      keeps one module graph: the fakes are installed around the modules the
@@ -45,6 +53,7 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
       'src/features/composer/mount': {
         drawMeter: () => {},
         goPaint: () => {},
+        say: (text: string) => seen.said.push(text),
       },
       'src/features/rail/store': {
         draw: () => {},
@@ -62,8 +71,11 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
       },
       'src/features/composer/approve': {
         closeApproval: (id: string) => seen.closed.push(id),
-        openApproval: (_opts: unknown, answer: (...a: unknown[]) => void, owner: string | null) =>
-          seen.sheets.push({ kind: 'approval', owner, answer }),
+        openApproval: (
+          req: unknown,
+          handlers: { onChoice: (...a: unknown[]) => void } & Sheet['handlers'],
+          owner: string | null,
+        ) => seen.sheets.push({ kind: 'approval', owner, answer: handlers.onChoice, req, handlers }),
         open: (_prompt: string, yes: () => void, no: () => void, owner: string | null) =>
           seen.sheets.push({ kind: 'confirm', owner, answer: (ok?: unknown) => (ok ? yes() : no()) }),
       },
@@ -87,6 +99,11 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
   const transport = await fakeGateway((method: string, params: unknown) => {
     if (method === 'session.list') { seen.refreshes += 1; return Promise.resolve({ sessions: [] }) }
     seen.sent.push([method, params])
+    /* The answers the cases below read: the undo asks whether the rule was
+       there, an answer whether the engine took it, a fresh page what is open. */
+    if (method === 'approval.revoke') return Promise.resolve({ ok: (params as { pattern: string }).pattern === 'git push *' })
+    if (method === 'approval.respond') return Promise.resolve({ ok: (params as { approval_id: string }).approval_id === 'a1' })
+    if (method === 'approval.pending') return Promise.resolve({ requests: seen.pendingOnEngine })
     return Promise.resolve({})
   })
   const { setSources } = await import('../sources')
@@ -279,6 +296,54 @@ describe('the conversation a request is filed under', () => {
     }]])
   })
 
+  /* N9: what the sheet is drawn from rides the frame, and a frame from an
+     engine that predates the fields still opens a sheet the page can lay out. */
+  it('hands the sheet the frame\'s view of the call, with a layout for a bare frame', async () => {
+    const h = await harness({ current: 'tui:open' })
+
+    h.pipeline.approvalRequest({
+      approval_id: 'a1', command: 'rm coverage.xml', description: 'Delete', conversation_id: 'tui:asker',
+      suggested_pattern: '', kind: 'shell.exec', family: 'delete_command',
+      origin: { kind: 'subagent', name: 'raven-code' }, evidence: { command: 'rm coverage.xml', cwd: '/w' },
+    })
+    expect(h.sheet('approval').req).toEqual({
+      approvalId: 'a1', command: 'rm coverage.xml', description: 'Delete', suggestedPattern: '',
+      kind: 'shell.exec', family: 'delete_command',
+      origin: { kind: 'subagent', name: 'raven-code' }, evidence: { command: 'rm coverage.xml', cwd: '/w' },
+    })
+
+    h.seen.sheets.length = 0
+    h.pipeline.approvalRequest({ approval_id: 'a2', command: 'rm -rf', conversation_id: 'tui:asker' })
+    expect(h.sheet('approval').req).toEqual({
+      approvalId: 'a2', command: 'rm -rf', description: '', suggestedPattern: '',
+      kind: 'unknown', family: '', origin: { kind: '', name: '' }, evidence: {},
+    })
+  })
+
+  it('takes a saved rule back over the wire and says whether it was there', async () => {
+    const h = await harness({ current: 'tui:open' })
+    h.pipeline.approvalRequest({ approval_id: 'a1', command: 'git push', conversation_id: 'tui:asker' })
+    const { onRevoke } = h.sheet('approval').handlers!
+
+    await expect(onRevoke!('git push *')).resolves.toBe(true)
+    await expect(onRevoke!('rm *')).resolves.toBe(false)
+    expect(h.seen.sent).toEqual([
+      ['approval.revoke', { pattern: 'git push *' }],
+      ['approval.revoke', { pattern: 'rm *' }],
+    ])
+  })
+
+  it('sends the sentence typed after a refusal on as the reader\'s next message', async () => {
+    const h = await harness({ current: 'tui:open' })
+    h.pipeline.approvalRequest({ approval_id: 'a1', command: 'rm -rf', conversation_id: 'tui:asker' })
+
+    h.sheet('approval').handlers!.onNote!('use git clean instead')
+
+    expect(h.seen.said).toEqual(['use git clean instead'])
+    /* Not an answer: the refusal already went, and this is a message. */
+    expect(h.seen.sent).toEqual([])
+  })
+
   it('waits and resumes on the conversation a clarify names', async () => {
     const h = await harness({ current: 'tui:open' })
 
@@ -319,5 +384,42 @@ describe('the step a clarify answer marks', () => {
     await h.tick()
 
     expect(openStep.hasQA).toBe(true)
+  })
+})
+
+/* N10: an answer the engine did not take, and the questions a fresh page has
+   to draw again. */
+describe('what the engine says back', () => {
+  it('reports whether the answer was taken, which the landed line reads', async () => {
+    const h = await harness({ current: 'tui:open' })
+    h.pipeline.approvalRequest({ approval_id: 'a1', command: 'rm -rf', conversation_id: 'tui:asker' })
+    await expect(h.sheet('approval').answer('allow', '', undefined)).resolves.toBe(true)
+
+    h.seen.sheets.length = 0
+    h.pipeline.approvalRequest({ approval_id: 'gone', command: 'rm -rf', conversation_id: 'tui:asker' })
+    await expect(h.sheet('approval').answer('allow', '', undefined)).resolves.toBe(false)
+  })
+
+  it('draws the requests still open on the engine, each under its own conversation', async () => {
+    const h = await harness({ current: 'tui:open' })
+    h.seen.pendingOnEngine = [
+      { approval_id: 'p1', command: 'rm a', conversation_id: 'tui:open', kind: 'shell.exec' },
+      { approval_id: 'p2', command: 'rm b', conversation_id: 'tui:away', kind: 'shell.exec' },
+    ]
+
+    await h.pipeline.replayPendingApprovals()
+
+    expect(h.seen.sheets.map((s) => [s.kind, s.owner])).toEqual([['approval', 'tui:open'], ['approval', 'tui:away']])
+    expect(h.seen.turns).toEqual([['tui:open', 'wait'], ['tui:away', 'wait']])
+    /* It asked, and answered nothing on the reader's behalf. */
+    expect(h.seen.sent).toEqual([['approval.pending', {}]])
+  })
+
+  it('draws nothing when the engine cannot answer, and does not throw', async () => {
+    const h = await harness({ current: 'tui:open' })
+    h.seen.pendingOnEngine = undefined as unknown as unknown[]
+
+    await expect(h.pipeline.replayPendingApprovals()).resolves.toBeUndefined()
+    expect(h.seen.sheets).toEqual([])
   })
 })

@@ -508,6 +508,25 @@ def _console_socket_registered():
 
 
 @pytest.fixture(autouse=True)
+def _no_declared_surface_families():
+    """Start every test with no command family declared.
+
+    ``set_surface_approval_families`` writes a ContextVar so a surface's
+    declaration reaches every tool built under it, sub-agents included. The
+    runtime declares the seven families before it builds its loop, and the
+    suite calls ``build_runtime`` from many files; pytest runs its tests in one
+    context per worker, so a declaration made in one test stays for the next,
+    and "the default policy declares no family" turns red in whichever test
+    happens to follow. Reset here, in the test's own context, and put back.
+    """
+    from raven.permissions import shell_policy
+
+    token = shell_policy._SURFACE_FAMILIES.set(())
+    yield
+    shell_policy._SURFACE_FAMILIES.reset(token)
+
+
+@pytest.fixture(autouse=True)
 def _restore_i18n_language():
     """Undo any ``raven.i18n.set_language`` left over from a prior test.
 

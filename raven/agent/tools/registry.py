@@ -937,7 +937,7 @@ class ToolRegistry:
             # happen before the timeout ceiling below, so a human deciding is
             # never timer-killed.
             if self._permission_gate is not None:
-                refusal = await self._permission_gate.enforce(name, params)
+                refusal = await self._permission_gate.enforce(name, params, tool=tool)
                 if refusal is not None:
                     return ToolOutput(
                         refusal.model_text,

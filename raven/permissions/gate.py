@@ -12,9 +12,10 @@ on the conversation (``raven.permissions.session``), and a later call whose
 every still-asking part was granted runs without a prompt. "Don't ask again"
 writes the prefix rule the human confirmed into ``permissions.tools.exec``,
 after the same validation the prompt's suggestion went through; the gate reads
-config live, so the rule holds from the next call. A pattern that fails
-validation still grants this once and this session -- the human did say yes --
-and the reason it was not written is logged.
+config live, so the rule holds from the next call, and no session grant is
+kept beside it -- taking the rule back means being asked again. A pattern that
+fails validation still grants this once and this session -- the human did say
+yes -- and the reason it was not written is logged.
 
 ``allow_ask`` is fixed per gate, not read from the turn: a sub-agent's task
 inherits the parent turn's context by asyncio's own rule, so a gate built for
@@ -41,7 +42,7 @@ from raven.contracts.permissions import (
     PermissionMode,
     Tier,
 )
-from raven.contracts.tool import PARSE_RETRY_INSTRUCTION, STOP_RETRY_INSTRUCTION, Continuation, ToolResult
+from raven.contracts.tool import PARSE_RETRY_INSTRUCTION, STOP_RETRY_INSTRUCTION, Continuation, Tool, ToolResult
 from raven.permissions.builtin import BuiltinRulings, action_digest, action_line, session_keys
 from raven.permissions.judge import review
 from raven.permissions.rules import default_tier, exec_approval_shape, user_tier, validate_exec_pattern
@@ -155,8 +156,13 @@ class PermissionGate:
             suggested_pattern=suggested_pattern,
         )
 
-    async def enforce(self, tool_name: str, params: dict[str, Any]) -> ToolResult | None:
-        """None waves the call through; a ``ToolResult`` replaces it."""
+    async def enforce(self, tool_name: str, params: dict[str, Any], tool: Tool | None = None) -> ToolResult | None:
+        """None waves the call through; a ``ToolResult`` replaces it.
+
+        ``tool`` is the registered object behind ``tool_name``, consulted only
+        for what a prompt should show (``Tool.approval_kind`` and
+        ``approval_evidence``); the decision never reads it.
+        """
         turn = current_turn()
         digest = action_digest(tool_name, params)
         if digest in turn.lapsed_digests:
@@ -190,6 +196,7 @@ class PermissionGate:
         if not self._allow_ask or turn.responder is None or not turn.conversation_id:
             self._annotate({"permission.decision": "deny", "permission.source": DecisionSource.UNATTENDED.value})
             return self._refusal(f"Error: {decision.reason}, but this turn is not interactive")
+        kind, evidence = self._prompt_view(tool, params)
         try:
             outcome = await turn.responder.await_approval(
                 conversation_id=turn.conversation_id,
@@ -198,6 +205,11 @@ class PermissionGate:
                 command=action_line(tool_name, params),
                 description=decision.description,
                 suggested_pattern=decision.suggested_pattern,
+                kind=kind,
+                family=decision.family,
+                origin=turn.origin,
+                origin_name=turn.origin_name,
+                evidence=evidence,
             )
         except Exception as exc:  # noqa: BLE001 - a broken transport must refuse, not execute
             logger.exception("permissions: approval transport failed for {}", tool_name)
@@ -212,10 +224,22 @@ class PermissionGate:
             }
         )
         if outcome.approved:
-            if outcome.choice is not ApprovalChoice.ALLOW:
+            # A rule that reached the config file is read live from the next
+            # call on, so it needs no session grant beside it -- and taking the
+            # rule back then really does mean being asked again. The session
+            # grant stays as the fallback whenever the rule does not carry this
+            # call on its own: a pattern that could not be written, or one the
+            # user's own stricter rule outranks (``git *: ask`` over the
+            # ``git push *`` just saved -- the strictest matching rule wins).
+            covered = (
+                outcome.choice is ApprovalChoice.ALLOW_ALWAYS
+                and self._persist(tool_name, outcome.pattern)
+                and user_tier(tool_name, params, self._config_source().tools) is Tier.ALLOW
+            )
+            if outcome.choice is ApprovalChoice.ALLOW_SESSION or (
+                outcome.choice is ApprovalChoice.ALLOW_ALWAYS and not covered
+            ):
                 remember_allowed(turn.conversation_id, decision.session_keys)
-            if outcome.choice is ApprovalChoice.ALLOW_ALWAYS:
-                self._persist(tool_name, outcome.pattern)
             return None
         turn.denied_digests.add(digest)
         if not outcome.answered:
@@ -227,12 +251,13 @@ class PermissionGate:
                 continuation=Continuation.ABORT_TURN,
             )
         if not outcome.answered:
-            # Not a refusal. The request went out and the deadline passed with
-            # nobody having answered it, and the two shared one sentence: a model
-            # told it had been denied stops asking and goes around, which is how a
-            # run whose approvals had merely lapsed reported a system error and
-            # delivered something else instead. Said plainly, the next move is to
-            # tell the reader, not to find another way.
+            # Not a refusal. The request went out and nobody answered it -- the
+            # connection went, the turn was torn down, a host's ceiling fired --
+            # and the two shared one sentence: a model told it had been denied
+            # stops asking and goes around, which is how a run whose approvals had
+            # merely lapsed reported a system error and delivered something else
+            # instead. Said plainly, the next move is to tell the reader, not to
+            # find another way.
             return self._refusal(
                 "Error: This action needed the user's approval, and the request expired with no "
                 "answer. Nobody refused it. Tell the user the approval lapsed and ask whether to "
@@ -241,26 +266,50 @@ class PermissionGate:
             )
         return self._refusal("Error: User denied this action." + feedback)
 
-    def _persist(self, tool_name: str, pattern: str) -> None:
-        """Write the confirmed prefix as an allow rule; the grant already stands."""
+    def _persist(self, tool_name: str, pattern: str) -> bool:
+        """Write the confirmed prefix as an allow rule; the grant already stands.
+
+        True when the rule is on disk, whether this call wrote it or found it."""
         pattern = pattern.strip()
         why = "only exec patterns can be persisted" if tool_name != "exec" else validate_exec_pattern(pattern)
         if why is not None:
             logger.warning("permissions: not persisting {!r}: {}", pattern, why)
             self._annotate({"permission.persisted": False, "permission.persist.refused": why})
-            return
+            return False
         try:
             added = allow_exec_pattern(pattern)
         except ValueError as exc:
             logger.warning("permissions: not persisting {!r}: {}", pattern, exc)
             self._annotate({"permission.persisted": False, "permission.persist.refused": str(exc)})
-            return
+            return False
         except Exception:  # noqa: BLE001 - the config file is the user's; a failed write is theirs to hear about
             logger.exception("permissions: could not write allow rule {!r}", pattern)
             self._annotate({"permission.persisted": False})
-            return
+            return False
         logger.info("permissions: {} exec allow rule {!r}", "added" if added else "kept", pattern)
         self._annotate({"permission.persisted": True, "permission.persist.pattern": pattern})
+        return True
+
+    @staticmethod
+    def _prompt_view(tool: Tool | None, params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """What the prompt shows: the tool's own account of the call, or its arguments.
+
+        A failing evidence hook falls back to the arguments rather than refusing
+        or running the call -- it only decides what a person sees, never
+        whether they are asked."""
+        kind = str(getattr(tool, "approval_kind", "") or "") or "unknown"
+        evidence: Any = None
+        if tool is not None:
+            try:
+                evidence = tool.approval_evidence(params)
+            except Exception:  # noqa: BLE001 - display only; the decision is made regardless
+                logger.debug("permissions: approval evidence failed for {}", kind, exc_info=True)
+        if not isinstance(evidence, dict):
+            # The arguments are the evidence now, and a layout keyed to the
+            # kind would draw them as blanks -- a file write with no path -- so
+            # the kind follows them.
+            return "unknown", {"input": params}
+        return kind, evidence
 
     @staticmethod
     def _annotate(attributes: dict) -> None:

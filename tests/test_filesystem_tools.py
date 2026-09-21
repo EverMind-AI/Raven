@@ -147,3 +147,87 @@ async def test_a_path_that_is_merely_missing_still_says_so(tmp_path: Path):
         assert isinstance(answer, str)
         assert answer.startswith("Error: File not found:")
         assert "web_fetch" not in answer
+
+
+# ---------------------------------------------------------------------------
+# What an approval prompt shows before the write happens
+# ---------------------------------------------------------------------------
+
+
+def test_a_write_over_an_existing_file_previews_as_a_diff(tmp_path: Path):
+    target = tmp_path / "letter.md"
+    target.write_text("dear friend\nold line\nbye\n", encoding="utf-8")
+
+    view = WriteFileTool(workspace=tmp_path).approval_evidence(
+        {"path": "letter.md", "content": "dear friend\nnew line\nbye\n"}
+    )
+
+    assert view["path"] == str(target.resolve())
+    assert view["created"] is False
+    assert "-old line" in view["diff"] and "+new line" in view["diff"]
+    assert target.read_text(encoding="utf-8") == "dear friend\nold line\nbye\n", "a preview writes nothing"
+
+
+def test_a_write_to_a_new_file_previews_as_a_creation(tmp_path: Path):
+    view = WriteFileTool(workspace=tmp_path).approval_evidence({"path": "fresh.txt", "content": "one\ntwo\n"})
+
+    assert view["created"] is True
+    assert "+one" in view["diff"] and "+two" in view["diff"]
+    assert not (tmp_path / "fresh.txt").exists()
+
+
+def test_an_append_previews_against_the_whole_file(tmp_path: Path):
+    target = tmp_path / "log.txt"
+    target.write_text("one\n", encoding="utf-8")
+
+    view = WriteFileTool(workspace=tmp_path).approval_evidence(
+        {"path": "log.txt", "content": "two\n", "mode": "append"}
+    )
+
+    assert "+two" in view["diff"] and "-one" not in view["diff"]
+
+
+def test_a_file_that_cannot_be_read_as_text_previews_without_a_diff(tmp_path: Path):
+    target = tmp_path / "blob.bin"
+    target.write_bytes(b"\xff\xfe\x00binary")
+
+    view = WriteFileTool(workspace=tmp_path).approval_evidence({"path": "blob.bin", "content": "text"})
+
+    assert view == {"path": str(target.resolve()), "created": False}
+
+
+def test_a_path_outside_the_fence_previews_as_the_bare_path(tmp_path: Path):
+    tool = WriteFileTool(workspace=tmp_path, allowed_dirs=(tmp_path,))
+
+    assert tool.approval_evidence({"path": "/etc/hosts", "content": "x"}) == {"path": "/etc/hosts"}
+
+
+def test_an_edit_previews_as_the_diff_of_its_two_snippets(tmp_path: Path):
+    (tmp_path / "a.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
+
+    view = EditFileTool(workspace=tmp_path).approval_evidence(
+        {"path": "a.py", "old_text": "y = 2", "new_text": "y = 3"}
+    )
+
+    assert view["path"] == str((tmp_path / "a.py").resolve())
+    assert view["created"] is False
+    assert "-y = 2" in view["diff"] and "+y = 3" in view["diff"]
+
+
+def test_the_file_tools_declare_the_layout_a_prompt_draws_them_in(tmp_path: Path):
+    assert WriteFileTool(workspace=tmp_path).approval_kind == "file.write"
+    assert EditFileTool(workspace=tmp_path).approval_kind == "file.write"
+    assert ReadFileTool(workspace=tmp_path).approval_kind == ""
+
+
+def test_a_file_too_large_to_preview_is_not_read_at_all(tmp_path: Path):
+    """The preview runs on the gate's path before the call; a file past the cap
+    is answered with its path alone rather than read and diffed."""
+    from raven.agent.tools.filesystem import _PREVIEW_MAX_BYTES
+
+    target = tmp_path / "big.log"
+    target.write_bytes(b"x" * (_PREVIEW_MAX_BYTES + 1))
+
+    view = WriteFileTool(workspace=tmp_path).approval_evidence({"path": "big.log", "content": "small"})
+
+    assert view == {"path": str(target.resolve()), "created": False}

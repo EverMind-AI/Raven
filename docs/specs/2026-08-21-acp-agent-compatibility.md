@@ -101,7 +101,7 @@ build is validated against it.
 | `session/request_permission` | **Supported** | Sent for the command families listed below. |
 | Option kinds offered | `allow_once`, `reject_once` | Not `allow_always` / `reject_always`. Raven has no persistent policy store -- the approval broker takes allow or deny, and its denial memory is cleared at every turn boundary. Offering an "always" a client would render as a saved preference is a lie. |
 | A refusal | `selected` with a reject option id | `RequestPermissionOutcome` has exactly two variants, `cancelled` and `selected`. There is no `denied`. |
-| A client that does not answer | **Refusal after 5 minutes** | Not 35 seconds, which is the terminal broker's ceiling because a terminal overlay owns a visible countdown. A person reading a diff in an editor is not that. |
+| A client that does not answer | **Refusal after 5 minutes** | The terminal broker sets no deadline, since a person is looking at its prompt; an editor process can stop answering, and a turn must not wait on it forever. |
 | A client that answers with an error | **Refusal** | |
 | A client that answers with an unknown option id | **Refusal** | Options are minted per request and the answer is checked against that set, so a stale id, an invented one, or a synthesised `allow_always` is refused rather than believed. |
 | A client that answers `cancelled` | **Refusal** | The one that is not misbehaviour: a client cancelling a turn MUST answer every pending permission this way. |

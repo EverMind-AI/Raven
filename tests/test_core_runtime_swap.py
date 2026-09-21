@@ -569,3 +569,29 @@ def test_a_taken_candidate_stays_owned_until_its_loop_runs():
 
     swaps.release()
     assert swaps.in_transition is None
+
+
+def test_the_runtime_declares_the_command_families_its_prompts_are_worded_by(tmp_path: Path, monkeypatch) -> None:
+    """Every surface this runtime serves names the family on an approval prompt,
+    the way the ACP editor does. The gate is built after the declaration, so
+    the policy inside it carries the families rather than only the context."""
+    from raven.core import runtime
+    from raven.permissions.shell_policy import surface_approval_families
+
+    _quiet_plugins(tmp_path, monkeypatch)
+    config, ec_config = _configs(tmp_path)
+
+    rt = runtime.build_runtime(config, ec_config, provider=_Provider())
+
+    assert [name for name, _ in surface_approval_families()] == [
+        "delete_command",
+        "publish_command",
+        "install_command",
+        "remote_exec_command",
+        "credential_command",
+        "destructive_vcs_command",
+        "fetch_side_effect",
+    ]
+    policy = rt.loop.tools._permission_gate._builtin._policy
+    assert policy.approval_reason("rm coverage.xml") == "delete_command"
+    assert policy.approval_reason("mkdir -p build") is None

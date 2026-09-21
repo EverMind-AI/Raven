@@ -180,11 +180,11 @@ describe('the sheet rack', () => {
     expect(rack().querySelector<HTMLElement>('.hd .ic')!.dataset.tip).toBe('gui.clarify.unfold')
   })
 
-  /* Who blocks the reader, as the rack reads it off the sheets themselves. The
-     permission sheet does NOT mark itself -- so a tenant docked beside it is
-     told nobody is waiting, which is today's behaviour and is recorded as such
-     in the plan's findings rather than fixed here. */
-  it('marks the clarify question and the preview as asking, and the approval not', () => {
+  /* Who blocks the reader, as the rack reads it off the sheets themselves:
+     every sheet that waits for an answer says so, the permission sheet
+     included -- a tenant docked beside it, the rail's light and the line that
+     says another conversation is waiting all read this one mark. */
+  it('marks the clarify question, the preview and the approval as asking', () => {
     clarifyOpen({ question: 'q', request_id: 'q1' }, () => {})
     expect((rack().firstElementChild as HTMLElement).dataset.asks).toBe('1')
     forget('a')
@@ -193,10 +193,9 @@ describe('the sheet rack', () => {
     expect((rack().firstElementChild as HTMLElement).dataset.asks).toBe('1')
     forget('a')
 
-    openApproval({ approvalId: 'ap-1', command: 'rm file.txt', description: 'Delete files' }, () => {})
+    openApproval({ approvalId: 'ap-1', command: 'rm file.txt', description: 'Delete files' }, { onChoice: () => {} })
     const sheet = rack().firstElementChild as HTMLElement
     expect(sheet.className).toBe('csheet perm')
-    expect(sheet.dataset.asks).toBeUndefined()
-    expect(sheet.hasAttribute('data-asks')).toBe(false)
+    expect(sheet.dataset.asks).toBe('1')
   })
 })
