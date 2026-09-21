@@ -488,23 +488,29 @@ async def turn_send(
     # the browser page and any other attached terminal.
     claim_conversation(lane)
 
-    if emitter is not None:
-        # The question rides the event that opens the turn so a client which
-        # did not send it can still draw it: the user entry is written to the
-        # transcript only at turn end, so until then this is the only place a
-        # second window can learn what was asked.
-        await emitter.emit(
-            parsed.session_key,
-            {"type": "message.start", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
-        )
-
     # After the submit, so a turn that was never accepted does not name a session
     # that has nothing in it; and only for the main conversation, since a direct
     # chat's opening line names its instance's lane, not this session. Returns
     # immediately -- the call it may start runs on its own task.
+    #
+    # Before the emit below, and that ordering is load-bearing: the namer reads
+    # "no user message on disk" as the mark of an opening turn, the worker files
+    # the question as its first act, and the emit is the first await the
+    # submitted worker can run inside. Naming from the far side of it saw a
+    # session that already had its question and declined to name anything.
     naming = False
     if parsed.target is None:
         naming = _name_session(parsed, agent_loop_factory=agent_loop_factory, emitter=emitter)
+
+    if emitter is not None:
+        # The question rides the event that opens the turn so a client which did
+        # not send it can draw it at once: the turn files it before the first
+        # model call, but a client that waited for the transcript would be
+        # watching a blank screen until it re-read the session.
+        await emitter.emit(
+            parsed.session_key,
+            {"type": "message.start", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
+        )
 
     return {"turn_id": turn_id, "accepted": True, "naming": naming}
 
