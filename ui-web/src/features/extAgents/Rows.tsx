@@ -22,7 +22,7 @@ import type { ExtAgentsState } from './store'
 import type { ExtAgentRow } from './types'
 import type { JSX } from 'react'
 
-export const kindText = (kind: string): string =>
+const kindText = (kind: string): string =>
   t(
     kind === 'builtin'
       ? 'gui.agent.kind_builtin'
@@ -53,7 +53,7 @@ export function Spin(): JSX.Element {
    and pulsing while a write is in flight, red for a refusal. None at all for a
    row that is merely off or absent -- "not connected" is what the section
    already says. */
-export function Led({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
+function Led({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
   if (shown === 'pending') return <span className="extAgents-led extAgents-led-busy" />
   if (shown === 'failed') return <span className="extAgents-led extAgents-led-bad" />
   if (shown !== 'on') return null
@@ -74,7 +74,7 @@ export function Tile({ row }: { row: ExtAgentRow }): JSX.Element {
    for a row nobody catalogued -- the probe's own verdict when it has one, else
    how Raven reaches it. A refusal replaces it in red; a write in flight
    replaces it with the ring. */
-export function oneLine(row: ExtAgentRow): string {
+function oneLine(row: ExtAgentRow): string {
   const short = shortOf(row)
   const stale = stageOf(row) === 'stale' ? t('gui.agent.tag_stale') : ''
   const base =
@@ -104,7 +104,7 @@ export function connect(row: ExtAgentRow): void {
 
 /* The one control a row carries. Exactly one, or none for the built-in loop,
    which is always on and has nothing to do. */
-export function RowControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
+function RowControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
   if (shown === 'pending') return <span className="extAgents-state">{t('gui.agent.setup_connecting')}</span>
   if (shown === 'failed') {
     return (
@@ -139,7 +139,7 @@ export function RowControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): 
    one the row is a plain row: no button role, no focus stop, nothing to press.
    The onboarding wizard draws it that way, since a wizard step is a decision
    and has no sheet to open. */
-export function AgentRow({
+function AgentRow({
   row, s, onOpen,
 }: { row: ExtAgentRow; s: ExtAgentsState; onOpen?: (row: ExtAgentRow) => void }): JSX.Element {
   const shown = shownOf(row, s)

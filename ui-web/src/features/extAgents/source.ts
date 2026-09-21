@@ -132,7 +132,10 @@ export function wizardSection(row: ExtAgentRow): Section | null {
    has, whichever of the two sections each sits in. Raven's own shipped agents
    are drawn -- connected when on, available when off -- but never counted:
    the step is about connecting something external, and the prototype counts
-   it done on those alone. */
+   it done on those alone. A connected row counts whatever its probe says --
+   it is on the roster and dispatchable, which is what `sectionOf` reads
+   first -- so a verdict that failed to carry over a re-scan no longer flips
+   the step back to not done. */
 export function isFound(row: ExtAgentRow): boolean {
   return !row.vendored && wizardSection(row) !== null
 }

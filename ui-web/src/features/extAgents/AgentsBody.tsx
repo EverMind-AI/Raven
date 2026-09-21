@@ -1,6 +1,6 @@
 /* The onboarding wizard's agents step: the Agent Hub's rows (Rows.tsx),
- * reduced to the two sections a first-run reader decides on -- what is
- * connected, and what this machine has that could be. The hub's third section
+ * reduced to the two sections a first-run reader decides on -- what this
+ * machine has that could be connected, then what already is. The hub's third section
  * (not installed on this machine) and its sheet stay on the hub: a wizard step
  * is a decision, not a roster to manage, so a row here has no sheet to open and
  * its one control is the whole of what it offers. Which rows count towards the
