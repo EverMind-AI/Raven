@@ -160,7 +160,11 @@ export function add(el: HTMLElement, key?: string, teardown?: () => void, view?:
   const k = key || session()
   el.dataset.sess = k
   if (teardown) TEARDOWN.set(el, teardown)
-  if (view !== undefined) VIEWS.set(el, { id: `sheet${++made}`, el, view })
+  /* A sheet re-added with a new view keeps its id: the rack keys the portal by
+     it, so a new id would unmount the interior the reader is looking at and
+     mount it again -- losing the scroll and the focus -- for what is a
+     repaint. */
+  if (view !== undefined) VIEWS.set(el, { id: VIEWS.get(el)?.id ?? `sheet${++made}`, el, view })
   let bucket = SHEETS.get(k)
   if (!bucket) SHEETS.set(k, (bucket = new Set()))
   bucket.add(el)
@@ -170,9 +174,11 @@ export function add(el: HTMLElement, key?: string, teardown?: () => void, view?:
   paint()
   /* First child, not last: sheets are flow content, and the newest belongs on
      top of the stack, above the field it interrupts. */
+  /* And a sheet already docked stays where it is: re-inserting it would lift
+     it back over whatever docked after it. */
   if (k === session()) {
     const dock = rack()
-    dock.insertBefore(el, dock.firstChild)
+    if (el.parentElement !== dock) dock.insertBefore(el, dock.firstChild)
   }
   dockLift()
 }

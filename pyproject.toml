@@ -286,12 +286,17 @@ ignore = ["DEP002", "DEP004"]
 #   nothing breaks.
 # cryptography: fallback AES path in the weixin adapter, reached under
 #   `with suppress(ImportError)` when pycryptodome is not present.
+# pymupdf / fitz: the rasteriser behind the deck template gallery in
+#   rpc/deck_templates.py, imported inside a function and probed with find_spec
+#   first. The gallery only exists when the ppt-engine plugin is installed, and
+#   that plugin is what pins PyMuPDF (under either import name); the core must
+#   not carry an AGPL dependency for a feature that is absent without the plugin.
 #
 # The list is per-module, not per-file, so a later unguarded import of any other
 # package is still caught by both rules.
 [tool.deptry.per_rule_ignores]
-DEP001 = ["raven_everos", "requests", "cryptography"]
-DEP003 = ["raven_everos", "requests", "cryptography"]
+DEP001 = ["raven_everos", "requests", "cryptography", "pymupdf", "fitz"]
+DEP003 = ["raven_everos", "requests", "cryptography", "pymupdf", "fitz"]
 
 [tool.ty]
 # A call-correctness gate, not a typing-strictness project. Of ty's 133 rules,

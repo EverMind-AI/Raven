@@ -11,5 +11,7 @@ import type { DomainManifest } from '../manifests'
    and its listeners are installed by main.tsx, so it roots nothing of its own. */
 export const manifest: DomainManifest = {
   domain: 'composer',
+  /* `cp*` on the template picker; the dock's older classes predate the prefix. */
+  cssPrefix: 'cp',
   sources: ['composer'],
 }

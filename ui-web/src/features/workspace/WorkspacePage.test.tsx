@@ -401,17 +401,42 @@ describe('workspace island', () => {
     expect(cancel).toHaveBeenCalled()
     const frame = document.querySelector('.fview iframe') as HTMLIFrameElement
     expect(frame).not.toBeNull()
-    expect(frame.getAttribute('src')).toBe('/file?path=%2Frepo%2Fdeck.pptx&render=pdf')
+    /* Framed without the browser viewer's toolbar: the bar above is the deck's
+       one set of controls. */
+    expect(frame.getAttribute('src')).toBe('/file?path=%2Frepo%2Fdeck.pptx&render=pdf#toolbar=0&navpanes=0&view=FitH')
     expect(frame.hasAttribute('sandbox')).toBe(false)
+    expect(frame.closest('.fview')!.classList.contains('workspace-fill')).toBe(true)
     expect(screen.queryByText('gui.ws.file_rendering')).not.toBeNull()
     await act(async () => { frame.dispatchEvent(new Event('load')) })
     expect(screen.queryByText('gui.ws.file_rendering')).toBeNull()
-    /* The deck itself stays reachable from the header: its PDF in a tab, its
-       own bytes as a download. */
-    expect(screen.getByLabelText('gui.ws.file_newtab')).toBeTruthy()
-    const save = screen.getByLabelText('gui.ws.save_copy') as HTMLAnchorElement
+    /* Two controls, in words: the deck's own bytes, and its folder. */
+    expect(screen.queryByLabelText('gui.ws.file_newtab')).toBeNull()
+    const save = screen.getByText('gui.ws.download') as HTMLAnchorElement
     expect(save.getAttribute('href')).toBe('/file?path=%2Frepo%2Fdeck.pptx')
     expect(save.getAttribute('download')).toBe('deck.pptx')
+    expect(screen.getByRole('button', { name: /gui\.ws\.reveal_/ })).toBeTruthy()
+    expect(screen.queryByText('gui.ws.open')).toBeNull()
+  })
+
+  it('reframes a deck delivered again under the same path', async () => {
+    install(emptyWs({ file: { ...deckFile } }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, status: 200, statusText: 'OK', body: { cancel: vi.fn() } }))
+    const delivered = (token: string, size: number, at: number): unknown => ({ raven_delivery: {
+      files: [{ path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck', download_path: `/files/download?token=${token}`, size }],
+      delivered_at: at,
+    } })
+    deliveries.record(deliveries.SESSION, 1, delivered('one', 9, 1000))
+    await mount()
+    await act(async () => { await Promise.resolve() })
+    const first = (document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('src')
+    expect(first).toContain('&v=1000#')
+    await act(async () => {
+      deliveries.record(deliveries.SESSION, 2, delivered('two', 11, 2000))
+      await Promise.resolve()
+    })
+    await act(async () => { await Promise.resolve() })
+    const again = (document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('src')
+    expect(again).toContain('&v=2000#')
   })
 
   it('prefers the delivery route for saving a delivered deck', async () => {
@@ -419,8 +444,37 @@ describe('workspace island', () => {
     deliveries.seed([{ path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck',
                        download_path: '/files/download?token=deck', size: 9 }])
     await mount()
-    const save = screen.getByLabelText('gui.ws.save_copy') as HTMLAnchorElement
+    const save = screen.getByText('gui.ws.download') as HTMLAnchorElement
     expect(save.getAttribute('href')).toBe('/files/download?token=deck')
+  })
+
+  it('keeps the deck bar to download and the folder even when the gateway is this desktop', async () => {
+    install(emptyWs({ file: { ...deckFile } }), {
+      canBrowse: true,
+      hostIsLocal: () => true,
+      openIn: async () => ({}),
+    }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(screen.getByText('gui.ws.download')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /gui\.ws\.reveal_/ })).toBeTruthy()
+    expect(screen.queryByText('gui.ws.open')).toBeNull()
+    expect(screen.queryByLabelText('gui.ws.open_with_pick')).toBeNull()
+  })
+
+  it('says why a reveal was refused, not the wire code', async () => {
+    const refused = Object.assign(new Error('config_validation_error'), {
+      data: { detail: "reveal failed: [Errno 2] No such file or directory: 'xdg-open'" },
+    })
+    const state = install(emptyWs({ file: { ...deckFile } }), { canBrowse: true, reveal: async () => { throw refused } },
+      { tab: 'file', open: true, picked: true })
+    await mount()
+    await act(async () => {
+      screen.getByRole('button', { name: /gui\.ws\.reveal_/ }).click()
+      await Promise.resolve()
+    })
+    await act(async () => { await Promise.resolve() })
+    const toasts = state.shellCalls.filter((c) => c[0] === 'toast').map((c) => String(c[1]))
+    expect(toasts).toEqual(["reveal failed: [Errno 2] No such file or directory: 'xdg-open'"])
   })
 
   /* A frame cannot say why its document did not come, so the answer to the

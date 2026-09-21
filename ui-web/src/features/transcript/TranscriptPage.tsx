@@ -12,7 +12,7 @@ import { DagGraph } from '../dag/DagGraph'
 import * as dag from '../dag/graph'
 import { getVersion as deliveriesVersion, humanSize, subscribe as deliveriesSubscribe } from '../workspace/deliveries'
 import {
-  fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath,
+  fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath, thumbURL,
 } from '../workspace/store'
 import { releaseUpward } from './overscroll'
 import * as store from './store'
@@ -1306,13 +1306,13 @@ const ArtMini = memo(function ArtMini({ name, head }: { name: string; head: stri
   return <span className="pic doc"><span className="amini"><span className="raw">{text}</span></span></span>
 })
 
-const DeliveryShot = memo(function DeliveryShot({ row, broken }: {
-  row: DeliveryRow; broken: () => void
+const DeliveryShot = memo(function DeliveryShot({ row, broken, src }: {
+  row: DeliveryRow; broken: () => void; src?: string
 }): ReactElement {
   const [ready, setReady] = useState(false)
   return (
     <span className={'pic shot' + (ready ? '' : ' skel')}>
-      <img src={row.downloadPath} alt="" loading="lazy" decoding="async"
+      <img src={src || row.downloadPath} alt="" loading="lazy" decoding="async"
         onLoad={() => setReady(true)} onError={broken} />
       {ready ? null : <span className="sk" />}
     </span>
@@ -1386,6 +1386,12 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview }: {
       setShot('broken')
       void askIfGone(url).then((gone) => { if (gone) setState('missing') })
     }} />
+  ) : kind === 'pptx' && shot === 'draw' ? (
+    /* The first page, as the gateway renders it. A render the host cannot
+       make (no LibreOffice, a timeout) arrives as a failed <img>, and the
+       tile shows the document face: the file is there, only the picture
+       of it is not, so nothing is asked about the file itself. */
+    <DeliveryShot row={row} src={thumbURL(row.path)} broken={() => setShot('broken')} />
   ) : preview?.head ? <ArtMini name={row.name} head={preview.head} />
     : fetched ? <ArtMini name={row.name} head={fetched} /> : (
       fallback

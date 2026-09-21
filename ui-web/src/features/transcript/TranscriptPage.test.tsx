@@ -1579,7 +1579,9 @@ describe("the turn's delivered files and file changes", () => {
     raven_delivery: {
       files: names.map((name) => ({
         path: `/w/${name}`, name, title: name, size: 12000,
-        media_type: name.endsWith('.png') ? 'image/png' : 'text/markdown',
+        media_type: name.endsWith('.png') ? 'image/png'
+        : name.endsWith('.pptx') ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        : 'text/markdown',
         download_path: `/files/download?token=${name}`,
         description,
         missing,
@@ -1642,6 +1644,54 @@ describe("the turn's delivered files and file changes", () => {
     /* Read from the same URL the tile already probed, and only a range of it. */
     const read = asked.find((a) => a.method !== 'HEAD')
     expect(read?.url).toBe('/files/download?token=radar.md')
+  })
+
+  it('shows a delivered deck by its first page, rendered by the gateway', async () => {
+    /* A deck is a picture of itself, not a document face: the tile asks the
+       file route for a thumb rendering of the deck's own path. */
+    vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
+      if (init?.method === 'HEAD') return Promise.resolve({ ok: true })
+      return Promise.resolve({ ok: true, text: () => Promise.resolve('') })
+    })
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make the deck', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['cv.pptx']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    const img = $('.atile .pic.shot img') as HTMLImageElement | null
+    expect(img).toBeTruthy()
+    const src = img?.getAttribute('src') || ''
+    expect(src).toContain('/file?path=' + encodeURIComponent('/w/cv.pptx'))
+    expect(src).toContain('render=thumb')
+  })
+
+  it('falls back to the document face when the deck cannot be rendered', async () => {
+    vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
+      if (init?.method === 'HEAD') return Promise.resolve({ ok: true })
+      return Promise.resolve({ ok: true, text: () => Promise.resolve('') })
+    })
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make the deck', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['cv.pptx']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    const img = $('.atile .pic.shot img') as HTMLImageElement
+    expect(img).toBeTruthy()
+    /* The tile's probe answers on a later tick than the picture's failure; both
+       land before the assertion. */
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    await act(async () => { img.dispatchEvent(new Event('error')); await new Promise((r) => setTimeout(r, 0)) })
+    expect($('.atile .pic.none .ft')?.textContent).toBe('PPTX')
+    /* The file itself is not in question: no status is asked about it. */
+    expect($('.atile')?.className).not.toContain('missing')
   })
 
   it('leaves a delivered file the tile cannot reach on its kind, not a miniature', async () => {

@@ -5283,6 +5283,118 @@
       }
     },
     {
+      "name": "deck.templates.list",
+      "summary": "The bundled deck templates, with a cover each where this host can render one.",
+      "params": [
+        {
+          "name": "covers",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "False lists the names alone, without rendering a cover for each."
+          }
+        }
+      ],
+      "result": {
+        "name": "DeckTemplatesListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "templates": {
+              "items": {
+                "$ref": "#/components/schemas/DeckTemplateRow"
+              },
+              "type": "array"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when the deck engine is not installed here; the picker then stays hidden."
+            },
+            "pending": {
+              "type": "boolean",
+              "description": "True while a cover is still being drawn in the background; ask again for it."
+            }
+          },
+          "required": [
+            "templates",
+            "available"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "deck.templates.pages",
+      "summary": "Every page of one bundled deck template as JPEG data URLs, for the picker's page viewer.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "A row's name from deck.templates.list."
+          }
+        }
+      ],
+      "result": {
+        "name": "DeckTemplatesPagesResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "pages": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "description": "Every page as a JPEG data URL, in order; empty where this host cannot render."
+            }
+          },
+          "required": [
+            "pages"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "deck.templates.pick",
+      "summary": "Deposit a bundled deck template under agent home's uploads and answer as fs.upload does.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "A row's name from deck.templates.list."
+          }
+        }
+      ],
+      "result": {
+        "name": "FsUploadResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "Workspace-relative path to hand the agent; uploads never return bytes.",
+              "type": "string"
+            },
+            "abs_path": {
+              "type": "string"
+            },
+            "size": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path",
+            "abs_path",
+            "size"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "fs.reveal",
       "summary": "Show one file in the gateway host's file manager, selected.",
       "params": [
@@ -9816,6 +9928,35 @@
           "enabled",
           "configured",
           "missing"
+        ],
+        "type": "object"
+      },
+      "DeckTemplateRow": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The template's stem, which deck.templates.pick takes."
+          },
+          "label": {
+            "type": "string",
+            "description": "The stem as words, for the picker's caption."
+          },
+          "size": {
+            "type": "integer"
+          },
+          "cover": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first page as a JPEG data URL, or null where this host cannot render one."
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "size"
         ],
         "type": "object"
       },
