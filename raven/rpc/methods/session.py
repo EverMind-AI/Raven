@@ -209,6 +209,11 @@ async def _default_session_info(
         # None for every single-endpoint provider -- there is one address and it
         # carries no label worth showing.
         "endpoint": getattr(getattr(agent_loop, "provider", None), "active_endpoint_label", None),
+        # A page that reloads onto a session whose turn is still running has no
+        # other way to learn it: the turn's own events went to the socket this
+        # page did not have. Without it the reader gets an idle composer over a
+        # conversation that is answering, and a send that is refused as -32003.
+        "running": bool(session_key) and turn_module.is_session_busy(session_key),
     }
 
     # Nudge the status bar to run `raven upgrade` when the cached latest release
@@ -589,6 +594,7 @@ def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:
         "updated_at": _ts(info.get("last_message_at")) or _ts(info.get("updated_at")) or started_at,
         "title": title,
         "pinned": bool(meta.get("pinned")),
+        "running": turn_module.is_session_busy(key),
         # The override session.create stored, and nothing else: a session on the
         # policy default answers null, which is how the rail tells the two apart.
         "workdir": str(meta["workdir"]) if meta.get("workdir") else None,

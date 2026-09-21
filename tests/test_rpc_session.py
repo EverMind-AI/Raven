@@ -594,6 +594,66 @@ async def test_session_list_returns_sessions_for_tui_channel(tmp_path: Path, mon
     assert "tui:20260610_110000_bbb222" in ids
 
 
+async def test_session_list_says_which_sessions_have_a_turn_in_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A page that has just loaded has no other way to know: the running turn's
+    frames went to a socket it did not have. Without the flag the rail draws a
+    conversation that is answering as idle, and a send into it is refused."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    busy_key, quiet_key = "tui:20260610_100000_busy11", "tui:20260610_110000_quiet1"
+    for key in (busy_key, quiet_key):
+        s = mgr.get_or_create(key)
+        s.add_message("user", "hello")
+        mgr.save(s)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    turn_module._active_turns.clear()
+    try:
+        turn_module._active_turns[busy_key] = object()
+        result = await session_list({})
+    finally:
+        turn_module._active_turns.clear()
+
+    running = {item["id"]: item["running"] for item in result["sessions"]}
+    assert running == {busy_key: True, quiet_key: False}
+
+
+async def test_session_resume_says_whether_the_session_is_answering_right_now(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same fact on the bundle a reload reads, which is where the page
+    learns to put the stop button back."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_running"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": "read the repo"}])
+
+    turn_module._active_turns.clear()
+    try:
+        quiet = await session_resume({"session_id": session_key})
+        turn_module._active_turns[session_key] = object()
+        busy = await session_resume({"session_id": session_key})
+    finally:
+        turn_module._active_turns.clear()
+
+    assert quiet["info"]["running"] is False
+    assert busy["info"]["running"] is True
+
+
+async def test_session_create_reports_a_session_nothing_is_running_in() -> None:
+    """A key minted this instant cannot have a turn on it, and the field is
+    required on the bundle either way."""
+    result = await session_create({})
+    assert result["info"]["running"] is False
+
+
 async def test_session_list_sorted_by_updated_at_desc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.list returns sessions ordered by updated_at descending."""
     cfg = load_config()
