@@ -11,7 +11,7 @@ import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
 import { sources } from '../../state/sources'
 import { show as toast } from '../../state/toast'
-import { KIND_ORDER, modelKind, offered, statedTags } from './types'
+import { KIND_ORDER, modelKind, offered, sameModel, statedTags } from './types'
 
 import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
 
@@ -154,7 +154,10 @@ export const column = (p: Provider, offer: Offer = at.offer): string[] => {
   const cur = offer.current
     ? (offer.current.provider === p.id ? offer.current.model : null)
     : (offer.pick ? null : (p.current ? selected : null))
-  return cur && !rows.includes(cur) ? [cur, ...rows] : rows
+  /* By the backend's identity, not by string: a role stores the spelling it was
+     handed while `model.add_model` stores the one it derived, so comparing the
+     strings put the same model in the column twice, under one visible name. */
+  return cur && !rows.some((m) => sameModel(p.id, m, cur)) ? [cur, ...rows] : rows
 }
 
 export { KIND_ORDER, statedTags }

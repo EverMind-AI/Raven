@@ -99,6 +99,18 @@ export interface Offer {
 export const modelKind = (facts: ModelTagFacts | undefined): Kind =>
   (KIND_ORDER as readonly string[]).includes(facts?.kind ?? '') ? (facts!.kind as Kind) : 'text'
 
+/* One model, however it was spelled. The backend's identity rule is
+   `providers/wire.py`'s `merge_key`: strip a leading `<provider>/`, lowercase,
+   compare. Two surfaces need it -- a provider's list mixes ids added by hand
+   (as typed) with ids the vendor reports (qualified), and a role stores the
+   spelling it was given while `model.add_model` stores the one it derived. Both
+   drew the same model twice before this. */
+export const bareModel = (slug: string, id: string): string =>
+  (id.toLowerCase().startsWith(`${slug.toLowerCase()}/`) ? id.slice(slug.length + 1) : id).toLowerCase()
+
+export const sameModel = (slug: string, a: string, b: string): boolean =>
+  bareModel(slug, a) === bareModel(slug, b)
+
 /* The next kind in the cycle. Both surfaces that let an id be typed offer the
    same wheel, and the arithmetic was written four times between them. */
 export const nextKind = (kind: Kind): Kind =>

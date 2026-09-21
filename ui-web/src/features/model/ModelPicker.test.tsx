@@ -627,6 +627,37 @@ describe('what the picker offers', () => {
     expect(rows('provs').map((b) => b.querySelector('.ct')!.textContent)).toEqual(['1', '1', '0'])
   })
 
+  it('lists the current model in its provider column even when the list does not carry it', () => {
+    /* onboarding and the CLI set agents.defaults.model without adding it to
+       the provider, so the model the chip names has to be somewhere it can be
+       seen marked. */
+    install({}, [{ id: 'p1', name: 'P1', on: true, models: ['a'], configured: ['a'], current: true }])
+    store.setCurrent('b')
+    mount()
+    openIt()
+    expect(rows('models').map((x) => x.querySelector('.nm')!.textContent)).toEqual(['b', 'a'])
+    expect(rows('models')[0]!.querySelector('.tick')).not.toBeNull()
+  })
+
+  it('does not list the current model twice when its two spellings differ', () => {
+    /* A role stores the spelling it was handed; `model.add_model` stores the
+       one it derived. Comparing the strings drew one model as two rows, both
+       reading the same because the provider half is not shown. */
+    install({}, [{
+      id: 'openrouter', name: 'OpenRouter', on: true,
+      models: ['openrouter/my-embedder'], configured: ['openrouter/my-embedder'],
+      labels: { 'openrouter/my-embedder': { kind: 'embedding' } },
+    }])
+    mount()
+    act(() => {
+      store.open(document.getElementById('modelChip'), undefined, undefined, {
+        kind: 'embedding', title: 'Embedding', pick: async () => {},
+        current: { model: 'my-embedder', provider: 'openrouter' },
+      })
+    })
+    expect(rows('models').map((x) => x.querySelector('.nm')!.textContent)).toEqual(['my-embedder'])
+  })
+
   it('offers the registry shortlist for a text opening on a provider with nothing added', () => {
     /* The first-run wizard's whole model step: a vendor is connected and a
        chat model picked before anyone has built a list. An empty column there

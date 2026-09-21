@@ -25,7 +25,7 @@ import { createPortal } from 'react-dom'
 
 import { ModelTags, TagGlyph } from '../../../components/ModelTags'
 import { t } from '../../../i18n/t'
-import { KIND_GLYPH, KIND_LABEL, KIND_ORDER, guessKind, modelKind, nextKind } from '../../model/types'
+import { KIND_GLYPH, KIND_LABEL, KIND_ORDER, bareModel as bare, guessKind, modelKind, nextKind } from '../../model/types'
 import { Rov } from '../Fields'
 import * as store from '../store'
 import { roleName, rolesUsing } from './Roles'
@@ -34,14 +34,6 @@ import type { Kind } from '../../model/types'
 import type { Sheet } from '../store'
 import type { ModelCandidate, ProviderRow } from '../types'
 import type { JSX } from 'react'
-
-/* One model, whatever spelling it was written in. The backend's identity rule
-   (`providers/wire.py`'s `merge_key`) strips a leading `<provider>/` and
-   lowercases, so `deepseek/deepseek-v4-pro` and `deepseek-v4-pro` are the same
-   row -- comparing the strings instead drew both, offered to add one that was
-   already added, and left an "add all" that could never reach zero. */
-const bare = (slug: string, id: string): string =>
-  (id.toLowerCase().startsWith(`${slug.toLowerCase()}/`) ? id.slice(slug.length + 1) : id).toLowerCase()
 
 /* Whether this row is on the provider already. `added` is the wire's own
    answer, computed with `merge_key`; the second test covers a row the vendor's
