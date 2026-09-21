@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 192 methods, 105 component schemas.
+// 192 methods, 106 component schemas.
 
 /* eslint-disable */
 /**
@@ -457,6 +457,17 @@ export interface FsEntry {
    */
   size: number;
 }
+export interface FsDirEntry {
+  name: string;
+  /**
+   * Absolute.
+   */
+  path: string;
+  /**
+   * True when a session may be pinned here; false inside the agent's own data (see raven.agent.workdir).
+   */
+  ok: boolean;
+}
 /**
  * One row, projected card-sized. ``kind`` decides which optional fields
  * carry a value: the four memory types share only ``id`` and ``kind``.
@@ -626,6 +637,10 @@ export interface SessionListItem {
    * User pinned this session to the top of the picker.
    */
   pinned?: boolean;
+  /**
+   * The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by.
+   */
+  workdir?: string;
 }
 export interface SessionMessage {
   /**
@@ -757,6 +772,10 @@ export interface SubagentRow {
   probe_status: 'ready' | 'attention' | 'missing' | 'unknown';
   probe_detail: string;
   has_api_key: boolean;
+  /**
+   * The agent answered the handshake and then refused to open a session without a credential. Measured by the capability snapshot, not inferred from probe_status, which reads `attention` both for this and for an installed agent nothing has verified -- two rows that need opposite things from the reader. Always false for a kind with no handshake to be refused in.
+   */
+  needs_auth?: boolean;
   mcps: string[];
   allow_mcp_secrets: boolean;
   last_test_ok?: boolean;
@@ -3295,6 +3314,34 @@ export interface FsListResult {
    */
   entries: FsEntry[];
 }
+export interface FsDirsParams {
+  /**
+   * Absolute directory to list the subdirectories of; the user's home directory when omitted.
+   */
+  path?: string;
+}
+export interface FsDirsResult {
+  /**
+   * The directory listed, resolved.
+   */
+  path: string;
+  /**
+   * One level up; null at the filesystem root.
+   */
+  parent?: string;
+  /**
+   * The user's home directory, where the browser starts.
+   */
+  home: string;
+  /**
+   * Whether the listed directory itself may be a session's working directory.
+   */
+  ok: boolean;
+  /**
+   * Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.
+   */
+  entries: FsDirEntry[];
+}
 export interface FsReadParams {
   path: string;
   max_bytes?: number;
@@ -3467,17 +3514,6 @@ export interface MemoryListResult {
    * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
    */
   note?: string | null;
-}
-export interface MemoryDeleteParams {
-  kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
-  id: string;
-}
-export interface MemoryDeleteResult {
-  ok: boolean;
-  /**
-   * Deleting an episode also drops its derived facts and foresight.
-   */
-  removed: number;
 }
 export interface PlaybooksListParams {}
 export interface PlaybooksListResult {
@@ -4633,6 +4669,7 @@ export interface RpcMethods {
   'channels.configure': { params: ChannelsConfigureParams; result: ChannelsConfigureResult };
   'channels.qr': { params: ChannelsQrParams; result: ChannelsQrResult };
   'fs.list': { params: FsListParams; result: FsListResult };
+  'fs.dirs': { params: FsDirsParams; result: FsDirsResult };
   'fs.read': { params: FsReadParams; result: FsReadResult };
   'fs.upload': { params: FsUploadParams; result: FsUploadResult };
   'deck.templates.list': { params: DeckTemplatesListParams; result: DeckTemplatesListResult };
@@ -4643,7 +4680,6 @@ export interface RpcMethods {
   'deliverables.list': { params: DeliverablesListParams; result: DeliverablesListResult };
   'memory.stats': { params: MemoryStatsParams; result: MemoryStatsResult };
   'memory.list': { params: MemoryListParams; result: MemoryListResult };
-  'memory.delete': { params: MemoryDeleteParams; result: MemoryDeleteResult };
   'playbooks.list': { params: PlaybooksListParams; result: PlaybooksListResult };
   'playbooks.get': { params: PlaybooksGetParams; result: PlaybooksGetResult };
   'playbooks.credentials.get': { params: PlaybooksCredentialsGetParams; result: PlaybooksCredentialsGetResult };
@@ -4764,6 +4800,7 @@ export const RPC_METHODS = [
   "delegation.status",
   "deliverables.list",
   "ext.list",
+  "fs.dirs",
   "fs.list",
   "fs.open",
   "fs.read",
@@ -4792,7 +4829,6 @@ export const RPC_METHODS = [
   "mcp.list",
   "mcp.test",
   "mcp.tools",
-  "memory.delete",
   "memory.list",
   "memory.stats",
   "model.add_endpoint",

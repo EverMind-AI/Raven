@@ -3711,16 +3711,6 @@ class MemoryListResult(_Strict):
     )
 
 
-class MemoryDeleteParams(_Strict):
-    kind: MemoryKind
-    id: str
-
-
-class MemoryDeleteResult(_Strict):
-    ok: bool
-    removed: int = Field(..., description="Deleting an episode also drops its derived facts and foresight.")
-
-
 # ---------------------------------------------------------------------------
 # The round-trip answer sinks, slash routing, and the rest
 # ---------------------------------------------------------------------------
@@ -4872,7 +4862,6 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # memory.*
     "memory.stats": (MemoryStatsParams, MemoryStatsResult),
     "memory.list": (MemoryListParams, MemoryListResult),
-    "memory.delete": (MemoryDeleteParams, MemoryDeleteResult),
     # the round-trip answer sinks
     "approval.respond": (ApprovalRespondParams, ApprovalRespondResult),
     "clarify.respond": (ClarifyRespondParams, ClarifyRespondResult),

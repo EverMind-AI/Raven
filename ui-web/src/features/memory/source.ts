@@ -4,9 +4,7 @@
    memory source: a page with no engine behind it reads the same calls off the
    fixture transport (ui-web/src/rpc/fixtures/memory.ts). */
 
-import { t } from '../../i18n/t'
 import { gateway } from '../../rpc/gateway'
-import { show as toast } from '../../state/toast'
 
 import type { ParamsOf } from '../../rpc/generated'
 import type { MemorySource } from './types'
@@ -23,13 +21,4 @@ export const memorySource: MemorySource = {
        cannot be spelt in the generated type. */
     q: req.q || null,
   } as ParamsOf<'memory.list'>),
-  /* Toasted here, and still rejected as handled: the island's success
-     branch closes the drawer and reloads, which must not run on a failed
-     delete. */
-  remove: (it) => gateway().call('memory.delete', { kind: it.kind, id: it.id })
-    .then(() => toast(t('gui.mem.deleted')))
-    .catch((e) => {
-      toast(t('gui.plug.op_failed', { err: (e.data && e.data.detail) || e.message || e }))
-      throw { handled: true }
-    }),
 }

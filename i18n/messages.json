@@ -2563,26 +2563,6 @@
       "en": "working · {t}",
       "zh": "输出中 · {t}"
     },
-    "gui.mem.confirm_del": {
-      "zh": "确认删除",
-      "en": "Confirm delete"
-    },
-    "gui.mem.del_episode_note": {
-      "zh": "会同时删除这段经历派生出的事实与预见，删除后不可恢复",
-      "en": "Also removes the facts and foresight derived from this episode; this cannot be undone"
-    },
-    "gui.mem.del_profile_note": {
-      "zh": "删除后画像会随后续对话重新生成",
-      "en": "The profile will regenerate from future sessions"
-    },
-    "gui.mem.delete": {
-      "zh": "删除这条记忆",
-      "en": "Delete this memory"
-    },
-    "gui.mem.deleted": {
-      "zh": "已删除",
-      "en": "Deleted"
-    },
     "gui.mem.down": {
       "zh": "长期记忆当前写不进去，这段时间的对话不会被记住。",
       "en": "Long-term memory is not being written; nothing from here on will be remembered."
