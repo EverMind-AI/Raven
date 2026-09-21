@@ -1,9 +1,10 @@
 /* Something newer than what this window is running.
  *
- * Two different things can be: the built page on disk, and the released
- * version of Raven itself. They share the rail-foot row because to the reader
- * they are one sentence -- something newer exists -- and they differ only in
- * what the click does.
+ * Three different things can be: the built page on disk, the released version
+ * of Raven itself, and -- on a source checkout -- the sources the page was
+ * built from. They share the rail-foot row because to the reader they are one
+ * sentence -- something newer exists -- and they differ only in what the click
+ * does: reload, upgrade, or be told how to rebuild.
  *
  * `raven serve` streams dist straight from disk and stamps static responses
  * with an mtime+size ETag, so a rebuilt dist is detectable with a HEAD probe --
@@ -24,7 +25,15 @@ import { open as upShade } from '../state/upgradeShade'
 
 import type { UpgradeShade } from '../state/upgradeShade'
 
-type UpKind = 'ver' | 'ui'
+type UpKind = 'ver' | 'ui' | 'behind'
+
+/* Which notice wins the one row. A pending release replaces the install, page
+   included, so it outranks both (a checkout that also sits behind its sources
+   still has the terminal's warning). A page behind its sources outranks a
+   rebuilt one: the reload the latter offers would come back behind as well, so
+   the row asks for the rebuild first, and the probe that sees it land takes
+   this notice down and lets the reload's take the row. */
+const RANK: Record<UpKind, number> = { ui: 0, behind: 1, ver: 2 }
 
 /* What build this window is running. Filled in from `system.version` once the
    socket is up, and unknown until then: the running install is the only thing
@@ -42,7 +51,7 @@ export function appVersionSet(v: string): void {
 let upKind: UpKind | null = null
 let upLatest: string | null = null
 
-/** Which of the two notices is up, for the reconnect that has to explain itself. */
+/** Which notice is up, for the reconnect that has to explain itself. */
 export const upgradeKind = (): UpKind | null => upKind
 
 /* The version the last notice named, retained here since `showUpNote` wrote
@@ -53,20 +62,38 @@ export const upgradeLatest = (): string | null => upLatest
 export function showUpNote(kind: UpKind, latest?: string | null): void {
   const note = document.getElementById('upnote')
   if (!note) return
-  /* a pending version upgrade outranks a rebuilt page: upgrading reloads anyway */
-  if (upKind === 'ver' && kind === 'ui') return
+  if (upKind && RANK[kind] < RANK[upKind]) return
   upKind = kind
   if (latest) upLatest = latest
-  const line = note.querySelector('.t') as HTMLElement
-  const rl = note.querySelector('.rl') as HTMLElement
-  if (kind === 'ver') {
-    line.textContent = upLatest ? t('gui.upg.note', { v: `v${upLatest}` }) : t('gui.upg.note_bare')
-    rl.textContent = t('gui.upg.go')
-  } else {
-    line.textContent = t('gui.update.note')
-    rl.textContent = t('gui.update.reload')
-  }
+  const [said, action] = wording(kind)
+  ;(note.querySelector('.t') as HTMLElement).textContent = said
+  ;(note.querySelector('.rl') as HTMLElement).textContent = action
   note.hidden = false
+}
+
+/* The row's line and its action word, per notice. */
+function wording(kind: UpKind): [string, string] {
+  if (kind === 'ver') return [upLatest ? t('gui.upg.note', { v: `v${upLatest}` }) : t('gui.upg.note_bare'), t('gui.upg.go')]
+  if (kind === 'behind') return [t('gui.update.behind'), t('gui.update.behind_how')]
+  return [t('gui.update.note'), t('gui.update.reload')]
+}
+
+/* The row, as the watch below found it. Only the behind-sources notice is ever
+   taken back down -- its reason is a fact about the disk that the next build
+   removes, and the probe that saw it go says so -- and that probe only runs
+   once the watch has the row, so this is the one reach it needs. */
+let noteRow: HTMLElement | null = null
+
+function hideBehindNote(): void {
+  if (upKind !== 'behind') return
+  if (noteRow) noteRow.hidden = true
+  upKind = null
+}
+
+/* The click for a page behind its sources. The page cannot rebuild itself, so
+   what it can do is say where and how. */
+function explainBehind(): void {
+  confirmAsk(t('gui.update.behind_title'), t('gui.update.behind_body'), t('gui.close'), () => {})
 }
 
 /* An upgrade outlives the page that started it: serve exits, a detached helper
@@ -184,7 +211,12 @@ export function watchUpgrade(shade: UpgradeShade, since?: number): void {
    same question this watcher asks on a timer. */
 let distBase: string | null = null
 
-const distProbe = async (): Promise<string | null> => {
+/* One look at the served page: the validator of the build on disk, and
+   whether the server judged that build older than the sources beside it (the
+   X-Raven-Page-Behind header, which only a source checkout ever sends). */
+interface DistSeen { tag: string | null; behind: boolean }
+
+const distProbe = async (): Promise<DistSeen | null> => {
   /* Only the built page has a dist to watch. Under `vite dev` the dev server
      owns '/' and answers with a fresh validator after every edit it hot-reloads,
      so this probe would read the developer's own typing as a new build. */
@@ -192,7 +224,10 @@ const distProbe = async (): Promise<string | null> => {
   try {
     const r = await fetch('/', { method: 'HEAD', cache: 'no-store' })
     if (!r.ok) return null
-    return r.headers.get('etag') || r.headers.get('last-modified') || null
+    return {
+      tag: r.headers.get('etag') || r.headers.get('last-modified') || null,
+      behind: r.headers.has('x-raven-page-behind'),
+    }
   } catch { return null }
 }
 
@@ -201,9 +236,9 @@ const distProbe = async (): Promise<string | null> => {
    against all answer false -- reloading on a maybe would throw a live
    transcript away for nothing. */
 export async function distMoved(): Promise<boolean> {
-  const tag = await distProbe()
-  if (tag === null || distBase === null) return false
-  return tag !== distBase
+  const seen = await distProbe()
+  if (seen === null || seen.tag === null || distBase === null) return false
+  return seen.tag !== distBase
 }
 
 /* Deliberately NOT skipped while a notice is already showing. It used to be,
@@ -213,10 +248,13 @@ export async function distMoved(): Promise<boolean> {
    watching for it. showUpNote already arbitrates which notice wins, so the
    ranking does not need a second gate here. */
 const probe = async (): Promise<void> => {
-  const tag = await distProbe()
-  if (tag === null) return
-  if (distBase === null) { distBase = tag; return }
-  if (tag !== distBase) showUpNote('ui')
+  const seen = await distProbe()
+  if (seen === null) return
+  if (seen.behind) showUpNote('behind')
+  else hideBehindNote()
+  if (seen.tag === null) return
+  if (distBase === null) { distBase = seen.tag; return }
+  if (seen.tag !== distBase) showUpNote('ui')
 }
 
 /* Whether the watch below ever started. The tab-visible probe is registered
@@ -234,7 +272,12 @@ export function onVisible(): void {
 export function watchForUpdates(): void {
   const note = document.getElementById('upnote')
   if (!note) return
-  note.onclick = () => { if (upKind === 'ver') askUpgrade(); else window.location.reload() }
+  noteRow = note
+  note.onclick = () => {
+    if (upKind === 'ver') askUpgrade()
+    else if (upKind === 'behind') explainBehind()
+    else window.location.reload()
+  }
   /* The click stays wired either way -- the version notice this row also
      carries comes from the gateway, which the dev server proxies. Only the
      dist watch is built-page-only; see distProbe. */

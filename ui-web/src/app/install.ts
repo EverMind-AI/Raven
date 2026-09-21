@@ -391,8 +391,10 @@ export function installDevHooks(): void {
   hooks.__clarify = (p: unknown) => clarifyRequest(p || { request_id: 'dev', question: '预览', choices: ['A', 'B'] })
 
   // The update row's version state only appears when a release is actually
-  // newer, which never happens on a dev checkout (window.__upnote('ver', '0.1.11')).
-  hooks.__upnote = (kind: 'ver' | 'ui', latest?: string) => showUpNote(kind || 'ver', latest)
+  // newer, which never happens on a dev checkout (window.__upnote('ver', '0.1.11')),
+  // and its behind-sources state only on a served checkout whose dist is stale
+  // (window.__upnote('behind')).
+  hooks.__upnote = (kind: 'ver' | 'ui' | 'behind', latest?: string) => showUpNote(kind || 'ver', latest)
 
   /* The approval sheet only appears when an engine asks for one, which is too
      long a loop to design a sheet in (window.__approve('rm -rf build/')). */
