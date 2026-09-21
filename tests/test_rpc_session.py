@@ -1886,6 +1886,38 @@ async def test_archiving_a_session_with_no_transcript_says_so(tmp_path: Path, mo
     assert mgr.get_or_create(session_key).metadata.get("archived") is True
 
 
+async def test_a_refused_write_is_reported_rather_than_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A filesystem that refuses the append answers pending, not success.
+
+    The flag is still applied in memory so the session behaves as asked for as
+    long as this process lives, but the reply says it did not reach the disk --
+    a client that takes the row off its list on a plain success would find it
+    back on the next load.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_100000_refused"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "hello")
+    mgr.save(session)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    def refuse(*_args: object, **_kwargs: object) -> bool:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(mgr, "append_metadata_patch", refuse)
+
+    result = await session_archive({"session_id": session_key, "archived": True})
+    assert result == {"archived": True, "session_key": session_key, "pending": True}
+    assert mgr.get_or_create(session_key).metadata["archived"] is True
+    assert SessionManager(tmp_path).peek(session_key).metadata.get("archived") is None
+
+
 async def test_session_archive_via_dispatcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)

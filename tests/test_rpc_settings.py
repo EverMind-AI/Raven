@@ -1239,7 +1239,7 @@ def _tool_row(name: str, call_id: str) -> dict:
     }
 
 
-def _transcript(home, name: str, days_ago: int, calls: list[str]) -> None:
+def _transcript(home, name: str, days_ago: int, calls: list[str], channel: str = "tui") -> None:
     """One session file carrying tool calls, with its mtime set by ``days_ago``.
 
     Nothing in the reply may be counted off it -- the cases below are about a
@@ -1248,10 +1248,10 @@ def _transcript(home, name: str, days_ago: int, calls: list[str]) -> None:
     import os
     from datetime import datetime, timedelta
 
-    d = home / "workspace" / "sessions" / "tui"
+    d = home / "workspace" / "sessions" / channel
     d.mkdir(parents=True, exist_ok=True)
     f = d / f"{name}.jsonl"
-    rows = [{"_type": "metadata", "key": f"tui:{name}", "metadata": {"title": name}}]
+    rows = [{"_type": "metadata", "key": f"{channel}:{name}", "metadata": {"title": name}}]
     rows.append({"role": "assistant", "tool_calls": [{"id": f"{name}-1", "name": c} for c in calls]})
     f.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
     when = (datetime.now() - timedelta(days=days_ago)).timestamp()
@@ -1283,6 +1283,22 @@ async def test_usage_counts_a_tool_call_on_the_day_it_was_recorded(telemetry, tm
     r = await rpc_console.settings_usage({"from": _iso(41), "to": _iso(0)})
     assert sorted(c["name"] for c in r["tools"]["counts"]) == ["exec", "grep"]
     assert r["tools"]["total"] == 2
+
+
+async def test_usage_names_the_sessions_the_range_saw(telemetry, tmp_path):
+    """Titles come from the transcripts of the sessions telemetry named.
+
+    A transcript is read for its title and for nothing else, and only when the
+    range saw that session at all -- which the telemetry answers, so the file
+    system never gets a vote on what the range covers.
+    """
+    telemetry(1, [_telemetry_row("a", 1.0)])
+    _transcript(tmp_path, "s1", 0, [], channel="web")
+    _transcript(tmp_path, "elsewhere", 0, [], channel="web")
+
+    r = await rpc_console.settings_usage({"from": _iso(5), "to": _iso(0)})
+    assert r["sessions"] == ["web:s1"]
+    assert r["session_titles"] == {"web:s1": "s1"}
 
 
 async def test_usage_from_is_clamped_and_reversed_range_refused(telemetry):
