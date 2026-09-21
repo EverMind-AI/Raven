@@ -50,6 +50,11 @@ without: at most one call, before any other work, recommending the default. Wher
 no user to ask (the request came from another agent), take the defaults. Say in the reply
 which of the four were defaults.
 
+Use what the user handed over as much as you can, before anything the rules below go and
+get: their documents and data are the material, their pictures are the pictures. A `.pptx`
+they attached is a template, and a deck on a template is the engine's work, not this
+skill's: the host routes it there before this skill is read.
+
 ## Rules
 
 1. Invent no number, no source, no person, no place. Search first. What the search does not
