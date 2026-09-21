@@ -408,7 +408,7 @@ async def build_rpc_stack(
 
                 begin_drain()
                 if agent_loop is not None:
-                    await agent_loop.subagents.cancel_all()
+                    await agent_loop.subagents.cancel_all(reason="the server stopped")
             except Exception:
                 logger.exception("serve: cancelling in-flight sub-agents failed; continuing shutdown")
         if turn_teardown is not None:

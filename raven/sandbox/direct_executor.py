@@ -146,6 +146,18 @@ class DirectExecutor(SandboxExecutor):
         )
         process = await asyncio.create_subprocess_shell(
             command,
+            # Pointed at /dev/null rather than inherited, so a read returns
+            # EOF at once -- an open read-only fd, not a closed one, and the
+            # same thing the background executor passes. Inherited, the command
+            # shares this process's stdin -- and when raven runs as an ACP
+            # sub-agent that is the pipe the client answers permission
+            # requests on. A command that
+            # reads its stdin (ssh without -n, cat, python3 -) then consumes the
+            # frames arriving while it runs, and every other session sharing the
+            # process waits out the 300 s approval deadline on an answer that was
+            # written and eaten. Measured 2026-09-15: four sessions, one process,
+            # 18 of 183 approvals lost, each inside another session's ssh.
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,

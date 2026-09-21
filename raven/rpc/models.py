@@ -386,7 +386,7 @@ class TurnStartedDelegated(_Strict):
 
     kind: Literal["spawn", "dag"]
     label: str
-    status: Literal["ok", "error", "exception", "notice"]
+    status: Literal["ok", "error", "exception", "notice", "cancelled"]
     run_id: str | None = None
     node_id: str | None = Field(
         None,
@@ -627,7 +627,7 @@ class CronDeliveredEvent(_Strict):
 class SubagentDeliveredPayload(_Strict):
     kind: Literal["spawn", "dag"]
     label: str = Field(..., description="The spawn's display label, or the dag's run_id.")
-    status: Literal["ok", "error", "exception", "notice"]
+    status: Literal["ok", "error", "exception", "notice", "cancelled"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
     node_id: str | None = Field(
         default=None,
@@ -2660,7 +2660,7 @@ class TranscriptDelegated(_Strict):
 
     kind: Literal["spawn", "dag"]
     label: str
-    status: Literal["ok", "error", "exception", "notice"]
+    status: Literal["ok", "error", "exception", "notice", "cancelled"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
     node_id: str | None = Field(
         default=None,

@@ -512,7 +512,7 @@ def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
     src = inspect.getsource(gateway_commands.register)
     stop_branch = src.split('if cmd == "/stop":', 1)[1].split('elif cmd == "/restart":', 1)[0]
     assert "cancel_conversation(cid)" in stop_branch
-    assert "cancel_by_session(cid)" in stop_branch
+    assert "cancel_by_session(cid, reason=" in stop_branch
     assert "stopped +=" in stop_branch
 
 
@@ -784,7 +784,7 @@ def test_the_gateway_shutdown_cancels_subagents_before_it_closes_the_transports(
     # same spines down in its own order, pinned by test_generation_swap.py.
     shutdown = src[src.index("except KeyboardInterrupt:") :]
     drain = shutdown.index("begin_drain()")
-    cancel = shutdown.index("await agent.subagents.cancel_all()")
+    cancel = shutdown.index("await agent.subagents.cancel_all(reason=")
     pool = shutdown.index("await close_pool()")
 
     assert drain < cancel < pool
@@ -797,7 +797,7 @@ def test_the_gateway_shutdown_cancels_subagents_before_the_page_spine_seals() ->
     already cancels before the mount goes; the shutdown path has to match."""
     src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "gateway_commands.py").read_text(encoding="utf-8")
     shutdown = src[src.index("except KeyboardInterrupt:") :]
-    cancel = shutdown.index("await agent.subagents.cancel_all()")
+    cancel = shutdown.index("await agent.subagents.cancel_all(reason=")
     page = shutdown.index("await page_mount.teardown()")
     spine = shutdown.index("await gw_teardown()")
 

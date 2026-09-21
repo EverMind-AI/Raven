@@ -284,7 +284,7 @@ export interface TranscriptNotice {
 export interface TranscriptDelegated {
   kind: 'spawn' | 'dag';
   label: string;
-  status: 'ok' | 'error' | 'exception' | 'notice';
+  status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
   /**
    * Set for kind=dag, so a client can open the run.
    */
@@ -1268,7 +1268,7 @@ export interface TurnStartedEvent {
     delegated?: {
       kind: 'spawn' | 'dag';
       label: string;
-      status: 'ok' | 'error' | 'exception' | 'notice';
+      status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
       /**
        * Which node of the run this is about. Present only on `kind: dag` with `status: exception`, where the report concerns one node rather than the whole run.
        */
@@ -1547,7 +1547,7 @@ export interface SubagentDeliveredEvent {
      * The spawn's display label, or the dag's run_id.
      */
     label: string;
-    status: 'ok' | 'error' | 'exception' | 'notice';
+    status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
     /**
      * Set for kind=dag, so a client can open the run.
      */

@@ -90,6 +90,9 @@ export const deliveredMessageKey = (status: TranscriptDelegated['status']): stri
   if (status === 'exception') {
     return 'gui.deleg.delivered_exception'
   }
+  if (status === 'cancelled') {
+    return 'gui.deleg.delivered_cancelled'
+  }
   return 'gui.deleg.delivered'
 }
 

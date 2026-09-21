@@ -46,7 +46,7 @@ class _FakeSubagents:
     def set_delivery_sink(self, fn) -> None:
         self.delivery_sink = fn
 
-    async def cancel_all(self) -> None:
+    async def cancel_all(self, *, reason: str = "") -> None:
         # Reached by an owning stack's teardown, which logs and swallows what
         # this raises -- so without it a real assertion failure in such a test
         # is reported behind an AttributeError traceback that is not the bug.
@@ -454,7 +454,7 @@ async def test_a_cancel_that_fails_does_not_keep_the_spine_from_sealing(monkeypa
     loop = _FakeLoop(_FakeCron())
     monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
 
-    async def _failing_cancel() -> None:
+    async def _failing_cancel(*, reason: str = "") -> None:
         raise RuntimeError("cancel blew up")
 
     loop.subagents.cancel_all = _failing_cancel
@@ -481,7 +481,7 @@ def test_the_served_shutdown_stops_subagents_before_it_stops_the_backend() -> No
     """Closing the memory adapter while a sub-agent run is still going fails
     that run's next write for a reason the service had no part in."""
     src = (Path(__file__).resolve().parents[1] / "raven" / "rpc" / "bootstrap.py").read_text(encoding="utf-8")
-    cancel = src.index("await agent_loop.subagents.cancel_all()")
+    cancel = src.index("await agent_loop.subagents.cancel_all(reason=")
     stop = src.index("await agent_loop.backend.stop()")
 
     assert cancel < stop

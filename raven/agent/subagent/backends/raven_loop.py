@@ -73,6 +73,32 @@ def _append_participant_note(messages: list[dict[str, Any]], note: str) -> None:
         messages[-1]["content"] = note
 
 
+def _withheld_here(tools: ToolRegistry, mcp_source: "McpSource | None") -> frozenset[str]:
+    """Which of this run's tools are not on offer right now.
+
+    Two sources, asked per assembly the way ``AgentLoop._withheld_tool_names``
+    asks them: the operator's MCP blacklist, and every registered tool that
+    says it is unconfigured. This lane builds its own registry, so without the
+    second source a source install without the browser extra advertised eight
+    ``browser_*`` tools to a delegated run that could only watch them fail --
+    the main loop withholds exactly those, and a delegated run is not a
+    different deployment.
+    """
+    withheld: set[str] = set(mcp_source.disabled_tools()) if mcp_source is not None else set()
+    for name in tools.names():
+        spec = tools.spec_of(name)
+        if spec is None or spec.configured is None:
+            continue
+        try:
+            offered = bool(spec.configured())
+        except Exception as exc:
+            logger.warning("tool {} could not say whether it is configured: {}", name, exc)
+            continue
+        if not offered:
+            withheld.add(name)
+    return frozenset(withheld)
+
+
 def build_subagent_prompt(
     agent_home: Path,
     work_dir: Path,
@@ -343,8 +369,7 @@ class RavenLoopBackend:
 
         _verifier = DefaultAction()
         tools = ToolRegistry(permission_gate=gate, verifier_provider=lambda: _verifier)
-        if self.mcp_source is not None:
-            tools.set_withheld_source(self.mcp_source.disabled_tools)
+        tools.set_withheld_source(lambda: _withheld_here(tools, self.mcp_source))
         for wrapper, origin in grant.for_registry():
             tools.register(wrapper, origin=origin)
 
@@ -404,6 +429,14 @@ class RavenLoopBackend:
             tools.register(
                 WebFetchTool(api_key=self._web_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
             )
+        # The same browser the parent drives, in a tab of this run's own: the
+        # tools name the run in flight as their owner, so two sub-agents
+        # browsing at once are two tabs, never one page typed into twice.
+        from raven.agent.tools.browser import browser_tools
+
+        for tool in browser_tools():
+            if allowed(tool.name):
+                tools.register(tool)
 
         # A resumed instance brings its own history, system prompt included;
         # rebuilding the prompt here would append a second system turn. A

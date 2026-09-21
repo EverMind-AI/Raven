@@ -92,6 +92,18 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A sub-agent run that is stopped now tells the conversation that started
+  it, and says why: `[Subagent '...' was cancelled]` with the reason (`the
+  gateway stopped`, `the user sent /stop`, `a user stopped this run`, ...),
+  the instance handle to resume from, and the directory the run was
+  dispatched to work in. The parent used to hear nothing: the cancel branch
+  wrote the record and a live-only status event, so a session whose run was
+  cancelled under it kept a "started" receipt with nothing after it, and
+  the artifacts that run had produced were never mentioned again. The
+  record's `error.md` carries the same reason, every announcement now names
+  its working directory, and the delivered marker both UIs draw gained a
+  `cancelled` status so a stop is not drawn as a result or a failure.
+
 - A sub-agent that finishes while the host is shutting down no longer loses its
   result. Its announce submits a turn to a scheduler that is already draining;
   the refusal escaped the announcing task, and the only trace was asyncio's
@@ -133,6 +145,15 @@ All notable changes to Raven are documented here.
   ledger (plus what it submitted itself), and `ops_declare` refuses a
   `remote_dir` a live sibling campaign is still writing rounds into.
 
+- A command run by `exec` no longer reads this process's stdin. It inherited
+  it, and when raven serves as an ACP sub-agent that stdin is the pipe the
+  client answers permission requests on: a command that reads its input
+  (`ssh` without `-n`, `cat`, `python3 -`) consumed the frames arriving while
+  it ran, and every other session sharing the process waited out the 300 s
+  approval deadline on an answer the client had written within a millisecond.
+  Measured with four sessions in one process: 18 of 183 approvals lost, each
+  inside another session's `ssh`. The command's stdin now reads EOF at once, as the
+  background executor's already did.
 - The web file viewer opens a sub-agent's report again. `/file` anchored the
   state-directory fence on the session's working directory whenever the page
   named a session, so the fence exempted `~/.raven/tmp/<channel>` and refused

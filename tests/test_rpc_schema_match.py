@@ -445,6 +445,17 @@ def test_schema_match_the_boundary_a_suspended_dag_node_emits(schema: dict[str, 
         jsonschema.validate(shape, {**schema["components"]["schemas"]["TurnEvent"], "components": schema["components"]})
         TypeAdapter(TurnEvent).validate_python(shape)
 
+    # And the fifth: a spawn stopped before it finished (the manager's
+    # CancelledError branch announces it). Declared on both sides so a client
+    # draws a stop as a stop, not as the result the run never returned.
+    cancelled = {"kind": "spawn", "label": "poster", "status": "cancelled", "content": "..."}
+    for shape in (
+        {"type": "turn.started", "payload": {"turn_id": "t1", "delegated": cancelled}},
+        {"type": "subagent.delivered", "payload": cancelled},
+    ):
+        jsonschema.validate(shape, {**schema["components"]["schemas"]["TurnEvent"], "components": schema["components"]})
+        TypeAdapter(TurnEvent).validate_python(shape)
+
 
 def test_schema_match_the_stall_notice_progress_event(schema: dict[str, Any]) -> None:
     """`dag.node_stalled` is what the stall watcher's progress event becomes on

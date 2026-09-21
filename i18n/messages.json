@@ -527,6 +527,10 @@
       "en": "failed; the error just joined this conversation",
       "zh": "运行失败，失败详情已注入本轮对话"
     },
+    "gui.deleg.delivered_cancelled": {
+      "en": "was cancelled before it finished; the notice just joined this conversation",
+      "zh": "运行被取消，未完成，取消通知已注入本轮对话"
+    },
     "gui.deleg.delivered_exception": {
       "en": "hit an exception and is waiting on a decision; its report just joined this conversation",
       "zh": "遇到异常，等待裁决，报告已注入本轮对话"

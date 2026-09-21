@@ -1133,6 +1133,17 @@ class AskUserToolConfig(Base):
     timeout: int = Field(default=600, gt=0)  # seconds, per call not per question
 
 
+class BrowserToolConfig(Base):
+    """Browser tools configuration."""
+
+    headful_on_agent_use: bool = False
+    """Pop the shared browser out into a real Chromium window the first time the
+    model acts on it (a navigate or a new tab), instead of leaving it headless in
+    the panel. Off by default: the window belongs to the person at the machine, so
+    a deployment without a desktop to pop into (a server, CI) must not be assumed
+    to want one -- and the agent's reads and clicks work the same either way."""
+
+
 class MediaToolConfig(Base):
     """Config for a media-generation tool (key + base + model).
 
@@ -1295,6 +1306,7 @@ class ToolsConfig(Base):
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
+    browser: BrowserToolConfig = Field(default_factory=BrowserToolConfig)
     ask_user: AskUserToolConfig = Field(default_factory=AskUserToolConfig)
     media: MediaGenConfig = Field(default_factory=MediaGenConfig)
     deep_research: DeepResearchToolConfig = Field(default_factory=DeepResearchToolConfig)

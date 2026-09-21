@@ -90,7 +90,7 @@ class RavenRuntime:
         process-lifetime transports are interleaved.
         """
         await self.loop.stop_plugin_services()
-        await self.loop.subagents.cancel_all()
+        await self.loop.subagents.cancel_all(reason="the gateway reloaded")
         await self.loop.close_mcp()
         self.loop.stop()
         # The context builder started a skill watcher in __init__, so it goes

@@ -29,6 +29,7 @@ from raven.agent import workdir
 from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
+from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.subagent.registry import AgentRegistry
 from raven.config.schema import (
@@ -3631,7 +3632,12 @@ async def test_cancel_all_gives_up_on_a_run_that_ignores_its_cancellation() -> N
     stubborn = asyncio.create_task(_deaf())
     await started.wait()
     stub = SimpleNamespace(
-        _running_tasks={"h1": stubborn}, _record_tasks=[], _unprompted_trailing={}, _unprompted_held={}
+        _running_tasks={"h1": stubborn},
+        _record_tasks=[],
+        _unprompted_trailing={},
+        _unprompted_held={},
+        _cancel_reasons={},
+        _unstarted={},
     )
 
     with patch.object(manager_mod, "_CANCEL_DRAIN_TIMEOUT_S", 0.05):
@@ -4148,3 +4154,233 @@ def test_an_agent_with_no_menu_offers_no_model(monkeypatch) -> None:
     assert mgr.agent_model_choices("Researcher") == ()
     with pytest.raises(ValueError):
         mgr.set_instance_model("s1", "Researcher", "h1", "anything")
+
+
+# --- a cancelled run tells its parent -------------------------------------------
+
+
+class _HoldingBackend:
+    """A backend whose run blocks until it is cancelled, so the cancel path can be driven."""
+
+    streams = False
+
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+
+    async def run(self, task: str, **kwargs: Any) -> str:
+        self.entered.set()
+        await asyncio.Event().wait()
+        return "never"
+
+
+class _HoldingRegistry(_OneBackendRegistry):
+    """The one-backend table, also answering the sweep ``remember_origin`` makes."""
+
+    def backends(self) -> list[Any]:
+        return [self._backend]
+
+
+def _cancel_harness(tmp_path: Path, monkeypatch) -> tuple[SubagentManager, _HoldingBackend, list[Any]]:
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1)
+    backend = _HoldingBackend()
+    mgr.registry = _HoldingRegistry(backend)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    submitted: list[Any] = []
+    mgr.set_submit(lambda req: submitted.append(req))
+    return mgr, backend, submitted
+
+
+async def _spawn_and_wait(mgr: SubagentManager, backend: _HoldingBackend, *, summary: str = "poster") -> str:
+    receipt = await mgr.spawn(
+        task="draw the poster",
+        task_summary=summary,
+        agent="Coder",
+        session_key="tui:s1",
+        origin_channel="tui",
+        origin_chat_id="default",
+    )
+    assert "started" in receipt
+    await asyncio.wait_for(backend.entered.wait(), 5)
+    (task_id,) = list(mgr._running_tasks)
+    return task_id
+
+
+async def test_a_cancelled_run_is_announced_to_its_parent_with_the_reason(tmp_path, monkeypatch):
+    """The parent used to hear nothing: the CancelledError branch wrote the
+    record and the status event, and the status event is live-only. A session
+    whose run was stopped under it kept a 'started' receipt with nothing after."""
+    mgr, backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    task_id = await _spawn_and_wait(mgr, backend)
+
+    assert await mgr.cancel_by_id(task_id, reason="a test stopped it")
+
+    (req,) = submitted
+    assert req.conversation == "tui:s1"
+    assert req.delegated == {"kind": "spawn", "label": "poster", "status": "cancelled"}
+    assert "[Subagent 'poster' was cancelled]" in req.text
+    assert "Cancelled: a test stopped it" in req.text
+    assert f"Working directory: {tmp_path}" in req.text
+    assert "Record:" not in req.text, "a run that wrote no answer has no out.md to point at"
+    (meta_path,) = list(mgr.session_dir_for("tui:s1").rglob("*.meta.json"))
+    assert json.loads(meta_path.read_text(encoding="utf-8"))["status"] == "cancelled"
+    (error_path,) = list(mgr.session_dir_for("tui:s1").rglob("*.error.md"))
+    assert error_path.read_text(encoding="utf-8") == "Cancelled: a test stopped it"
+    assert mgr._cancel_reasons == {}
+
+
+async def test_cancel_all_tells_every_parent_why(tmp_path, monkeypatch):
+    mgr, backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    await _spawn_and_wait(mgr, backend)
+
+    await mgr.cancel_all(reason="the gateway stopped")
+
+    (req,) = submitted
+    assert "[Subagent 'poster' was cancelled]" in req.text
+    assert "Cancelled: the gateway stopped" in req.text
+    assert mgr._cancel_reasons == {}
+
+
+async def test_a_bare_task_cancel_still_announces_with_no_stated_reason(tmp_path, monkeypatch):
+    """A cancellation that reaches the run without passing through a cancel
+    method -- its parent task torn down, a caller holding the task itself --
+    is still announced, saying no reason was given rather than inventing one."""
+    mgr, backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    task_id = await _spawn_and_wait(mgr, backend)
+
+    task = mgr._running_tasks[task_id]
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    (req,) = submitted
+    assert manager_mod.UNEXPLAINED_CANCEL in req.text
+
+
+async def test_a_run_cancelled_while_queued_behind_the_gate_is_announced_too(tmp_path, monkeypatch):
+    """Before dispatch there is no record to finish, but the parent was still
+    handed a 'started' receipt, so the stop has to be announced from the outer
+    frame; the announcement then has no record to point at."""
+    mgr, backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    first = await _spawn_and_wait(mgr, backend)
+    receipt = await mgr.spawn(
+        task="second poster",
+        task_summary="second",
+        agent="Coder",
+        session_key="tui:s1",
+        origin_channel="tui",
+        origin_chat_id="default",
+    )
+    assert "started" in receipt
+    try:
+        second = next(tid for tid in mgr._running_tasks if tid != first)
+        # Let the second task start and park on the gate: a task cancelled
+        # before its first step never enters its body, so nothing would run.
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert await mgr.cancel_by_id(second, reason="a test stopped the queued one")
+
+        (req,) = submitted
+        assert "[Subagent 'second' was cancelled]" in req.text
+        assert "Cancelled: a test stopped the queued one" in req.text
+        assert "Record:" not in req.text
+        assert not list(mgr.session_dir_for("tui:s1").rglob("second*.meta.json")), "a queued run opened no record"
+    finally:
+        await mgr.cancel_all()
+
+
+async def _spawn_without_yielding(
+    mgr: SubagentManager, monkeypatch, *, summary: str = "poster"
+) -> tuple[str, list[str]]:
+    """Spawn and hand back the task id with a record of whether the body ever ran."""
+    entered: list[str] = []
+    real = mgr._run_subagent
+
+    async def spy(task_id, *args, **kwargs):
+        entered.append(task_id)
+        return await real(task_id, *args, **kwargs)
+
+    monkeypatch.setattr(mgr, "_run_subagent", spy)
+    receipt = await mgr.spawn(
+        task="draw the poster",
+        task_summary=summary,
+        agent="Coder",
+        session_key="tui:s1",
+        origin_channel="tui",
+        origin_chat_id="default",
+    )
+    assert "started" in receipt
+    (task_id,) = list(mgr._running_tasks)
+    return task_id, entered
+
+
+async def test_a_run_cancelled_before_its_first_step_is_still_announced(tmp_path, monkeypatch):
+    """``spawn()`` returns once the task exists, so a caller can cancel it before
+    it has taken a step -- and asyncio closes an unstarted coroutine without
+    entering it, so neither CancelledError handler in the body runs. The cancel
+    method then owes what the body would have done: the registry row, the
+    status event and the announcement, or the parent keeps only its receipt."""
+    mgr, _backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    events: list[dict[str, Any]] = []
+
+    async def sink(_key: str, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    mgr.set_delivery_sink(sink)
+    task_id, entered = await _spawn_without_yielding(mgr, monkeypatch)
+
+    # No await between spawn and cancel: the task has not run.
+    assert await mgr.cancel_by_id(task_id, reason="a test stopped it at once")
+    await asyncio.sleep(0)
+
+    assert entered == [], "the body never ran, so this is the unstarted case, not the one the inner handler covers"
+    (req,) = submitted
+    assert req.delegated == {"kind": "spawn", "label": "poster", "status": "cancelled"}
+    assert "[Subagent 'poster' was cancelled]" in req.text
+    assert "Cancelled: a test stopped it at once" in req.text
+    statuses = [e["payload"]["status"] for e in events if e["type"] == "subagent.status"]
+    assert statuses == ["pending", "cancelled"]
+    rows = [r for r in get_registry().list_instances("tui:s1") if r.get("handle") == task_id]
+    assert [r["status"] for r in rows] == ["cancelled"]
+    assert mgr._unstarted == {} and mgr._cancel_reasons == {}
+
+
+async def test_cancel_all_reports_the_runs_it_stopped_before_they_started(tmp_path, monkeypatch):
+    mgr, _backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    _task_id, entered = await _spawn_without_yielding(mgr, monkeypatch)
+
+    await mgr.cancel_all(reason="the gateway stopped")
+
+    assert entered == []
+    (req,) = submitted
+    assert "[Subagent 'poster' was cancelled]" in req.text and "Cancelled: the gateway stopped" in req.text
+    assert mgr._unstarted == {}
+
+
+async def test_a_run_that_did_start_is_reported_once(tmp_path, monkeypatch):
+    """The body pops its own entry first thing, so the cancel method must not
+    report a run the inner handler already announced."""
+    mgr, backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    task_id = await _spawn_and_wait(mgr, backend)
+    assert mgr._unstarted == {}
+
+    assert await mgr.cancel_by_id(task_id, reason="a test stopped it")
+
+    assert len(submitted) == 1
+
+
+async def test_announce_result_names_the_working_directory(monkeypatch):
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(lambda req: submitted.append(req))
+
+    await mgr._announce_result(
+        task_id="t1",
+        task_summary="label",
+        task="task",
+        result="result",
+        origin={"channel": "tui", "chat_id": "default", "session_key": "tui:sess", "workspace": Path("/work/here")},
+        status="ok",
+    )
+
+    assert "Working directory: /work/here" in submitted[0].text
+    assert "[Subagent 'label' returned]" in submitted[0].text
