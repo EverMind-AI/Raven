@@ -7,14 +7,18 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from raven.config.paths import get_data_dir, get_sandbox_dir
 from raven.sandbox import (
@@ -275,6 +279,48 @@ class TestDirectExecutor:
         result = await e.exec("sleep 10", timeout=0.1)
         assert result.exit_code == -1
         assert "Timed" in result.stderr
+
+    async def test_the_command_does_not_read_this_process_stdin(self):
+        """A command that reads stdin gets EOF at once, not raven's own stdin.
+
+        Run as an ACP sub-agent, this process's stdin is the pipe the client
+        answers permission requests on. A command inheriting it (``ssh``
+        without ``-n``, ``cat``, ``python3 -``) consumed the frames arriving
+        while it ran, and every other session in the process waited out the
+        approval deadline on an answer that had been written. Measured
+        2026-09-15: four sessions in one process, 18 of 183 approvals lost.
+
+        The check runs in a child interpreter fed a byte on its stdin, rather
+        than swapping this process's fd 0: a test that only runs ``cat`` proves
+        nothing, because under pytest fd 0 is already at EOF and the inheriting
+        spawn reads nothing either -- it passes against the very implementation
+        it is meant to catch, measured both ways -- while dup2 over fd 0 here
+        would reach into the capture pytest itself installed on it. With a
+        readable fd 0 the two diverge: inherited, the child prints the byte and
+        leaves its parent's stdin drained; closed, the byte is still there for
+        the parent to read afterwards, which is the property that matters.
+        """
+        probe = textwrap.dedent(
+            f"""
+            import asyncio, sys
+            sys.path.insert(0, {str(REPO_ROOT)!r})
+            from raven.sandbox import DirectExecutor
+
+            result = asyncio.run(DirectExecutor().exec("cat; echo done", timeout=5))
+            print("CHILD:" + result.stdout.strip())
+            print("LEFT:" + sys.stdin.read())
+            """
+        )
+        done = subprocess.run(  # noqa: S603 -- this interpreter, a literal script
+            [sys.executable, "-c", probe],
+            input=b"frame\n",
+            capture_output=True,
+            timeout=60,
+        )
+        assert done.returncode == 0, done.stderr.decode("utf-8", errors="replace")
+        out = done.stdout.decode()
+        assert "CHILD:done" in out, "the command read its parent's stdin"
+        assert "LEFT:frame" in out, "the command drained its parent's stdin"
 
     async def test_timeout_keeps_the_output_already_produced(self):
         """A timeout must hand back the part that already ran.
