@@ -3404,16 +3404,16 @@
       "zh": "完全访问"
     },
     "gui.perm.full_h": {
-      "en": "No prompts - but operations that the platform deems dangerous are still refused.",
-      "zh": "不弹审批；平台级高危操作仍会被拒绝"
+      "en": "No prompts, and it may run dangerous operations; deny rules still hold.",
+      "zh": "不弹审批，可能执行危险操作；禁止规则仍然生效"
     },
     "gui.perm.smart": {
       "en": "smart",
       "zh": "智能模式"
     },
     "gui.perm.smart_h": {
-      "en": "An AI reviewer pre-screens each action and asks you only when unsure.",
-      "zh": "AI 预审每个操作，拿不准才请求你审批"
+      "en": "The model decides when to ask for approval.",
+      "zh": "模型决定是否请求审批"
     },
     "gui.perm.title": {
       "en": "Permission mode",
