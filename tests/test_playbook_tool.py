@@ -6,6 +6,8 @@ give a model: the listing it chooses from, the enum that bounds the choice, and
 ``fills`` being able to complete a playbook but never to edit one.
 """
 
+import asyncio
+
 import pytest
 
 from raven.agent.tools.load_playbook import LoadPlaybookTool
@@ -131,6 +133,22 @@ def test_tool_schema_refreshes_after_adoption_in_the_same_turn(runtime):
     from raven.agent.tools.params import validate_params
 
     assert validate_params(loader.parameters, {"name": "monthly-feedback"}) == []
+
+
+async def test_preselected_playbook_is_isolated_between_concurrent_turns(tmp_path):
+    loader = LoadPlaybookTool(_runtime(tmp_path, [_spec(), _spec(name="monthly-feedback")]))
+
+    async def render(selected: str) -> str:
+        loader.set_preselected(selected)
+        await asyncio.sleep(0)
+        return loader.description
+
+    weekly, monthly = await asyncio.gather(render("weekly-feedback"), render("monthly-feedback"))
+
+    assert "selected 'weekly-feedback'" in weekly
+    assert "selected 'monthly-feedback'" not in weekly
+    assert "selected 'monthly-feedback'" in monthly
+    assert "selected 'weekly-feedback'" not in monthly
 
 
 async def test_running_by_name_dispatches_the_same_graph(tmp_path):

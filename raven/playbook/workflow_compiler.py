@@ -30,11 +30,14 @@ SYSTEM_PROMPT = """\
 You compile one accepted execution DAG into a reusable Playbook Workflow.
 Preserve its nodes, dependencies, worker aliases, skills, MCP names, inputs and
 instance continuity. Replace only concrete values inside promptTemplate that
-are expected to change between runs with ${params.<name>} references and declare those inputs. Do not
-invent extra steps and do not emit a prompt-mode template. Retrieval keywords
+are expected to change between runs with ${params.<name>} references and declare those inputs.
+Every declared input must carry the replaced concrete value as its default so
+the accepted prompt can be reconstructed exactly. Do not invent extra steps
+and do not emit a prompt-mode template. Retrieval keywords
 describe the user's domain and action, never the words playbook/workflow.
 The Harness is supplied separately and must not be rewritten here.
 """
+_PARAM_REF_RE = re.compile(r"\$\{params\.([A-Za-z_][A-Za-z0-9_-]*)\}")
 
 
 def _tool() -> list[dict[str, Any]]:
@@ -112,6 +115,24 @@ def _args(response: Any) -> dict[str, Any] | None:
     return None
 
 
+def _prompt_is_preserved(source: str, compiled: str, artifact: UnifiedPlaybookSpec) -> bool:
+    """Whether declared defaults restore the exact accepted instruction."""
+    if source == compiled:
+        return True
+    missing = False
+
+    def restore(match: re.Match[str]) -> str:
+        nonlocal missing
+        param = artifact.input_schema.properties.get(match.group(1))
+        if param is None or param.default is None:
+            missing = True
+            return ""
+        return str(param.default)
+
+    restored, references = _PARAM_REF_RE.subn(restore, compiled)
+    return references > 0 and not missing and restored == source
+
+
 def _preservation_errors(accepted: "SubAgentDagSpec", artifact: UnifiedPlaybookSpec) -> list[str]:
     """Ensure compilation parameterizes prompts without rewriting the proven graph."""
     if artifact.workflow is None:
@@ -127,9 +148,11 @@ def _preservation_errors(accepted: "SubAgentDagSpec", artifact: UnifiedPlaybookS
     actual = {node.id: node for node in artifact.workflow.nodes}
     for source in accepted.nodes:
         compiled = actual[source.id]
-        for field in ("subagent", "depends_on", "skills", "mcps", "inputs", "instance"):
+        for field in ("subagent", "node_summary", "depends_on", "skills", "mcps", "inputs", "instance"):
             if getattr(compiled, field) != getattr(source, field):
                 errors.append(f"node {source.id!r}: {field} changed during compilation")
+        if not _prompt_is_preserved(source.prompt_template, compiled.prompt_template, artifact):
+            errors.append(f"node {source.id!r}: prompt_template changed beyond declared parameter defaults")
     return errors
 
 

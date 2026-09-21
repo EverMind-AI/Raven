@@ -24,6 +24,7 @@ description of what ran.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from raven.contracts.tool import Tool
@@ -49,7 +50,7 @@ class LoadPlaybookTool(Tool):
         self._turn_message = ""
         self._turn_view: tuple[list[tuple[str, str]], list[str]] | None = None
         self._view_revision = -1
-        self._preselected: str | None = None
+        self._preselected: ContextVar[str | None] = ContextVar(f"load_playbook_preselected_{id(self)}", default=None)
 
     def bind_runtime(self, handles: "RuntimeHandles") -> None:
         """Receive the loop's assembled funnel; decline when there is none.
@@ -80,7 +81,7 @@ class LoadPlaybookTool(Tool):
 
     def set_preselected(self, name: str | None) -> None:
         """Expose the pre-turn resolver's choice to the model for this turn."""
-        self._preselected = name
+        self._preselected.set(name)
 
     def _library_view(self) -> tuple[list[tuple[str, str]], list[str]]:
         if self._runtime is None:
@@ -115,10 +116,11 @@ class LoadPlaybookTool(Tool):
         described = {pid for pid, _ in listing}
         rest = [n for n in names if n not in described]
         more = f"\nAlso installed (ask by name for details): {', '.join(rest)}." if rest else ""
+        preselected = self._preselected.get()
         selected = (
-            f"\nThe pre-turn resolver selected {self._preselected!r} for this request. "
+            f"\nThe pre-turn resolver selected {preselected!r} for this request. "
             "Call load_playbook with that exact name before improvising."
-            if self._preselected in names
+            if preselected in names
             else ""
         )
         return (

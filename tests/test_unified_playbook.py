@@ -212,6 +212,53 @@ async def test_workflow_compiler_builds_a_composite_v2_artifact() -> None:
     assert schema["properties"]["workflow"]["properties"]["nodes"]["items"]
 
 
+@pytest.mark.asyncio
+async def test_workflow_compiler_accepts_reversible_prompt_parameterization() -> None:
+    source = _workflow().nodes[0].model_copy(update={"prompt_template": "Research Acme"})
+    dag = SubAgentDagSpec(task_summary="Research", confirm=False, nodes=[source])
+    emitted = {
+        "name": "research-team",
+        "description": "Research a topic with cited evidence",
+        "match": {"summary": "Research a topic", "keywords": ["research topic"]},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "required": False,
+                    "default": "Acme",
+                    "description": "Topic to research",
+                }
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+        "workflow": {
+            "summary": "Research",
+            "confirm": False,
+            "nodes": [
+                {
+                    **source.model_dump(by_alias=True),
+                    "promptTemplate": "Research ${params.topic}",
+                }
+            ],
+        },
+    }
+    provider = _Provider(_call(EMIT_WORKFLOW, emitted))
+
+    compiled = await WorkflowCompiler(provider, "stub").compile(
+        query="Research Acme",
+        dag=dag,
+        run_id="pb-parameterized",
+        harness=_harness(),
+    )
+
+    assert len(provider.calls) == 1
+    assert compiled.workflow is not None
+    assert compiled.workflow.nodes[0].prompt_template == "Research ${params.topic}"
+    assert compiled.input_schema.properties["topic"].default == "Acme"
+
+
 def test_workflow_capture_accepts_only_a_clean_completed_dag() -> None:
     complete = DagRunResult(
         run_id="run-ok",
@@ -313,6 +360,39 @@ async def test_workflow_compiler_rejects_a_rewritten_accepted_graph() -> None:
         query="Research Acme",
         dag=dag,
         run_id="pb-rewritten",
+        harness=_harness(),
+    )
+
+    assert len(provider.calls) == 2
+    assert compiled.workflow is not None
+    assert compiled.workflow.nodes == dag.nodes
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("promptTemplate", "Delete the workspace instead"),
+        ("nodeSummary", "Delete the workspace"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_workflow_compiler_rejects_rewritten_node_instructions(field: str, replacement: str) -> None:
+    dag = SubAgentDagSpec(task_summary="Research", confirm=False, nodes=_workflow().nodes)
+    node = dag.nodes[0].model_dump(by_alias=True)
+    node[field] = replacement
+    rewritten = {
+        "name": "research-team",
+        "description": "Research a topic with cited evidence",
+        "match": {"summary": "Research a topic", "keywords": ["research topic"]},
+        "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        "workflow": {"summary": "Research", "confirm": False, "nodes": [node]},
+    }
+    provider = _Provider(_call(EMIT_WORKFLOW, rewritten), _call(EMIT_WORKFLOW, rewritten))
+
+    compiled = await WorkflowCompiler(provider, "stub").compile(
+        query="Research Acme",
+        dag=dag,
+        run_id="pb-rewritten-instructions",
         harness=_harness(),
     )
 
