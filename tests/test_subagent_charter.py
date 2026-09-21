@@ -23,7 +23,9 @@ from raven.agent.subagent.charter import (
 )
 from raven.agent.subagent.charter_code import (
     CharterCodeError,
+    compile_function,
     compile_judge,
+    run_function,
     run_judge,
 )
 
@@ -236,6 +238,12 @@ def test_an_over_long_source_is_refused_before_parsing() -> None:
         compile_judge("def judge(n, p, q):\n    return []\n" + "# padding\n" * 5000)
 
 
+def test_generic_function_compilation_rejects_unknown_verbs_and_runtime_errors_are_silence() -> None:
+    with pytest.raises(CharterCodeError, match="unsupported charter function"):
+        compile_function("def archive(step):\n    return None", "archive")
+    assert run_function(lambda value: 1 / 0, {"detached": True}) is None
+
+
 def test_a_judge_cannot_reach_a_name_it_was_not_given() -> None:
     """The namespace is an allow-list, not a denylist: a denylist is only as
     complete as the day it was written."""
@@ -425,6 +433,21 @@ def test_a_dispatch_brings_its_judgements_as_a_participant() -> None:
             "write under ./out/",
             "read it first",
         ]
+
+
+def test_a_refused_generated_function_is_cached_as_silence(monkeypatch) -> None:
+    from raven.agent.subagent import charter as charter_mod
+
+    source = "def advise(step):\n    import os\n    return 'never'"
+    charter_mod._COMPILED.clear()
+    monkeypatch.setattr(charter_mod, "MAX_COMPILED", 0)
+    try:
+        with charter_scope(Charter(functions=(("advise", source),))):
+            assert charter_mod._generated_answer("advise", {}) is None
+            assert charter_mod._generated_answer("advise", {}) is None
+        assert charter_mod._COMPILED[("advise", source)] is False
+    finally:
+        charter_mod._COMPILED.clear()
 
 
 def test_a_plugins_own_rules_speak_before_the_dispatchs() -> None:

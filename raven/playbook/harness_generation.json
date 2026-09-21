@@ -1,0 +1,75 @@
+{
+  "harnessGeneration": {
+    "note": "Controls the fields and functions emitted for a generated worker harness.",
+    "memory": {
+      "note": "Controls worker input, context additions, completion, and turn records.",
+      "parameters": {"note": "Data-only Memory settings.", "items": {
+        "systemPrompt": {"enabled": true, "note": "Adds task-specific worker instructions."},
+        "stopWhen": {"enabled": true, "note": "Names the worker completion condition."},
+        "dropSegments": {"enabled": false, "note": "Would omit selected context segments."},
+        "memoryTopK": {"enabled": false, "note": "Would limit recalled memory items."}
+      }},
+      "functions": {"note": "Memory functions grouped by execution seat.",
+        "self": {"note": "Host-owned functions returning or mutating runtime objects.", "items": {
+          "owns_compaction": {"enabled": false, "note": "Answers whether Memory owns compaction."},
+          "candidate_messages": {"enabled": false, "note": "Chooses candidate history messages."},
+          "token_budget": {"enabled": false, "note": "Computes the context token budget."},
+          "assemble": {"enabled": false, "note": "Builds the host AssembledContext."},
+          "shrink": {"enabled": false, "note": "Builds the host ShrinkResult."},
+          "after_turn": {"enabled": false, "note": "Updates host memory after a turn."}
+        }},
+        "participant": {"note": "Pure-data functions called through Memory participant seats.", "items": {
+          "intake": {"enabled": true, "note": "May reshape inbound text or end before a model call."},
+          "system_addendum": {"enabled": false, "note": "May add text after the system prefix."},
+          "archive": {"enabled": false, "note": "May stamp data on the completed turn record."}
+        }}
+      }
+    },
+    "planning": {
+      "note": "Controls guidance and planning around model calls.",
+      "parameters": {"note": "Data-only Planning settings.", "items": {
+        "reasoningEffort": {"enabled": false, "note": "Would override reasoning effort for this dispatch."},
+        "maxToolIterations": {"enabled": false, "note": "Would cap tool iterations for this dispatch."}
+      }},
+      "functions": {"note": "Planning functions grouped by execution seat.",
+        "self": {"note": "Host-owned functions returning runtime planning objects.", "items": {
+          "prepare": {"enabled": false, "note": "Builds the host PlanningResult."}
+        }},
+        "participant": {"note": "Pure-data functions called through Planning participant seats.", "items": {
+          "advise": {"enabled": true, "note": "May add guidance around a model call."}
+        }}
+      }
+    },
+    "capability": {
+      "note": "Controls tool definitions offered to the worker.",
+      "parameters": {"note": "Data-only Capability settings.", "items": {
+        "tools": {"enabled": true, "note": "Narrows tool names for this dispatch."}
+      }},
+      "functions": {"note": "Capability functions grouped by execution seat.",
+        "self": {"note": "Host-owned functions returning runtime capability objects.", "items": {
+          "select": {"enabled": false, "note": "Builds the host CapabilitySelection."}
+        }},
+        "participant": {"note": "Pure-data functions called through Capability participant seats.", "items": {
+          "select_tools": {"enabled": false, "note": "May reshape the full tool-schema array."}
+        }}
+      }
+    },
+    "action": {
+      "note": "Controls model-call checks and generated judgements.",
+      "parameters": {"note": "Data-only Action settings.", "items": {
+        "checks": {"enabled": true, "note": "Adds declarative checks before worker tool calls."},
+        "checksImpl": {"enabled": false, "note": "Would select an installed check implementation."}
+      }},
+      "functions": {"note": "Action functions grouped by execution seat.",
+        "self": {"note": "Host-owned functions performing the model decision.", "items": {
+          "decide": {"enabled": false, "note": "Builds the host LLMResponse."}
+        }},
+        "participant": {"note": "Pure-data functions called through Action participant seats.", "items": {
+          "judge": {"enabled": true, "note": "Returns refusal sentences before one tool call."},
+          "review": {"enabled": false, "note": "May accept, resample, or end a model step."},
+          "salvage": {"enabled": true, "note": "May supply a missing final reply."}
+        }}
+      }
+    }
+  }
+}

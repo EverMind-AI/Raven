@@ -191,6 +191,7 @@ include = [
     "raven/providers/data/*.toml",
     # Playbook role-pool defaults and the builtin playbook library.
     "raven/playbook/*.yaml",
+    "raven/playbook/*.json",
     "raven/playbook/builtin/**/*.md",
     # Tracing dashboard viewer (dependency-free Node server + static client),
     # a CLI-launched surface, so it lives beside the CLI and not in the kernel.

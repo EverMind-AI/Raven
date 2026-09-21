@@ -33,6 +33,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
+from raven.agent.harness_capabilities import function_enabled, parameter_enabled
 from raven.playbook.types import CamelBase
 
 AGENT_SPEC_VERSION = 1
@@ -112,6 +113,11 @@ class Checks(CamelBase):
 
 class SubMemory(CamelBase):
     system_prompt: str = ""
+    functions: dict[str, str] = Field(default_factory=dict)
+
+
+class SubPlanning(CamelBase):
+    functions: dict[str, str] = Field(default_factory=dict)
 
 
 class SubCapability(CamelBase):
@@ -123,6 +129,7 @@ class SubCapability(CamelBase):
 
 class SubAction(CamelBase):
     checks: Checks | None = None
+    functions: dict[str, str] = Field(default_factory=dict)
 
 
 class SubPlaybook(CamelBase):
@@ -130,6 +137,7 @@ class SubPlaybook(CamelBase):
 
     role: Literal["subagent"] = "subagent"
     memory: SubMemory = Field(default_factory=SubMemory)
+    planning: SubPlanning = Field(default_factory=SubPlanning)
     capability: SubCapability = Field(default_factory=SubCapability)
     action: SubAction = Field(default_factory=SubAction)
     stop_when: str = ""
@@ -143,6 +151,39 @@ class SubPlaybook(CamelBase):
     *this* job is, so it may name a deadline the config could not have known to
     set; it may not lengthen one an operator set."""
     """One line naming what, once obtained, means this worker is done."""
+
+    @model_validator(mode="after")
+    def _enabled_fields_only(self) -> "SubPlaybook":
+        disabled: list[str] = []
+        if "system_prompt" in self.memory.model_fields_set and not parameter_enabled("memory", "systemPrompt"):
+            disabled.append("memory.systemPrompt")
+        if "stop_when" in self.model_fields_set and not parameter_enabled("memory", "stopWhen"):
+            disabled.append("memory.stopWhen")
+        if "tools" in self.capability.model_fields_set and not parameter_enabled("capability", "tools"):
+            disabled.append("capability.tools")
+        if self.action.checks:
+            if "rules" in self.action.checks.model_fields_set and not parameter_enabled("action", "checks"):
+                disabled.append("action.checks")
+            if "impl" in self.action.checks.model_fields_set and not parameter_enabled("action", "checksImpl"):
+                disabled.append("action.checksImpl")
+            if "code" in self.action.checks.model_fields_set and not function_enabled("action", "participant", "judge"):
+                disabled.append("action.functions.judge")
+        generated = (
+            ("memory", self.memory.functions, {"intake"}),
+            ("planning", self.planning.functions, {"advise"}),
+            ("action", self.action.functions, {"salvage"}),
+        )
+        for module, functions, known in generated:
+            for name, source in functions.items():
+                if name not in known:
+                    raise ValueError(f"unknown generated participant function: {module}.{name}")
+                if not isinstance(source, str) or not source.strip():
+                    raise ValueError(f"generated participant function is empty: {module}.{name}")
+                if not function_enabled(module, "participant", name):
+                    disabled.append(f"{module}.functions.{name}")
+        if disabled:
+            raise ValueError(f"disabled harness field(s): {', '.join(disabled)}")
+        return self
 
     @model_validator(mode="after")
     def _no_third_level(self) -> "SubPlaybook":
@@ -204,5 +245,6 @@ __all__ = [
     "SubAction",
     "SubCapability",
     "SubMemory",
+    "SubPlanning",
     "SubPlaybook",
 ]
