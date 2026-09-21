@@ -4183,6 +4183,22 @@
       "en": "Unpinned",
       "zh": "已取消固定"
     },
+    "gui.update.behind": {
+      "en": "Stale page build",
+      "zh": "页面构建落后于源码"
+    },
+    "gui.update.behind_body": {
+      "en": "ui-web/src or i18n/messages.json changed after dist/index.html was built, so this page is older than the code it runs on. In the repository root run make build-ui, then reload this page.",
+      "zh": "ui-web/src 或 i18n/messages.json 在 dist/index.html 构建之后有改动，这个页面比它背后的代码旧。在仓库根目录运行 make build-ui，然后刷新本页。"
+    },
+    "gui.update.behind_how": {
+      "en": "How to rebuild",
+      "zh": "如何重建"
+    },
+    "gui.update.behind_title": {
+      "en": "Rebuild the page",
+      "zh": "重建页面"
+    },
     "gui.update.note": {
       "en": "UI updated on disk",
       "zh": "界面有更新"

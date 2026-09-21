@@ -1520,3 +1520,105 @@ async def test_two_writes_at_once_assemble_once(monkeypatch) -> None:
     assert both == [True, True]
     assert len(calls) == 2  # the first start, then one assembly
     assert served.current is second
+
+
+class TestPageBehindSources:
+    """A source-tree page is behind when something it is built from is newer.
+
+    The wheel's copy never is: it ships beside the code it was built with, so
+    nothing newer exists for it to be behind. The comparison is by mtime, the
+    way make judges a target, and it skips tests and snapshots because those
+    change without changing the page.
+    """
+
+    @staticmethod
+    def _stamp(path: Path, when: float) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text("x", encoding="utf-8")
+        import os
+
+        os.utime(path, (when, when))
+
+    def test_a_page_built_after_its_last_source_edit_is_current(self, two_candidates) -> None:
+        _packaged, source = two_candidates
+        ui = source.parent
+        self._stamp(ui / "src" / "main.tsx", 1_000.0)
+        self._stamp(ui.parent / "i18n" / "messages.json", 1_500.0)
+        self._stamp(source / "index.html", 2_000.0)
+
+        assert serve_commands.page_behind_sources(source) is False
+
+    def test_a_newer_source_file_puts_the_page_behind(self, two_candidates) -> None:
+        _packaged, source = two_candidates
+        ui = source.parent
+        self._stamp(source / "index.html", 2_000.0)
+        self._stamp(ui / "src" / "features" / "rail" / "RailPage.tsx", 3_000.0)
+
+        assert serve_commands.page_behind_sources(source) is True
+
+    def test_a_newer_catalogue_puts_the_page_behind(self, two_candidates) -> None:
+        _packaged, source = two_candidates
+        ui = source.parent
+        self._stamp(source / "index.html", 2_000.0)
+        self._stamp(ui / "src" / "main.tsx", 1_000.0)
+        self._stamp(ui.parent / "i18n" / "messages.json", 3_000.0)
+
+        assert serve_commands.page_behind_sources(source) is True
+
+    def test_tests_harnesses_and_snapshots_do_not_count(self, two_candidates) -> None:
+        _packaged, source = two_candidates
+        ui = source.parent
+        self._stamp(source / "index.html", 2_000.0)
+        self._stamp(ui / "src" / "app" / "updates.test.ts", 3_000.0)
+        self._stamp(ui / "src" / "test" / "settingsHarness.ts", 3_000.0)
+        self._stamp(ui / "src" / "features" / "rail" / "__snapshots__" / "RailPage.test.tsx.snap", 3_000.0)
+        self._stamp(ui / "scripts" / "__golden__" / "boot-stub.txt", 3_000.0)
+
+        assert serve_commands.page_behind_sources(source) is False
+
+    def test_a_dependency_bump_or_build_script_edit_puts_the_page_behind(self, two_candidates) -> None:
+        _packaged, source = two_candidates
+        ui = source.parent
+        self._stamp(source / "index.html", 2_000.0)
+        self._stamp(ui / "src" / "main.tsx", 1_000.0)
+        self._stamp(ui / "package-lock.json", 3_000.0)
+
+        assert serve_commands.page_behind_sources(source) is True
+
+        self._stamp(ui / "package-lock.json", 1_000.0)
+        self._stamp(ui / "build.py", 3_000.0)
+
+        assert serve_commands.page_behind_sources(source) is True
+
+    def test_the_packaged_copy_is_never_behind(self, two_candidates) -> None:
+        packaged, source = two_candidates
+        ui = source.parent
+        self._stamp(packaged / "index.html", 1_000.0)
+        self._stamp(ui / "src" / "main.tsx", 3_000.0)
+
+        assert serve_commands.page_behind_sources(packaged) is False
+
+    def test_no_page_is_not_behind(self, two_candidates) -> None:
+        _packaged, source = two_candidates
+
+        assert serve_commands.page_behind_sources(None) is False
+        assert serve_commands.page_behind_sources(source) is False
+
+    def test_the_resolver_warns_where_the_page_is_behind(self, two_candidates, monkeypatch) -> None:
+        """Every path that serves or opens the page resolves it here once, and
+        the terminal that resolver prints to is where the rebuild happens."""
+        _packaged, source = two_candidates
+        ui = source.parent
+        self._stamp(source / "index.html", 2_000.0)
+        self._stamp(ui / "src" / "main.tsx", 3_000.0)
+        said: list[str] = []
+        from loguru import logger
+
+        token = logger.add(lambda m: said.append(m.record["message"]), level="WARNING")
+        try:
+            assert serve_commands.resolve_ui_dist() == source
+        finally:
+            logger.remove(token)
+
+        assert [m for m in said if "make build-ui" in m], said
