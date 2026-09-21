@@ -543,10 +543,6 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     slow first `npx` download) as this test's verdict forever. A truly absent
     executable still fails fast -- launch raises before any timeout waits.
     """
-    # Function-level on purpose: the acp client family is future shelf cargo,
-    # and this module must not name it at import time (binding-time debt).
-    from raven.acp_client.capabilities import verify_agent
-
     # A preset's snapshot is recorded too, and has to be: the page draws a
     # preset row's verdict from it -- a recorded credential refusal is what puts
     # "Unauthorized" there -- so Test is that row's only way back. The store

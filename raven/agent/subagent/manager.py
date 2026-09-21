@@ -91,7 +91,6 @@ _SHUTDOWN_REFUSAL = (
 _DAG_SHUTDOWN_REFUSAL = "Error: the host is shutting down and is starting no more sub-agents. No sub-agent was run."
 
 
-
 def _row_pin(config: Any, pool: Any = None) -> tuple[str | None, str | None]:
     """A built-in row's own ``model``, with the provider its stored id names.
 
