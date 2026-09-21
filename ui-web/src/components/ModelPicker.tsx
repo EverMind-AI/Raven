@@ -118,6 +118,22 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
       window.removeEventListener('resize', again)
     }
   }, [anchor, onClose])
+  /* Clicking off the panel closes it, which is what a menu does and what the
+     prototype's own veil did. `pointerdown` rather than `click`, so the press
+     that lands outside dismisses before it can also activate whatever it hit;
+     the anchor is excluded because its own handler toggles, and closing here
+     first would reopen on the same press. */
+  useEffect(() => {
+    const off = (e: PointerEvent): void => {
+      const t = e.target as Node | null
+      if (!t) return
+      if (box.current?.contains(t)) return
+      if (anchor?.contains(t)) return
+      onClose()
+    }
+    document.addEventListener('pointerdown', off, true)
+    return () => document.removeEventListener('pointerdown', off, true)
+  }, [anchor, onClose])
   return (
     <div className="model-picker" role="dialog" aria-label={title} ref={box}>
       <div className="model-picker-search">
@@ -143,7 +159,6 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
             if (e.key === 'Enter' && sel && first) onPick(first, sel.id, !sel.models.includes(first))
           }}
         />
-        <button type="button" className="model-picker-back" onClick={onClose}>{t('gui.cancel')}</button>
       </div>
       <div className="model-picker-body">
         <div className="model-picker-left">

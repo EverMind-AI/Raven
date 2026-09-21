@@ -38,6 +38,11 @@
      is neutral now, which is what moves --ink, --surface, --raised, --line and
      the three text greys below as well as the names introduced here. */
   --page:     #fafaf8;   /* the ground a module page is read on */
+  /* One height and one radius for a row of controls, and the focus glow that
+     goes with the amber edge (the control standard above input[type]). */
+  --ctl-h: 32px;
+  --ctl-r: 8px;
+  --ctl-focus: 0 0 0 3px color-mix(in srgb, var(--amber) 16%, transparent);
   /* The ground a CONVERSATION is read on: the same paper, with a cool cast
      falling from the top right and a warm one rising from the bottom left. It
      is a gradient rather than a flat fill because the column that sits on it is
@@ -267,7 +272,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* One quiet focus ring for the whole page: the amber hairline the rail and
    the changes list already wear. The old 2px text-colour band read as an
    error box everywhere it landed, worst of all around a dag node. */
-:focus-visible { outline: 1.5px solid var(--amber); outline-offset: 2px; border-radius: 3px; }
+:focus-visible { outline: 1px solid var(--amber); outline-offset: 2px; border-radius: 6px; }
 
 /* ── scrollbars ─────────────────────────────────────────────────────────
    Every scroller in the app is scrolled the same way, so it gets the same bar:
@@ -329,11 +334,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    the line it moves, because a 1px target is not a target. */
 .grip {
   position: absolute; top: 0; bottom: 0; width: 6px; z-index: 6;
-  cursor: col-resize; background: none; border: 0; padding: 0;
+  cursor: col-resize; background: none; border: 0; padding: 0; right: -3px;
 }
 .grip::after {
   content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px;
-  background: var(--faint); opacity: 0; transition: opacity .12s;
+  background: var(--text); opacity: 0; transition: opacity .14s ease;
 }
 .grip:hover::after, .grip[data-drag="true"]::after { opacity: .55; }
 .rail .grip { right: -3px; }
@@ -383,11 +388,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* Search and collapse are chores, not destinations: icon-only, quiet,
    and out of the way in the top-right corner. */
 .ghost-ic {
-  flex: none; color: var(--faint); padding: 5px; border-radius: 6px;
+  flex: none; color: var(--muted); width: 28px; height: 28px; border-radius: 7px;
   display: grid; place-items: center; line-height: 1;
 }
 .ghost-ic:hover { color: var(--text); background: var(--hover); }
-.ghost-ic[aria-expanded="true"] { color: var(--text); background: var(--hover); }
 /* The buttons written in markup size their own glyph; the ones built with ico()
    have no width or height attribute, and an unsized inline SVG collapses to
    nothing. One rule here rather than a size at every call site. */
@@ -427,14 +431,17 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   padding: 17px 10px 4px; cursor: pointer; user-select: none;
 }
 .list .grp:first-child { padding-top: 7px; }
-.list .grp .car { display: grid; place-items: center; flex: none; color: var(--faint); }
+.list .grp .car { display: grid; place-items: center; flex: none; color: var(--faint);
+  opacity: 0; transition: opacity .15s ease; }
+.list .grp[aria-expanded="false"] .car, .list .grp:hover .car,
+.list .grp:focus-visible .car { opacity: 1; }
 .list .grp .car svg {
   width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 2.2;
   stroke-linecap: round; stroke-linejoin: round;
   transform: rotate(90deg); transition: transform .18s ease;
 }
 .list .grp[aria-expanded="false"] .car svg { transform: rotate(0deg); }
-@media (prefers-reduced-motion: reduce) { .list .grp .car svg { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .list .grp .car, .list .grp .car svg { transition: none; } }
 /* The rail's group headings keep the page's tracking but drop its monospace
    and its capitals: a session list is already a column of short strings, and a
    mono uppercase row over it reads as a second kind of name rather than as the
@@ -482,12 +489,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   min-height: 1.65em;
   min-height: 1lh;
 }
-.sess .t span { overflow: hidden; text-overflow: ellipsis; }
-/* The folder a conversation was pinned to, beside its title: the name only,
-   the full path on hover. A quiet tag, since the group heading above it has
-   already said these rows have one. */
-.sess .t .wdt { flex: none; max-width: 38%; font-family: var(--mono); font-size: 9.5px; font-weight: 400;
-  color: var(--faint); border: 1px solid var(--line-soft); border-radius: 5px; padding: 0 5px; line-height: 1.5; }
+.sess .t span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The stamp is a fixed-width note on the row, so it keeps its own weight when
    the row goes bold. */
 .sess .w {
@@ -509,17 +511,17 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    opacity-0, not hidden, so tabbing on from the row focuses one and both
    halves of this pair fire together. */
 .sess .quick {
-  display: flex; align-items: center; gap: 3px; position: absolute; right: 9px;
-  opacity: 0; pointer-events: none;
+  display: flex; align-items: center; gap: 2px; position: absolute; right: 6px;
+  opacity: 0; pointer-events: none; top: 50%; transform: translateY(-50%);
 }
 .sess:hover .quick, .sess .quick:focus-within { opacity: 1; pointer-events: auto; }
 .sess:hover .w, .sess:has(.quick:focus-within) .w { display: none; }
 .sess:hover .t, .sess:has(.quick:focus-within) .t { padding-right: 48px; }
 .sess .quick button {
-  display: grid; place-items: center; position: relative; width: 21px; height: 21px; border-radius: 5px;
-  color: var(--muted);
+  display: grid; place-items: center; position: relative; width: 22px; height: 22px; border-radius: 5px;
+  color: var(--faint);
 }
-.sess .quick button:hover, .sess .quick button:focus-visible { color: var(--text); background: var(--line-soft); }
+.sess .quick button:hover, .sess .quick button:focus-visible { color: var(--text); background: var(--selected); }
 .sess .quick button::after {
   content: attr(aria-label); position: absolute; left: 50%; bottom: calc(100% + 5px);
   z-index: 2; opacity: 0; transform: translate(-50%, 2px); pointer-events: none;
@@ -529,7 +531,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .sess .quick button:hover::after, .sess .quick button:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
 .sess .quick button[data-active] { color: var(--amber); }
-.sess .quick svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.sess .quick svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .sess:has(.ren) .quick { display: none; }
 .sess:has(.ren) .t { padding-right: 0; }
 /* As wide as the name it holds, not as wide as the rail.
@@ -619,7 +621,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* No seam above the identity row: the list ends in whitespace and the foot is
    a glyph and one word, so there is nothing for a rule to separate that the gap
    does not separate already. */
-.rail-foot { display: grid; gap: 2px; padding: 6px 8px 8px; margin-top: 4px; }
+.rail-foot { display: grid; gap: 2px; padding: 6px 8px 8px; margin-top: 4px; flex: none; }
 
 .rail-foot .me {
   display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
@@ -632,8 +634,12 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   background: var(--amber-dp); color: var(--amber);
   display: grid; place-items: center; font-size: 12px; font-weight: 600;
 }
-.rail-foot .me .av.anon { background: var(--raised); color: var(--faint); }
-.rail-foot .me .av.anon svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+/* No account sits behind this row, so the glyph is a nav row's glyph: no plate,
+   no circle, the same 16px mark and the same muted ink as every other row. */
+.rail-foot .me .av.anon {
+  width: 16px; height: 16px; border-radius: 0; background: none; color: var(--muted);
+}
+.rail-foot .me .av.anon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 .rail-foot .me .who { flex: 1; min-width: 0; display: grid; }
 .rail-foot .me .who .n { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-foot .me .who .s {
@@ -707,13 +713,13 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    every session line -- so the column reads as one list instead of three. */
 .navi, .sess {
   position: relative; display: flex; align-items: center; gap: 10px; width: 100%;
-  min-height: 32px; padding: 0 10px; border-radius: 8px; text-align: left; cursor: pointer;
+  height: 32px; padding: 0 10px; border-radius: 8px; text-align: left; cursor: pointer;
   font-size: 14px; color: var(--text);
 }
 /* A row's label is the page's own text colour, and the glyph beside it is the
    quiet one: the list reads as a list of names, with the icons as marks against
    them rather than as a second column of equal weight. */
-.navi svg { color: var(--muted); }
+.navi svg { width: 16px; height: 16px; color: var(--muted); }
 .navi:hover, .sess:hover { background: var(--hover); color: var(--text); }
 /* Selected and hovered are the same move at two depths -- one flat step of
    ground, --hover then --selected -- and the weight of the label carries the
@@ -806,7 +812,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .chip:hover { color: var(--text); background: var(--surface); }
 .chip[aria-expanded="true"] { border-color: var(--faint); color: var(--text); background: var(--surface); }
-.led { width: 5px; height: 5px; border-radius: 50%; background: var(--moss); flex: none; }
+.led { width: 6px; height: 6px; border-radius: 50%; background: var(--moss); flex: none; }
 .led.warn { background: var(--gold); }
 .led.bad { background: var(--clay); }
 .provider-icon { width: 20px; height: 20px; object-fit: contain; flex: none; }
@@ -915,36 +921,6 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 #permPop .prow .txt { flex: 1; min-width: 0; text-align: left; }
 #permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--amber); margin-top: 3px; }
 .pop .note { padding: 7px 9px 4px; font-size: 10.5px; line-height: 1.5; color: var(--faint); }
-.pop .note.err { color: var(--clay); }
-/* The working-directory chip and its panel (shell/workdir.ts). A folder that
-   was picked reads in the text colour so the row shows the choice was made;
-   once the conversation exists the chip is disabled and only reports, so it
-   drops the hover affordance without dropping the name. */
-.chip.set { color: var(--muted); }
-.chip:disabled { cursor: default; }
-.chip:disabled:hover { background: none; color: var(--faint); }
-.chip.set:disabled:hover { color: var(--muted); }
-.pop.wd { width: 340px; }
-.pop .sec { padding: 8px 9px 2px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em;
-  text-transform: uppercase; color: var(--faint); }
-.pop .rulel { height: 1px; margin: 5px 4px; background: var(--line-soft); }
-/* A folder that cannot itself be the workspace, but can be entered. */
-.pop .prow.off .txt { color: var(--faint); }
-.pop .prow.off .pic { opacity: .55; }
-/* The browser: where we are, then what is here, then the two ways out. The path
-   is drawn from its tail because the tail is the part that changes as one
-   descends and the part that names the folder. */
-.wdpath { display: flex; align-items: center; gap: 4px; padding: 4px 6px 6px; }
-.wdpath .icb { flex: none; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none;
-  color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
-.wdpath .icb svg { width: 14px; height: 14px; }
-.wdpath .icb:hover:not(:disabled) { background: var(--raised); color: var(--text); }
-.wdpath .icb:disabled { opacity: .35; cursor: default; }
-.wdpath .p { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
-.wdlist { max-height: 260px; overflow-y: auto; }
-.wdlist .prow { padding: 6px 9px; }
-.wdfoot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 8px 6px 2px; }
 
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
 /* Bottom inset tracks the floating composer (--lift is the card's height plus
@@ -1037,7 +1013,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    sentence. */
 .turn { display: flex; flex-direction: column; min-width: 0; }
 .turn.me { align-self: flex-end; align-items: flex-end; max-width: 70%; }
-.turn.ai { align-self: stretch; width: 100%; }
+.turn.ai { align-self: stretch; width: 100%; max-width: 760px; margin-right: auto; }
 .msg.me {
   background: var(--bubble-me); color: var(--bubble-me-fg);
   border-radius: 9px; padding: 11px 16px; font-size: 14px; line-height: 22px;
@@ -1048,9 +1024,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    rim, which is one treatment with two drawings -- the shadow carries it in
    light, the rim in dark, where a shadow on a dark ground says nothing. */
 .msg.ai {
-  background: var(--paper); border-radius: 12px; padding: 6px 16px 12px;
+  background: var(--ink); border-radius: 12px; padding: 6px 16px 12px;
   font-size: 14px; line-height: 26px;
-  box-shadow: 0 1px 4px var(--sh-soft), 0 0 0 1px var(--ring);
+  box-shadow: 0 1px 4px var(--sh-soft), 0 0 0 1px var(--ring); color: var(--text);
 }
 /* Folded long message: ~12 lines, fading out instead of cutting mid-glyph. */
 .msg.me.clip {
@@ -1122,8 +1098,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    exchange beside it, the rows behind it -- declared once on the container.
    Per-child margins had the summary sitting tighter to the first row than the
    rows sat to each other, which reads as a misalignment. */
-.wk { margin: 12px 0; min-width: 0; display: grid; gap: 5px; }
-.wkin { display: grid; gap: 5px; min-width: 0; }
+.wk { margin: 12px 0; min-width: 0; display: grid; gap: 5px; grid-template-columns: minmax(0, 1fr); }
+.wkin { display: grid; gap: 5px; min-width: 0; grid-template-columns: minmax(0, 1fr); }
 /* The icon is what this line leads with, so the icon is what sits on the
    transcript's left edge. fit-content keeps a hover or focus state hugging its
    own line instead of growing a full-width bar.
@@ -1140,7 +1116,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   display: flex; align-items: center; gap: 7px; color: var(--muted);
   width: fit-content; max-width: 100%; min-width: 0;
   font-size: 13.5px; line-height: 1.5; padding: 3px 8px; margin: 0 -8px;
-  border-radius: 7px;
+  border-radius: 7px; text-align: left;
 }
 .wrow.tog:hover .vb, .wrow.tog:hover .ar { color: var(--text); }
 .wrow.tog:hover .ic, .wrow.tog:hover .cv { color: var(--muted); }
@@ -1444,17 +1420,17 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   container: artifacts / inline-size;
 }
 .arts .asec + .asec {
-  margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line-soft);
+  margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--line-soft);
 }
 .arts .ahd {
-  display: flex; align-items: center; gap: 12px; margin-bottom: 6px;
-  font-size: 13.5px; line-height: 1.45; color: var(--muted);
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  font-size: 12px; line-height: 1.5; color: var(--faint);
 }
-.arts .ahd .ahm { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.arts .ahd .lb { color: var(--text); font-weight: 600; }
+.arts .ahd .ahm { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.arts .ahd .lb { color: var(--muted); font-weight: 500; }
 .arts .ahd .n {
   min-width: 18px; padding: 1px 5px; border-radius: 999px; background: var(--ink);
-  color: var(--muted); font-family: var(--mono); font-size: 9.5px; line-height: 16px;
+  color: var(--faint); font-family: var(--mono); font-size: 10.5px; line-height: 16px;
   text-align: center; font-variant-numeric: tabular-nums;
 }
 /* One tile, two arrangements. A single delivery keeps the headline row it
@@ -1465,13 +1441,13 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .atiles {
   --atile-ratio: 16 / 10;
   --atile-pad: 11px 14px;
-  --atile-nm: 15px;
+  --atile-nm: 14px;
   --atile-ds: 12.5px;
   display: grid; gap: 8px; min-width: 0;
   /* Tracks fill the row between a floor and the column's own width, which is
      what makes a turn's products read as one block rather than as tiles
      scattered on a shelf. */
-  grid-template-columns: repeat(auto-fit, minmax(min(178px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
 }
 .atile {
   position: relative; display: grid; min-width: 0; overflow: hidden;
@@ -1508,15 +1484,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
      = 198px), so a tile that had stretched across the row carried a preview
      that had not -- the blank right half. Stated width, ratio for the height,
      cap for the ceiling. */
-  display: grid; width: 100%; aspect-ratio: var(--atile-ratio);
+  display: block; width: 100%; aspect-ratio: var(--atile-ratio);
   max-height: var(--atile-pic-max);
   overflow: hidden; position: relative;
-  background: var(--surface); border-bottom: 1px solid var(--line-soft);
+  background: var(--paper); border-bottom: 1px solid var(--line-soft); border: 1px solid var(--line-soft); border-radius: 6px;
 }
-.atile .pic.none { place-content: center; justify-items: center; gap: 6px; }
-.atile .pic.none .fi { width: 18px; height: 18px; stroke: var(--faint); }
+.atile .pic.none { place-content: center; justify-items: center; gap: 5px; display: grid; background: var(--surface); border-style: dashed; }
+.atile .pic.none .fi { width: 16px; height: 16px; stroke: var(--faint); }
 .atile .pic.none .ft {
-  color: var(--muted); font-family: var(--mono); font-size: 9px; font-weight: 600;
+  color: var(--faint); font-family: var(--mono); font-size: 9px; font-weight: 600;
   letter-spacing: .08em;
 }
 /* ONE surface. The preview used to be a grey mount with a white page inset in
@@ -1544,24 +1520,24 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    at 250% too. */
 .atile .amini {
   --mini-scale: .4;
-  font-size: 12px; line-height: 1.55;
+  font-size: 12px; line-height: 1.6;
   position: relative; display: block; width: calc(100% / var(--mini-scale));
-  height: calc(100% / var(--mini-scale)); padding: calc(7px / var(--mini-scale)) calc(8px / var(--mini-scale));
+  height: calc(100% / var(--mini-scale)); padding: calc(8px / var(--mini-scale)) calc(9px / var(--mini-scale));
   transform: scale(var(--mini-scale)); transform-origin: top left; pointer-events: none;
   /* Faded rather than cut, the same way a folded question ends: a hard edge
      mid-glyph reads as the render having broken, a fade as a page continuing. */
   -webkit-mask-image: linear-gradient(180deg, #000 68%, transparent 100%);
-  mask-image: linear-gradient(180deg, #000 68%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 68%, transparent 100%); color: var(--muted);
 }
 .atile .amini .raw {
-  display: block; font-family: var(--mono); font-size: 12px; line-height: 1.55;
+  display: block; font-family: var(--mono); font-size: 12px; line-height: 1.6;
   color: var(--muted); white-space: pre; overflow: hidden;
 }
 /* A long unbroken token (a URL, a path) still has to give way rather than run
    past the paper. */
 .atile .amini.prose { overflow-wrap: anywhere; }
 .atile .amini.prose > :first-child { margin-top: 0; }
-.atile .cap { display: grid; gap: 3px; align-content: start; padding: var(--atile-pad); min-width: 0; }
+.atile .cap { display: grid; gap: 2px; align-content: center; padding: var(--atile-pad); min-width: 0; }
 /* One row each, cut with an ellipsis. This is what keeps the card's height
    independent of the window: a wrapping title grew the card as the column
    narrowed, so the same delivery was 155px tall at one width and 175px at
@@ -1579,8 +1555,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   color: var(--muted); font-size: var(--atile-ds); line-height: 1.5;
 }
 .atile .cap .mt {
-  font-family: var(--mono); font-size: 10.5px; line-height: 1.4; color: var(--muted);
-  font-variant-numeric: tabular-nums;
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.5; color: var(--faint);
+  font-variant-numeric: tabular-nums; margin-top: 2px;
 }
 /* The headline row: the preview beside the caption rather than above it, and
    CENTRED in its column at the shared ratio. The caption decides how tall the
@@ -1595,7 +1571,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    whole card's height up with it -- the same delivery was 133px tall in a desk
    pane and 147px in a wide window. */
 .atiles.single .atile {
-  grid-template-columns: 116px minmax(0, 1fr);
+  grid-template-columns: 92px minmax(0, 1fr);
   align-items: center; gap: 0;
   transition: grid-template-columns .2s ease, border-color .14s, box-shadow .14s, transform .14s;
 }
@@ -1603,10 +1579,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    margins inside a fixed 116px column, so a stated full width put it 22px past
    the column and over the title beside it. */
 .atiles.single .atile .pic {
-  width: auto; margin: 11px; border-bottom: 0; border-radius: 7px;
-  border: 1px solid var(--line-soft);
+  width: auto; margin: 12px 0 12px 12px; border-bottom: 0; border-radius: 7px;
+  border: 1px solid var(--line-soft); height: 98px;
 }
-.atiles.single .atile .cap { align-content: center; padding: 13px 16px 13px 3px; }
+.atiles.single .atile .cap { align-content: center; padding: 13px 16px; }
 /* No narrow-container type step. Every caption row is one ellipsised line now,
    so a narrow card already fits without shrinking anything -- and shrinking the
    type here was the last thing making a delivery's card a different height in a
@@ -1618,7 +1594,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    placeholder the rail and the hub cards use -- a tile that jumps from blank
    to full reads as the page having been broken until that moment. */
 .atile .pic.skel .sk { position: absolute; inset: 0; border-radius: 0; }
-.achanges { overflow: hidden; border: 1px solid var(--line-soft); border-radius: 8px; }
+.achanges { overflow: hidden; border: 1px solid var(--line-soft); border-radius: 10px; }
 .achange {
   display: grid; grid-template-columns: 48px minmax(0, 1fr) 34px 34px 34px; align-items: center;
   width: 100%; min-width: 0; min-height: 33px; padding: 5px 9px;
@@ -1629,19 +1605,19 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .achange:last-child { border-bottom: 0; }
 .achange:hover { color: var(--text); background: var(--surface); }
 .achange .ck { font-size: 10.5px; font-weight: 600; color: var(--amber); }
-.achange .ck.new { color: var(--green); }
+.achange .ck.new { color: var(--moss); }
 .achange .cn {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text); font-size: 14px; font-weight: 500;
+  color: var(--text); font-size: 13px; font-weight: 500;
 }
 .achange .ct, .achange .ca, .achange .cd {
   color: var(--muted); font-family: var(--mono); font-size: 9.5px; text-align: right;
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.achange .ct { padding-left: 4px; }
+.achange .ct { padding-left: 4px; color: var(--faint); font-family: var(--mono); font-size: 9.5px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .amore {
-  display: inline-flex; margin: 7px 0 0; padding: 2px 0; border: 0; background: none;
-  font-size: 12.5px; line-height: 1.5; color: var(--muted); cursor: pointer;
+  display: inline-flex; margin: 8px 0 0; padding: 2px 0; border: 0; background: none;
+  font-size: 12px; line-height: 1.5; color: var(--faint); cursor: pointer;
 }
 .amore:hover { color: var(--text); }
 @container artifacts (max-width: 430px) {
@@ -1686,7 +1662,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* detail card: the only place raw commands, paths and output appear. A titled
    card, so the reader knows what they opened before reading the body. */
 .dtl {
-  margin: 6px 0 10px; background: var(--ink); border: 1px solid var(--line);
+  margin: 0 0 4px; background: var(--ink); border: 1px solid var(--line);
   border-radius: 10px; font-family: var(--mono); font-size: 11.5px;
   line-height: 1.7; color: var(--muted); min-width: 0; overflow: hidden;
 }
@@ -1708,7 +1684,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .dtl .dhd .cp:hover { background: var(--raised); }
 .dtl .bd { padding: 9px 11px; max-height: 300px; overflow: auto; }
 .dtl pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
-.dtl .cmd { color: var(--text); overflow-wrap: anywhere; }
+.dtl .cmd { color: var(--text); overflow-wrap: anywhere; font: inherit; background: none; border: 0; padding: 0; display: block; }
 .dtl .cmd::before { content: '$ '; color: var(--faint); }
 .dtl .hd { color: var(--faint); font-size: 10.5px; letter-spacing: .04em; margin: 8px 0 3px; }
 .dtl .hd:first-child { margin-top: 0; }
@@ -1723,7 +1699,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   cursor: pointer; overflow-wrap: anywhere; text-align: left;
 }
 .dtl pre .pth:hover { color: var(--amber); text-decoration: underline; text-underline-offset: 2px; }
-.dtl .exit { font-size: 10.5px; padding: 0 6px; border-radius: 8px; }
+.dtl .exit { font-size: 10.5px; padding: 1px 6px; border-radius: 8px; }
 .dtl .exit.ok { color: var(--moss); background: color-mix(in oklab, var(--moss) 12%, transparent); }
 .dtl .exit.bad { color: var(--clay); background: color-mix(in oklab, var(--clay) 12%, transparent); }
 .dtl .dline { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0 6px; margin: 0 -6px; }
@@ -1816,14 +1792,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    greys, which made three lines of the same kind read as three kinds of thing.
    Declared together so they cannot drift again. */
 .think, .tfh, .wrow.sum { font-size: 13px; color: var(--muted); }
-.tfh .tm { color: var(--faint); }
+.tfh .tm { color: var(--faint); font-family: var(--mono); font-size: 11px; }
 /* An empty clock still spends its flex gap, which pushed the caret one whole
    gap further from the label on every line whose time happened to be blank --
    two folds side by side then looked like two different components. */
 .tfh .tm:empty { display: none; }
 .think:hover, .tfh:hover, .wrow.sum:hover { color: var(--text); }
 /* the phrase is a summary of the rows underneath, not a target of its own */
-.wrow.sum .ar { color: var(--muted); }
+.wrow.sum .ar { color: var(--muted); font-size: 13px; }
 .wrow.sum:hover .ar { color: var(--text); }
 
 /* the turn is never silent: a breathing dot fills the gap before events */
@@ -1926,10 +1902,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 
 /* mid-turn narration is speech, not metadata: it reads at full strength, like
    the reference transcripts do — only the answer footer marks the final say */
-.say { margin: 12px 0 2px; }
+.say { margin: 12px 0 2px; font-size: 13.5px; line-height: 1.72; }
 .cot { overflow-wrap: anywhere; }
 
-.answer { position: relative; }
+.answer { position: relative; margin-top: 18px; }
 .acts { display: flex; align-items: center; gap: 1px; margin-top: 8px; }
 .acts button {
   position: relative; width: 27px; height: 27px; display: grid; place-items: center;
@@ -1978,14 +1954,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 
 /* The shared icon button: a quiet square that shows its verb on hover. */
 .icb {
-  position: relative; width: 24px; height: 24px; flex: none;
-  display: inline-grid; place-items: center; padding: 0; border-radius: 6px;
+  position: relative; width: 22px; height: 22px; flex: none;
+  display: grid; place-items: center; padding: 0; border-radius: 5px;
   color: var(--faint); transition: color .12s, background .12s;
 }
-.icb:hover { color: var(--text); background: var(--surface); }
+.icb:hover { color: var(--text); background: var(--raised); }
 .icb:disabled { opacity: .4; cursor: default; }
 .icb svg {
-  width: 14px; height: 14px; fill: none; stroke: currentColor;
+  width: 13px; height: 13px; fill: none; stroke: currentColor;
   stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
 }
 
@@ -2431,29 +2407,29 @@ textarea:focus, textarea:focus-visible,
  */
 .model-picker {background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:var(--elev-up);
   width:min(720px, 100%); height:min(78vh, 560px); display:flex; flex-direction:column; overflow:hidden}
-.model-picker-search {display:flex; align-items:center; gap:10px; padding:13px 16px; border-bottom:1px solid var(--line)}
+.model-picker-search {display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line)}
 .model-picker-search svg {width:15px; height:15px; flex:0 0 15px; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
-.model-picker-search input {flex:1; font:inherit; font-size:15px; border:0; background:none; color:var(--text); outline:none}
+.model-picker-search input {flex:1; font:inherit; font-size:14px; border:0; background:none; color:var(--text); outline:none}
 .model-picker-search input::placeholder {color:var(--faint)}
-.model-picker-body {display:grid; grid-template-columns:200px 1fr; min-height:0; flex:1}
+.model-picker-body {display:grid; grid-template-columns:170px 1fr; min-height:0; flex:1}
 @media(max-width:560px) {
   .model-picker-body {grid-template-columns:140px 1fr}
 }
 .model-picker-left {border-right:1px solid var(--line); overflow-y:auto; padding:8px}
 .model-picker-right {overflow-y:auto; padding:8px 8px 12px}
-.model-picker-prov {display:flex; align-items:center; gap:8px; width:100%; text-align:left; font:inherit; font-size:14.5px;
-  background:none; border:0; color:var(--text); padding:9px 11px; border-radius:8px; cursor:pointer}
+.model-picker-prov {display:flex; align-items:center; gap:8px; width:100%; text-align:left; font:inherit; font-size:13.5px;
+  background:none; border:0; color:var(--text); padding:7px 10px; border-radius:8px; cursor:pointer}
 .model-picker-prov:hover {background:var(--surface)}
 .model-picker-prov[aria-current="true"] {background:var(--raised); font-weight:600}
 .model-picker-prov .model-picker-count {margin-left:auto; color:var(--faint); font-size:12.5px; font-variant-numeric:tabular-nums}
 .model-picker-prov .model-picker-dot {width:5px; height:5px; border-radius:99px; background:var(--amber); flex:0 0 5px}
-.model-picker-model {display:flex; align-items:center; gap:10px; width:100%; text-align:left; font-family:var(--mono); font-size:14px;
-  background:none; border:0; color:var(--text); padding:9px 12px; border-radius:8px; cursor:pointer}
+.model-picker-model {display:flex; align-items:center; gap:10px; width:100%; text-align:left; font-family:var(--mono); font-size:13px;
+  background:none; border:0; color:var(--text); padding:7px 10px; border-radius:8px; cursor:pointer}
 .model-picker-model:hover {background:var(--surface)}
 .model-picker-model .model-picker-tick {margin-left:auto; color:var(--amber); font-size:14px}
 .model-picker-model .model-picker-win {margin-left:auto; color:var(--faint); font-size:11.5px; font-family:var(--sans)}
 .model-picker-model .model-picker-tick + .model-picker-win {margin-left:8px}
-.model-picker-empty {padding:22px 14px; color:var(--faint); font-size:13.5px; text-align:center}
+.model-picker-empty {padding:18px 14px; color:var(--faint); font-size:12.5px; text-align:center}
 .model-picker-prov:focus-visible,.model-picker-model:focus-visible {outline:2px solid var(--amber); outline-offset:-2px}
 .model-picker-hr {height:1px; background:var(--line-soft); margin:6px 4px}
 .model-picker-model.model-picker-opt {font-family:var(--sans)}
@@ -2461,7 +2437,7 @@ textarea:focus, textarea:focus-visible,
 .model-picker-model.model-picker-add {color:var(--gold)}
 .model-picker-search .model-picker-back {font:inherit; font-size:12.5px; border:0; background:none; color:var(--muted); cursor:pointer; padding:2px 6px; border-radius:6px}
 .model-picker-search .model-picker-back:hover {color:var(--text); background:var(--raised)}
-.model-picker-search .model-picker-title {font-family:var(--disp); font-weight:600; font-size:15px}
+.model-picker-search .model-picker-title {font-family:var(--disp); font-weight:600; font-size:13.5px}
 .model-picker-search .model-picker-title:empty {display:none}
 .model-picker-search .model-picker-title + svg {margin-left:6px}
 
@@ -2591,7 +2567,7 @@ textarea:focus, textarea:focus-visible,
 }
 /* No ground of its own: the wash is .main's, so the column and whatever stands
    beside it read as one surface (see .main). */
-.chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+.chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; flex: 1; }
 /* New-task state: no header title, the composer holds the centre line. */
 .chat[data-fresh] #title, .chat[data-fresh] #renameBtn { visibility: hidden; }
 /* The landing page does not move the composer. It used to float it up to the
@@ -2971,8 +2947,8 @@ textarea:focus, textarea:focus-visible,
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fbar .nm b { font-weight: 500; color: var(--text); }
 .fbar .nm i { font-style: normal; color: var(--faint); }
-.fbar .fcopy { flex: none; width: 22px; height: 22px; color: var(--faint); }
-.fbar .fcopy:hover { color: var(--text); }
+.fbar .fcopy { flex: none; width: 22px; height: 22px; color: var(--faint); display: grid; place-items: center; border-radius: 6px; }
+.fbar .fcopy:hover { color: var(--text); background: var(--raised); }
 .fbar .fcopy svg { width: 12px; height: 12px; }
 .fbar .fsp { flex: 1; min-width: 8px; }
 .code { font-family: var(--mono); font-size: 11.5px; line-height: 1.7; padding: 8px 0 20px; }
@@ -3032,7 +3008,7 @@ textarea:focus, textarea:focus-visible,
 /* One pane. The viewer used to carry a tree of the working directory beside
    it; what it opens now comes from the transcript, the diff list or the
    deliverables shelf, and nothing navigates from inside it. */
-.fwrap { display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; }
+.fwrap { display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; flex: 1; }
 .fwrap > .fpane { flex: 1; min-height: 0; }
 .fpane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .fpane .fbody { flex: 1; overflow: auto; min-height: 0; }
@@ -3052,7 +3028,7 @@ textarea:focus, textarea:focus-visible,
 .fbar .kseg button { padding: 3px 9px; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
 .fbar .kseg button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
 .fview { min-height: 0; }
-.fview .prose { padding: 14px 14px 26px; }
+.fview .prose { padding: 14px 14px 26px; font-size: 13.5px; line-height: 1.75; }
 .fview .shot { display: block; padding: 14px; }
 .fview .shot img {
   max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line-soft);
@@ -3112,16 +3088,18 @@ textarea:focus, textarea:focus-visible,
 
 /* ── switch ────────────────────────────────────────────────────────── */
 .swi, .two-pane-swi {
-  flex: none; width: 32px; height: 18px; border-radius: 10px; background: var(--line);
+  flex: 0 0 auto; width: 38px; height: 22px; border-radius: 99px; background: var(--raised);
+  border: 1px solid var(--line); padding: 0; cursor: pointer;
   position: relative; transition: background .16s;
 }
 .swi::after, .two-pane-swi::after {
-  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
-  border-radius: 50%; background: var(--faint); transition: transform .16s, background .16s;
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 99px; background: var(--paper); box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+  transition: transform .16s;
 }
-.swi[aria-checked="true"], .two-pane-swi[aria-checked="true"] { background: var(--amber-dp); }
+.swi[aria-checked="true"], .two-pane-swi[aria-checked="true"] { background: var(--amber); border-color: var(--amber); }
 .swi[aria-checked="true"]::after,
-.two-pane-swi[aria-checked="true"]::after { transform: translateX(14px); background: var(--amber); }
+.two-pane-swi[aria-checked="true"]::after { transform: translateX(16px); }
 .two-pane-swi:disabled { opacity: .45; }
 
 .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line-soft);
@@ -3157,7 +3135,7 @@ details[open] summary { margin-bottom: 8px; }
 /* Modules replace the conversation, not the whole window: the rail stays put
    so you never lose your place in the session list. */
 .page {
-  position: fixed; inset: 0 0 0 var(--rail); z-index: var(--z-page); background: var(--ink);
+  position: fixed; inset: 0 0 0 var(--rail); z-index: var(--z-page); background: var(--page);
   display: none; flex-direction: column;
 }
 :root[data-rail="off"] .page { left: 0; }
@@ -3212,8 +3190,8 @@ details[open] summary { margin-bottom: 8px; }
 .trow.off .nm, .trow.off .one { opacity: .55; }
 
 /* capabilities */
-.cbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
-.cfind { position: relative; flex: 1; min-width: 200px; }
+.cbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.cfind { position: relative; flex: none; min-width: 200px; width: 300px; max-width: 100%; }
 .cfind input {
   width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
   padding: 9px 12px 9px 32px; outline: 0; font-size: 13px;
@@ -3331,7 +3309,8 @@ details[open] summary { margin-bottom: 8px; }
 /* page hero: the market's one big line -- everything else stays quiet */
 /* Every module page opens with the same hero: h3 title, muted sub, one
    rhythm (10px above, 18px down to the page's controls). */
-.pmhero { margin: 10px 0 18px; }
+.pmhero { margin: 10px 0 22px; display: flex; align-items: center;
+  justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 #pageHero { margin: 10px 0 18px; }
 #pageHero[hidden] { display: none; }
 .pmhero h3 {
@@ -3726,17 +3705,24 @@ details[open] summary { margin-bottom: 8px; }
 .card .st.bad { color: var(--clay); }
 .card .st.new { color: var(--sky); }
 .mini {
-  border: 1px solid var(--line); border-radius: 8px; padding: 4px 11px;
-  font-size: 12px; color: var(--text); white-space: nowrap;
+  border: 1px solid var(--line); border-radius: 7px; padding: 0 12px;
+  height: 28px; min-width: 68px; justify-content: center; white-space: nowrap;
+  font-size: 12.5px; color: var(--text); background: var(--ink);
+  display: inline-flex; align-items: center; gap: 6px;
   transition: background .13s ease, color .13s ease, border-color .13s ease;
 }
-.mini:hover { background: var(--raised); }
+/* The floor is the longest word in the language, and neither value fits the
+   other: 68 holds the Chinese words, Disconnect needs 96. */
+:root[data-lang="en"] .mini { min-width: 96px; }
+.mini:hover:not(:disabled) { border-color: var(--muted); background: var(--surface); }
+.mini.go { background: var(--text); border-color: var(--text); color: var(--ink); }
+.mini.go:hover:not(:disabled) { background: var(--text); filter: brightness(1.18); }
 /* Primary market action: quiet gold outline that turns solid only under its
    own pointer -- the card and the button are separate hit zones. */
 .mini.gold { border-color: color-mix(in oklab, var(--gold) 42%, transparent); color: var(--gold); font-weight: 600; }
 .mini.gold:hover { background: var(--gold); border-color: var(--gold); color: var(--ink); }
-.mini[disabled] { opacity: .55; pointer-events: none; }
-.mini.ghost { border-color: var(--line); color: var(--muted); }
+.mini[disabled], .mini:disabled { opacity: .4; pointer-events: none; cursor: default; }
+.mini.ghost { background: none; border-color: var(--line); color: var(--muted); }
 .mini.ghost:hover { color: var(--text); border-color: var(--faint); }
 /* The one thing left to do. Raised when a key saves onto an empty model list:
    the provider is connected, nothing looks wrong, and it still lends the picker
@@ -3757,7 +3743,7 @@ details[open] summary { margin-bottom: 8px; }
 }
 /* The outline still carries it for a reader who has asked for no motion. */
 @media (prefers-reduced-motion: reduce) { .mini.nudge { animation: none; } }
-.mini.update { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 28px; padding: 4px; }
+.mini.update { display: inline-flex; align-items: center; justify-content: center; width: 32px; min-width: 0; height: 28px; padding: 4px; }
 .mini.update svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 .adv { margin-top: 30px; border-top: 1px solid var(--line-soft); padding-top: 16px; }
@@ -3868,10 +3854,10 @@ details[open] summary { margin-bottom: 8px; }
 .probe.ok { color: var(--moss); }
 .probe.bad { color: var(--clay); }
 .mini.danger, .mini.ghost.danger {
-  color: var(--clay); border-color: color-mix(in oklab, var(--clay) 50%, transparent);
+  color: var(--clay); border-color: color-mix(in oklab, var(--clay) 35%, transparent);
 }
 .mini.danger:hover, .mini.ghost.danger:hover {
-  background: color-mix(in oklab, var(--clay) 12%, transparent); border-color: var(--clay); color: var(--clay);
+  background: color-mix(in oklab, var(--clay) 8%, transparent); border-color: var(--clay); color: var(--clay);
 }
 
 /* settings — a dialog with its own two panes: the nav and the panel scroll
@@ -4272,19 +4258,36 @@ details[open] summary { margin-bottom: 8px; }
 
 .fset { display: grid; gap: 1px; background: var(--line-soft); border: 1px solid var(--line-soft);
   border-radius: 10px; overflow: hidden; }
+/* The control standard: anything you type into is paper with a --line edge and
+   turns amber with a glow on focus; one row of controls shares a height and a
+   radius; grey is left to what is not a control -- a segmented track, a
+   read-only block. One form used to carry five grounds, five heights and three
+   radii, which read as three people having built it. */
 input[type="text"], input[type="password"], select {
-  background: var(--surface); border: 1px solid var(--line); border-radius: 7px;
-  padding: 7px 10px; outline: 0; font-family: var(--mono); font-size: 12.5px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: var(--ctl-r);
+  padding: 0 10px; outline: 0; font-family: var(--mono); font-size: 13px;
+  height: var(--ctl-h); box-sizing: border-box;
 }
-input[type="text"]:focus, input[type="password"]:focus, select:focus { border-color: var(--muted); }
+input[type="text"]:focus, input[type="password"]:focus, select:focus {
+  border-color: var(--amber); box-shadow: var(--ctl-focus);
+}
 input[type="range"] { accent-color: var(--amber); width: 190px; }
 .val { font-family: var(--mono); font-size: 12px; color: var(--amber); margin-left: 9px;
   font-variant-numeric: tabular-nums; }
 
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.seg button { padding: 6px 13px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
-.seg button[aria-pressed="true"] { background: var(--raised); color: var(--text); font-weight: 600; }
-.seg button:hover[aria-pressed="false"] { background: var(--surface); }
+.seg {
+  display: inline-flex; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); height: 32px; box-sizing: border-box; padding: 2px; gap: 2px;
+}
+.seg button {
+  padding: 0 12px; font-size: 13px; color: var(--muted);
+  border-radius: 5px; white-space: nowrap;
+}
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed="true"] {
+  background: var(--paper); color: var(--text); font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .06), 0 0 0 1px rgba(0, 0, 0, .03);
+}
 
 /* ── scheduled work: job cards ride the market card language ───────── */
 .herorow { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 10px 0 18px; }
@@ -5291,7 +5294,8 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-row .chgs .d { color: var(--clay); }
 .desk-diff-row { height: 38px; padding: 0 11px; border-bottom: 1px solid var(--line-soft); }
 .desk-diff-row .chgc { width: 22px; height: 22px; display: grid; place-items: center; flex: none;
-  border-radius: 6px; font: 10px/1 var(--mono); }
+  border-radius: 6px; font: 10px/1 var(--mono); background: var(--surface); color: var(--muted);
+}
 .desk-diff-row .desk-name { font: 11px/1.4 var(--mono); }
 .desk-diff-row .chgs { font-size: 10.5px; }
 /* One empty state, whichever tab is showing: the tab's icon, what is not here,
@@ -5334,7 +5338,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-dlv-row .dlv-kind[data-kind="pptx"] { color: var(--clay); }
 .desk-dlv-row .dlv-kind[data-kind="csv"],
 .desk-dlv-row .dlv-kind[data-kind="json"] { color: var(--moss); }
-.desk-dlv-row .desk-name { display: grid; gap: 1px; }
+.desk-dlv-row .desk-name { display: grid; gap: 2px; }
 .desk-dlv-row .desk-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font: 500 11.5px/1.45 var(--sans); }
 .desk-dlv-row .desk-name s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -5377,11 +5381,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 /* The two marks that ARE tiles fill the frame instead of sitting a card inside
    one. MiroMind's file is a favicon and carries its own rounded card. */
 .agent-mark img[data-agent="mirothinker"] { width: 100%; height: 100%; }
-/* The second mark that is a tile: raven.svg carries an opaque plate of its own,
-   for the reason the color-scheme comment below records. Keyed by file, because
-   `data-agent` carries the preset and raven's own rows have none -- the same
-   reason agent-mark.tsx holds it outside MARKS. */
-.agent-mark img[src$="agents/raven.svg"] { width: 100%; height: 100%; }
 /* Only the marks that draw in currentColor, which an <img> resolves against its
    own document and so renders black. `mono` is every shape, so the whole file
    inverts, as the provider marks already do. `hybrid` is qoder alone: brand
@@ -5511,12 +5510,12 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
   container: desk-pane / size; isolation: isolate; pointer-events: auto;
   border: 1px solid var(--line); border-radius: 14px;
-  background: var(--paper);
+  background: var(--ink);
   box-shadow: 0 8px 28px var(--sh-soft), 0 1px 3px var(--ring); }
-.desk-pane > header { height: 48px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px;
+.desk-pane > header { height: 48px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 10px;
   border-bottom: 1px solid var(--line-soft); }
 .desk-pane > header > svg { width: 15px; height: 15px; flex: none; stroke-linecap: round; stroke-linejoin: round; }
-.desk-pane > header b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.desk-pane > header b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
 /* Centred rather than left to each child's own rules: one of these buttons
    holds an inline <svg>, which sits on the text baseline with the descender
    space still under it, and the other holds the "x" character, which sits
@@ -5524,9 +5523,10 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    two controls side by side in the same header, visibly off one another.
    The line-height is the last quarter pixel of it: centring alone leaves the
    line box's half-leading behind. */
-.desk-pane > header button { width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent;
+.desk-pane > header button { width: 28px; height: 28px; border: 0; border-radius: 7px; background: transparent;
   display: grid; place-items: center; line-height: 1;
-  color: var(--faint); font-size: 16px; cursor: pointer; }
+  color: var(--text-3); font-size: 17px; cursor: pointer; flex: none;
+}
 .desk-pane > header button svg { width: 16px; height: 16px; stroke-linecap: round; stroke-linejoin: round; }
 .desk-pane > header .pane-fullscreen svg { width: 14px; height: 14px; }
 /* The instance's own effort. A text chip, so it has to undo the fixed 26px
@@ -5540,7 +5540,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   display: block; line-height: 22px; }
 .desk-pane > header .pane-imode:not(.auto) { color: var(--text); background: var(--raised);
   box-shadow: inset 0 0 0 1px var(--line-soft); }
-.desk-pane > header button:hover { color: var(--text); background: var(--raised); }
+.desk-pane > header button:hover { color: var(--text); background: var(--hover); }
 /* The header is the handle once there is more than one pane to arrange. */
 .desk-grid[data-can-drag="true"] .desk-pane > header { cursor: grab; touch-action: none; user-select: none;
   -webkit-user-select: none; }
@@ -6663,7 +6663,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 /* A door, not a label: each chip opens the thing it names -- the product in the
    preview, the changed file in its diff -- so it is a control and wears the
    affordances of one. */
-.wchip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text);
+.wchip { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text);
   line-height: 1.6; background: var(--surface); border: 1px solid transparent; border-radius: 8px;
   padding: 4px 10px; cursor: pointer; }
 .wchip:hover { background: var(--raised); }

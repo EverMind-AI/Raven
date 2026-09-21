@@ -131,30 +131,30 @@ def test_the_own_mark_ships() -> None:
     assert (_ASSETS / f"{_own_mark()}.svg").is_file()
 
 
-def test_the_own_mark_carries_its_own_plate() -> None:
-    """The two halves of that are one fact, and neither is safe alone.
+def test_the_own_mark_answers_the_theme() -> None:
+    """A raven is dark, and the dark theme's surface is ``#1e1c14``.
 
-    A raven is dark, and the dark theme's surface is ``#1e1c14``. Measured at
-    the roster's render size, the bird against that surface is 1.07:1 -- gone,
-    leaving the halo alone in an empty frame. The mark cannot be filtered into
-    legibility the way a ``mono`` one is, because it is not one colour to
-    invert, so it answers the theme by not participating in it: an opaque plate
-    behind every shape, which renders the same on either surface.
+    Two mechanisms answer that, and the file may carry either. A
+    ``prefers-color-scheme`` rule inside the file flips the bird for the dark
+    surface -- what the mark the chrome draws does through ``currentColor``
+    (components/RavenMark.tsx), and what the stylesheet's ``color-scheme``
+    lines on ``.agent-mark img`` exist to make reachable from an ``<img>``, as
+    miromind.svg also relies on. An opaque plate behind every shape is the
+    other: it renders the same on either surface and makes the rule redundant.
+    A file with neither is the failure this guards -- measured at the roster's
+    render size, the bird against that surface is 1.07:1, gone.
 
-    That is why the plate is asserted rather than a ``prefers-color-scheme``
-    rule. The file used to carry one, as miromind.svg still does; a plate makes
-    the rule redundant, and the stylesheet's ``color-scheme`` lines no longer
-    decide anything for this mark. Either mechanism is a fact about the file,
-    and a file with neither is the failure this guards.
-
-    The tone must stay absent for the same reason it always did: a ``mono`` or
-    ``hybrid`` here would invert the plate along with the bird, which lands at
+    The tone must stay absent either way, for the reason it always did: a
+    ``mono`` or ``hybrid`` here would invert the whole mark, which lands
     dark-on-dark in exactly one theme -- and no DOM assertion sees a colour.
     """
     svg = (_ASSETS / f"{_own_mark()}.svg").read_text(encoding="utf-8")
     root = svg[: svg.index(">") + 1]
     shapes = _SHAPE.findall(svg)
     plate = [el for el in shapes if el.startswith("<rect") and 'fill="#FFFFFF"' in el]
-    assert plate, "the own mark carries neither a plate nor a prefers-color-scheme rule"
-    assert 'fill="none"' in root, "a root fill would paint outside the plate"
+    assert plate or "prefers-color-scheme" in svg, (
+        "the own mark carries neither a plate nor a prefers-color-scheme rule"
+    )
+    if plate:
+        assert 'fill="none"' in root, "a root fill would paint outside the plate"
     assert _tone_of(_own_mark()) is None
