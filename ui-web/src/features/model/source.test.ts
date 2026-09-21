@@ -114,7 +114,9 @@ async function live({ session = null, answers = null }: Options = {}) {
     loadPermMode: settingsModule.loadPermMode,
     loadSettings: settingsModule.loadSettings,
     settingsSnapshot: settingsModule.settingsSnapshot,
-    get providersLive() { return model.providers() },
+    loadDefaultProviders: model.loadDefaultProviders,
+    get providersLive() { return model.modelSource.providers() },
+    get defaultProvidersLive() { return model.defaultProviders() },
     get defaultModelLive() { return model.defaultModel() },
     get defaultProviderLive() { return model.defaultProvider() },
   }
@@ -341,6 +343,34 @@ describe('providers the page does not offer', () => {
       ['openrouter', true, false],
       ['anthropic', false, true],
     ])
+  })
+})
+
+describe('the two provider scopes', () => {
+  const row = (slug: string, current = false) =>
+    ({ slug, name: slug, authenticated: true, models: [`${slug}/m`], is_current: current })
+
+  it('a default-scoped read leaves the conversation rows alone', async () => {
+    /* `is_current` is the whole difference: the backend marks the
+       conversation's provider when the read names a session and
+       agents.defaults' when it does not. Sharing one array let the settings
+       dialog's read -- which every settings write repeats -- put the default's
+       answer under the composer's picker, which then opened on the default's
+       column with the conversation's model prepended and ticked there, under a
+       vendor whose key does not serve it. */
+    const h = await live({ session: 'sess-1' })
+
+    const perSession = h.settings.loadProviders()
+    await h.settle(0, { model: 'gemini/g', provider: 'gemini', providers: [row('deepseek'), row('gemini', true)] })
+    await perSession
+    expect(h.settings.providersLive.filter((p) => p.current).map((p) => p.id)).toEqual(['gemini'])
+
+    const perDefault = h.settings.loadDefaultProviders()
+    await h.settle(1, { model: 'deepseek/d', provider: 'deepseek', providers: [row('deepseek', true), row('gemini')] })
+    await perDefault
+
+    expect(h.settings.providersLive.filter((p) => p.current).map((p) => p.id)).toEqual(['gemini'])
+    expect(h.settings.defaultProvidersLive.filter((p) => p.current).map((p) => p.id)).toEqual(['deepseek'])
   })
 })
 
