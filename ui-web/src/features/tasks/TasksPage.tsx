@@ -147,7 +147,6 @@ function Row({ row, now, open, onOpen }: {
       <div className="bd">
         <div className="tline">
           <span className="nm">{row.task_summary || row.id}</span>
-          {row.playbook ? <span className="tksrc">{row.playbook}</span> : null}
         </div>
         <s className="st">{line}</s>
       </div>

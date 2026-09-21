@@ -2304,10 +2304,6 @@ export interface TaskRow {
   status: TaskStatus;
   replan?: TaskReplan;
   /**
-   * The library name of the playbook that dispatched this run, derived from the node-id prefix the executor writes; null when none matches.
-   */
-  playbook?: string | null;
-  /**
    * Epoch milliseconds; the earliest node start.
    */
   started_at?: number | null;

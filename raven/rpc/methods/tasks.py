@@ -58,10 +58,6 @@ _SPAWN_META_STATUS = {
 
 _COUNT_KEYS = ("pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted", "exception")
 
-# `_namespace_run` (`raven/playbook/executor.py`) tags every node id of one run
-# with the same random hex, right after the sanitized playbook name.
-_PLAYBOOK_TAG_RE = re.compile(r"^[0-9a-f]{6}-")
-
 
 def _head(path: Path, limit: int) -> str | None:
     """The first ``limit`` characters of a file, or None when it does not exist."""
@@ -203,43 +199,6 @@ def _live_spawn_handles(agent_loop_factory: "AgentLoopFactory | None", session_k
         return set()
 
 
-def _playbook_names() -> list[str]:
-    """Every playbook the library currently holds, best-effort.
-
-    A misconfigured playbooks directory must not break the task list -- it
-    should just mean no run in it derives a playbook name.
-    """
-    try:
-        from raven.rpc.methods.playbooks import _store
-
-        return list(_store().list_ids())
-    except Exception:  # noqa: BLE001 - the derived field is optional, the read is not
-        return []
-
-
-def _derive_playbook(first_node_id: str | None, names: list[str]) -> str | None:
-    """The playbook that dispatched this run, from its first node's id prefix.
-
-    ``_namespace_run`` rewrites every node id to ``<sanitized name>-<6
-    hex>-<original id>`` before dispatch, so matching that shape against the
-    library's names recovers the source without a declared field on the graph.
-    The longest matching name wins a prefix collision (``scan`` vs.
-    ``scan-report``).
-    """
-    if not first_node_id:
-        return None
-    best: str | None = None
-    for name in names:
-        prefix = re.sub(r"[^A-Za-z0-9_-]+", "-", name) + "-"
-        if not first_node_id.startswith(prefix):
-            continue
-        if not _PLAYBOOK_TAG_RE.match(first_node_id[len(prefix) :]):
-            continue
-        if best is None or len(name) > len(best):
-            best = name
-    return best
-
-
 def _spawn_row(files: "_NodeFiles", agent_loop_factory: "AgentLoopFactory | None", session_key: str) -> dict[str, Any]:
     meta = _read_meta(files)
     raw_status = str(meta.get("status") or "")
@@ -294,7 +253,6 @@ def _spawn_row(files: "_NodeFiles", agent_loop_factory: "AgentLoopFactory | None
         "kind": "spawn",
         "task_summary": task_summary,
         "status": status,
-        "playbook": None,
         "started_at": started_at,
         "ended_at": ended_at,
         "agent": meta.get("agent"),
@@ -391,7 +349,6 @@ def _dag_row(
     instance_rows: list[dict[str, Any]],
     nodes_dir: Path,
     live_runs: set[str],
-    playbook_names: list[str],
 ) -> dict[str, Any] | None:
     graph = _graph_of(session_dir, run_dir.name)
     if not isinstance(graph.get("nodes"), list):
@@ -475,7 +432,6 @@ def _dag_row(
         "kind": "dag",
         "task_summary": graph.get("task_summary") or None,
         "status": task_status,
-        "playbook": _derive_playbook(nodes[0]["node_id"] if nodes else None, playbook_names),
         "started_at": min(starts) if starts else None,
         "ended_at": max(ends) if ends and task_status != "running" else None,
         "agent": None,
@@ -513,12 +469,8 @@ def _dag_rows(
         instance_rows = []
     live_runs = _live_dag_run_ids(agent_loop_factory)
     nodes_dir = nodes_root(session_dir)
-    playbook_names = _playbook_names()
 
-    rows = (
-        _dag_row(session_dir, run_dir, registry_nodes, instance_rows, nodes_dir, live_runs, playbook_names)
-        for run_dir in run_dirs
-    )
+    rows = (_dag_row(session_dir, run_dir, registry_nodes, instance_rows, nodes_dir, live_runs) for run_dir in run_dirs)
     return [row for row in rows if row is not None]
 
 
