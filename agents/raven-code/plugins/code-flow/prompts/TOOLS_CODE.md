@@ -70,10 +70,14 @@ the host exec instead; follow that tool's stated limits and failure behavior.
 - Neither tool spills a complete result to a file. `grep` cuts its output at
   30,000 characters and says so in a trailing note; a result marked PARTIAL is
   not the full set — use `output_mode='count'` for exact totals, or narrow the
-  pattern or path. `glob` returns at most `limit` entries; raise `limit` or
-  narrow the pattern when you need the rest. Brace alternatives such as
-  `*.{py,ts}` share one limit after deduplication and recency sorting. If any
-  alternative was truncated, the merged result is marked PARTIAL too;
+  pattern or path. `glob` returns at most `limit` entries; a notice that names
+  the limit means the result was cut there — raise `limit` or narrow the
+  pattern when you need the rest. Brace alternatives such as `*.{py,ts}` share
+  one limit after deduplication and recency sorting. If any alternative was
+  truncated, the merged result is marked PARTIAL too. A PARTIAL notice that
+  names the traversal budget is a different thing: the walk ran out of time
+  before it covered the tree, absence of a match is NOT conclusive there, and a
+  higher `limit` does not help — narrow the path or pattern and run it again;
   an error means the search failed, not that there are no matching files
 - A `grep` result that begins "Warning: search incomplete" means the fallback
   scanner ran out of time: absence of a match is NOT conclusive there — narrow

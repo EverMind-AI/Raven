@@ -114,7 +114,9 @@ class GlobTool(trunk.FindTool):
             "are skipped, except one the pattern starts with: 'node_modules/*.js' looks inside it. "
             "Use it to locate a file before reading or editing it instead of "
             "guessing at the path. Brace alternatives share one limit after deduplication and sorting. "
-            "A truncation notice means the result is partial; raise limit or narrow the pattern."
+            "A notice naming the limit means the result was cut there: raise limit or narrow the pattern. "
+            "A notice naming the traversal budget means the walk ran out of time: absence of a match is not "
+            "conclusive there, and only a narrower path or pattern helps."
         )
 
     @property
@@ -131,7 +133,8 @@ class GlobTool(trunk.FindTool):
         props["limit"] = {
             **props["limit"],
             "description": "Maximum unique entries across all patterns (default 1000). "
-            "Raise this limit or narrow the pattern when the result is marked partial.",
+            "Raise it when a notice says the result was cut at the limit; a traversal-budget notice "
+            "needs a narrower path or pattern instead.",
         }
         return {**base, "properties": props}
 
