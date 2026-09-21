@@ -108,6 +108,7 @@ $('#modelChip').onclick = () => {
 };
 
 $('#permChip').onclick = () => togglePerm();
+$('#wdChip').onclick = () => toggleWorkdir();
 $('#tierChip').onclick = () => toggleTier();
 
 /* Arrows, not references: live.js swaps openCaps for one that loads real data

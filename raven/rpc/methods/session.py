@@ -588,6 +588,9 @@ def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:
         "updated_at": _ts(info.get("last_message_at")) or _ts(info.get("updated_at")) or started_at,
         "title": title,
         "pinned": bool(meta.get("pinned")),
+        # The override session.create stored, and nothing else: a session on the
+        # policy default answers null, which is how the rail tells the two apart.
+        "workdir": str(meta["workdir"]) if meta.get("workdir") else None,
     }
 
 

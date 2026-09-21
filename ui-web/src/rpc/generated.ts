@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 178 methods, 96 component schemas.
+// 179 methods, 97 component schemas.
 
 /* eslint-disable */
 /**
@@ -415,6 +415,17 @@ export interface FsEntry {
    */
   size: number;
 }
+export interface FsDirEntry {
+  name: string;
+  /**
+   * Absolute.
+   */
+  path: string;
+  /**
+   * True when a session may be pinned here; false inside the agent's own data (see raven.agent.workdir).
+   */
+  ok: boolean;
+}
 /**
  * One row, projected card-sized. ``kind`` decides which optional fields
  * carry a value: the four memory types share only ``id`` and ``kind``.
@@ -576,6 +587,10 @@ export interface SessionListItem {
    * User pinned this session to the top of the picker.
    */
   pinned?: boolean;
+  /**
+   * The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by.
+   */
+  workdir?: string;
 }
 export interface SessionMessage {
   /**
@@ -2934,6 +2949,34 @@ export interface FsListResult {
    */
   entries: FsEntry[];
 }
+export interface FsDirsParams {
+  /**
+   * Absolute directory to list the subdirectories of; the user's home directory when omitted.
+   */
+  path?: string;
+}
+export interface FsDirsResult {
+  /**
+   * The directory listed, resolved.
+   */
+  path: string;
+  /**
+   * One level up; null at the filesystem root.
+   */
+  parent?: string;
+  /**
+   * The user's home directory, where the browser starts.
+   */
+  home: string;
+  /**
+   * Whether the listed directory itself may be a session's working directory.
+   */
+  ok: boolean;
+  /**
+   * Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.
+   */
+  entries: FsDirEntry[];
+}
 export interface FsReadParams {
   path: string;
   max_bytes?: number;
@@ -4153,6 +4196,7 @@ export interface RpcMethods {
   'channels.configure': { params: ChannelsConfigureParams; result: ChannelsConfigureResult };
   'channels.qr': { params: ChannelsQrParams; result: ChannelsQrResult };
   'fs.list': { params: FsListParams; result: FsListResult };
+  'fs.dirs': { params: FsDirsParams; result: FsDirsResult };
   'fs.read': { params: FsReadParams; result: FsReadResult };
   'fs.upload': { params: FsUploadParams; result: FsUploadResult };
   'fs.reveal': { params: FsRevealParams; result: FsRevealResult };
@@ -4273,6 +4317,7 @@ export const RPC_METHODS = [
   "delegation.status",
   "deliverables.list",
   "ext.list",
+  "fs.dirs",
   "fs.list",
   "fs.open",
   "fs.read",

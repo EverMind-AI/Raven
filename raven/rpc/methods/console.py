@@ -1564,6 +1564,82 @@ async def fs_list(params: dict, *, agent_loop_factory=None) -> dict:
     return {"root": str(root), "path": rel, "entries": entries}
 
 
+async def fs_dirs(params: dict, *, agent_loop_factory=None) -> dict:
+    """``fs.dirs`` -- the subdirectories of one absolute directory.
+
+    What the page's folder picker walks when a person chooses where a new
+    conversation will work. Not rooted at a session like ``fs.list``: the
+    conversation does not exist yet, and the point is to reach a directory the
+    policy default would never have picked. Directories only, since a file
+    cannot be a working directory; dotfiles omitted, as ``fs.list`` omits them.
+
+    Every entry carries ``ok``, the answer ``validate_override`` would give
+    ``session.create`` for that path, so the picker can grey out the agent's
+    own data instead of offering a folder the create is going to refuse. A
+    directory that merely CONTAINS that data answers false too (the validator
+    refuses agent home's ancestors), which says nothing about its children --
+    the picker lets such a row be entered and only withholds the pick.
+
+    The cap counts directories FOUND, not names examined, so a folder is never
+    dropped for sorting late among its siblings: the picker offers no typed
+    path, and a subtree left out of the listing cannot be reached at all.
+    Bounding the input instead would buy speed with the answer. The scan is
+    cheap regardless because the type comes off the dirent -- ``os.scandir``
+    answers ``is_dir`` from what the kernel already returned, so a directory of
+    thirty thousand files costs no stats at all. And the walk runs off the
+    event loop, as ``fs_read`` does, because the directory is the caller's
+    choice and a slow mount would otherwise stall every other client on the
+    shared socket.
+    """
+    from raven.config.loader import load_config
+
+    raw = str(params.get("path") or "")
+    target = Path(raw).expanduser() if raw else Path.home()
+    if not target.is_absolute():
+        raise ConfigValidationError(f"path must be absolute, got {raw!r}", data={"field": "path"})
+    home = load_config().workspace_path
+    return await asyncio.to_thread(_walk_dirs, target, home)
+
+
+def _walk_dirs(target: Path, agent_home: Path) -> dict:
+    """The blocking half of ``fs.dirs``: resolve, list, judge."""
+    from raven.agent.workdir import validate_override
+
+    target = target.resolve()
+    if not target.is_dir():
+        raise ConfigValidationError(f"not a directory: {target}", data={"field": "path"})
+
+    def allowed(path: Path) -> bool:
+        try:
+            validate_override(path, agent_home)
+        except ValueError:
+            return False
+        return True
+
+    try:
+        with os.scandir(target) as scan:
+            children = sorted((c for c in scan if not c.name.startswith(".")), key=lambda c: c.name.lower())
+    except OSError as e:
+        raise ConfigValidationError(str(e)) from None
+    entries = []
+    for child in children:
+        try:
+            if not child.is_dir():
+                continue
+        except OSError:
+            continue
+        entries.append({"name": child.name, "path": child.path, "ok": allowed(Path(child.path))})
+        if len(entries) >= _FS_MAX_ENTRIES:
+            break
+    return {
+        "path": str(target),
+        "parent": None if target.parent == target else str(target.parent),
+        "home": str(Path.home()),
+        "ok": allowed(target),
+        "entries": entries,
+    }
+
+
 _UPLOAD_DIR = "uploads"
 
 
@@ -1860,6 +1936,7 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("channels.configure", bind(channels_configure))
     dispatcher.register("channels.qr", channels_qr)
     dispatcher.register("fs.list", bind(fs_list))
+    dispatcher.register("fs.dirs", bind(fs_dirs))
     dispatcher.register("fs.read", bind(fs_read))
     dispatcher.register("fs.upload", bind(fs_upload))
     dispatcher.register("fs.reveal", bind(fs_reveal))

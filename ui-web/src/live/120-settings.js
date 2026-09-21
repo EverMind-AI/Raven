@@ -306,6 +306,7 @@ function redrawAll() {
   drawCapsBadge();
   setModelLabel();
   drawPerm();
+  drawWorkdir();
   drawCtx();
   // Every module page, not just the open one: a hidden page keeps its old
   // DOM, so it would still be in the previous language when reopened.

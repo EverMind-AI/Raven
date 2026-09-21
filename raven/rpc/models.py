@@ -1070,6 +1070,13 @@ class SessionListItem(_Strict):
     updated_at: float = Field(..., description="Unix timestamp of the latest user or assistant message.")
     title: str
     pinned: bool = Field(default=False, description="User pinned this session to the top of the picker.")
+    workdir: str | None = Field(
+        default=None,
+        description=(
+            "The directory this session was pinned to when it was created, absolute; absent for a "
+            "session that runs where the policy default puts it. What the rail groups by."
+        ),
+    )
 
 
 class SessionListParams(_Strict):
@@ -3143,6 +3150,32 @@ class FsListResult(_Strict):
     entries: list[FsEntry] = Field(..., description="Directories first, dotfiles omitted, capped at 500.")
 
 
+class FsDirsParams(_Strict):
+    path: str | None = Field(
+        default=None,
+        description="Absolute directory to list the subdirectories of; the user's home directory when omitted.",
+    )
+
+
+class FsDirEntry(_Strict):
+    name: str
+    path: str = Field(..., description="Absolute.")
+    ok: bool = Field(
+        ...,
+        description="True when a session may be pinned here; false inside the agent's own data (see raven.agent.workdir).",
+    )
+
+
+class FsDirsResult(_Strict):
+    path: str = Field(..., description="The directory listed, resolved.")
+    parent: str | None = Field(..., description="One level up; null at the filesystem root.")
+    home: str = Field(..., description="The user's home directory, where the browser starts.")
+    ok: bool = Field(..., description="Whether the listed directory itself may be a session's working directory.")
+    entries: list[FsDirEntry] = Field(
+        ..., description="Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found."
+    )
+
+
 class FsReadParams(_Strict):
     path: str
     max_bytes: int | None = None
@@ -4433,6 +4466,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "channels.configure": (ChannelsConfigureParams, ChannelsConfigureResult),
     "channels.qr": (ChannelsQrParams, ChannelsQrResult),
     "fs.list": (FsListParams, FsListResult),
+    "fs.dirs": (FsDirsParams, FsDirsResult),
     "fs.read": (FsReadParams, FsReadResult),
     "fs.upload": (FsUploadParams, FsUploadResult),
     "fs.reveal": (FsRevealParams, FsRevealResult),

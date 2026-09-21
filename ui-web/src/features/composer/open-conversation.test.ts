@@ -58,16 +58,19 @@ function harness(startAsDraft: boolean) {
     'rpc', 'T', 'sessionCurrent', 'sessionSet', 'sessionRows', 'claimDraft',
     'applyStagedModel', 'applyStagedTier', 'applyStagedPerm', 'sessionDraw',
     'subscribe', 'wsSetRoot', 'startAsDraft', 'touchSession', 'beginNaming',
-    'mediaOf', 'namingDeclined',
-    `let draft = startAsDraft; let viewGen = 7; let turnOwner = null;\n${fnSource}\n`
+    'mediaOf', 'namingDeclined', 'setSessionWorkdir',
+    `let draft = startAsDraft; let viewGen = 7; let turnOwner = null; let pendingWorkdir = null;\n${fnSource}\n`
     + 'return { openConversation, sendOnSession, isDraft: () => draft, '
-    + 'turnOwner: () => turnOwner, setDraft: (on) => { draft = on; } };',
+    + 'turnOwner: () => turnOwner, setDraft: (on) => { draft = on; }, '
+    + 'stageWorkdir: (dir) => { pendingWorkdir = dir; }, stagedWorkdir: () => pendingWorkdir };',
   ) as (...args: unknown[]) => {
     openConversation: (preview?: string, atPointer?: (id: string) => void) => Promise<string | null>
     sendOnSession: (text: string, failed: (e: unknown) => void) => void
     isDraft: () => boolean
     turnOwner: () => string | null
     setDraft: (on: boolean) => void
+    stageWorkdir: (dir: string | null) => void
+    stagedWorkdir: () => string | null
   }
   const built = build(
     rpc,
@@ -87,6 +90,7 @@ function harness(startAsDraft: boolean) {
     () => { log.push('naming') },
     () => ({}),
     say('namingDeclined'),
+    say('workdir'),
   )
   return { ...built, log, rows, rpc, pointer: () => pointer }
 }
@@ -100,6 +104,26 @@ describe('getting a conversation to work in', () => {
     expect(h.rpc.call).not.toHaveBeenCalled()
     expect(h.log).toEqual([])
     expect(h.rows).toEqual([])
+  })
+
+  it('hands the staged folder to the create, puts it on the row, and spends it', async () => {
+    const h = harness(true)
+    h.stageWorkdir('/w/thesis')
+    await expect(h.openConversation()).resolves.toBe('made-1')
+    expect(h.rpc.call).toHaveBeenCalledWith('session.create', { workdir: '/w/thesis' })
+    expect((h.rows[0] as Row & { workdir?: string | null }).workdir).toBe('/w/thesis')
+    /* Spent by the create, so the next draft starts from no folder; and the
+       chip is told the conversation it now reports on. */
+    expect(h.stagedWorkdir()).toBeNull()
+    expect(h.log).toContain('workdir:/w/thesis')
+  })
+
+  it('creates with no folder when none was staged, and the chip is told so', async () => {
+    const h = harness(true)
+    await h.openConversation()
+    expect(h.rpc.call).toHaveBeenCalledWith('session.create', {})
+    expect((h.rows[0] as Row & { workdir?: string | null }).workdir).toBeNull()
+    expect(h.log).toContain('workdir')
   })
 
   it('promotes the draft, and answers with the conversation it made', async () => {
@@ -138,6 +162,7 @@ describe('getting a conversation to work in', () => {
       'pointer:made-1',
       'hook:made-1',
       'claimDraft:made-1',
+      'workdir',
       'staged:model:7',
       'staged:tier:made-1',
       'staged:perm:made-1',

@@ -111,6 +111,14 @@ let pendingModel = null;
 let pendingTier = null;
 /* The permission mode picked while still a draft: the same pair, the same two resets. */
 let pendingPerm = null;
+/* The working directory picked while still a draft. Not a fourth staged write:
+   the engine takes it on `session.create` itself, so `promote` hands it over
+   with the mint rather than writing it afterwards. Reset on the same two paths
+   as the others, and pushed to the chip on each so the chip reads draft (live)
+   or conversation (fixed). Cleared only once the create has taken it: a create
+   the gateway refuses (a folder inside raven's own data) leaves the draft
+   standing with its pick still on the chip, which is where the reader changes it. */
+let pendingWorkdir = null;
 
 /* Apply a staged draft pick to the session the first message just minted.
    Awaited before that turn is sent, so the turn runs on the chosen model rather
@@ -219,6 +227,7 @@ function startDraft() {
      rather than waiting to be spent by whichever conversation is sent next. */
   pendingTier = null; void loadTier();
   pendingPerm = null; void loadPermMode(null, gen);
+  pendingWorkdir = null; setDraftWorkdir();
   $('#title').textContent = T('gui.new_task');
   pitch(); sessionDraw(); ta.focus();
 }
@@ -257,6 +266,7 @@ async function openLiveSession(s) {
      conversation is the open one, so the row has done its job and a badge left
      behind would outlive the sheet it was pointing at. */
   if (row && (row.status === 'done' || row.status === 'ask')) row.status = null;
+  pendingWorkdir = null; setSessionWorkdir((row && row.workdir) || s.workdir || null);
   markNewCurrent();
   resetView();
   $('#title').textContent = plainTitle(s.title);
@@ -422,10 +432,13 @@ async function promote(preview, atPointer) {
      reads the view as it stood when the promotion began rather than whatever
      the reader has opened since. */
   const gen = viewGen;
-  const r = await rpc.call('session.create', {});
+  const workdir = pendingWorkdir;
+  const r = await rpc.call('session.create', workdir ? { workdir } : {});
+  pendingWorkdir = null;
   wsSetRoot(r.info && r.info.cwd);
   const s = { id: r.session_id, title: T('gui.new_task'), last: preview || T('gui.sess.not_started'),
-    when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false };
+    when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false,
+    workdir: workdir || null };
   sessionRows().unshift(s); sessionSet(s.id); draft = false;
   /* The pointer has moved, and a caller with something to file under the new
      conversation files it HERE rather than after the round trips below: the
@@ -436,6 +449,8 @@ async function promote(preview, atPointer) {
   // The composer was owned by 'new' until this point; keep later keystrokes
   // filed under the session that just came into being.
   claimDraft(sessionCurrent());
+  // The chip stops taking presses: the folder is the conversation's now.
+  setSessionWorkdir(workdir || null);
   await applyStagedModel(s.id, gen);
   await applyStagedTier(s.id);
   await applyStagedPerm(s.id);
@@ -558,6 +573,11 @@ DS.composer.send = liveSend;
    offered by name, for a caller that needs the conversation and has no message
    to start it with. */
 DS.composer.startConversation = () => openConversation();
+/* The folder chip's two doors (shell/workdir.ts), on the composer seam beside
+   the promotion they feed: the draft's pick, held for the create above, and
+   the gateway's directory walk behind "Open folder...". */
+DS.composer.stageWorkdir = (dir) => { pendingWorkdir = dir || null; };
+DS.composer.browseDirs = (path) => rpc.call('fs.dirs', path ? { path } : {});
 DS.composer.stop = function () {
   /* A runtime turn (a delegated result re-entering) is NOT cancellable:
      turn.cancel resolves only handles turn.send registered, and the stop
