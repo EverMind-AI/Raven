@@ -2081,6 +2081,13 @@ class ImportPhase(_Strict):
     total: int
 
 
+class ImportCurrentSource(_Strict):
+    platform: str
+    source_key: str
+    sent: int
+    total: int
+
+
 class ImportPhases(_Strict):
     status: Literal["pending", "done", "failed", "cancelled"]
     errors: list[str]
@@ -2095,6 +2102,9 @@ class ImportStatusResult(_Strict):
     # The post-import phase in flight, when one is: the message pass reports
     # through the counts above, the profile mirror and skill install through this.
     phase: ImportPhase | None = None
+    # The source the message pass is on and how many of its messages have
+    # landed; the per-source counts stand still through a large source.
+    current: ImportCurrentSource | None = None
     # How the last run's phases stand on disk. The counts above are settled
     # before the phases begin, so without this a run the gateway lost during
     # them, or one whose phase failed, would read as finished.

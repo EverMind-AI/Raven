@@ -16,7 +16,7 @@
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 
-import type { ImportPhase, ImportStarted, ImportStatus, ImportSyncSource, ImportTier } from './types'
+import type { ImportPhase, ImportSource, ImportStarted, ImportStatus, ImportSyncSource, ImportTier } from './types'
 
 export const POLL_MS = 3000
 const DISMISSED_KEY = 'raven.importSync.dismissed'
@@ -37,12 +37,16 @@ export interface RowView {
   pct: number
   failed: number
   phase: ImportPhase | null
+  /* The source the pass is on. Its own counts move with every batch, while the
+     share one source buys the percentage is a fraction of a point in a run of
+     many, and that is the movement a reader is looking for. */
+  source: ImportSource | null
   /* Whether a click asks for the run again: a stopped run resumes, a finished
      run with failures retries them, and both are the same call. */
   clickable: boolean
 }
 
-const HIDDEN: RowView = { kind: 'hidden', pct: 0, failed: 0, phase: null, clickable: false }
+const HIDDEN: RowView = { kind: 'hidden', pct: 0, failed: 0, phase: null, source: null, clickable: false }
 
 const readDismissed = (): string => {
   try { return window.localStorage.getItem(DISMISSED_KEY) ?? '' } catch { return '' }
@@ -79,7 +83,12 @@ export function view(s: ImportSyncState): RowView {
   const st = s.status
   const total = st?.total ?? 0
   const settled = st ? st.submitted + st.failed : 0
-  const pct = total ? Math.min(100, Math.round((settled / total) * 100)) : 0
+  /* The share of the source the pass is on: a large source is many batches
+     and many minutes, and the per-source counts stand still for all of them. */
+  const within = st?.running && st.current && st.current.total ? Math.min(1, st.current.sent / st.current.total) : 0
+  /* 100 percent is every source settled. Rounding up to it while one is still
+     being sent is the 100-percent-then-wait this row exists to remove. */
+  const pct = total ? Math.min(settled < total ? 99 : 100, Math.round(((settled + within) / total) * 100)) : 0
   if (s.starting && !st?.running) return { ...HIDDEN, kind: 'scan' }
   if (!st) return HIDDEN
   const phase = st.phase ?? null
@@ -87,19 +96,19 @@ export function view(s: ImportSyncState): RowView {
   const again = resumable(st)
   if (st.running) {
     const phasePct = phase && phase.total ? Math.min(100, Math.round((phase.current / phase.total) * 100)) : pct
-    return { kind: phase ? 'wrap' : 'run', pct: phase ? phasePct : pct, failed: st.failed, phase, clickable: false }
+    return { kind: phase ? 'wrap' : 'run', pct: phase ? phasePct : pct, failed: st.failed, phase, source: phase ? null : st.current ?? null, clickable: false }
   }
   if (!total && !phases) return HIDDEN
   /* Short of the total: the message pass was stopped, or the gateway lost it. */
-  if (settled < total) return { kind: 'paused', pct, failed: st.failed, phase: null, clickable: again }
+  if (settled < total) return { kind: 'paused', pct, failed: st.failed, phase: null, source: null, clickable: again }
   /* Settled, but the phases behind the pass never finished: no verdict on file
      for a run that recorded its request (lost before the phases began), or a
      verdict that says they were still running or were stopped. */
   const unfinished = phases === null ? again : phases.status === 'pending' || phases.status === 'cancelled'
-  if (unfinished) return { kind: 'paused', pct: 100, failed: st.failed, phase: null, clickable: again }
+  if (unfinished) return { kind: 'paused', pct: 100, failed: st.failed, phase: null, source: null, clickable: again }
   const failed = st.failed + (phases?.status === 'failed' ? phases.errors.length : 0)
   if (s.dismissed === signature(st)) return HIDDEN
-  return { kind: 'done', pct: 100, failed, phase: null, clickable: failed > 0 && again }
+  return { kind: 'done', pct: 100, failed, phase: null, source: null, clickable: failed > 0 && again }
 }
 
 const failure = (e: unknown): string => {

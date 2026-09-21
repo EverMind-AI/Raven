@@ -42,6 +42,7 @@ export function ImportSyncApp(): JSX.Element | null {
   const count = v.kind === 'scan' ? ''
     : v.kind === 'wrap' && v.phase ? `${v.phase.current}/${v.phase.total}`
     : v.kind === 'done' ? (v.failed ? t('gui.importSync.failed_n', { n: v.failed }) : '')
+    : v.source ? `${v.pct}% · ${v.source.sent}/${v.source.total}`
     : `${v.pct}%`
   const action = v.kind === 'paused' ? t('gui.importSync.resume') : t('gui.importSync.retry')
   return (
