@@ -11,6 +11,8 @@ const seen: Array<[string, unknown]> = []
 const toasts: string[] = []
 const opened: string[] = []
 const railReloads: number[] = []
+const permWrites: string[] = []
+let stagedPick: string | null = null
 const chipWrites: string[] = []
 
 async function load(answers: Record<string, unknown> = {}): Promise<Source> {
@@ -18,6 +20,7 @@ async function load(answers: Record<string, unknown> = {}): Promise<Source> {
   toasts.length = 0
   opened.length = 0
   railReloads.length = 0
+  permWrites.length = 0
   chipWrites.length = 0
   const mod = await loadPart(() => import('./source'), {
     fakes: {
@@ -25,6 +28,8 @@ async function load(answers: Record<string, unknown> = {}): Promise<Source> {
       'src/lib/openUrl': { open: (url: string) => { opened.push(url) } },
       'src/features/rail/source': { loadSessions: async () => { railReloads.push(1) }, SESS_CHANNELS: ['tui', 'cron'] },
       'src/state/banner': { draw: () => {} },
+      'src/state/perm': { setFromConfig: (v: string) => { permWrites.push(v) } },
+      'src/state/session/staging': { staging: () => ({ model: null, tier: null, perm: stagedPick }) },
       'src/features/model/source': { showModel: (m: string) => { chipWrites.push(m) } },
       'src/i18n/t': { t: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key) },
     },
@@ -84,6 +89,33 @@ describe('settings source', () => {
     await mod.loadSettings()
     expect(mod.settingsSnapshot().model).toBe('deepseek/pro')
     expect(chipWrites).toEqual([])
+  })
+
+  it('a draft that picked a mode keeps it when the chip is re-read', async () => {
+    /* With no session the read is default-scoped, so its answer is the
+       configured default. Painting that over a staged pick made the chip claim
+       a tier the first turn does not run at -- and in the unsafe direction:
+       `applyStagedPerm` still writes the pick to the session the next message
+       mints. Reachable from every settings write, each of which re-reads. */
+    stagedPick = 'full'
+    const mod = await load({ 'config.get': { config: { 'permissions.mode': 'smart' } } })
+    await mod.loadPermMode(null)
+    expect(permWrites).toEqual([])
+  })
+
+  it('a draft with no pick of its own, and a conversation, both follow the read', async () => {
+    /* The control for the guard above: it must not swallow the refresh that
+       shows a draft the default it will actually start on, nor a
+       conversation's own mode, which is what the session-scoped read answers. */
+    stagedPick = null
+    const draft = await load({ 'config.get': { config: { 'permissions.mode': 'smart' } } })
+    await draft.loadPermMode(null)
+    expect(permWrites).toEqual(['smart'])
+
+    stagedPick = 'full'
+    const open = await load({ 'config.get': { config: { 'permissions.mode': 'ask' } } })
+    await open.loadPermMode('tui:1')
+    expect(permWrites).toEqual(['ask'])
   })
 
   it('usage asks for the two dates, inclusive', async () => {

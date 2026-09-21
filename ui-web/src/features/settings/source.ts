@@ -95,6 +95,15 @@ export async function loadPermMode(sid?: string | null, gen?: number): Promise<v
     return
   }
   if (ticket !== generation()) return
+  /* A draft that has picked a mode keeps it. With no session there is nothing
+     to scope the read to, so the answer is the configured default -- and
+     painting that over a staged pick left the chip claiming a tier the first
+     turn does not run at, in the direction that matters: pick full access,
+     open the settings dialog (or make any settings write, each of which
+     reloads this), and the chip says smart while `applyStagedPerm` writes full
+     to the session the next message mints. The model chip guards the same case
+     the same way. */
+  if (!sid && stagedPerm()) return
   setPermMode(String(((r && r.config) || {})['permissions.mode'] || 'ask'))
 }
 
