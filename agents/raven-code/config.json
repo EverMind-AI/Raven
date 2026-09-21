@@ -35,12 +35,13 @@
         "maxResults": 5
       }
     },
+    "toolSearch": {
+      "enabled": false
+    },
     "disabledTools": [
       "spawn",
       "message",
       "hub",
-      "tool_search",
-      "tool_call",
       "deep_research",
       "image_generate",
       "text_to_speech",
