@@ -1,10 +1,9 @@
 /* The tasks board's own node card: a 1:1 port of the prototype's `runCard`
  * (proto.js:4658-4674) -- the two-line title, the agent line and a top-right
  * status cluster of icon-or-word plus duration, in the prototype's own
- * words. Passed to `DagGraph` as its `renderNode` prop (CONTRIBUTING's
- * "minimal additions only": one prop, one caller) so only the tasks board's
- * boxes look like this; the transcript card and the composer sheet keep
- * drawing `DagGraph`'s own SVG box untouched.
+ * words. Handed to `DagGraph` through its `renderNode`: the renderer lays the
+ * nodes out, draws the edges and takes the clicks, and the box inside each
+ * node is the caller's.
  */
 
 import { t } from '../../i18n/t'

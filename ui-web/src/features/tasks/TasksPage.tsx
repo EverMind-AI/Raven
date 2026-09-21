@@ -298,7 +298,6 @@ function Fork({ row, paneId }: { row: TaskRow; paneId: string }): JSX.Element {
           dims={COLUMN}
           nodes={nodes}
           now={Date.now()}
-          surface="sheet"
           flow="down"
           selectedId={s.nodes[paneId] ?? null}
           onPick={(n) => store.pickNode(paneId, n.id)}

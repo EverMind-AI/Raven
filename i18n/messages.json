@@ -1755,10 +1755,6 @@
       "en": "Collapse the graph",
       "zh": "收起编排图"
     },
-    "gui.dag.more_layers": {
-      "en": "+{n} more layers",
-      "zh": "还有 {n} 层"
-    },
     "gui.dag.node_empty": {
       "en": "This node has not written anything yet.",
       "zh": "这个节点还没有产出。"

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-/* The shared DAG renderer's surface policy and label measurement. */
+/* The box DagGraph hands each node, and the edges it draws between them. */
 
 import { act } from '@testing-library/react'
 import { createRoot } from 'react-dom/client'
@@ -8,27 +8,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import { DagGraph, visibleLayers } from './DagGraph'
-import { CARD, SHEET } from './graph';
+import { DagGraph } from './DagGraph'
+import { layout } from './graph'
 
-import type { CardRenderer } from './DagGraph'
+import type { Dims } from './graph'
 import type { DagNode } from './types'
 import type { Root } from 'react-dom/client'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const node = (id: string, depends_on: string[] = []): DagNode => ({
+const DIMS: Dims = { W: 184, H: 44, GAP_X: 230, GAP_Y: 60, PAD: 10 }
+
+const node = (id: string, depends_on: string[] = [], over: Partial<DagNode> = {}): DagNode => ({
   id,
   subagent: 'raven',
   depends_on,
   status: 'pending',
   started_at: null,
   ended_at: null,
+  ...over,
 })
-
-const chain = (count: number): DagNode[] => Array.from({ length: count }, (_, i) =>
-  node(`n${i + 1}`, i ? [`n${i}`] : []),
-)
 
 let host: HTMLDivElement
 let root: Root
@@ -49,151 +48,59 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-const draw = (nodes: DagNode[], surface: 'card' | 'sheet', renderNode?: CardRenderer): void => {
+const draw = (nodes: DagNode[], dims: Dims): void => {
   act(() => {
-    root.render(<DagGraph dims={surface === 'card' ? CARD : SHEET} nodes={nodes}
-      now={1000} onPick={() => {}} surface={surface} renderNode={renderNode} />)
+    root.render(<DagGraph dims={dims} nodes={nodes} now={1000} onPick={() => {}}
+      renderNode={(n, now) => <div className="stand-in">{n.id}:{now}</div>} />)
   })
 }
 
-describe('the shared DAG renderer', () => {
-  it('caps only the compact card after five layers', () => {
-    const nodes = chain(7)
-    expect(visibleLayers(nodes)).toEqual({ hiddenLayers: 2, nodes: nodes.slice(0, 5) })
-
-    draw(nodes, 'card')
-    expect(host.querySelectorAll('.nd')).toHaveLength(5)
-    expect(host.querySelector('.daggraph')!.getAttribute('data-hidden-layers')).toBe('2')
-    expect(host.querySelector('.dagcap')!.textContent).toBe('gui.dag.more_layers {"n":2}')
-
-    draw(nodes, 'sheet')
-    expect(host.querySelectorAll('.nd')).toHaveLength(7)
-    expect(host.querySelector('.dagcap')).toBeNull()
+describe('the box DagGraph hands each node, and the edges between them', () => {
+  it('draws the caller\'s card inside each node, sized to the box and given the clock', () => {
+    /* Both halves of the CardRenderer contract: the node, and the clock a
+       running node's own duration is measured against -- the board's live
+       tick comes through this argument and nothing else. */
+    draw([node('n1')], DIMS)
+    const box = host.querySelector('.nd foreignObject') as SVGForeignObjectElement
+    expect(box.getAttribute('width')).toBe(String(DIMS.W))
+    expect(box.getAttribute('height')).toBe(String(DIMS.H))
+    expect(host.querySelector('.nd .stand-in')?.textContent).toBe('n1:1000')
   })
 
-  it('titles a node by what it is for, keeping the id in reach', () => {
-    /* The id is a key, not a name: a playbook namespaces every node with its own
-       name and run tag, so a graph's ids share their first twenty characters and
-       differ in the tail the box has least room for. The summary is what the
-       model was required to write about the step. The id stays in the tooltip
-       and in the node panel's fields, where a dependency and a run dir are
-       keyed by it. */
-    const nodes = [{ ...node('daily-digest-36e275-scan'), node_summary: 'read pages' }]
-    draw(nodes, 'sheet')
-
-    expect(host.querySelector('.id')!.textContent).toBe('read pages')
-    expect(host.querySelector('.nd title')!.textContent)
-      .toBe('read pages \u00b7 daily-digest-36e275-scan \u00b7 raven')
-    /* Set in the reading face rather than the key face: a sentence in mono reads
-       as an identifier. */
-    expect(host.querySelector('.id')!.getAttribute('class')).toBe('id prose')
-  })
-
-  it('falls back to the id for a node whose graph carried no summary', () => {
-    /* A run started before the field existed, and a model that skipped it. */
-    draw([node('scan-news')], 'sheet')
-
-    expect(host.querySelector('.id')!.textContent).toBe('scan-news')
-    expect(host.querySelector('.id')!.getAttribute('class')).toBe('id')
-  })
-
-  it('places each node by absolute coordinates on its shapes, not by a transform on the group', () => {
+  it('places each node by absolute coordinates on its box, not by a transform on the group', () => {
     /* WebKit draws a foreignObject without its ancestor group's transform: the
        box is hit-tested where the layout put it but painted at the SVG's
        origin, so on Safari every card of a two-step graph sat on the first
        node's spot with the arrow pointing at empty canvas. The place is
-       therefore written on the shapes, where every engine honours it. */
-    const a = node('scan')
-    const b = { ...node('write'), depends_on: ['scan'] }
-    draw([a, b], 'sheet')
+       therefore written on the box itself, where every engine honours it. */
+    const nodes = [node('scan'), node('write', ['scan'])]
+    draw(nodes, DIMS)
     const groups = [...host.querySelectorAll<SVGGElement>('.nd')]
     expect(groups.map((g) => g.getAttribute('transform'))).toEqual([null, null])
-    const boxes = groups.map((g) => g.querySelector('foreignObject')!)
-    const rects = groups.map((g) => g.querySelector('rect')!)
-    /* Two layers, so two different places; the rect and the label box of one
-       node agree on the row, and the label sits inside the rect. */
-    expect(rects[0]!.getAttribute('x')).not.toBe(rects[1]!.getAttribute('x'))
-    expect(boxes[0]!.getAttribute('y')).toBe(rects[0]!.getAttribute('y'))
-    expect(boxes[1]!.getAttribute('y')).toBe(rects[1]!.getAttribute('y'))
-    expect(Number(boxes[0]!.getAttribute('x'))).toBe(Number(rects[0]!.getAttribute('x')) + 31)
-    expect(Number(boxes[1]!.getAttribute('x'))).toBe(Number(rects[1]!.getAttribute('x')) + 31)
-    /* And the caller's own card, when one is given, takes the node's place itself. */
-    draw([a, b], 'sheet', (n) => <span className="mine">{n.id}</span>)
-    const cards = [...host.querySelectorAll<SVGForeignObjectElement>('.nd foreignObject')]
-    expect(cards.map((c) => c.getAttribute('x'))).toEqual(rects.map((r) => r.getAttribute('x')))
-    expect(cards.map((c) => c.getAttribute('y'))).toEqual(rects.map((r) => r.getAttribute('y')))
-    expect(host.querySelectorAll('.mine').length).toBe(2)
-  })
-
-  it('gives the label the width of its own box to end in, on both surfaces', () => {
-    /* The node's width IS the truncation rule. It used to be a measured pass
-       whose answer was written down, so a graph drawn where nothing has a
-       width -- inside a folded turn, or before its font arrived -- kept an
-       answer taken in the dark and its labels ran past the box for the rest of
-       the session. Nothing is measured now: the text is laid out inside the
-       box and cut by it. */
-    const long = { ...node('scan'), node_summary: 'read every page and say which two matter' }
-    draw([long], 'card')
-    const box = host.querySelector('.nd foreignObject') as SVGForeignObjectElement
-    expect(box.getAttribute('width')).toBe(String(CARD.W - 29 - 9))
-    expect(box.getAttribute('height')).toBe(String(CARD.H))
-    /* Whole, because it is the box that ends it. */
-    expect(host.querySelector('.id')!.textContent).toBe('read every page and say which two matter')
-
-    draw([long], 'sheet')
-    const wide = host.querySelector('.nd foreignObject') as SVGForeignObjectElement
-    expect(wide.getAttribute('width')).toBe(String(SHEET.W - 31 - 11))
-    expect(host.querySelector('.id')!.textContent).toBe('read every page and say which two matter')
-  })
-
-  it('strips the namespace a graph of long ids all share, on both surfaces', () => {
-    /* The one cut that is not the box's to make: a playbook gives every node
-       the same twenty-character head, and the box cuts from the tail -- the
-       only part that tells them apart. */
-    const nodes = [node('project-tag-fetch-metadata-and-normalise'), node('project-tag-parse')]
-    draw(nodes, 'card')
-    expect([...host.querySelectorAll('.id')].map((el) => el.textContent))
-      .toEqual(['fetch-metadata-and-normalise', 'parse'])
-
-    draw(nodes, 'sheet')
-    expect([...host.querySelectorAll('.id')].map((el) => el.textContent))
-      .toEqual(['fetch-metadata-and-normalise', 'parse'])
-  })
-
-  it('leaves a graph of short ids their namespace', () => {
-    const nodes = [node('run-a12-ok'), node('run-a12-no')]
-    draw(nodes, 'card')
-    expect([...host.querySelectorAll('.id')].map((el) => el.textContent))
-      .toEqual(['run-a12-ok', 'run-a12-no'])
-  })
-
-  it('marks a suspended node differently from both a failed and a pending one', () => {
-    /* `exception` reads as neither -- a failure the run is done with, nor a
-       step that has not started -- because the viewer still has to act on it.
-       Falling through to the same fallback mark pending gets would say
-       nothing needs attention; sharing failed's mark would say the run is
-       over, when the node is waiting on a verdict. */
-    const nodes = [node('n1'), { ...node('n2'), status: 'failed' }, { ...node('n3'), status: 'exception' }]
-    draw(nodes, 'sheet')
-    const clsOf = (id: string): string | null =>
-      host.querySelector(`.nd[data-node="${id}"] .mk`)?.getAttribute('class') || null
-
-    expect(clsOf('n1')).toBe('mk wait')
-    expect(clsOf('n2')).toBe('mk bad')
-    expect(clsOf('n3')).toBe('mk warn')
-  })
-
-  it('draws a caller-supplied card instead of the default box, when given one', () => {
-    /* The tasks board's own escape hatch (BoardCard.tsx): everything about
-       the default box -- rect, mark, two-line label, tooltip -- is a caller's
-       choice not to draw once it hands DagGraph a renderNode. */
-    act(() => {
-      root.render(<DagGraph dims={SHEET} nodes={[node('n1')]} now={1000} onPick={() => {}} surface="sheet"
-        renderNode={(n) => <div className="stand-in">{n.id}</div>} />)
+    const { at } = layout(nodes, DIMS)
+    const places = groups.map((g) => {
+      const box = g.querySelector('foreignObject')!
+      return [Number(box.getAttribute('x')), Number(box.getAttribute('y'))]
     })
-    expect(host.querySelector('.nd rect')).toBeNull()
-    expect(host.querySelector('.nd .mk')).toBeNull()
-    expect(host.querySelector('.nd title')).toBeNull()
-    expect(host.querySelector('.nd .stand-in')?.textContent).toBe('n1')
+    expect(places).toEqual(groups.map((g) => {
+      const p = at.get(g.getAttribute('data-node')!)!
+      return [p.x, p.y]
+    }))
+    /* Two layers, so two different places. */
+    expect(places[0]![0]).not.toBe(places[1]![0])
+  })
+
+  it('draws one edge and one arrowhead for a two-node chain, flowed once the upstream node is done', () => {
+    const upstream = node('a', [], { status: 'pending' })
+    const downstream = node('b', ['a'])
+    draw([upstream, downstream], DIMS)
+    expect(host.querySelectorAll('.edge')).toHaveLength(1)
+    expect(host.querySelectorAll('.tip')).toHaveLength(1)
+    expect(host.querySelector('.edge')!.getAttribute('class')).toBe('edge')
+    expect(host.querySelector('.tip')!.getAttribute('class')).toBe('tip')
+
+    draw([{ ...upstream, status: 'completed' }, downstream], DIMS)
+    expect(host.querySelector('.edge')!.getAttribute('class')).toBe('edge flowed')
+    expect(host.querySelector('.tip')!.getAttribute('class')).toBe('tip flowed')
   })
 })
