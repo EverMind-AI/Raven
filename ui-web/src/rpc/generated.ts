@@ -1855,6 +1855,7 @@ export interface SessionHistoryResult {
 export interface TurnSendParams {
   session_key: string;
   content: string;
+  playbook_mode?: 'off' | 'task' | 'persona';
   channel?: string;
   chat_id?: string;
   sender_id?: string;
