@@ -10,12 +10,13 @@ const status = (patch: Partial<ImportStatus> = {}): ImportStatus => ({
   running: false, total: 0, submitted: 0, failed: 0, by_platform: {}, phase: null, phases: null, tier: null, platforms: [], ...patch,
 })
 
-/* `watched` defaults on: every case below is about a run this page asked for
-   or found in flight, which is the only kind that has ever drawn a settled
-   row. The cases that turn it off are the ones about a run left in the
-   importer's file by somebody else. */
+/* `followed` defaults to this very run: every case below is about a run this
+   page asked for or found in flight, which is the only kind that has ever
+   drawn a settled row. The cases that clear it are the ones about a run left
+   in the importer's file by somebody else. */
 const state = (st: ImportStatus | null, patch: Partial<store.ImportSyncState> = {}): store.ImportSyncState => ({
-  status: st, starting: false, watched: true, dismissed: '', error: '', ...patch,
+  status: st, starting: false, watching: false, followed: st ? store.signature(st) : '',
+  dismissed: '', error: '', ...patch,
 })
 
 interface Fake {
@@ -283,12 +284,30 @@ describe('following a run', () => {
     await store.start(['hermes'], 'full')
     expect(store.view(store.get()).kind).toBe('done')
   })
+
+  /* A page outlives a run. Having followed one is not having followed the
+     next one somebody started from the CLI. */
+  it('does not draw a later run it did not follow', async () => {
+    const mine = { tier: 'full' as const, platforms: ['hermes'] }
+    const f = fake([
+      status({ running: true, total: 2, submitted: 1, ...mine }),
+      status({ total: 2, submitted: 2, ...mine, phases: { status: 'done', errors: [] } }),
+      /* Somebody else's run, settled in the same file while the tab stayed open. */
+      status({ total: 5, submitted: 4, failed: 1, platforms: ['claude_code'] }),
+    ])
+    setSources({ importSync: f.src })
+    await store.refresh()
+    await store.refresh()
+    expect(store.view(store.get()).kind).toBe('done')
+    await store.refresh()
+    expect(store.view(store.get()).kind).toBe('hidden')
+  })
 })
 
 /* The row is the work outstanding, never a receipt: a run nobody here watched
    is on the rail only while its click can still do something. */
 describe('a run left in the file by somebody else', () => {
-  const unwatched = { watched: false }
+  const unwatched = { followed: '' }
 
   it('is not drawn when it finished and nothing can be retried', () => {
     const cli = status({ total: 2, submitted: 2, platforms: ['claude_code', 'hermes'] })
@@ -299,7 +318,7 @@ describe('a run left in the file by somebody else', () => {
      has no retry behind it and the reader can do nothing but dismiss it. */
   it('is not drawn when it finished with failures it cannot ask for again', () => {
     const cli = status({ total: 2, submitted: 1, failed: 1, platforms: ['claude_code', 'hermes'] })
-    expect(store.view(state(cli, { watched: true })))
+    expect(store.view(state(cli)))
       .toMatchObject({ kind: 'done', failed: 1, clickable: false })
     expect(store.view(state(cli, unwatched)).kind).toBe('hidden')
   })

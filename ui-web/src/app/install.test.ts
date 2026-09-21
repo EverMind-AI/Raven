@@ -122,9 +122,12 @@ describe('the wizard asks for its import through the rail row (installSources)',
     wiring.installSources()
     setSources({
       importSync: {
+        /* Settled with no request on file, so the row is drawn for one reason
+           only: this page followed the run. A resumable one would draw on its
+           own click and prove nothing. */
         status: async () => ({
           running: false, total: 1, submitted: 1, failed: 0, by_platform: {},
-          phase: null, phases: null, tier: 'memory_files', platforms: ['hermes'],
+          phase: null, phases: null, tier: null, platforms: [],
         }),
         run: async (platforms: string[], tier: string) => {
           runs.push([platforms, tier])
@@ -137,7 +140,7 @@ describe('the wizard asks for its import through the rail row (installSources)',
     await ds('onboard').startImport(['hermes'], 'memory_files')
 
     expect(runs).toEqual([[['hermes'], 'memory_files']])
-    expect(store.get().watched).toBe(true)
+    expect(store.view(store.get()).kind).toBe('done')
     store._resetForTests()
   })
 })

@@ -33,10 +33,14 @@ export interface ImportSyncState {
   /* Between asking for a run and hearing that it started: the scan the gateway
      does before it answers is the one stretch with no counts to show. */
   starting: boolean
-  /* Whether this page has a run of its own to follow: it asked for one, or it
-     found one in flight. A settled run is only ever on the rail because of
-     this -- see `stale` below. */
-  watched: boolean
+  /* A run of this page's own is in flight: it asked for one, or it found one
+     running. Becomes `followed` the moment that run settles. */
+  watching: boolean
+  /* The run this page followed to its end, by the same signature `dismissed`
+     uses. A settled run is only ever on the rail because of this or because
+     its click still does something -- see `stale` below. Page state, never
+     stored: a reload has followed nothing. */
+  followed: string
   dismissed: string
   error: string
 }
@@ -58,13 +62,19 @@ export interface RowView {
 const HIDDEN: RowView = { kind: 'hidden', pct: 0, failed: 0, phase: null, source: null, clickable: false }
 
 /* Whether a run that is NOT running has earned a row. Two reasons it has:
-   something can still be done about it, or this page watched it happen. A run
-   that is neither is history -- the importer's file outlives every run that
-   wrote it, so a CLI import from weeks ago, or one an earlier reader started,
-   would otherwise greet the next reader as news. It is not news: nothing is
-   moving, the click does nothing, and the reader never asked for it. The row
-   is the work outstanding, never a receipt for work nobody here watched. */
-const stale = (s: ImportSyncState, clickable: boolean): boolean => !clickable && !s.watched
+   something can still be done about it, or this page followed THAT run to its
+   end. A run that is neither is history -- the importer's file outlives every
+   run that wrote it, so a CLI import from weeks ago, or one an earlier reader
+   started, would otherwise greet the next reader as news. It is not news:
+   nothing is moving, the click does nothing, and the reader never asked for
+   it. The row is the work outstanding, never a receipt for work nobody here
+   watched.
+
+   Held per run rather than per page, because a page outlives a run: a tab that
+   followed one import and stayed open would otherwise draw the receipt of the
+   next one somebody ran from the CLI. */
+const stale = (s: ImportSyncState, st: ImportStatus, clickable: boolean): boolean =>
+  !clickable && s.followed !== signature(st)
 
 const readDismissed = (): string => {
   try { return window.localStorage.getItem(DISMISSED_KEY) ?? '' } catch { return '' }
@@ -74,7 +84,7 @@ const writeDismissed = (sig: string): void => {
   try { window.localStorage.setItem(DISMISSED_KEY, sig) } catch { /* a private window keeps nothing */ }
 }
 
-const initial = (): ImportSyncState => ({ status: null, starting: false, watched: false, dismissed: readDismissed(), error: '' })
+const initial = (): ImportSyncState => ({ status: null, starting: false, watching: false, followed: '', dismissed: readDismissed(), error: '' })
 
 const store = makeStore<ImportSyncState>(initial())
 
@@ -119,19 +129,19 @@ export function view(s: ImportSyncState): RowView {
   if (!total && !phases) return HIDDEN
   /* Short of the total: the message pass was stopped, or the gateway lost it. */
   if (settled < total) {
-    return stale(s, again) ? HIDDEN : { kind: 'paused', pct, failed: st.failed, phase: null, source: null, clickable: again }
+    return stale(s, st, again) ? HIDDEN : { kind: 'paused', pct, failed: st.failed, phase: null, source: null, clickable: again }
   }
   /* Settled, but the phases behind the pass never finished: no verdict on file
      for a run that recorded its request (lost before the phases began), or a
      verdict that says they were still running or were stopped. */
   const unfinished = phases === null ? again : phases.status === 'pending' || phases.status === 'cancelled'
   if (unfinished) {
-    return stale(s, again) ? HIDDEN : { kind: 'paused', pct: 100, failed: st.failed, phase: null, source: null, clickable: again }
+    return stale(s, st, again) ? HIDDEN : { kind: 'paused', pct: 100, failed: st.failed, phase: null, source: null, clickable: again }
   }
   const failed = st.failed + (phases?.status === 'failed' ? phases.errors.length : 0)
   const retry = failed > 0 && again
   if (s.dismissed === signature(st)) return HIDDEN
-  if (stale(s, retry)) return HIDDEN
+  if (stale(s, st, retry)) return HIDDEN
   return { kind: 'done', pct: 100, failed, phase: null, source: null, clickable: retry }
 }
 
@@ -151,7 +161,16 @@ function poll(on: boolean): void {
 export async function refresh(): Promise<void> {
   try {
     const status = await source().status()
-    set({ status, error: '', ...(status.running ? { watched: true } : {}) })
+    /* A run in flight is this page's to follow; the read that finds it settled
+       is where following turns into the one run whose row may be drawn. */
+    store.set((prev) => ({
+      ...prev,
+      status,
+      error: '',
+      ...(status.running
+        ? { watching: true }
+        : prev.watching ? { watching: false, followed: signature(status) } : {}),
+    }))
     poll(status.running)
   } catch (e) {
     set({ error: failure(e) })
@@ -165,7 +184,7 @@ export async function refresh(): Promise<void> {
    makes the run this page's to follow, which is what keeps its finished row on
    the rail afterwards. */
 export async function start(platforms: string[], tier: ImportTier): Promise<ImportStarted> {
-  set({ starting: true, watched: true, error: '' })
+  set({ starting: true, watching: true, error: '' })
   try {
     const r = await source().run(platforms, tier)
     /* Read after, then report: a refusal is this call's news, and the read
@@ -206,5 +225,5 @@ export function dismiss(): void {
 export function _resetForTests(): void {
   poll(false)
   store._resetForTests()
-  store.set({ ...initial(), watched: false, dismissed: '' })
+  store.set({ ...initial(), watching: false, followed: '', dismissed: '' })
 }
