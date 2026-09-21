@@ -2104,8 +2104,8 @@
       "zh": "导入 Agent 数据"
     },
     "gui.onb.sync_counts": {
-      "en": "{files} memory files, {convs} conversations",
-      "zh": "{files} 个记忆文件 · {convs} 段对话"
+      "en": "{files} memory files",
+      "zh": "{files} 个记忆文件"
     },
     "gui.onb.sync_unsupported": {
       "en": "Not supported",

@@ -228,7 +228,8 @@ describe('the onboarding wizard', () => {
     expect(steps()[3]).toBe('4gui.onb.step_sync:current')
     const rows = [...document.querySelectorAll('.ob-row')]
     expect(rows.length).toBe(2)
-    expect(rows[0]!.textContent).toContain('gui.onb.sync_counts:{"files":31,"convs":284}')
+    expect(rows[0]!.textContent).toContain('gui.onb.sync_counts:{"files":31}')
+    expect(rows[0]!.textContent).not.toContain('284')
     expect(rows[0]!.textContent).toContain('gui.onb.sync_skills:{"n":2}')
     expect(rows[0]!.querySelector('[role=switch]')).not.toBeNull()
     expect(rows[1]!.textContent).toContain('gui.onb.sync_unsupported')

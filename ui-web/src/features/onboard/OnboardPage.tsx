@@ -60,7 +60,7 @@ function SyncBody(): JSX.Element {
               <div className="ob-at">{agent.name}</div>
               {p?.scannable ? (
                 <div className="ob-ad">
-                  {t('gui.onb.sync_counts', { files: p.memory_files, convs: p.conversations })}
+                  {t('gui.onb.sync_counts', { files: p.memory_files })}
                   {p.skills ? ` · ${t('gui.onb.sync_skills', { n: p.skills })}` : ''}
                 </div>
               ) : null}
