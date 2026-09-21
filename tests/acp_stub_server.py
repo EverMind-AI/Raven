@@ -10,6 +10,10 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
 - ``ok``           - full handshake, one text chunk plus a tool call, then end_turn.
 - ``reject_init``  - answers ``initialize`` with a JSON-RPC error.
 - ``no_session``   - handshake fine, ``session/new`` errors (an auth-shaped message).
+- ``no_session_other`` - like ``no_session``, but the refusal is about anything
+                     else. The handshake still advertises an auth method, which is
+                     the point: an advertisement is not evidence that THIS refusal
+                     was about a credential.
 - ``empty_turn``   - handshake and session fine, but the prompt produces no content
                      and still reports ``stopReason: end_turn``, with the real
                      reason on stderr. This is the shape measured on a live
@@ -662,6 +666,8 @@ def main() -> None:
         elif method == "session/new":
             if MODE == "no_session":
                 err(request_id, -32000, "no api key configured for this agent")
+            elif MODE == "no_session_other":
+                err(request_id, -32000, "selected model is unavailable")
             else:
                 global _SESSIONS
                 _SESSIONS += 1

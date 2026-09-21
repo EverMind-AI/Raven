@@ -751,6 +751,10 @@
       "en": "Connect",
       "zh": "连接"
     },
+    "gui.agent.connecting": {
+      "en": "Connecting...",
+      "zh": "连接中..."
+    },
     "gui.agent.disconnect": {
       "en": "Disconnect",
       "zh": "断开"
@@ -794,6 +798,14 @@
     "gui.agent.kind_openai": {
       "en": "openai",
       "zh": "openai"
+    },
+    "gui.agent.not_installed": {
+      "en": "Not Installed",
+      "zh": "未安装"
+    },
+    "gui.agent.unauthorized": {
+      "en": "Unauthorized",
+      "zh": "未授权"
     },
     "gui.agent.none": {
       "en": "Nothing connected yet.",

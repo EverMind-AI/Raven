@@ -316,7 +316,12 @@ enabled_third_party = enabled_agents
 
 
 def build_third_party_backend(
-    cfg: Any, *, registry: Any = None, timeout: int | None = None, ready_timeout_ms: int | None = None
+    cfg: Any,
+    *,
+    registry: Any = None,
+    timeout: int | None = None,
+    ready_timeout_ms: int | None = None,
+    pool: Any = None,
 ) -> SubagentBackend:
     """Build a third-party backend from a config object (duck-typed on ``kind``).
 
@@ -333,6 +338,10 @@ def build_third_party_backend(
     would drift the moment a field is added, and the test would then silently
     exercise a different command than a real spawn. ``registry`` is ignored for
     kind ``openai``, which has no session store.
+
+    ``pool`` is the acp transport's equivalent of ``registry``: a caller whose
+    turns must not disturb the roster's connections hands in one of its own.
+    Ignored for every other kind, none of which pools anything.
     """
     kind = getattr(cfg, "kind", None)
     if kind == "cli":
@@ -370,6 +379,7 @@ def build_third_party_backend(
             mcps=cfg.mcps,
             allow_mcp_secrets=cfg.allow_mcp_secrets,
             session_mcp=session_mcp_for(cfg),
+            pool=pool,
         )
     if kind == "openai":
         return OpenAIApiBackend(
