@@ -1966,6 +1966,50 @@ async def test_deck_templates_list_answers_at_once_and_draws_the_covers_behind_i
     assert drawn == ["gold_panel_year_end_summary"], "one render per template, not one per ask"
 
 
+async def test_deck_templates_list_draws_at_most_three_covers_at_once(tmp_path: Path, monkeypatch) -> None:
+    """A cold gallery asks for every template in one walk. The covers are still
+    drawn behind the answer, but three LibreOffice at a time, not ten: the
+    fourth waits for one of the first three to finish."""
+    from raven.rpc import deck_templates, pdf_preview
+
+    names = tuple(f"template_{n}" for n in range(10))
+    _bundled_templates(monkeypatch, tmp_path / "tpl", names)
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
+    monkeypatch.setattr(deck_templates, "_failed", set())
+    monkeypatch.setattr(deck_templates, "_drawing", {})
+    monkeypatch.setattr(deck_templates, "_render_gate", asyncio.Semaphore(deck_templates.COVER_RENDERS_AT_ONCE))
+    in_flight = 0
+    peak = 0
+    release = asyncio.Event()
+
+    async def slow_pdf(path, **_):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await release.wait()
+        in_flight -= 1
+        return path
+
+    def rasterise(pdf, target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"\xff\xd8jpeg")
+
+    monkeypatch.setattr(pdf_preview, "pdf_for", slow_pdf)
+    monkeypatch.setattr(deck_templates, "_rasterise_first_page", rasterise)
+
+    first = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert first["pending"] is True
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert peak == deck_templates.COVER_RENDERS_AT_ONCE, "ten misses start three conversions, not ten"
+    release.set()
+    await asyncio.gather(*deck_templates._drawing.values())
+    again = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert again["pending"] is False and all(row["cover"] for row in again["templates"])
+    assert peak == deck_templates.COVER_RENDERS_AT_ONCE
+
+
 async def test_deck_templates_list_stops_asking_for_a_cover_that_cannot_be_drawn(tmp_path: Path, monkeypatch) -> None:
     """A render that fails is not retried on the next ask, and the answer stops
     saying pending -- or the page would poll forever and start LibreOffice each

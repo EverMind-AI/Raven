@@ -37,6 +37,13 @@ COVER_JPEG_QUALITY = 78
 PAGE_WIDTH_PX = 960
 PAGE_JPEG_QUALITY = 72
 _MIME_JPEG = "image/jpeg"
+#: How many covers LibreOffice draws at once. A cold gallery asks for every
+#: bundled template in one walk, and one soffice per template is ten
+#: processes and a couple of GB started by a single click on a gateway that is
+#: also serving turns. Three keeps most of the measured gain of fanning out
+#: (the per-conversion time barely moves past four) at a third of the cost.
+COVER_RENDERS_AT_ONCE = 3
+_render_gate = asyncio.Semaphore(COVER_RENDERS_AT_ONCE)
 
 
 def templates_dir() -> Path | None:
@@ -161,8 +168,9 @@ async def cover_for(template: Template) -> Path | None:
     from raven.rpc import pdf_preview
 
     try:
-        pdf = await pdf_preview.pdf_for(template.path)
-        await asyncio.to_thread(_rasterise_first_page, pdf, cached)
+        async with _render_gate:
+            pdf = await pdf_preview.pdf_for(template.path)
+            await asyncio.to_thread(_rasterise_first_page, pdf, cached)
     except Exception as exc:  # noqa: BLE001 - a missing picture must not fail the list
         _failed.add(template.name)
         logger.warning("deck template {!r}: no cover ({}: {})", template.name, type(exc).__name__, exc)
