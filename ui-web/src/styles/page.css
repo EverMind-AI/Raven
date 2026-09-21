@@ -771,8 +771,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* rename affordance: an icon that appears on hover, editing only the title box */
 #renameBtn { opacity: 0; transition: opacity .14s; }
 .top:hover #renameBtn, #renameBtn:focus-visible { opacity: 1; }
+/* The box is the name's width, not a fixed slot: a two-word conversation opened
+   a 420px field with most of it empty paper. `field-sizing: content` is what
+   makes an input measure its own value, so the width follows what is typed.
+   The cap is the heading's own (`.top h1`), which is what keeps a rename from
+   widening the header past where the title already sat, and the floor keeps a
+   field you have just emptied from collapsing to a sliver you cannot aim at.
+   Without `field-sizing` an input falls back to its default intrinsic width,
+   which is narrower than the slot this replaces rather than wider. */
 .top .titin {
-  min-width: 0; width: min(420px, 52%); background: var(--ink);
+  field-sizing: content; min-width: 7ch; max-width: min(420px, 52%); background: var(--ink);
   border: 1px solid var(--faint); border-radius: 7px; padding: 4px 9px; outline: 0;
   font-size: var(--step-0); font-weight: 600; color: var(--text); font-family: inherit;
 }
