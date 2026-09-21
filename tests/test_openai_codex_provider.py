@@ -288,6 +288,20 @@ def _capture_body(monkeypatch) -> list[dict]:
     return bodies
 
 
+async def test_named_tool_choice_reaches_the_codex_request_in_responses_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bodies = _capture_body(monkeypatch)
+    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol")
+
+    await provider.chat(
+        [{"role": "user", "content": "build the worker table"}],
+        tool_choice={"type": "function", "function": {"name": "emit_worker_table"}},
+    )
+
+    assert bodies[0]["tool_choice"] == {"type": "function", "name": "emit_worker_table"}
+
+
 async def test_the_cache_key_is_stable_while_the_conversation_grows(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keyed on the transcript, it changed every turn -- so requests sharing a
     cached prefix never landed on the same cache, which is the only thing the key

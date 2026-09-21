@@ -1327,6 +1327,10 @@ class WiringMixin:
             # terms once judgement is wired in.
             provider_for=self._verdict_provider,
             binding_for=self._turn_binding,
+            # Stored Playbook nodes already name roster agents and carry their
+            # own prompts. A turn-scoped generated worker with the same label
+            # must not rewrite that persisted graph.
+            worker_table_for=lambda: None,
             control_reachable=self.dag_control_reachable,
             control_advert=self.dag_control_advert,
             verdict_config=self.subagent_dag_config,

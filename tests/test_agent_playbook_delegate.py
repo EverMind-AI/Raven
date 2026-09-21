@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import tempfile
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -18,8 +19,12 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.subagent.dag_graph import parse_dag_spec
+from raven.agent.subagent.dag_tool import _DispatchBackend, _WorkerBackend
 from raven.agent.subagent.delegate import DelegateTable, Worker, current_delegate, delegate_scope, outbound_charter
+from raven.agent.subagent.prompt_capabilities import AgentCapabilities
+from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.config.schema import PlaybookConfig
+from raven.playbook import NodeSpec, PlaybookSpec, Triggers
 from raven.playbook.agent_generator import WorkerTableGenerator, build_table, emit_tool, render_charter
 from raven.playbook.agent_spec import AgentPlaybookSpec
 from raven.providers.base import LLMProvider, LLMResponse
@@ -200,13 +205,140 @@ async def test_a_dag_worker_resolves_and_carries_its_charter(workspace, monkeypa
             )
         )
 
-    # A background graph starts after this turn scope has gone away. Both the
-    # real roster identity and the worker's charter must already be frozen.
+    # A background graph may outlive its caller. Both the real roster identity
+    # and the worker's charter must already be frozen during preflight.
     assert resolved == ["Raven"]
     assert preflight.spec.nodes[0].subagent == "Raven"
     await preflight.backends["research-a-node"].run("find pricing")
     assert backend.calls and backend.calls[0][0].startswith("BRIEF-A\n\n")
     assert backend.calls[0][1] == payload
+
+
+@pytest.mark.asyncio
+async def test_worker_capabilities_follow_the_resolved_roster_agent(workspace, monkeypatch) -> None:
+    """A generated label is resolved before the real agent's gates run."""
+    tool = _loop(workspace, "generate").tools.get("run_subagent_dag")
+    monkeypatch.setattr(
+        tool,
+        "_capability_map",
+        lambda: {"Raven": AgentCapabilities(reads_local_files=False)},
+    )
+    table = DelegateTable(workers={"file-reader": Worker("file-reader", "Raven", "read a file", "")})
+
+    with delegate_scope(table), pytest.raises(DagValidationError) as exc_info:
+        await tool._preflight(
+            parse_dag_spec(
+                {
+                    "task_summary": "read a local file",
+                    "nodes": [
+                        {
+                            "id": "read",
+                            "subagent": "file-reader",
+                            "node_summary": "read the file",
+                            "prompt_template": "inspect {{ ref_path:notes.md }}",
+                        }
+                    ],
+                }
+            )
+        )
+
+    assert "sub-agent 'Raven'" in str(exc_info.value)
+    assert "no-local-files" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_stored_playbook_dag_ignores_the_turn_worker_table(workspace, monkeypatch) -> None:
+    """A stored graph runs as authored even when a worker label collides."""
+
+    class _RecordingBackend:
+        kind = "raven-loop"
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+
+        async def run(self, task: str, **kwargs) -> str:
+            self.calls.append((task, outbound_charter()))
+            return "done"
+
+    loop = _loop(workspace, "generate")
+    runtime = loop._playbooks
+    assert runtime is not None
+    runtime._executor._background = False
+    tool = runtime.dag_tool
+    backend = _RecordingBackend()
+    resolved: list[str] = []
+
+    def resolve(node):
+        resolved.append(node.subagent)
+        return backend
+
+    monkeypatch.setattr(tool, "_resolve_node", resolve)
+    runtime.store.save(
+        PlaybookSpec(
+            name="stored-raven",
+            description="Run one stored Raven step",
+            task_summary="stored Raven step",
+            mode="dag",
+            confirm=False,
+            triggers=Triggers(keywords=["stored raven"]),
+            nodes=[
+                NodeSpec(
+                    id="step",
+                    subagent="Raven",
+                    node_summary="run the stored step",
+                    prompt_template="stored task",
+                )
+            ],
+        )
+    )
+    payload = {"memory": {"systemPrompt": "turn-only prompt"}}
+    colliding_table = DelegateTable(
+        workers={
+            "Raven": Worker(
+                "Raven",
+                "Raven-Research",
+                "turn-only worker",
+                "TURN CHARTER\n\n",
+                payload,
+            )
+        }
+    )
+
+    with delegate_scope(colliding_table):
+        plan = await runtime.load("stored-raven")
+
+    assert plan is not None and plan.kind == "dag"
+    assert resolved == ["Raven"]
+    assert backend.calls
+    assert "stored task" in backend.calls[0][0]
+    assert "TURN CHARTER" not in backend.calls[0][0]
+    assert backend.calls[0][1] is None
+
+
+@pytest.mark.asyncio
+async def test_worker_backend_keeps_legacy_run_signatures_and_can_be_copied() -> None:
+    """The wrapper consumes optional metadata unsupported by older backends."""
+
+    class _LegacyBackend:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def run(self, task: str, *, task_id: str, workspace: str, executor: object) -> str:
+            self.calls.append(task)
+            return "done"
+
+    wrapped = deepcopy(_WorkerBackend(_LegacyBackend(), charter="BRIEF\n\n"))
+    dispatched = deepcopy(_DispatchBackend(wrapped))
+    result = await dispatched.run(
+        "task",
+        task_id="n1",
+        workspace="/tmp/work",
+        executor=object(),
+        authored_task="authored task",
+    )
+
+    assert result == "done"
+    assert dispatched.backend.backend.calls == ["BRIEF\n\ntask"]
 
 
 def test_each_worker_carries_its_brief_into_the_description(workspace) -> None:

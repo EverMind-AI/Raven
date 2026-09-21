@@ -127,9 +127,11 @@ The workers one Turn may dispatch to, written for that Turn before it starts whe
 `playbooks.agentHarness` is `generate`. Each row is a label, the roster agent behind it, and
 a brief; two labels may name one agent with different briefs, which is how a single question
 gets a worker per subject without registering an agent per pair. The label reaches the model
-as `spawn`'s own enum (which is why `SpawnTool` authors its `to_schema`) and resolves to the
-agent before any dispatch, because a label resolves to no backend. The brief travels as a
-preamble on the task a worker is given.
+as a live enum on `spawn`, `run_subagent_dag`, and `resolve_dag_node`, and resolves to the
+agent during DAG preflight or before a spawn dispatch, because a label resolves to no backend.
+The brief travels as a preamble on the task a worker is given. A stored Playbook's private DAG
+tool never consults this turn-scoped table: its graph already names roster agents and carries
+its own authored prompts, so a coincidentally equal worker label cannot rewrite it.
 _Avoid_: reading the table itself as a permission. It decides who the dispatching model may
 hand work to; what a dispatched worker may then do is its Charter's business, applied in the
 worker's own process. And reading it as configuring the main agent: it does not. The main

@@ -48,7 +48,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent import workdir
-from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
+from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN, optional_keyword
 from raven.agent.subagent.dag_adjudication import AdjudicationDesk, Final, Outbox, ReplanPlan, Report, Stopped
 from raven.agent.subagent.dag_capabilities import AgentCapabilities, validate_capabilities
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, parse_dag_spec, validate_and_order
@@ -79,7 +79,7 @@ from raven.contracts.tool import Tool, ToolResult
 from raven.security.trust import wrap_untrusted
 
 if TYPE_CHECKING:
-    from raven.agent.subagent.delegate import Worker
+    from raven.agent.subagent.delegate import DelegateTable, Worker
     from raven.agent.subagent.registry import AgentRegistry
 
 # Sink: (conversation_id, event_name, payload) -> awaitable. Late-bound by the
@@ -190,7 +190,10 @@ class _DispatchBackend:
     drop_mcps: bool = False
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self.backend, name)
+        backend = self.__dict__.get("backend")
+        if backend is None:
+            raise AttributeError(name)
+        return getattr(backend, name)
 
     async def run(self, *args: Any, **kwargs: Any) -> str:
         if self.drop_mcps:
@@ -219,11 +222,19 @@ class _WorkerBackend:
     payload: Mapping[str, Any] | None = None
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self.backend, name)
+        backend = self.__dict__.get("backend")
+        if backend is None:
+            raise AttributeError(name)
+        return getattr(backend, name)
 
-    async def run(self, task: str, *args: Any, **kwargs: Any) -> str:
+    async def run(self, task: str, *args: Any, authored_task: str | None = None, **kwargs: Any) -> str:
         with dispatch_charter(self.payload):
-            return await self.backend.run(self.charter + task, *args, **kwargs)
+            return await self.backend.run(
+                self.charter + task,
+                *args,
+                **optional_keyword(self.backend, "authored_task", authored_task),
+                **kwargs,
+            )
 
 
 @dataclass
@@ -387,6 +398,7 @@ class SubAgentDagTool(Tool):
         control_advert: "Callable[[str], str | None] | None" = None,
         provider_for: "Callable[[], Any] | None" = None,
         binding_for: "Callable[[], tuple[Any, str | None]] | None" = None,
+        worker_table_for: "Callable[[], DelegateTable | None] | None" = None,
         verdict_config: "SubagentDagConfig | None" = None,
     ) -> None:
         # Read through to SubagentManager's flag rather than mirroring it: this
@@ -442,6 +454,10 @@ class SubAgentDagTool(Tool):
         # `provider_for` is: the loop's binding is a property over the turn, and a
         # graph dispatched under a switched model has to carry it to its nodes.
         self._binding_for = binding_for
+        # Public DAG calls read the generated table bound to this turn. Private
+        # DAG tools may inject an empty source when their graph came from a
+        # stored Playbook and must retain the agents and prompts it authored.
+        self._worker_table_for = worker_table_for or current_delegate
         self._verdict_config = verdict_config if verdict_config is not None else SubagentDagConfig()
         self._cancels: dict[str, asyncio.Event] = {}
         self._desks: dict[str, AdjudicationDesk] = {}
@@ -882,7 +898,7 @@ class SubAgentDagTool(Tool):
         # node's `instance` field only makes sense once you know which agents
         # are stateful, and a downstream node's prompt_template has to be
         # written against the shape of what the upstream one returns.
-        table = current_delegate()
+        table = self._worker_table_for()
         if table:
             lines = []
             for label in table.labels():
@@ -994,7 +1010,7 @@ class SubAgentDagTool(Tool):
         a table whose every row failed to build.
         """
         schema = deepcopy(_NODE_SCHEMA)
-        table = current_delegate()
+        table = self._worker_table_for()
         names = table.labels() if table else self._registry.names()
         if names:
             schema["properties"]["subagent"]["enum"] = names
@@ -1513,7 +1529,7 @@ class SubAgentDagTool(Tool):
         # and applies capability checks. Node-specific worker data is frozen
         # into its backend below so a background run does not depend on the
         # turn-scoped delegate table remaining bound.
-        table = current_delegate()
+        table = self._worker_table_for()
         workers: dict[str, Worker] = {}
         resolved_nodes: list[DagNodeSpec] = []
         for node in spec.nodes:
