@@ -50,6 +50,7 @@ KNOWN_EVENT_TYPES = frozenset(
         "tool.start",
         "tool.complete",
         "message.start",
+        "message.injected",
         "turn.started",
         "message.complete",
         "error",
@@ -246,7 +247,9 @@ def translate(event: Any, *, cwd: str | None = None) -> Translated:
     # message.start and turn.started carry the turn id, which a client has no use
     # for and which rides ``_meta`` where it matters -- and in ACP the
     # ``session/prompt`` request is itself the record that a turn began, so an
-    # update saying so would be a second one. turn.started's ``delegated`` block
+    # update saying so would be a second one. message.injected is the same case
+    # one step later: the client's own steer request is the record that it sent
+    # a message mid-turn. turn.started's ``delegated`` block
     # names a sub-agent turn, which this surface reports through the tool call
     # that delegated it rather than as a turn of its own. episode.start is a TUI collapsing
     # boundary with no ACP counterpart. The dag.* events would map to `plan`, but
