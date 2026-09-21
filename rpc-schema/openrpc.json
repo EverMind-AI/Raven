@@ -9244,6 +9244,10 @@
           },
           "delegated": {
             "$ref": "#/components/schemas/TranscriptDelegated"
+          },
+          "mid_turn": {
+            "description": "Set on a user entry merged into a turn already running, not the prompt that opened one. A reader draws it INSIDE the turn: no new turn number, no fold closed over the narration above it, and the text before it is still that turn's narration rather than its answer.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -11413,6 +11417,41 @@
           }
         }
       },
+      "MessageInjectedEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "payload"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "message.injected"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "A message merged into the turn already running on this conversation. `message.start` cannot say this: that event opens a turn, and an inject joins one. `target` names the conversation this event belongs to; absent is the main agent.",
+            "required": [
+              "turn_id",
+              "content"
+            ],
+            "properties": {
+              "turn_id": {
+                "type": "string",
+                "description": "The id minted for this text, not the running turn's. It is what the fallback turn's events carry if the host ends before draining it, which is how a client tells the two views of one message apart."
+              },
+              "content": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/components/schemas/DirectTarget"
+              }
+            }
+          }
+        }
+      },
       "EpisodeStartEvent": {
         "type": "object",
         "additionalProperties": false,
@@ -12620,6 +12659,9 @@
             "$ref": "#/components/schemas/MessageStartEvent"
           },
           {
+            "$ref": "#/components/schemas/MessageInjectedEvent"
+          },
+          {
             "$ref": "#/components/schemas/TurnStartedEvent"
           },
           {
@@ -12693,6 +12735,7 @@
           "propertyName": "type",
           "mapping": {
             "message.start": "#/components/schemas/MessageStartEvent",
+            "message.injected": "#/components/schemas/MessageInjectedEvent",
             "turn.started": "#/components/schemas/TurnStartedEvent",
             "episode.start": "#/components/schemas/EpisodeStartEvent",
             "notice": "#/components/schemas/NoticeEvent",

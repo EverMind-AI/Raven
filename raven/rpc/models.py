@@ -400,6 +400,33 @@ class MessageStartEvent(_Strict):
     payload: MessageStartPayload
 
 
+class MessageInjectedPayload(_Strict):
+    """A message merged into the turn already running on this conversation.
+
+    ``message.start`` cannot say this: that event opens a turn, and an inject
+    opens none -- it joins one. Announced so every window draws the same bubble
+    from the same frame, the sender's included: ``turn.send`` answers before the
+    text has reached the running turn, and a second window never sees the call
+    at all.
+    """
+
+    turn_id: str = Field(
+        ...,
+        description=(
+            "The id minted for this text, not the running turn's. It is what the fallback "
+            "turn's events carry if the host ends before draining it, which is how a client "
+            "tells the two views of one message apart."
+        ),
+    )
+    content: str
+    target: DirectTarget | None = None
+
+
+class MessageInjectedEvent(_Strict):
+    type: Literal["message.injected"]
+    payload: MessageInjectedPayload
+
+
 class TurnStartedDelegated(_Strict):
     """Which delegated run re-entered the conversation, on the live boundary.
 
@@ -1161,6 +1188,7 @@ class SessionNamingEndedEvent(_Strict):
 TurnEvent = Annotated[
     Union[
         MessageStartEvent,
+        MessageInjectedEvent,
         TurnStartedEvent,
         EpisodeStartEvent,
         NoticeEvent,
@@ -3077,6 +3105,15 @@ class TranscriptMessage(_Strict):
             "body from inside the untrusted fence in `text`; drawing `text` as prose "
             "attributes to the user a question they never asked, fence markers "
             "included. `origin` names who opened the turn; this says which run came back."
+        ),
+    )
+    mid_turn: bool | None = Field(
+        default=None,
+        description=(
+            "Set on a user entry merged into a turn already running, not the prompt that "
+            "opened one. A reader draws it INSIDE the turn: no new turn number, no fold "
+            "closed over the narration above it, and the text before it is still that "
+            "turn's narration rather than its answer."
         ),
     )
 
