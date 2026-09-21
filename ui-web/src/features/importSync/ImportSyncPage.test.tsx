@@ -84,14 +84,18 @@ describe('the import row', () => {
     expect(runs).toEqual([[['claude_code'], 'memory_files']])
   })
 
-  it('says how many did not make it and offers a retry, with nothing to dismiss', () => {
+  it('says how many did not make it, offers a retry, and a dismiss that takes the row down', async () => {
     draw(status({ total: 18, submitted: 15, failed: 3, tier: 'full', platforms: ['claude_code'], phases: { status: 'done', errors: [] } }))
     expect(row()?.className).toContain('importSync-done')
     expect(row()?.className).toContain('importSync-warn')
     expect(row()?.textContent).toContain('gui.importSync.failed_n:{"n":3}')
     expect(main().disabled).toBe(false)
     expect(main().getAttribute('aria-label')).toBe('gui.importSync.retry')
-    expect(x()).toBeNull()
+    expect(x()?.getAttribute('aria-label')).toBe('gui.importSync.dismiss')
+
+    await act(async () => { fireEvent.click(x()!) })
+
+    expect(row()).toBeNull()
   })
 
   it('shows a stopped run it cannot ask for again as paused with nothing to click', () => {
