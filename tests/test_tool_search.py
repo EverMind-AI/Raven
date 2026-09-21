@@ -405,6 +405,20 @@ async def test_strategy_passthrough_when_meta_tools_absent() -> None:
     assert {t["function"]["name"] for t in out} == {t["function"]["name"] for t in tools}
 
 
+@pytest.mark.asyncio
+async def test_an_unreadable_entry_passes_through_instead_of_raising() -> None:
+    # Replay feeds a recorded array back through this chain, so a corrupt
+    # recording arrives as an entry whose "function" is a string. That has to
+    # end at replay's own backstop as an unreplayable recording; a TypeError
+    # here ends the turn instead, and ends it somewhere that cannot say why.
+    reg, ctrl = _registry_with_n(40)
+    strat = ToolSearchStrategy(ctrl, compaction_threshold=25)
+    tools = [*reg.get_definitions(), {"function": "bad"}, "not-a-dict"]
+    _, out, _ = await strat.before_llm_call([], tools, "m")
+    assert {"function": "bad"} in out and "not-a-dict" in out, "what the fold cannot read, it keeps"
+    assert any(t.get("function", {}).get("name") == TOOL_CALL_NAME for t in out if isinstance(t, dict))
+
+
 def test_registry_register_first_runs_before_others() -> None:
     from raven.contracts.token_strategy import TokenStrategy
     from raven.token_wise.registry import StrategyRegistry

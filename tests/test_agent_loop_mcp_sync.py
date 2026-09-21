@@ -449,6 +449,39 @@ async def test_healthy_and_absent_managers_produce_no_notices(workspace) -> None
     assert loop._mcp_tool_notices() == []
 
 
+async def test_a_folded_catalog_names_its_connected_servers(workspace) -> None:
+    """A connected server is silent until the fold hides it.
+
+    With the catalog folded the model has no inventory anywhere else -- nothing
+    in the prompt names an installed server -- so one that does not think to
+    search reports a capability it holds as missing."""
+    from raven.config.schema import ToolSearchConfig
+
+    loop = _loop(
+        workspace,
+        {"svc": MCPServerConfig(url="https://svc.test/mcp")},
+        tool_search_config=ToolSearchConfig(enabled=True, compaction_threshold=0),
+    )
+    with patch(_PATCH, new=_fake_connect(["search", "create"])):
+        await loop._connect_mcp()
+
+    notes = loop._mcp_tool_notices()
+    assert len(notes) == 1, notes
+    assert "svc" in notes[0] and "2 tool(s)" in notes[0]
+    assert "tool_search" in notes[0] and "tool_call" in notes[0], "the line must name both routes"
+
+    # The gate is the fold, not the connection: below the threshold those tools
+    # are in the array and the sentence would be false.
+    unfolded = _loop(
+        workspace,
+        {"svc": MCPServerConfig(url="https://svc.test/mcp")},
+        tool_search_config=ToolSearchConfig(enabled=True, compaction_threshold=500),
+    )
+    with patch(_PATCH, new=_fake_connect(["search", "create"])):
+        await unfolded._connect_mcp()
+    assert unfolded._mcp_tool_notices() == []
+
+
 async def test_tool_notices_ride_the_runtime_context_block(workspace) -> None:
     from datetime import datetime
 

@@ -172,7 +172,7 @@ class McpGlueMixin:
         """Host facts about MCP tools the definitions cannot carry.
 
         One line per enabled server whose tools are absent from this turn for a
-        reason the model cannot see, and the two reasons need different lines:
+        reason the model cannot see, and the three reasons need different lines:
 
         * ``auth_required`` -- the wait is on a person, and the answer names who
           can end it. Without this the model reads an unauthorized plugin as a
@@ -181,6 +181,13 @@ class McpGlueMixin:
           that overtakes it, which since ``prewarm_mcp`` is the ordinary shape of
           a first turn rather than a rarity: the turn no longer waits, so it can
           be assembled while servers are still coming up.
+        * ``connected`` while the catalog is folded -- the schemas are withheld on
+          purpose, and nothing else in the prompt names an installed server, so a
+          model that does not think to search reports a capability it holds as
+          missing. ``tool_search``'s own description says a catalog exists; only
+          this says what is in it. Gated on
+          ``ToolSearchController.search_visible`` because below the fold those
+          tools are in the array and the line would be false.
 
         Rendered into the runtime-context block, not the system prompt -- the
         set changes turn to turn and must never be cached with the prefix.
@@ -195,6 +202,8 @@ class McpGlueMixin:
         # that way -- an imperative here would be either ignored or a fence
         # violation. The fact alone is enough to stop it reporting a missing
         # capability.
+        controller = getattr(self, "tool_search_controller", None)
+        folded = controller is not None and controller.search_visible()
         notices = []
         for snap in mgr.status():
             if not snap.get("enabled", True):
@@ -210,6 +219,12 @@ class McpGlueMixin:
                     f"MCP plugin '{snap['name']}': installed, still connecting. Its tools are absent "
                     f"from this turn's definitions and register themselves when the handshake "
                     f"finishes, so they are available from a later turn without anyone acting."
+                )
+            elif folded and snap["connected"] and snap["tool_count"]:
+                notices.append(
+                    f"MCP plugin '{snap['name']}': connected, {snap['tool_count']} tool(s). Their "
+                    f"schemas are not in this turn's definitions because the catalog is folded -- "
+                    f"tool_search finds them by keyword, tool_call invokes them by name."
                 )
         return notices
 
