@@ -43,9 +43,9 @@ export function notify(owner: string, event: PhaseEvent): void {
      above repaints for that case -- the phase folds into the conversation's own
      copy and says nothing, and the three writers below paint the open
      conversation only -- so the row was the reader's only possible notice and it
-     was never drawn. An approval is gone 35 seconds after it was raised
-     (raven/rpc/approval_broker.py), and its sheet mounts only on its own screen,
-     so a row that reads like every other one is the whole of why it lapsed.
+     was never drawn. An approval's sheet mounts only on its own screen and the
+     turn behind it waits for the person, so a row that reads like every other
+     one is a conversation that never finishes.
      Back to `run` when the wait ends rather than to nothing: the turn that
      raised it is still open. */
   const s = sess(owner)
