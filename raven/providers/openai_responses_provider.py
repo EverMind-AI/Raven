@@ -18,23 +18,13 @@ from raven.providers.first_byte import httpx_timeout, stream_first_byte_budget
 from raven.providers.openai_codex_provider import (
     _consume_sse,
     _convert_messages,
+    _convert_tool_choice,
     _convert_tools,
 )
 from raven.providers.usage import responses_usage
 
 _GPT_VERSION = re.compile(r"(?:^|/)gpt-(\d+)\.(\d+)(?:$|[-/])", re.IGNORECASE)
 _DEFAULT_BASE = "https://api.openai.com/v1"
-
-
-def _convert_tool_choice(
-    tool_choice: str | dict[str, Any] | None,
-) -> str | dict[str, Any] | None:
-    if not isinstance(tool_choice, dict):
-        return tool_choice
-    function = tool_choice.get("function")
-    if tool_choice.get("type") == "function" and isinstance(function, dict) and function.get("name"):
-        return {"type": "function", "name": function["name"]}
-    return tool_choice
 
 
 class OpenAIResponsesProvider(LLMProvider):
