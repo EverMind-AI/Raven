@@ -182,5 +182,7 @@
 
 /* The shared picker, sized to hang under the pill inside the 520px sheet: the
    settings dialog's 720x560 would neither fit below the pill nor above it. */
-.extAgents-sheet .model-picker { width: 478px; max-width: calc(100vw - 32px); height: min(390px, 56vh); }
-.extAgents-sheet .model-picker-body { grid-template-columns: 168px 1fr; }
+/* The panel's box is the placer's now (`lib/popover.ts`'s anchorRow): it runs
+   from the field's left edge to inside the card's right edge and gives up
+   height to the shelf below the field, so a fixed size here would fight it. */
+.extAgents-sheet .model-picker { max-width: calc(100vw - 32px); }

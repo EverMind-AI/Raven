@@ -713,7 +713,7 @@
    `@instance` handle when it has one, and the tool-count chip when the lane
    reported one. */
 .tkrunl2 { display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; }
-.tkrunag { font-size: 12px; color: var(--faint); }
+.tkrunag { font-size: 12px; color: var(--text-3); }
 .tkrunhandle {
   font-family: var(--mono);
   font-size: 10.5px;
