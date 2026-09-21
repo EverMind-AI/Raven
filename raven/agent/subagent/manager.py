@@ -78,6 +78,12 @@ _CANCEL_DRAIN_TIMEOUT_S = 5.0
 # refusals below open with this, and the spawn tool tests for it before publishing
 # anything that presumes the run exists.
 SPAWN_REFUSED_PREFIX = "Spawn refused: "
+_SHUTDOWN_REFUSAL = (
+    f"{SPAWN_REFUSED_PREFIX}the host is shutting down and is starting no more sub-agents. Nothing was run."
+)
+# The DAG's refusals carry the quota refusal's shape rather than the spawn prefix;
+# said once here for both of its doors, `charge_dag_run` and `adopt_background_run`.
+_DAG_SHUTDOWN_REFUSAL = "Error: the host is shutting down and is starting no more sub-agents. No sub-agent was run."
 # Tier mismatches already reported, so a busy session logs one line per agent
 # rather than one per dispatch. Same shape and reason as `_STALE_SNAPSHOT_SEEN`
 # in raven/agent/subagent/backends/__init__.py.
@@ -303,6 +309,10 @@ class SubagentManager:
         # because pausing is how a user stops a fan-out from growing without
         # throwing away the work already in flight.
         self._paused = False
+        # One-way, set by `cancel_all`: this manager is being retired, by the
+        # process shutting down or by a generation swap that builds a new one.
+        # Closing dispatch admission is what makes that sweep's snapshot final.
+        self._dispatch_closed = False
         self._max_spawns_per_hour = max_spawns_per_hour
         # Per-session spawn timestamps (monotonic), kept per session (not
         # per-process) so one busy session can't throttle others. Each deque is
@@ -724,7 +734,16 @@ class SubagentManager:
         not bound that -- each dispatch finishes and frees its slot for the
         next. A run counts once however many nodes it carries; the gate is what
         rations the nodes.
+
+        Refuses before charging once dispatch admission has closed: the
+        refusal is the caller's own result, the way the quota refusal is, and a
+        refused graph costs zero dispatches. This door is the cheap one; the
+        caller yields between it and creating its task, so
+        ``adopt_background_run`` checks again.
         """
+        if self._dispatch_closed:
+            logger.info("DAG run refused: the host is shutting down")
+            return _DAG_SHUTDOWN_REFUSAL
         quota_key = session_key or "default"
         if self._charge_dispatch_quota(quota_key):
             return None
@@ -741,7 +760,7 @@ class SubagentManager:
             f"submitting the graph again."
         )
 
-    def adopt_background_run(self, run_id: str, task: asyncio.Task, session_key: str | None) -> None:
+    def adopt_background_run(self, run_id: str, task: asyncio.Task, session_key: str | None) -> str | None:
         """Put a task this manager did not start under the same reach as a spawn.
 
         Every ``run_subagent_dag`` run -- backgrounded or blocking, the latter
@@ -750,8 +769,22 @@ class SubagentManager:
         see :meth:`cancel_all` for what an unreachable one leaves behind.
         Indexed here rather than only on the DAG tool so every entry point's
         existing teardown covers it with no extra wiring.
+
+        None once the task is indexed. Once dispatch admission has closed, the
+        task is cancelled instead -- tracked, it would be a run the sweep has
+        already passed; left alone, one nothing can reach -- and the refusal is
+        returned for the caller to hand on. Returned rather than logged because
+        the caller creates the task and adopts it in the same step: the cancel
+        lands before the task's first tick, and a task cancelled then never
+        enters its body, so nothing the body would do on cancellation happens.
+        What the task owed is the caller's to settle, and this is how it learns.
         """
+        if self._dispatch_closed:
+            logger.info("DAG run {} refused: the host is shutting down; cancelling it unstarted", run_id)
+            task.cancel()
+            return _DAG_SHUTDOWN_REFUSAL
         self._track(run_id, task, session_key)
+        return None
 
     @property
     def dispatch_gate(self) -> asyncio.Semaphore:
@@ -813,6 +846,12 @@ class SubagentManager:
         would re-inject the whole file.
         """
         agent = agent or GENERIC_AGENT
+        # Shutdown before pause: a host that is both answers with the terminal
+        # reason. The pause text tells the model to ask the user to resume, and
+        # during a shutdown nobody can.
+        if self._dispatch_closed:
+            logger.info("Spawn refused: the host is shutting down")
+            return _SHUTDOWN_REFUSAL
         if self._paused:
             logger.info("Spawn refused: delegation is paused")
             return (
@@ -895,6 +934,19 @@ class SubagentManager:
         # below: the argument is new here, and a caller that replaces this method
         # keeps working as long as it is not handed something it never declared.
         extra = {"mcp_grant": mcp_grant} if mcp_grant is not None else {}
+        # Read again after the last await above: `cancel_all` can close
+        # admission while a spawn waits on the MCP preflight or on its registry
+        # row, and a task created after that sweep took its snapshot is a task
+        # nothing sweeps -- the hosts seal the spine next, and a CLI child runs
+        # in its own session, so it would outlive the process. Nothing awaits
+        # between here and `_track`, so a spawn that passes this is indexed and
+        # therefore reachable. The `pending` row already written needs no
+        # undoing: a pending row with no live handle reads back `interrupted`
+        # (`reconcile_instance_rows` in raven/agent/subagent/instances.py).
+        if self._dispatch_closed:
+            logger.info("Spawn refused: the host began shutting down while [{}] was starting", task_id)
+            return _SHUTDOWN_REFUSAL
+
         # The last thing done to the task before it leaves. `origin` already
         # holds the undecorated wording, so the announcement quotes what was
         # asked rather than this line as well.
@@ -1892,7 +1944,10 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
 
         assert self._submit is not None
         mark = {"kind": "spawn", "label": task_summary, "status": status}
-        self._inject(announce_content, origin, mark)
+        # The delivered marker draws the seam where a result re-entered its
+        # conversation; a refused inject re-entered nothing, so there is none.
+        if not self._inject(announce_content, origin, mark):
+            return
         # `content` is the text that was injected, verbatim. A client draws the
         # reader-facing part of it by dropping everything outside the untrusted
         # fence -- and a client REPLAYING this turn later reads the same string
@@ -1925,7 +1980,8 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
             return
         injected = wrap_untrusted(summary, source="subagent")
         mark = {"kind": "dag", "label": run_id, "status": "ok", "run_id": run_id}
-        self._inject(injected, origin, mark)
+        if not self._inject(injected, origin, mark):
+            return
         # The graph's own tally names the outcome; "ok" here only means the run
         # came back at all, and the marker's job is placement, not verdict.
         self._emit_delivered(origin, {**mark, "content": injected})
@@ -1999,7 +2055,8 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
             )
         injected = f"{ask}\n\n{wrap_untrusted(report, source='subagent')}"
         mark = {"kind": "dag", "label": run_id, "status": status, "run_id": run_id, "node_id": node_id}
-        self._inject(injected, origin, mark)
+        if not self._inject(injected, origin, mark):
+            return
         self._emit_delivered(origin, {**mark, "content": injected})
         logger.debug("DAG run [{}] node [{}] reported an exception to {}", run_id, node_id, origin["session_key"])
 
@@ -2112,37 +2169,55 @@ This instance acted on its own schedule -- an armed wake, a watch round -- and s
 
 Read it against the plan this instance serves. If it reports finished work, results ready to collect, or a decision point, continue that plan now -- dispatch the next round or collect what is ready; do not leave finished work waiting for the owner to notice. If it is routine progress only, no action and no reply to the user are needed."""
         mark = {"kind": "unprompted", "label": f"{agent}/{handle}", "status": "report"}
-        self._inject(content, origin, mark)
+        if not self._inject(content, origin, mark):
+            return
         self._emit_delivered(origin, {**mark, "content": content})
         logger.info("unprompted turn on {}/{} announced to {}", agent, handle, session_key)
 
-    def _inject(self, content: str, origin: dict[str, str], delegated: dict[str, str] | None = None) -> None:
+    def _inject(self, content: str, origin: dict[str, str], delegated: dict[str, str] | None = None) -> bool:
         """Re-inject ``content`` to trigger a main-agent turn in the originating session.
 
         The spine path routes by conversation (= originating session) with
         origin=SUBAGENT; the reply rides emit -> hub -> outlet (source.channel
         is the originating channel). Fire-and-forget — the announce is fixed,
         the turn's output isn't read back.
+
+        False when the spine refused the turn because it is draining. The host
+        is shutting down and no turn is left to carry the words, so they go to
+        the log in full rather than out of the announcing task as an exception
+        nothing awaits -- asyncio's "Task exception was never retrieved" was
+        the only trace a finished run used to leave. A completed run's content
+        names its record, so the result stays recoverable from disk as well.
         """
         from raven.spine import ChatType, Origin, Source, TurnRequest
+        from raven.spine.scheduler import SchedulerDrainingError
 
         # Wired by set_submit before any announce (see __init__); the announce
         # path is the only caller and it runs after the gateway has wired it.
         assert self._submit is not None
-        self._submit(
-            TurnRequest(
-                origin=Origin.SUBAGENT,
-                source=Source(
-                    channel=origin["channel"],
-                    chat_id=origin["chat_id"],
-                    sender_id="subagent",
-                    chat_type=ChatType.DM,
-                ),
-                text=content,
-                conversation=origin["session_key"],
-                delegated=delegated,
-            )
+        request = TurnRequest(
+            origin=Origin.SUBAGENT,
+            source=Source(
+                channel=origin["channel"],
+                chat_id=origin["chat_id"],
+                sender_id="subagent",
+                chat_type=ChatType.DM,
+            ),
+            text=content,
+            conversation=origin["session_key"],
+            delegated=delegated,
         )
+        try:
+            self._submit(request)
+        except SchedulerDrainingError:
+            logger.error(
+                "sub-agent announce to {} dropped: the scheduler is draining and no turn can carry it; "
+                "the undelivered text follows\n{}",
+                origin["session_key"],
+                content,
+            )
+            return False
+        return True
 
     async def cancel_by_session(self, session_key: str) -> int:
         """Cancel all subagents for the given session. Returns count cancelled."""
@@ -2250,7 +2325,19 @@ Read it against the plan this instance serves. If it reports finished work, resu
         cancelled -- how many were asked to stop, not how many obeyed in time:
         the wait for them is bounded, so a run that ignores its cancellation is
         left to the process exit rather than holding the shutdown open.
+
+        Terminal for this manager: dispatch admission closes here and does not
+        reopen, so a caller that means to keep serving wants ``cancel_by_session``
+        or ``set_paused`` instead. Every caller does mean to retire it -- the
+        three host shutdowns, and the generation swap, which builds a new
+        manager with the generation that replaces this one.
         """
+        # Admission closes before the snapshot and stays closed. The drain
+        # below yields for up to five seconds, and every caller here is retiring
+        # this manager -- the process shutting down, or a generation swap that
+        # builds a new one. Left open, a turn still running could dispatch into
+        # that window and this snapshot would not hold it.
+        self._dispatch_closed = True
         tasks = [t for t in self._running_tasks.values() if not t.done()]
         for t in tasks:
             t.cancel()

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 from loguru import logger
 from pydantic import ValidationError
 
-from raven.agent.subagent.backends import agent_meta
+from raven.agent.subagent.backends import acp_snapshot_for, agent_meta
 from raven.agent.subagent.presets import (
     THIRD_PARTY_SUBAGENT_PRESETS,
     third_party_subagent_preset,
@@ -300,6 +300,11 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 result = replace(result, status="attention")
         last = result.last_test
         task = _RUNNING.get(cfg.name)
+        # One store read per acp row, beside the one ``agent_meta`` already
+        # makes. Not hoisted into a cache: the store is deliberately uncached,
+        # because a cache is what keeps serving a stale verdict after a verify
+        # has already fixed it.
+        caps = acp_snapshot_for(cfg) if getattr(cfg, "kind", None) == "acp" else None
         rows.append(
             {
                 "name": cfg.name,
@@ -328,6 +333,13 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "probe_status": result.status,
                 "probe_detail": result.detail,
                 "has_api_key": bool((getattr(cfg, "api_key", "") or "").strip()),
+                # Measured by the handshake, not guessed from the status: an
+                # `attention` row is equally "wants a credential" and "installed
+                # but never verified", and those ask the reader for opposite
+                # things. Always present, never omitted -- a client cannot tell
+                # a missing key from a false one, and one day it will mean
+                # "this server predates the field".
+                "needs_auth": bool(getattr(caps, "needs_auth", False)),
                 "mcps": list(getattr(cfg, "mcps", None) or []),
                 "allow_mcp_secrets": bool(getattr(cfg, "allow_mcp_secrets", False)),
                 "last_test_ok": None if last is None else last.ok,

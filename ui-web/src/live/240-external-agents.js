@@ -38,6 +38,10 @@ function xaRowOf(r) {
     upgrade_to: r.upgrade_to || null,
     probe_detail: r.probe_detail || '',
     has_api_key: !!r.has_api_key,
+    /* The handshake was answered and the session refused for want of a
+       credential. This mapper is a whitelist, so a field it does not name is a
+       field the island never sees. */
+    needs_auth: !!r.needs_auth,
     description: r.description || '',
     last_test_ok: r.last_test_ok,
     last_test_detail: r.last_test_detail || '',

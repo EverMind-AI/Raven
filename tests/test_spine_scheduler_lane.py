@@ -301,7 +301,37 @@ async def test_run_exception_yields_turn_failed_and_resolves_future():
     assert result is None
     failed = next(e for e in events if isinstance(e, TurnFailed))
     assert failed.cancelled is False
-    assert "boom" in failed.error
+    assert failed.error == "ValueError: boom"
+
+
+async def test_a_failure_with_no_message_still_names_itself():
+    """A stalled model stream raises a bare TimeoutError, whose str() is empty;
+    the event used to carry that emptiness, and a client was told the turn
+    failed and nothing else."""
+
+    class SilentRunner:
+        async def run(self, req, emit, drain) -> TurnOutcome:
+            raise TimeoutError()
+
+    events, sink = _collector()
+    lane = Lane(runner=SilentRunner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
+    await lane.submit(_req())
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.error == "TimeoutError"
+
+
+def test_a_message_that_already_names_its_class_is_not_prefixed_twice():
+    """Several SDK errors open with their own class name; the event must read
+    `APIError: rate limited`, not `APIError: APIError: rate limited`."""
+    from raven.spine.scheduler import describe_failure
+
+    class APIError(Exception):
+        pass
+
+    assert describe_failure(APIError("APIError: rate limited")) == "APIError: rate limited"
+    assert describe_failure(APIError("rate limited")) == "APIError: rate limited"
+    assert describe_failure(APIError("")) == "APIError"
+    assert describe_failure(ValueError("boom")) == "ValueError: boom"
 
 
 async def test_run_exception_is_logged_with_a_traceback():

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from raven.config.schema import ROUTE_REQUIREMENTS, TIER_LADDER
+from raven.config.schema import ROUTE_REQUIREMENTS
 
 REPO = Path(__file__).resolve().parent.parent
 RUN_PY = REPO / "agents" / "raven-design" / "run.py"
@@ -157,16 +157,18 @@ def test_the_roster_row_carries_the_forks_identity_verbatim():
     # belongs here is that there is no sixth key -- a field nothing reads would
     # look like configuration.
     ((route,)) = ours["routes"]
-    assert set(route) == {"to", "owes", "noteFile", "needs", "minTier"}
+    assert set(route) == {"to", "owes", "noteFile", "needs", "needsFile"}
     assert route["owes"] == ".pptx"
     # The gate reaches this route because this route asked for it. Both are
     # pinned here rather than left to the gate's own tests: the gate is generic,
     # and a manifest that dropped either would close nothing while every test
-    # about the gate kept passing.
+    # about the gate kept passing. The template lane opens on a template and
+    # on nothing else: no tier floor, so a row that reintroduced one would
+    # send a deck with no template to the engine again.
     assert route["needs"] == ["image_generation", "image_search"]
-    assert route["minTier"] == "max"
+    assert route["needsFile"] == ".pptx"
+    assert "minTier" not in route
     assert set(route["needs"]) <= set(ROUTE_REQUIREMENTS)
-    assert route["minTier"] in TIER_LADDER
     # The note is prose and lives beside the manifest, which discovery reads
     # into the route. Its absence from the folder is the one thing that cannot
     # be checked anywhere else: no note file, no requirement, and the row still
@@ -282,14 +284,13 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
     assert all(mount.always_enabled and mount.path.endswith("skills") for mount in mounts)
 
 
-def test_only_medium_names_an_effort_and_the_other_tiers_inherit_the_hosts(grounded, tmp_path):
-    """Design tiers change iteration caps; medium alone pins its reasoning effort.
+def test_tiers_climb_a_ladder_of_effort_around_the_hosts(grounded, tmp_path):
+    """Design tiers keep one iteration cap and climb a ladder of reasoning effort.
 
-    Below the top tier this agent designs the deck itself rather than handing it
-    to the template lane, and the cheapest tier is the one that must not also ask
-    for the host's full thinking budget. The host here is on ``high`` so an
-    inherited effort and a pinned one are different strings -- a host already on
-    ``low`` would let the pin pass by coincidence.
+    This agent designs every deck itself, so what a tier buys is how hard it
+    thinks: medium asks for low, max for xhigh, and the
+    baseline inherits whatever the host is set to -- ``high`` here, so the
+    ladder reads low / high / xhigh.
     """
     from raven.config.loader import load_config
     from raven.config.mode_catalogue import build_mode_catalogue
@@ -306,7 +307,7 @@ def test_only_medium_names_an_effort_and_the_other_tiers_inherit_the_hosts(groun
     assert {m: (e["maxToolIterations"], e["reasoningEffort"]) for m, e in modes.items()} == {
         "medium": (400, "low"),
         "high": (400, "high"),
-        "max": (400, "high"),
+        "max": (400, "xhigh"),
     }
     # The overlay carries the cap it changed and not the effort: the effort is
     # the trunk's own knob, dispensed off the entry, and a copy in the diff the
@@ -315,7 +316,7 @@ def test_only_medium_names_an_effort_and_the_other_tiers_inherit_the_hosts(groun
     # And the trunk reads them as the loop will enforce them.
     catalogue = build_mode_catalogue(load_config(grounded.render_config(RUN_PY.parent / "config.json")))
     assert catalogue.default == "high"
-    assert (catalogue.get("max").max_iterations, catalogue.get("max").reasoning_effort) == (400, "high")
+    assert (catalogue.get("max").max_iterations, catalogue.get("max").reasoning_effort) == (400, "xhigh")
     assert (catalogue.get("high").max_iterations, catalogue.get("high").reasoning_effort) == (400, "high")
     assert (catalogue.get("medium").max_iterations, catalogue.get("medium").reasoning_effort) == (400, "low")
 
@@ -337,6 +338,8 @@ def test_own_credentials_and_source_model_are_ignored(grounded, tmp_path):
     assert list(data["providers"]) == ["custom"]
     assert data["providers"]["custom"]["apiKey"] == "host-key"
     assert data["agents"]["defaults"]["model"] == "host-model"
+    # The host's ``low``, not the source's ``max``: the effort is inherited
+    # with the model, and the source has no say in it.
     assert data["agents"]["defaults"]["reasoningEffort"] == "low"
 
 

@@ -19,6 +19,13 @@ export interface XaState {
      mutated in place, so a fresh answer remounts it -- the same wholesale
      redraw the legacy xaSheetDraw performed after every mutation. */
   epoch: number
+  /* Names this page has a write in flight for. Same job `testing` does below
+     and for the same reason -- the call's await IS the work, so nothing before
+     it returns says it began -- but this one also gates: the server proves the
+     agent before it writes, and a second call for a name already in flight
+     retires the first one's connection and fails it in the agent's name. A
+     press for a busy name is therefore dropped here rather than sent. */
+  busy: string[]
   /* Names this page has a test in flight for. The rows carry the server's own
      `test_running`, but they are only re-read when a call returns and a test
      can take two minutes, so between the click and the verdict the rows say
@@ -28,7 +35,7 @@ export interface XaState {
   testing: string[]
 }
 
-let state: XaState = { rows: [], sheet: null, epoch: 0, testing: [] }
+let state: XaState = { rows: [], sheet: null, epoch: 0, busy: [], testing: [] }
 const listeners = new Set<() => void>()
 
 export const getState = (): XaState => state
@@ -76,6 +83,12 @@ export function close(): void {
 /* Every write goes through here: one place that toasts the failure and repaints
    from whatever the source answered, so no caller has to remember either. */
 export async function run(op: XaOp, row?: XaRow, args?: XaActArgs): Promise<void> {
+  /* The writes only. `test` carries its own flag and `test_cancel` has to reach
+     the server *while* that test is in flight -- locking the row for the length
+     of a two-minute test would make Stop unpressable. */
+  const holds = row !== undefined && op !== 'test' && op !== 'test_cancel'
+  if (holds && state.busy.includes(row.name)) return
+  if (holds) set({ busy: [...state.busy, row.name] })
   let rows = state.rows
   /* A rename moves the open sheet, but only once the rows that carry the new
      name are here: the sheet is resolved by looking the name up in rows, so
@@ -91,6 +104,7 @@ export async function run(op: XaOp, row?: XaRow, args?: XaActArgs): Promise<void
     toast(t('gui.agent.failed', { detail: failure(e) }))
   }
   const landed: Partial<XaState> = { rows, epoch: state.epoch + 1 }
+  if (holds) landed.busy = state.busy.filter((name) => name !== row.name)
   if (renamed && state.sheet === row?.name) landed.sheet = renamed
   set(landed)
   if (state.sheet && !rows.some((x) => x.name === state.sheet)) closeSheet()

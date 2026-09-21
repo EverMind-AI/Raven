@@ -158,6 +158,15 @@ class SubagentRow(_Strict):
     probe_status: Literal["ready", "attention", "missing", "unknown"]
     probe_detail: str
     has_api_key: bool
+    needs_auth: bool = Field(
+        default=False,
+        description=(
+            "The agent answered the handshake and then refused to open a session without a credential. "
+            "Measured by the capability snapshot, not inferred from probe_status, which reads `attention` "
+            "both for this and for an installed agent nothing has verified -- two rows that need opposite "
+            "things from the reader. Always false for a kind with no handshake to be refused in."
+        ),
+    )
     mcps: list[str]
     allow_mcp_secrets: bool
     last_test_ok: bool | None = None

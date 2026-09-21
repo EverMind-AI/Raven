@@ -13,7 +13,7 @@
         "image_generation",
         "image_search"
       ],
-      "minTier": "max"
+      "needsFile": ".pptx"
     }
   ],
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py --acp",
