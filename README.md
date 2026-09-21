@@ -18,7 +18,7 @@
 # What is Raven
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/4ae8ac91-2f0c-4c81-aa7c-c15526bd77af"><img src="https://github.com/user-attachments/assets/4ae8ac91-2f0c-4c81-aa7c-c15526bd77af" alt="Raven one surface, all agents workflow" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/f400d693-d8cf-46eb-b846-6948f66f6fed"><img src="https://github.com/user-attachments/assets/f400d693-d8cf-46eb-b846-6948f66f6fed" alt="Raven one surface, all agents workflow" width="100%"></a>
 </p>
 
 <p align="center"><em>One Surface, All Agents: Raven generates DAGs and orchestrates multiple specialized agents for complex tasks.</em></p>
@@ -80,7 +80,7 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 <p align="center"><em>Raven-Design tops on PresentBench for slide generation</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347"><img src="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="95%"></a>
+  <a href="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46"><img src="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="95%"></a>
 </p>
 
 <p align="center"><em>Raven-Design's performance on visual design benchmarks</em></p>
@@ -104,49 +104,96 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 ## ❯❯ Showcase
 
 Real runs, each captured from Raven's task graph. The graph shows the
-orchestration Raven chose for the task; below it is what the run produced.
+orchestration Raven generates for the task; below it is what the run produced.
 
 <table>
 <tr>
-<td width="50%" valign="top">
-<p align="center"><b>Song-dynasty domestic aesthetics</b></p>
-<a href="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4"><img src="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f"><img src="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f" alt="Cover, slides and closing slide of the Song-dynasty aesthetics deck" width="100%"></a>
-</td>
-<td width="50%" valign="top">
-<p align="center"><b>How ancient Greece was whitewashed</b></p>
-<a href="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257"><img src="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/3c5a2a9a-d6d7-40ad-b3dc-70e9f5c095df"><img src="https://github.com/user-attachments/assets/3c5a2a9a-d6d7-40ad-b3dc-70e9f5c095df" alt="Cover, slides and closing slide of the Greek polychromy deck" width="100%"></a>
-</td>
+<td valign="top"><p align="center"><b>An FPS boss arena game, built in Godot 4</b></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top">
-<p align="center"><b>How pop music is manufactured</b></p>
-<a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/9ab75945-81ba-4437-aec0-9ef6a633ed55"><img src="https://github.com/user-attachments/assets/9ab75945-81ba-4437-aec0-9ef6a633ed55" alt="Cover, slides and closing slide of the pop music deck" width="100%"></a>
-</td>
-<td width="50%" valign="top">
-<p align="center"><b>A century of abstract art</b></p>
-<a href="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6"><img src="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/b3dfce6c-366d-4e31-9a57-7c98df054618"><img src="https://github.com/user-attachments/assets/b3dfce6c-366d-4e31-9a57-7c98df054618" alt="Cover, slides and closing slide of the abstract art deck" width="100%"></a>
+<td valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a></p></td>
+</tr>
+<tr>
+<td valign="top">
+
+https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
+
 </td>
 </tr>
 </table>
 
-Runs that end in something other than a deck.
+<table>
+<tr>
+<td width="50%" valign="top"><p align="center"><b>Song-dynasty domestic aesthetics</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>How ancient Greece was whitewashed</b></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4"><img src="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257"><img src="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f"><img src="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f" alt="Cover, slides and closing slide of the Song-dynasty aesthetics deck" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/3c5a2a9a-d6d7-40ad-b3dc-70e9f5c095df"><img src="https://github.com/user-attachments/assets/3c5a2a9a-d6d7-40ad-b3dc-70e9f5c095df" alt="Cover, slides and closing slide of the Greek polychromy deck" width="100%"></a></p></td>
+</tr>
+</table>
 
 <table>
 <tr>
-<td width="50%" valign="top">
-<p align="center"><b>Six orchestration frameworks, compared</b></p>
-<a href="https://github.com/user-attachments/assets/92ff2c83-3b0f-49eb-9995-c1ad4c298452"><img src="https://github.com/user-attachments/assets/92ff2c83-3b0f-49eb-9995-c1ad4c298452" alt="Task graph: two Raven-Research nodes running in parallel into one Raven-Design node" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/75beba36-a112-46f2-949d-015856dae588"><img src="https://github.com/user-attachments/assets/75beba36-a112-46f2-949d-015856dae588" alt="Comparison board: six orchestration frameworks against four dimensions, colour-coded for explicit-graph versus code-or-model orchestration" width="100%"></a>
-</td>
-<td width="50%" valign="top">
-<p align="center"><b>A parameter sweep, written, run and plotted</b></p>
-<a href="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8"><img src="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8" alt="Task graph: Raven-Code into Raven-Oncall into Raven-Design, run in sequence" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a"><img src="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a" alt="Retrieval sweep: recall@k is set by top_k alone, and latency stays flat across the grid" width="100%"></a>
-</td>
+<td width="50%" valign="top"><p align="center"><b>How pop music is manufactured</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A century of abstract art</b></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6"><img src="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="98%"></a></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9ab75945-81ba-4437-aec0-9ef6a633ed55"><img src="https://github.com/user-attachments/assets/9ab75945-81ba-4437-aec0-9ef6a633ed55" alt="Cover, slides and closing slide of the pop music deck" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/b3dfce6c-366d-4e31-9a57-7c98df054618"><img src="https://github.com/user-attachments/assets/b3dfce6c-366d-4e31-9a57-7c98df054618" alt="Cover, slides and closing slide of the abstract art deck" width="100%"></a></p></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="50%" valign="top"><p align="center"><b>Six agent-orchestration frameworks, compared</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A parameter sweep, written, run and plotted</b></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/92ff2c83-3b0f-49eb-9995-c1ad4c298452"><img src="https://github.com/user-attachments/assets/92ff2c83-3b0f-49eb-9995-c1ad4c298452" alt="Task graph: two Raven-Research nodes running in parallel into one Raven-Design node" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8"><img src="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8" alt="Task graph: Raven-Code into Raven-Oncall into Raven-Design, run in sequence" width="100%"></a></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/5120c2c0-9aeb-4224-ac85-df9dc188b5cc"><img src="https://github.com/user-attachments/assets/5120c2c0-9aeb-4224-ac85-df9dc188b5cc" alt="Comparison board: six orchestration frameworks against four dimensions, each tagged explicit graph or canvas, declared task flow, or dynamic at runtime" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/10679855-e2c5-4422-81c3-17cd784123ce"><img src="https://github.com/user-attachments/assets/10679855-e2c5-4422-81c3-17cd784123ce" alt="Retrieval sweep dashboard: recall@k is set by top_k alone and latency stays broadly flat, with a sixteen-cell grid of measured recall and latency and the best cell ringed at top_k 10, chunk_size 1024" width="99%"></a></p></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="50%" valign="top"><p align="center"><b>How light pollution steals wildlife sleep</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>Why GPS needs a fourth satellite</b></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd"><img src="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd" alt="Task graph: three Raven-Research nodes in parallel into a Raven-Code node; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="83%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9754976b-11ff-4738-b53d-0621ec6ae7da"><img src="https://github.com/user-attachments/assets/9754976b-11ff-4738-b53d-0621ec6ae7da" alt="Task graph: two Raven-Code nodes in parallel into a Raven-Oncall cross-check; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="100%"></a></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7767ac05-6785-4e6a-9e27-c1b123753766"><img src="https://github.com/user-attachments/assets/7767ac05-6785-4e6a-9e27-c1b123753766" alt="Key visual plus the derived series: street poster, data panel, social square and wide banner" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/25c57220-c5fc-4f72-94fb-ea4b7e83f429"><img src="https://github.com/user-attachments/assets/25c57220-c5fc-4f72-94fb-ea4b7e83f429" alt="GPS trilateration explainer: the live page, and the fix at two, three and four satellites" width="97%"></a></p></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="50%" valign="top"><p align="center"><b>A beam's limit load, found by bisection</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A dam break, tuned until the water stays bounded</b></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783"><img src="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a CalculiX cantilever plastic limit chain, 3 of 3 done in 5m21s, 1m28s and 4m11s" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/050707b5-2af9-4f29-9d65-1564e96fef9d"><img src="https://github.com/user-attachments/assets/050707b5-2af9-4f29-9d65-1564e96fef9d" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a dam-break chain, 3 of 3 done in 11m48s, 1m16s and 3m58s" width="100%"></a></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7d195366-8764-4788-84a6-22bf60cbb058"><img src="https://github.com/user-attachments/assets/7d195366-8764-4788-84a6-22bf60cbb058" alt="Limit-load search: a cantilever beam under rising load colored by von Mises stress, with the bisection bracket narrowing from 1800-2000 kN down to 3.125 kN over eight rounds" width="90%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/e814c6b9-f41f-4070-94cb-d1bc8ca9c51e"><img src="https://github.com/user-attachments/assets/e814c6b9-f41f-4070-94cb-d1bc8ca9c51e" alt="Dam-break solve: a collapsing water column resolved to fine free-surface structure, with the out-of-bounds water fraction falling from 1e0 to 1.36e-10 over seven rounds" width="90%"></a></p></td>
 </tr>
 </table>
 
@@ -236,11 +283,17 @@ raven web
 
 The command opens the WebUI in your browser and keeps Raven running in the background. Use `raven web --stop` to stop the background service.
 
-> **Screenshot placeholder 1:** Conversations and workspace.
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/9ecddecc-c73f-4249-97bd-58a68ef2c7c1"><img src="https://github.com/user-attachments/assets/9ecddecc-c73f-4249-97bd-58a68ef2c7c1" alt="Raven WebUI new task page" width="90%"></a>
+</p>
 
-> **Screenshot placeholder 2:** Agent collaboration and task graph.
+<p align="center"><em>New task: one composer, with skills, playbooks, knowledge and memory a click away.</em></p>
 
-> **Screenshot placeholder 3:** Memory and skill management.
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/68c6f1c7-a709-4742-9e32-1c2cbe98b500"><img src="https://github.com/user-attachments/assets/68c6f1c7-a709-4742-9e32-1c2cbe98b500" alt="Raven WebUI subagents page" width="90%"></a>
+</p>
+
+<p align="center"><em>Subagents: every connected agent in one roster, built-in and third-party alike.</em></p>
 
 ## ❯❯ EverMind Ecosystem
 

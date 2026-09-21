@@ -220,6 +220,8 @@ const UNSENT = new Set([
   'session.compress.info.config_notices', 'session.compress.info.endpoint', 'session.compress.info.update_available', 'session.compress.info.update_command', 'session.compress.info.usage.context_estimated', 'session.compress.messages', 'session.compress.summary.note', 'session.compress.summary.token_line', 'session.compress.usage',
   // session.create: 5
   'session.create.info.config_notices', 'session.create.info.endpoint', 'session.create.info.update_available', 'session.create.info.update_command', 'session.create.info.usage.context_estimated',
+  // session.list: 1 -- no offline conversation is pinned to a folder; the chip that pins one is not on this tree yet
+  'session.list.sessions[].workdir',
   // session.resume: 12
   'session.resume.info.config_notices', 'session.resume.info.endpoint', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
   // settings.everos: 1

@@ -60,7 +60,7 @@ def _dict_cmd(meta: dict, args: str) -> str:
 
 
 def _campaign(campaign: str, ledger: str | None):
-    from oncall_flow.backends import backend_from_meta
+    from oncall_flow.backends import backend_from_meta, billing_only
     from oncall_flow.ledger import Ledger
 
     cdir = _resolve_campaign_dir(campaign, ledger)
@@ -82,7 +82,8 @@ def _campaign(campaign: str, ledger: str | None):
     if not meta_path.exists():
         return f"No campaign meta under {cdir} (need meta.json)."
     meta = _json.loads(meta_path.read_text(encoding="utf-8"))
-    return backend_from_meta(meta), Ledger(ledger_path), cdir, meta
+    ledger = Ledger(ledger_path)
+    return billing_only(backend_from_meta(meta), ledger), ledger, cdir, meta
 
 
 def _case_root(backend: Any, meta: dict, led: Any, trial: str | None) -> tuple[str, str] | str:

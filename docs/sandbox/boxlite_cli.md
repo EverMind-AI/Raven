@@ -6,7 +6,7 @@ CLI for managing boxlite OCI images and VMs from the command line.
 
 ## Setup
 
-**Requirements:** Python 3.11+, [uv](https://docs.astral.sh/uv/)
+**Requirements:** Python 3.12+, [uv](https://docs.astral.sh/uv/)
 
 ```bash
 # From the repo root — install all deps including the sandbox/boxlite extra
@@ -17,7 +17,7 @@ Verify:
 
 ```bash
 uv run python -c "import boxlite; print(boxlite.__version__)"
-# → 0.8.2
+# → 0.9.5
 ```
 
 Platform requirements:

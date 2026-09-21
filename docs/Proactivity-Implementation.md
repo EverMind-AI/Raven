@@ -15,8 +15,9 @@ user-state awareness — not a user-scheduled timer. The key points:
    `nudge_inject`, `nudge_defer`, `spawn_agent`. `nudge_inject` (ride the next
    reply) and `nudge_defer` (wait until the current thread settles) are what
    make the agent aware of what the user is doing right now.
-3. The decision reads one packaged context, the `PlannerContext`. The Planner is
-   a pure function and degrades any failure to `skip`; it never raises.
+3. The decision reads one packaged context, the `PlannerContext`. The Planner
+   returns decisions without executing them. Reported LLM errors and invalid
+   tool-argument shapes become `skip`; raised exceptions are handled by the runner.
 4. One shared anti-spam gate, the `NudgePolicy`, learns its tightness from user
    feedback. Every nudge executor and task discovery passes through it.
 5. State is persisted, not rebuilt each tick: derived decision signals land in
@@ -90,9 +91,9 @@ CronService (timer loop, sleep capped so peer-process job edits are seen)
 
 Core design decisions:
 
-1. Pure-function decision layer: the Planner is `(ctx, provider, model) ->
-   Decision` with no side effects; any failure degrades to `skip` and it never
-   raises.
+1. Decision-only layer: the Planner is `(ctx, provider, model) -> Decision` and
+   does not execute the chosen action. Reported LLM errors and invalid
+   tool-argument shapes become `skip`; the runner handles raised exceptions.
 2. Structured tool call: the Planner returns one of the five actions via the
    `planner_decision` tool schema.
 3. Five actions, three nudge executors plus spawn: finer-grained than a binary
@@ -232,15 +233,17 @@ outage.
   (default 1800s / 30 minutes), and concurrently runs the DeferManager loop and,
   in the gateway, a trigger-consume loop. The runner does not depend on the wake
   scheduler — event-driven wake is the heartbeat's concern (see section 11).
-- `tick_once()` / `tick_with_context()`: a single synchronous tick, used by
-  tests and benchmark adapters.
+- `tick_once()` / `tick_with_context()`: async methods that execute a single tick
+  when awaited, without starting the continuous loop; used by tests and benchmark
+  adapters.
 
 ### Degradation
 
-Every layer is wrapped: a ContextAssembler failure becomes a `skip`; a Planner
-failure tries the deadline fallback then `skip`; an executor failure returns a
-non-delivered result and the tick continues. The runner never raises — a single
-failed tick never breaks the lifecycle.
+The runner catches ContextAssembler failures and returns `skip`. If the Planner
+raises, the runner first tries the guarded high-priority deadline fallback and
+otherwise returns `skip`. An executor failure returns a non-delivered result.
+The background tick loop logs unexpected tick exceptions and continues instead
+of terminating the service.
 
 ### TickOutcome
 
@@ -289,8 +292,9 @@ the decision.
 
 1. Build the messages: the system prompt plus the rendered context prompt.
 2. Call the provider with the `planner_decision` tool.
-3. Every failure path degrades to `skip` (provider error, no tool call, tool
-   args not a dict).
+3. An error response from the provider, no tool call, or tool args that are not a
+   dict become `skip`. Raised exceptions propagate to the runner, which handles
+   the deadline fallback or returns `skip`.
 4. Field validation and clamping: an invalid `action` becomes `skip`, an invalid
    `priority` becomes `low`, an out-of-range `proactivity_score` is clamped to
    `[0, 1]`.
@@ -353,8 +357,9 @@ if verdict.verdict == "allow":
     policy.record_fired(action, session_key, content)
 ```
 
-State is written only after a successful dispatch, so a "deny -> dispatch ->
-error -> do not charge quota" case is handled correctly.
+State is written only after a successful dispatch, so an "allow -> dispatch ->
+error -> do not charge quota" case is handled correctly. A denied action is not
+dispatched.
 
 ### Personalization and persistence
 
@@ -434,11 +439,15 @@ micro-agent for a multi-step task (a digest, a status check). `dispatch()`:
 2. passes its own NudgePolicy check, reusing the shared quota and dedup (keyed on
    the spawn task as the content hash);
 3. splits the target session into channel and chat_id;
-4. spawns the micro-agent; the result is delivered back through the
-   NudgeDispatcher to the originating channel.
+4. spawns the micro-agent and records the dispatch in the shared NudgePolicy.
+   When the task finishes, SubagentManager submits its result to the originating
+   session as a `SUBAGENT`-origin `TurnRequest`. The main agent's reply is
+   delivered through the Spine, not through NudgeDispatcher.
 
-Spawn uses its own quota line (so it does not steal the reactive-nudge quota) but
-shares the same dedup so the same spawn task does not repeat in a short window.
+Spawn shares the hourly and daily NudgePolicy quotas with nudges: dispatching
+a spawn consumes that same allowance. It also shares deduplication, so the same
+spawn task does not repeat in a short window. SubagentManager separately enforces
+its shared subagent concurrency and per-session dispatch-rate limits.
 
 ---
 
@@ -507,8 +516,11 @@ dispatched record marked neutral) so the Sentinel suppresses its own proactive
 nudge on the same topic within the dedup window, without dragging down the
 acceptance rate the Sentinel learns from (a cron is user-initiated, not the
 Sentinel's own proposal). A recurring job that fires repeatedly with no user
-response auto-decays after a strike limit, to contain a runaway "every few
-minutes forever" job.
+response is automatically disabled when `silent_fire_count` reaches
+`silent_fire_limit` (default 12). Successful fires increment this count; user
+activity for the matching channel and recipient resets it. This counts fires
+without user activity, not execution failures, and contains runaway "every few
+minutes forever" jobs.
 
 ---
 
@@ -548,9 +560,10 @@ of candidate tasks for the user to pick from. The pipeline:
   `fcntl`-locked JSON store with TTL, awaiting-confirm state, and supersede
   semantics.
 - DecisionRouter (`sentinel/executor/decision_router.py`): watches user replies,
-  matching a number / `/pick N` deterministically with an LLM classifier
-  fallback (above a confidence threshold). A match consumes the reply so it does
-  not reach the agent loop.
+  matching `/pick N` deterministically. Other replies, including bare numbers,
+  require a configured provider and model for the confidence-gated LLM
+  classifier; if either is missing, only `/pick N` selects an option. A match consumes
+  the reply so it does not reach the normal conversational LLM.
 - DecisionConsumer (`sentinel/executor/decision_consumer.py`): turns a matched
   pick into an ActionExecutor call, optionally behind a confirm step.
 - ActionExecutor (`sentinel/executor/action_executor.py`): executes a `reply`
@@ -608,7 +621,7 @@ conversation_id and prompt to a `QuestionBroker`
 notification and blocks (on a future keyed by conversation_id) until an answer
 arrives, with a fail-safe default so the loop always gets a string back.
 `clarify.request` / `clarify.respond` is the ui-tui frontend's existing
-multi-choice prompt contract (ClarifyPrompt), which the broker reuses.
+single-select question contract (ClarifyPrompt), which the broker reuses.
 
 The answer reaches the broker by two routes:
 

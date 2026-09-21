@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from typer.testing import CliRunner
@@ -791,6 +791,28 @@ def test_ticks_live_wires_headless_nudge_sink(runner, monkeypatch):
     )
     assert result.exit_code == 0, result.stdout
     stub_runner.dispatcher.set_post.assert_called_once_with(_headless_nudge_sink)
+
+
+@pytest.mark.asyncio
+async def test_live_tick_discovery_menus_use_the_headless_sink(fake_sentinel_dir, tmp_path, monkeypatch):
+    from raven.cli import sentinel_commands
+    from raven.config.raven import RavenConfig
+
+    config = RavenConfig(sentinel={"enabled": True, "task_discovery_enabled": True})
+    config.base.agents.defaults.workspace = str(tmp_path / "workspace")
+    monkeypatch.setattr(sentinel_commands, "make_provider", lambda _config: MagicMock())
+    sink = AsyncMock(wraps=sentinel_commands._headless_nudge_sink)
+    monkeypatch.setattr(sentinel_commands, "_headless_nudge_sink", sink)
+
+    tick_runner = sentinel_commands._build_tick_runner(config, workspace=None, now_fn=None, live=True)
+    assert tick_runner.task_discoverer is not None
+    assert tick_runner.task_discoverer.dispatcher is tick_runner.dispatcher
+
+    result = await tick_runner.task_discoverer.dispatcher.dispatch_options(_decision())
+    assert result.delivered is True
+    sink.assert_awaited_once()
+    message = sink.await_args.args[0]
+    assert message.source.extras["_sentinel_action"] == "discovery_menu"
 
 
 def test_ticks_dry_run_neutralizes_dispatcher_and_skips_sink(runner, monkeypatch):

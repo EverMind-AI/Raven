@@ -1,276 +1,316 @@
-# Proactivity Design
-
-> From passive notification to anticipatory collaboration: the design of
-> Raven's proactivity subsystem.
-
-This document describes the design intent — what the proactivity subsystem is
-meant to be and why it is shaped the way it is. Its companion, the
-[Proactivity Reference](proactivity.md), is the as-built document: it maps each
-piece to a module path under `raven/proactive_engine/` and the spine
-(`raven/spine/`).
-
----
-
-## 1. Three layers of proactivity
-
-A widely used framing splits agent proactivity into three layers, each built on
-the one before it:
-
-| Layer | Name | Definition |
-|:---:|---|---|
-| L1 | Reactive monitoring | An event has happened, is detected, and the agent decides whether to notify the user. |
-| L2 | Predictive / routine-based | Recurring patterns are learned from the user's history and acted on before the user asks. |
-| L3 | Anticipatory / contextual | The agent reasons over the user's current situation, infers a latent need, and acts. |
-
-A system that stops at L1 is felt as a notifier, not a collaborator. Raven's
-subsystem reaches L2 and L3 while staying conservative by default.
-
-Design principles that follow from this:
-
-1. Three-way decisions, not binary: stay silent, send a short message, or run a
-   multi-step task — not just notify-or-not.
-2. A per-user model: proactivity preferences must vary by user, not be a single
-   global setting.
-3. A feedback loop: every nudge collects a signal that tightens or loosens
-   future behavior.
-4. Low intrusion first: conservative defaults, gradual takeover; the quality of
-   the first few proactive messages decides whether the user keeps the feature.
-5. Content quality over frequency: one precise proactive message beats ten
-   generic notifications.
-
----
-
-## 2. The core idea: periodic Planner plus on-demand spawn
-
-The subsystem does not run a second agent loop and does not subscribe to an
-event stream. Instead it wakes periodically, reads a packaged context, and makes
-one structured LLM decision per tick. When a decision needs multi-step
-execution, it spawns a micro-agent through the existing `SubagentManager` rather
-than reimplementing a loop.
-
-This keeps the cost bounded (one LLM call per tick, a tail-bounded spawn) while
-still covering routine automation (L2) and multi-step anticipation (L3). The
-periodic Planner mirrors the shape of the heartbeat service
-(`raven/proactive_engine/schedulers/heartbeat/service.py`), and execution
-reuses the subagent machinery rather than a bespoke runtime.
-
-The two sources of proactivity are:
-
-- Sentinel — the LLM decides each tick whether and how to reach the user.
-- Cron — the user explicitly schedules a reminder.
-
-Both reach the agent as origin-tagged turns through the spine, and both pass the
-same `NudgePolicy` ledger so the two surfaces never double-remind the user on
-the same topic.
-
----
-
-## 3. Components
-
-### ProactivePlanner — periodic reasoner
-
-Wakes on its own interval, reads a single packaged context, and makes one LLM
-call that returns a structured decision. It is a pure function of its inputs:
-it has no side effects and never raises — any failure degrades to `skip`.
-
-Its only input is the assembled `PlannerContext`: the user's long-term memory, a
-tail of recent history, currently active sessions, learned routines, calendar
-entries, the current `NudgePolicy` state, the previous tick's decision, a recent
-fire history, selected sections of an `attention.md` state file, and a folded
-window of recent behavior. The Planner sees nothing else.
-
-### ContextAssembler — input packaging
-
-Aggregates every signal source into the `PlannerContext`, with graceful
-degradation per field (a missing source yields an empty value rather than a
-crash). This is the single place that decides what the Planner gets to see.
-
-### RoutineLearner — behavior-pattern learning
-
-Mines recurring patterns from the user's history (recency-weighted token
-frequency, no LLM required) and emits candidate routines for the Planner to
-consume. Candidates are persisted with a confirmation lifecycle: a pattern is
-proposed before it is acted on, confirmed by the user, then triggered
-automatically; it is paused on rejection and retired after long disuse.
-
-### NudgePolicy — the shared anti-spam gate
-
-Every proactive message — from any executor and from the task-discovery menu —
-must pass `NudgePolicy.check()` before it is delivered. It enforces quotas,
-quiet hours, cooldowns, content de-duplication, and per-topic limits, and it
-learns to tighten or loosen from user feedback. See section 5.
-
-### ProactiveSpawn — multi-step execution bridge
-
-When a decision is `spawn_agent`, this wraps `SubagentManager.spawn(...)` to run
-a micro-agent for a multi-step task (for example a status check or a digest),
-then routes the result back through the NudgePolicy and the dispatcher. It adds
-no new agent loop — only a thin layer for the proactive source tag, result
-formatting, and a concurrency/timeout bound on top of the subagent's own
-iteration cap.
-
-### Task discovery — anticipatory menus
-
-A daily batch reads recent memory and history, proposes a small menu of
-candidate tasks, and posts it for the user to pick from by number. A pick is
-caught before it reaches the agent and routed to an executor (reply, tool, or
-spawn), optionally behind a confirm step.
-
----
-
-## 4. Action space
-
-A Planner tick returns exactly one of five actions, validated against a tool
-schema so the Planner cannot emit a malformed decision:
-
-- `skip` — nothing worth doing this tick.
-- `nudge` — send a standalone message now.
-- `nudge_inject` — append the message to the agent's next reply in the target
-  session (the user is already in that conversation, so the information extends
-  the current thread naturally).
-- `nudge_defer` — wait until the target session's current thread settles, then
-  send (the user is busy with something else and should not be interrupted).
-- `spawn_agent` — dispatch a micro-agent for a multi-step task.
-
-`nudge_inject` and `nudge_defer` are the distinctive ones: they make the agent
-aware of what the user is doing right now, rather than only choosing send-now or
-not. Their execution paths are described in the implementation reference.
-
----
-
-## 5. Anti-spam: the NudgePolicy gate
-
-The NudgePolicy is a layered gate with a clean read/write split: `check()` is a
-pure verdict, and `record_fired()` writes state only after a successful
-delivery. The layers, applied in order, cover:
-
-- quiet hours (a static window plus a per-hour window learned from feedback);
-- per-persona do-not-disturb windows;
-- per-day and per-hour quotas;
-- per-session and per-dismissal cooldowns;
-- per-topic acceptance-rate and hard-reject cooldowns;
-- content de-duplication within a window;
-- a rolling per-topic quota stack (hour / day / week).
-
-A high-priority message can bypass some soft layers, but the hard quotas and
-cooldowns hold, and the high-priority bypass is itself withdrawn when the user
-has shown low acceptance even of high-priority messages.
-
-The hour quota is scaled by an adaptive multiplier that moves symmetrically with
-the user's recent acceptance rate: a highly engaged user can receive more, a
-disengaged user fewer. The multiplier is also surfaced to the Planner prompt as
-a soft signal so the Planner can raise its own value threshold and avoid LLM
-calls that would only be denied.
-
-The policy is personalizable: a `ProactivityPreferencesReader` lets learned user
-preferences override the static config, but only in the tightening direction (a
-user preference can widen the quiet window, never narrow it).
-
-All of this state is persisted across processes (an `fcntl`-locked atomic-rename
-JSON store), so the REPL and the gateway share one ledger and a restart does not
-lose quota or cooldown state.
-
----
-
-## 6. Delivery and turn transport: the spine
-
-There is no message bus. The spine is the sole turn transport and delivery path.
-
-- A turn is submitted as a `TurnRequest` to the per-process `Scheduler`
-  (`raven/spine/scheduler.py`), which routes it to a per-conversation serial
-  `Lane`. Each request carries an `Origin` — `USER`, `SENTINEL`, `CRON`,
-  `HEARTBEAT`, or `SUBAGENT` — that drives concurrency pooling and control
-  eligibility (`raven/spine/turn.py`).
-- A reply, or any proactive message, is delivered through the `DeliveryHub`
-  (`raven/spine/delivery.py`), which routes each deliverable to its channel's
-  outlet. A plain nudge is posted to the hub directly (not run back through a
-  turn), so the user receives it as a standalone message and the agent cannot
-  "act on" a reminder.
-- Sentinel, cron, and heartbeat all reach the agent the same way: as
-  origin-tagged turns submitted through the spine. Cron's reminder fires as a
-  `CRON`-origin turn; the heartbeat wakes as its own service.
-
-`USER`-origin turns get the full user-inbound treatment (engagement detection,
-the response-modifier chain that lets `nudge_inject` piggyback). Proactive
-system turns that should not be treated as user input, or should not have a
-nudge layered onto their own output, are gated out of those hooks by origin.
-
----
-
-## 7. Scenarios
-
-### L2 — routine automation
-
-The user has checked the weather on the last few Monday mornings. The
-RoutineLearner surfaces a candidate routine; on the next Monday-morning tick the
-Planner proposes it ("I noticed you check the weather on Monday mornings — want
-me to do it automatically?"). Once confirmed, a later Monday-morning tick emits
-`spawn_agent` to fetch and summarize the forecast and delivers a concise digest.
-
-### L3 — memory-linked reminder
-
-The user mentioned an SSL certificate expiring at the end of the month. Reading
-memory, the Planner reminds the user a week out (`nudge`, medium priority) and,
-if no action followed, again two days out at high priority.
-
-### L3 — context-aware resumption
-
-The user was debugging a Redis connection two hours ago and never replied. The
-Planner reads the active session, sees what the agent last suggested, and asks a
-contextual follow-up ("Did the Redis connection issue get sorted? If
-`systemctl start redis` did not help, I can check firewall rules or the bind
-address.") — not a context-free "are you still there?".
-
-### L3 — proactive status check
-
-The user deployed to staging and said "let it run for a bit". After a reasonable
-interval the Planner emits `spawn_agent` to run a health check and reports the
-result — the agent has already looked, rather than reminding the user to look.
-
----
-
-## 8. Cost
-
-The Planner makes a single bounded LLM call per tick (a small input, a small
-structured output). The default tick interval is 30 minutes, and the
-RoutineLearner uses no LLM. Spawned micro-agents are the only multi-step cost,
-and they are tail-bounded by the subagent iteration cap plus a per-task timeout
-and a concurrency limit. The whole subsystem is off by default
-(`sentinel.enabled=false`), so an opt-out user pays nothing.
-
-Tail-risk controls:
-
-- a concurrency cap on proactive micro-agents;
-- a per-task timeout on each;
-- the subagent's own iteration cap;
-- the NudgePolicy rate limit, which indirectly bounds spawn frequency.
-
----
-
-## 9. Risks and mitigations
-
-### Over-notification
-
-If the Planner misjudges and pushes low-value nudges, the user disables the
-feature. Mitigations: conservative defaults; the RoutineLearner proposes before
-it acts; the adaptive NudgePolicy tightens on low acceptance; the Planner prompt
-defaults to `skip`.
-
-### Planner decision quality
-
-A small model can misjudge complex context. Mitigations: the Planner output is a
-structured tool call (reliable to parse); the context is kept small to stay in
-the model's sweet spot; high-impact actions require at least medium priority; the
-Planner model is configurable for users who want a stronger one.
-
-### Spawn safety
-
-An unattended micro-agent could take a damaging action. Mitigations: proactive
-spawn is off by default; the subagent runs under workspace restriction with no
-messaging or recursive-spawn tools, the iteration cap, and an extra timeout.
-
-### History format drift
-
-The RoutineLearner depends on a timestamped history format. Mitigations: the
-history is written by the consolidator under a controlled format, the parser
-tolerates deviation, and an unparseable entry is skipped rather than fatal.
+# Proactivity Design and Implementation { #proactivity-design }
+
+For developers extending or debugging the Proactive Engine. This is the site's
+implementation reference, with the design rationale kept alongside the
+contracts it explains. For configuration, costs, and operating procedures, use
+the [Proactivity Guide](proactivity.md).
+
+Paths below are relative to `raven/proactive_engine/` unless stated otherwise.
+Configuration types live in `raven/config/raven.py`; canonical runtime terms
+live in `CONTEXT.md`.
+
+<span id="1-three-layers-of-proactivity"></span>
+<span id="2-the-core-idea-periodic-planner-plus-on-demand-spawn"></span>
+<span id="7-scenarios"></span>
+<span id="l2-routine-automation"></span>
+<span id="l3-memory-linked-reminder"></span>
+<span id="l3-context-aware-resumption"></span>
+<span id="l3-proactive-status-check"></span>
+
+## Design rationale
+
+The aim is to offer useful follow-up work without treating every observation
+as permission to interrupt or act. Three choices shape the implementation:
+
+- **Separate decision from execution.** The Planner reads packaged context and
+  returns a structured decision. Executors own delivery and task dispatch.
+  This makes decisions testable without starting background tasks.
+- **Match the interruption to the situation.** Silence, a standalone nudge,
+  a reply-appended nudge, a deferred nudge, and a background task have different
+  effects on an active conversation.
+- **Reuse runtime services.** Policy, persisted feedback, the Spine, and
+  SubagentManager provide the shared mechanisms. Sentinel does not implement a
+  second tool-running agent loop.
+
+Routine-based assistance and context-aware anticipation describe intended uses,
+not guaranteed capabilities. For example, a remembered deadline can inform a
+reminder and a recent deployment can inform a status-check proposal. Whether
+either happens depends on available context, model output, policy, and tools.
+A learned pattern alone is not a user-created Cron schedule.
+
+<span id="3-components"></span>
+
+## Components and assembly
+
+| Responsibility | Implementation |
+| --- | --- |
+| Stack construction and hooks | `raven/core/proactive_stack.py` |
+| Lifecycle, tick, and routing | `sentinel/executor/runner.py` |
+| Context assembly | `sentinel/predictor/context_assembler.py` (`PlannerContextAssembler`) |
+| Decision and validation | `sentinel/planner.py`, `sentinel/types.py` |
+| Tool schema and context rendering | `sentinel/trigger_policy/prompts.py` |
+| Limits and preferences | `sentinel/trigger_policy/` (`policy.py`, `prefs.py`) |
+| Nudge delivery, reply append, and delay | `sentinel/executor/` (`dispatcher.py`, `injector.py`, `defer_manager.py`) |
+| Proactive task dispatch | `sentinel/executor/spawn.py` |
+| Routine learning and task discovery | `sentinel/predictor/` |
+| Persistence and feedback | `sentinel/feedback/`, `sentinel/state_files.py` |
+| Derived attention state | `sentinel/attention_updater.py`, `sentinel/attention_producers/` |
+
+`build_sentinel_stack()` returns an inactive result when Sentinel is disabled.
+Otherwise it builds the shared stores, policy, Planner, executors, and runner.
+The gateway binds the dispatcher's `post` callback to its DeliveryHub after the
+hub exists; `attach_sentinel_spawn()` and
+`attach_sentinel_decision_consumer()` connect agent-dependent execution.
+
+The Planner model defaults to the main agent model. `evaluator_model` can
+override it; `evaluator_base_url` and `evaluator_api_key_env` can select a
+separate provider. If the named API-key environment variable is empty, assembly
+warns and falls back to the main provider. The system prompt is loaded through
+`raven.i18n`; the tool schema and context renderer remain in
+`trigger_policy/prompts.py`.
+
+<span id="proactiveplanner-periodic-reasoner"></span>
+<span id="contextassembler-input-packaging"></span>
+<span id="planner-decision-quality"></span>
+
+## Context and decision contracts
+
+`PlannerContext` is the Planner's input. `PlannerContextAssembler` collects:
+
+| Context | Source |
+| --- | --- |
+| `memory_md`, `history_md_recent` | Long-term memory and a recent history tail |
+| `active_sessions` | Recently active sessions with their last user and assistant messages |
+| `routines` | Deterministic history-pattern learning |
+| `calendar` | An optional caller-supplied calendar function; no built-in calendar integration is implied |
+| `nudge_policy_state`, `fire_history` | Policy counters, recent topic fires, and dismissals |
+| `last_decision` | The runner's remembered previous decision |
+| `attention_md`, `behaviors_recent` | Selected attention sections and a folded behavior window |
+
+Missing sources generally produce empty fields rather than aborting assembly.
+Memory filtering, attention-section selection, and behavior windows are
+configurable; the Planner does not independently search other data sources.
+
+`ProactivePlanner.decide()` requests a `planner_decision` tool call. It
+normalizes invalid actions to `skip`, invalid priorities to `low`, and clamps
+the score to `[0, 1]`. Nudge actions need `nudge_message`; defer additionally
+needs `defer_condition`; spawn needs `spawn_task`. Missing required payloads
+downgrade the decision to `skip`. A `topic_tag` supports per-topic policy;
+the Planner derives a fallback tag if the model omits it.
+
+Provider error responses, missing tool calls, and non-dict arguments become
+`skip`. Raised exceptions are handled by the runner, not swallowed by the
+Planner. Structured output constrains the action format; it does not establish
+that the proposed action is correct or safe.
+
+## Tick lifecycle
+
+`await tick_once()` assembles context and calls `await tick_with_context(ctx)`.
+The latter runs these steps:
+
+1. Trim feedback when due and retune the policy.
+2. Refresh derived memory state and run task discovery when due and enabled.
+3. Check the daily fire plan for a due recurring slot; if one qualifies, route
+   its prepared message without a Planner call.
+4. Apply skip-only fast paths for quiet hours or unchanged context after a
+   previous skip. A due high-priority deadline bypasses these shortcuts so it
+   can reach the Planner.
+5. Ask the Planner and route the decision. If it raises, try the guarded
+   high-priority deadline fallback when enabled; otherwise return an error skip.
+6. Remember the decision for the next tick.
+
+One-shot deadline slots normally go to the Planner so recent context can
+indicate that the user already completed the work. The outage fallback cannot
+make that judgment; it is restricted to due high-priority deadline slots and
+still uses the normal routing policy. A returned `skip` is not the same as a
+raised exception and does not invoke this fallback.
+
+`start()` / `stop()` manage the periodic loop, the defer loop, and the
+discovery-trigger consumer when wired. The trigger consumer polls a separate
+file-based store on a short cadence; it does not wait for the next Planner
+tick. The runner logs unexpected background exceptions and continues.
+`TickOutcome` exposes the decision, execution result, route, optional nudge
+identifier, and notes for diagnostics.
+
+<span id="4-action-space"></span>
+<span id="proactivespawn-multi-step-execution-bridge"></span>
+
+## Action routing
+
+| Action | Path | When work is considered dispatched |
+| --- | --- | --- |
+| `skip` | No executor | No dispatch |
+| `nudge` | Policy check, target resolution, NudgeDispatcher → `DeliveryHub.post` | After the dispatcher reports delivery |
+| `nudge_inject` | Policy check, NudgeInjector queue | At queue insertion, before the user receives a reply |
+| `nudge_defer` | Policy check, DeferManager registration | Registration is pending, not delivery |
+| `spawn_agent` | ProactiveSpawn policy check → SubagentManager | At task dispatch, not task completion |
+
+Plain nudges and discovery menus are posted directly to the DeliveryHub.
+They are finished messages, not prompts to run through the tool-enabled Agent
+Loop. This preserves menu formatting and avoids having the agent act on a
+reminder as if it were a new user request.
+
+NudgeInjector appends pending text through a response-modifier hook on an
+eligible reply. It has an expiry and a per-session FIFO cap. DeferManager waits
+for the target session's idle threshold, expires entries after a maximum wait,
+and resolves destinations at fire time. Its `defer_condition` is not evaluated
+by an LLM: settlement is time-based.
+
+ProactiveSpawn validates the task, checks the shared policy using the task text
+for deduplication, and calls SubagentManager. Completion returns through a
+`SUBAGENT`-origin turn in the originating session, not NudgeDispatcher. It adds
+neither a private quota nor a task-wide timeout.
+
+<span id="8-cost"></span>
+<span id="spawn-safety"></span>
+Cost and spawn-safety guidance now lives in the guide's
+[Costs and safety limits](proactivity.md#costs-and-safety-limits) section,
+including model calls, backend execution, and isolation limits.
+
+An unwired executor returns a degraded, non-delivered result. In particular,
+disabling inject or defer does not convert those decisions into plain nudges.
+
+<span id="nudgepolicy-the-shared-anti-spam-gate"></span>
+<span id="5-anti-spam-the-nudgepolicy-gate"></span>
+<span id="9-risks-and-mitigations"></span>
+<span id="over-notification"></span>
+
+## Policy boundaries
+
+`NudgePolicy.check()` evaluates quiet hours, learned and user-specified
+do-not-disturb windows, daily/hourly limits, session and dismissal cooldowns,
+topic feedback, content deduplication, and rolling topic quotas. High priority
+may bypass selected soft limits, not the daily cap, cooldowns, or topic limits.
+Ordinary user-specified quiet windows also follow the high-priority bypass
+setting; they are not an unconditional block.
+
+Adaptive tuning adjusts the hourly multiplier using feedback; a weekend
+factor can tighten it further. Preference overrides can only tighten the
+static policy. Policy state persists, so restarting is not a quota reset.
+
+Checking and recording are separate operations. Do not assume that every path
+charges quota at the same time, or that a persisted ledger is an atomic
+check-and-reserve transaction:
+
+- Plain nudges record a fire after reported delivery; injects record when queued;
+  proactive spawns record after dispatch. Queuing or dispatching is not proof
+  that the user has seen the result.
+- Defer registration checks policy, but the current runner does not attach a
+  callback to record the eventual fire. DeferManager directly dispatches after
+  the idle check without rechecking policy. Delayed nudges therefore do not
+  provide complete send-time quota or quiet-hours enforcement.
+- The task-discovery menu is policy-gated. A user-selected option is a separate
+  execution path, not a second pass through ProactiveSpawn for every action.
+- Cron is explicitly user-scheduled and bypasses `check()`. With a Sentinel
+  runner wired, successful fires update its shared counters and topic ledger.
+  This helps suppress overlapping Sentinel reminders; it is not a guarantee
+  of semantic deduplication across all messages.
+
+## State and feedback
+
+Default runtime state is under `~/.raven/sentinel/`, relocated with
+`RAVEN_HOME`. Filenames are defined in `sentinel/state_files.py`.
+
+| File | Role |
+| --- | --- |
+| `state.json` | Shared policy ledger, pending injects and defers, and engagement state |
+| `feedback.jsonl` | Dispatch and feedback events used for adaptive tuning |
+| `pending_decisions.json` | Discovery menus, expiry, and confirmation state |
+| `routines.json` | Learned routines and their persisted confirmation state |
+| `discover_triggers.json` | Operator-requested discovery runs consumed by the runner |
+
+`JsonStateStore` uses an `fcntl` lock and atomic rename for its JSON
+read-modify-write operations. Processes using the same state directory share
+these files; this does not imply independent quotas for every chat recipient.
+
+In the configured agent home, `user_memory/attention.md` holds derived
+sections. AttentionUpdater computes producer output outside the file lock and
+splices sections under lock, skipping unchanged output and isolating producer
+failures. Optional daily analysis shares an LLM result across several
+producers. `user_memory/behaviors.md` holds extracted behavior events. Daily
+analysis and behavior extraction are off by default.
+
+The current feedback hook handles a recent nudge's `/dismiss` reply as a
+dismissal and session cooldown. An unclassified reply is neutral, not
+automatically accepted. Discovery choices and confirmations record their own
+feedback; unattended nudges can contribute ignored signals.
+
+<span id="routinelearner-behavior-pattern-learning"></span>
+<span id="task-discovery-anticipatory-menus"></span>
+<span id="history-format-drift"></span>
+
+## Routines and task discovery
+
+RoutineLearner bins timestamped history by weekday and time slot and extracts
+keywords without an LLM. Unparseable lines are skipped, and insufficient
+history yields no candidates. Recency weighting favors current patterns.
+RoutineStore preserves confirmed state when refreshed; routine confirmation
+promotes a candidate to active, and dismissal retires it for a cooldown before
+it can be proposed again. Silence alone does not create a confirmed routine.
+
+When enabled, TaskDiscoverer refreshes candidates, optionally validates them,
+groups them for presentation, and proposes a `PendingDecision` menu.
+PendingDecisionStore maintains its expiry, supersession, and confirmation state.
+DecisionRouter matches `/pick N` deterministically. Other replies, including bare
+numbers, use a confidence-gated model classifier when a provider and model are
+configured; if either is missing, only `/pick N` selects an option. DecisionConsumer
+handles the matched reply before the normal agent turn continues.
+
+After the configured confirmation step, ActionExecutor dispatches by kind:
+
+- `reply`: submit the chosen prompt as a user-intent turn with
+  `sentinel.action_origin`, not a NudgeInjector append. Submit without waiting
+  on that same Lane inside the menu-pick hook, or the hook would deadlock.
+- `tool`: invoke the registered tool.
+- `spawn`: delegate directly to SubagentManager.
+- `routine_confirm`: promote the routine and optionally create a Cron job
+  when the payload requests it and a CronService is wired.
+
+A deterministic selection avoids the normal conversational LLM path, but
+classification, confirmation, or the selected work may still call a model.
+
+<span id="6-delivery-and-turn-transport-the-spine"></span>
+
+## Cron, Heartbeat, and the Spine
+
+CronService (`schedulers/cron/service.py`) persists jobs under file locking
+and claims due work before executing it outside the lock. Ownership follows
+**Fire-at-origin**: the runner for the job's creation-time channel/recipient
+binding executes and delivers it. There is no trigger-time forwarding or
+broadcast. `raven/core/cron_stack.py` submits the work as a `CRON` turn in
+`cron:<job_id>`.
+
+Successful recurring fires increase `silent_fire_count`; matching user
+activity resets it. Reaching `silent_fire_limit` (default `12`) disables the
+job. This counts fires without user activity, not failures. Cron's feedback
+record is marked neutral so it does not lower Sentinel's learned acceptance
+rate. Fixed-delay `every` schedules compute their next run from completion,
+not from the previous due time.
+
+HeartbeatService (`schedulers/heartbeat/service.py`) checks `HEARTBEAT.md`
+with a structured model decision and runs agent work only on a `run` result.
+`wake.py` coalesces early wake requests, rate-limits them, and defers them
+while user work is busy. Wake drives Heartbeat, not Sentinel's tick loop.
+
+The Spine's Scheduler routes turns into per-conversation Lanes and origin
+concurrency pools; DeliveryHub routes output to outlets. User-inbound and
+response-modifier hooks distinguish genuine user turns from system-origin
+work. A user-confirmed discovery action has its own marker to avoid counting
+the selection twice.
+
+General turn controls are not Sentinel features: `BusyPolicy.INJECT` concerns
+mid-turn user input, while `ask_user` and QuestionBroker handle structured
+questions. See [Architecture](architecture.md); implementation entry points
+are `raven/spine/scheduler.py`, `raven/agent/loop/main.py`, and
+`raven/rpc/question_broker.py`.
+
+## Verification entry points
+
+Use `tests/test_sentinel_planner.py` and `tests/test_sentinel_fast_path.py`
+for decision behavior; `tests/test_sentinel_runner.py`,
+`tests/test_nudge_policy.py`, and `tests/test_proactive_spawn.py` for routing
+and policy. `tests/test_core_sentinel_stack.py` covers assembly,
+`tests/test_core_cron_stack_ledger.py` covers Cron's ledger integration, and
+`tests/test_cli_sentinel_commands.py` covers operator commands. Run tests
+through `uv run pytest`; use injected clocks and fake providers rather than
+live notifications to check these contracts.

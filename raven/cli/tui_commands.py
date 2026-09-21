@@ -27,7 +27,7 @@ from typing import Optional, Tuple
 
 import typer
 
-from raven.cli._helpers import report_dropped_memory_writes
+from raven.cli._helpers import report_memory_write_outcome
 from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file
 from raven.i18n import t
 from raven.rpc.cron_events import build_cron_callback_spine, fanout_cron_missed
@@ -559,25 +559,14 @@ async def _run_rpc_server_until_done(
                 agent_loop.cron_service.stop()
             except Exception:
                 pass
-        if turn_teardown is not None:
-            try:
-                await turn_teardown()
-            except Exception:
-                pass
-        # Contributed services stop before everything else -- producers
-        # before drains, the order dispose follows.
-        if agent_loop is not None:
-            try:
-                await agent_loop.stop_plugin_services()
-            except Exception:
-                from loguru import logger as _logger
-
-                _logger.exception("tui: plugin services stop failed; continuing shutdown")
-        # Sub-agents go first, and before the memory drain in particular: a run
-        # still going is a run that can hand the backend another write, so
-        # draining while they live is draining into a queue that is still being
-        # filled. Stopping them costs a signal and a bounded wait, where the
-        # drain costs its whole budget.
+        # Sub-agents go first: before the spine seals, and before the memory
+        # drain in particular. Sealing is the first thing the turn teardown
+        # does, and a run that finishes after it announces its result into a
+        # submit that refuses new turns -- the only route that result has back
+        # to its conversation. And a run still going can hand the backend
+        # another write, so draining while they live is draining into a queue
+        # that is still being filled. Stopping them costs a signal and a
+        # bounded wait, where the drain costs its whole budget.
         try:
             from raven.acp_client.client import begin_drain
 
@@ -588,6 +577,20 @@ async def _run_rpc_server_until_done(
             from loguru import logger as _logger
 
             _logger.exception("tui: cancelling in-flight sub-agents failed; continuing shutdown")
+        if turn_teardown is not None:
+            try:
+                await turn_teardown()
+            except Exception:
+                pass
+        # Contributed services stop before the stores drain -- producers
+        # before drains, the order dispose follows.
+        if agent_loop is not None:
+            try:
+                await agent_loop.stop_plugin_services()
+            except Exception:
+                from loguru import logger as _logger
+
+                _logger.exception("tui: plugin services stop failed; continuing shutdown")
         # ACP agents are launched with start_new_session, so they do not get the
         # terminal's signals and outlive this process unless the pool is closed.
         try:
@@ -616,8 +619,8 @@ async def _run_rpc_server_until_done(
         # Release the embedded index lock so the next process can start.
         if agent_loop is not None and agent_loop.backend is not None:
             try:
-                dropped = await agent_loop.drain_backend_stores()
-                report_dropped_memory_writes(dropped)
+                outcome = await agent_loop.drain_backend_stores()
+                report_memory_write_outcome(outcome)
                 await agent_loop.backend.stop()
             except Exception:
                 from loguru import logger as _logger
