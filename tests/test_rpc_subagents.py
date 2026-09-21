@@ -2296,6 +2296,8 @@ async def test_test_can_target_a_discovered_product(
     assert row["last_test_ok"] is True
     with pytest.raises(SubagentNotFoundError):
         await subagents_test({"name": "Coder", "source": "vendored"})
+
+
 async def test_a_row_carries_the_credential_verdict_its_snapshot_measured(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

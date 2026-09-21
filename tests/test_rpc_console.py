@@ -2151,6 +2151,8 @@ async def test_deck_templates_pages_renders_every_page_once_and_refuses_a_strang
 
     with pytest.raises(ConfigValidationError):
         await console_module.deck_templates_pages({"name": "nope"}, agent_loop_factory=_loop_factory(None))
+
+
 # ---------------------------------------------------------------------------
 # fs.dirs -- the folder picker's directory walk
 # ---------------------------------------------------------------------------
