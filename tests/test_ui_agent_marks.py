@@ -156,5 +156,5 @@ def test_the_own_mark_carries_its_own_plate() -> None:
     shapes = _SHAPE.findall(svg)
     plate = [el for el in shapes if el.startswith("<rect") and 'fill="#FFFFFF"' in el]
     assert plate, "the own mark carries neither a plate nor a prefers-color-scheme rule"
-    assert "fill=\"none\"" in root, "a root fill would paint outside the plate"
+    assert 'fill="none"' in root, "a root fill would paint outside the plate"
     assert _tone_of(_own_mark()) is None
