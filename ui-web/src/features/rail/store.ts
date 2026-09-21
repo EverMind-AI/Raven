@@ -42,7 +42,12 @@ export function reconcileRows(
   const oldById = new Map(previous.map(row => [row.id, row]))
   for (const row of incoming) {
     const old = oldById.get(row.id)
-    if (old?.status) row.status = old.status
+    /* A `run` on an old row is the server's to clear, and the incoming row
+       already carries its answer: this page subscribes to the conversation it
+       is showing, so no `message.complete` is coming for any other row and a
+       badge kept here would never come off. `done`/`ask`/`err` are the reader's
+       own unread marks, which no answer to `session.list` carries. */
+    if (old?.status && old.status !== 'run') row.status = old.status
   }
   const current = currentId ? oldById.get(currentId) : undefined
   const currentListed = !!currentId && incoming.some(row => row.id === currentId)

@@ -71,6 +71,7 @@ interface ListedSession {
   started_at?: number
   updated_at?: number
   pinned?: boolean
+  running?: boolean
   workdir?: string | null
 }
 
@@ -98,6 +99,10 @@ export function rowFrom(it: ListedSession): SessRow {
       : t('gui.sess.n_messages', { n: it.message_count }),
     when, at, run: null, live: true, from: cron ? 'cron' : undefined,
     pin: !!it.pinned, persisted: true,
+    /* The server's answer to "is this one answering right now", which is the
+       only source a page that has just loaded has: the turn's own frames went
+       to a socket this page did not have. */
+    status: it.running ? 'run' : null,
     workdir: it.workdir || null,
   }
 }

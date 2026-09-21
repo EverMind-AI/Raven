@@ -308,6 +308,14 @@ export async function switchTo(s: SessRow): Promise<void> {
        ring has nowhere to say an estimate, so the writer takes two numbers.
        See state/ctxChip.ts. */
     setCtx(u.context_used, u.context_max)
+    /* The turn this conversation is in the middle of, which nothing else on a
+       page that has just loaded can know: its frames went to a socket this page
+       did not have. Put the machine back into the state `message.start` would
+       have left it in, so the stop button is there, a send queues instead of
+       being refused as -32003, and the deltas still to come open a step of
+       their own. What already streamed is not recoverable and is not pretended
+       at -- the reader picks the answer up from where it has got to. */
+    if (r.info && r.info.running) { rt.dispatch({ type: 'stream', cancellable: true }); goState() }
     /* Every graph this conversation started, oldest first, as the gateway
        stamped them onto the rows that started them. This is the only source
        that survives a run the reader never saw start: no live event reached

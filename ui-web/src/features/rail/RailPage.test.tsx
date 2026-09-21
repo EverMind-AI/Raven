@@ -143,6 +143,34 @@ describe('rail island', () => {
     expect(next?.pin).toBe(false)
   })
 
+  it('lets the server end a run badge while keeping the reader\'s own marks', () => {
+    /* The page subscribes to the conversation it is showing, so no
+       message.complete is coming for any other row: a `run` kept against the
+       server's answer would never come off. */
+    const cleared = store.reconcileRows(
+      [row({ id: 'a', persisted: true, status: 'run' })],
+      [row({ id: 'a', persisted: true, status: null })],
+      null
+    ).rows[0]
+    expect(cleared?.status).toBeNull()
+
+    const stillRunning = store.reconcileRows(
+      [row({ id: 'a', persisted: true, status: 'run' })],
+      [row({ id: 'a', persisted: true, status: 'run' })],
+      null
+    ).rows[0]
+    expect(stillRunning?.status).toBe('run')
+
+    for (const mark of ['done', 'ask'] as const) {
+      const kept = store.reconcileRows(
+        [row({ id: 'a', persisted: true, status: mark })],
+        [row({ id: 'a', persisted: true, status: null })],
+        null
+      ).rows[0]
+      expect(kept?.status).toBe(mark)
+    }
+  })
+
   it('describes the complete state transition after deleting a session', () => {
     const a = row({ id: 'a' })
     const b = row({ id: 'b' })

@@ -11,7 +11,11 @@
 import { describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart } from '../../../scripts/module-harness.mjs'
+/* The real reducer, so a case can say "busy and stoppable" rather than naming
+   the event that happens to produce it today. */
+import { reduce } from '../../features/composer/turn'
 
+import type { TurnEvent, TurnSnapshot } from '../../features/composer/turn'
 import type { SessRow } from '../../features/rail/types'
 
 type Registry = typeof import('./registry')
@@ -76,14 +80,15 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
       },
       'src/features/composer/mount': {
         drawMeter: () => {},
-        goPaint: () => {},
+        goPaint: () => calls.push(['goPaint']),
         loadDraft: (id: string) => calls.push(['loadDraft', id]),
         parkDraft: () => {},
         queueClear: () => {},
         queueRestore: () => {},
         queueShift: () => undefined,
         turn: {
-          dispatch: () => {}, busy: () => false, snapshot: () => ({}),
+          dispatch: (event: TurnEvent) => calls.push(['turnDispatch', event]),
+          busy: () => false, snapshot: () => ({}),
           restore: () => {}, reduce: (phase: unknown) => phase,
         },
       },
@@ -165,7 +170,14 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
     sess: (id: string) => (rows || []).find((r) => r.id === id),
   }
   const asked = (method: string) => calls.filter((c) => c[0] === 'rpc' && c[1] === method).map((c) => c[2])
+  const IDLE: TurnSnapshot = { phase: 'idle', cancellable: false, resume: null }
   return {
+    /* Where the island's turn machine has been driven to, read off the events
+       the switch dispatched rather than off the machine itself: the fake above
+       is what stands in for it here. */
+    turnState: () => calls
+      .filter((c) => c[0] === 'turnDispatch')
+      .reduce((state, c) => reduce(state, c[1] as TurnEvent), IDLE),
     subscribe: registry.subscribe,
     startDraft: registry.switchToDraft,
     openLiveSession: (row: Row) => registry.switchTo(row as SessRow),
@@ -232,6 +244,28 @@ describe('the live session switch', () => {
     expect(h.title()).toBe('Alpha')
     expect(h.env.live.subId).toBe('sub:a')
     expect(h.calls).toContainEqual(['viewResume', 'a'])
+  })
+
+  it('puts the stop button back on a conversation whose turn is still running', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [{ text: 'a' }], info: { running: true } })
+
+    /* Everything a live turn owes the reader hangs off this: the stop button,
+       a send that queues instead of being refused, and the deltas still to
+       come opening a step of their own. */
+    expect(h.turnState()).toMatchObject({ phase: 'streaming', cancellable: true })
+    expect(h.calls).toContainEqual(['goPaint'])
+  })
+
+  it('leaves a conversation that is not answering idle', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [{ text: 'a' }], info: { running: false } })
+
+    expect(h.turnState().phase).toBe('idle')
   })
 
   it('drops the answer to an open the reader has already left', async () => {
