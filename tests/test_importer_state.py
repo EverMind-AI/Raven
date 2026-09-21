@@ -37,6 +37,36 @@ class TestImportState:
         state.mark_submitted("hermes", "k3")
         assert state.is_submitted("hermes", "k3")
 
+    def test_set_total_records_the_runs_own_request(self, state_path: Path) -> None:
+        """A client that finds a run stopped short (the gateway restarted under
+        it) starts the same one again from what the file says was asked."""
+        ImportState(path=state_path).set_total(3, keys=["b", "a"], tier="full", platforms=["hermes", "claude_code"])
+
+        meta = ImportState(path=state_path).get_progress()["meta"]
+
+        assert meta == {"total": 3, "keys": ["a", "b"], "tier": "full", "platforms": ["claude_code", "hermes"]}
+
+    def test_set_total_without_a_request_forgets_the_previous_one(self, state: ImportState) -> None:
+        state.set_total(3, keys=["a"], tier="full", platforms=["hermes"])
+        state.set_phases("done")
+
+        state.set_total(5)
+
+        assert state.get_progress()["meta"] == {"total": 5}
+
+    def test_set_phases_records_the_verdict_and_survives_a_reload(self, state_path: Path) -> None:
+        state = ImportState(path=state_path)
+        state.set_total(1, keys=["claude_code:a"], tier="memory_files", platforms=["claude_code"])
+        state.set_phases("pending")
+        assert ImportState(path=state_path).get_progress()["meta"]["phases"] == {"status": "pending", "errors": []}
+
+        state.set_phases("failed", ["profile: bad byte"])
+
+        assert ImportState(path=state_path).get_progress()["meta"]["phases"] == {
+            "status": "failed",
+            "errors": ["profile: bad byte"],
+        }
+
     def test_persistence_across_instances(self, state_path: Path) -> None:
         s1 = ImportState(path=state_path)
         s1.mark_submitted("openclaw", "k4")

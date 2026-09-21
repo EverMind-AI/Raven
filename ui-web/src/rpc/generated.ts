@@ -4370,6 +4370,7 @@ export interface ImportScanResult {
     memory_files: number;
     conversations: number;
     estimated_size: number;
+    skills: number;
   }[];
 }
 export interface ImportRunParams {
@@ -4394,6 +4395,17 @@ export interface ImportStatusResult {
       failed: number;
     };
   };
+  phase?: {
+    kind: 'profile' | 'skills';
+    current: number;
+    total: number;
+  } | null;
+  phases?: {
+    status: 'pending' | 'done' | 'failed' | 'cancelled';
+    errors: string[];
+  } | null;
+  tier?: 'memory_files' | 'full' | null;
+  platforms?: string[];
 }
 export interface ImportStopParams {}
 export interface ImportStopResult {

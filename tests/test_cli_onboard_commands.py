@@ -3699,7 +3699,7 @@ def test_the_wizard_asks_before_copying_a_skill_tree(
 
     installer.assert_not_awaited()
     out = " ".join(capsys.readouterr().out.split())
-    assert "About to import 12 Hermes skills" in out, out
+    assert "About to import 12 skills" in out, out
     assert "12 installed" not in out
 
 

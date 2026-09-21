@@ -8552,7 +8552,8 @@
                   "scannable",
                   "memory_files",
                   "conversations",
-                  "estimated_size"
+                  "estimated_size",
+                  "skills"
                 ],
                 "properties": {
                   "platform": {
@@ -8568,6 +8569,9 @@
                     "type": "integer"
                   },
                   "estimated_size": {
+                    "type": "integer"
+                  },
+                  "skills": {
                     "type": "integer"
                   }
                 }
@@ -8685,6 +8689,69 @@
                     "type": "integer"
                   }
                 }
+              }
+            },
+            "phase": {
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "current",
+                "total"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "profile",
+                    "skills"
+                  ]
+                },
+                "current": {
+                  "type": "integer"
+                },
+                "total": {
+                  "type": "integer"
+                }
+              }
+            },
+            "phases": {
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "errors"
+              ],
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "done",
+                    "failed",
+                    "cancelled"
+                  ]
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "tier": {
+              "type": ["string", "null"],
+              "enum": [
+                "memory_files",
+                "full",
+                null
+              ]
+            },
+            "platforms": {
+              "type": "array",
+              "items": {
+                "type": "string"
               }
             }
           }

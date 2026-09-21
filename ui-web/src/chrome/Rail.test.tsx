@@ -81,7 +81,7 @@ describe('the rail', () => {
       'railBtn', 'findBtn',
       'newBtn', 'playbooksBtn', 'agentsBtn', 'moreFly', 'moreBtn',
       'findBox', 'sfind', 'sclr', 'list',
-      'upnote', 'meBtn', 'railGrip',
+      'upnote', 'importRow', 'meBtn', 'railGrip',
     ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }

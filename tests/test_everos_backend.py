@@ -1646,6 +1646,32 @@ class TestWriteBudgetFollowsTheCaller:
         assert seen == [mod._store_budget(100)]
         assert seen[0] > mod._STORE_TIMEOUT_S * 2
 
+    async def test_a_bulk_write_gets_the_extraction_budget_however_small(self, monkeypatch) -> None:
+        """The importer marks its appends ``bulk``: nothing waits on them, and
+        EverOS extracts on the add itself, so a per-message estimate is the
+        wrong shape -- a fifty-message batch measured 24s against a real
+        service and a hundred ran past six minutes. Only the extraction budget
+        holds that, and it must not depend on the slice being large.
+        """
+        from raven_everos import backend as mod
+
+        seen: list[float] = []
+
+        async def _spy(coro, timeout=None):
+            seen.append(timeout)
+            return await coro
+
+        monkeypatch.setattr(mod.asyncio, "wait_for", _spy)
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        b = self._backend(adapter)
+
+        await b.store("s", [{"role": "user", "content": "x"}], metadata={"is_final": False, "bulk": True})
+
+        assert seen == [mod._MEMORIZE_TIMEOUT_S]
+        adapter.memorize.assert_awaited_once()
+        assert adapter.memorize.await_args.kwargs["is_final"] is False
+
     async def test_a_final_flush_gets_the_extraction_budget(self, monkeypatch) -> None:
         from raven_everos import backend as mod
 

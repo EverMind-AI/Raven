@@ -2104,12 +2104,60 @@
       "zh": "导入 Agent 数据"
     },
     "gui.onb.sync_counts": {
-      "en": "{files} memory files, {convs} conversations",
-      "zh": "{files} 个记忆文件 · {convs} 段对话"
+      "en": "{files} memory files",
+      "zh": "{files} 个记忆文件"
     },
     "gui.onb.sync_unsupported": {
       "en": "Not supported",
       "zh": "暂不支持"
+    },
+    "gui.onb.sync_skills": {
+      "en": "{n} skills",
+      "zh": "{n} 个技能"
+    },
+    "gui.importSync.scan": {
+      "en": "Looking for data to sync",
+      "zh": "正在查找可同步的数据"
+    },
+    "gui.importSync.run": {
+      "en": "Syncing data",
+      "zh": "正在同步数据"
+    },
+    "gui.importSync.paused": {
+      "en": "Sync paused",
+      "zh": "同步已暂停"
+    },
+    "gui.importSync.done": {
+      "en": "Memory import finished",
+      "zh": "记忆导入完成"
+    },
+    "gui.importSync.failed_n": {
+      "en": "{n} did not make it",
+      "zh": "{n} 条没成"
+    },
+    "gui.importSync.profile": {
+      "en": "Building your profile",
+      "zh": "正在整理画像"
+    },
+    "gui.importSync.skills": {
+      "en": "Installing skills",
+      "zh": "正在装技能"
+    },
+    "gui.importSync.stop": {
+      "en": "Stop sync",
+      "zh": "停止同步"
+    },
+    "gui.importSync.dismiss": {
+      "en": "Dismiss",
+      "zh": "关闭"
+    },
+    "gui.importSync.resume": {
+      "en": "Resume import",
+      "zh": "继续导入"
+    },
+    "gui.importSync.retry": {
+      "en": "Retry what failed",
+      "zh": "重试失败项"
     },
     "gui.turn_died": {
       "en": "Turn failed - {e}",

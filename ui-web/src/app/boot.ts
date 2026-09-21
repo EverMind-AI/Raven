@@ -16,6 +16,7 @@
 import { load as paneLoad } from '../chrome/behaviour/panes'
 import { goPaint } from '../features/composer/mount'
 import { warm as warmCron } from '../features/cron/store'
+import { refresh as refreshImportSync } from '../features/importSync/store'
 import { loadExt } from '../features/installed/source'
 import { setupState } from '../features/model/source'
 import { open as openOnboard } from '../features/onboard/store'
@@ -162,6 +163,11 @@ async function sequence(): Promise<void> {
        restored never changes session, so the chip would stay hidden on the one
        screen where the reader is about to start a conversation. */
     loadTier()
+    /* The import row's first read. Here rather than with the seam installers:
+       those run before the socket opens, and a read there is refused as "not
+       connected" -- which left a run the gateway lost to a restart, still in
+       the importer's file, off the rail until the wizard next closed. */
+    void refreshImportSync()
     /* Refresh the rail badges from real data right away -- until these resolve
        the badges stay suppressed (data-counts="pending") rather than showing
        the demo mock's phantom counts. */
