@@ -107,10 +107,15 @@ describe('the tasks list', () => {
     expect(document.querySelector('.sarow.task .tkerr')?.textContent).toBe('error')
   })
 
-  it('shows the playbook name only when the row carries one', async () => {
+  /* The row is the prototype's: dot, name, second line, error tag. Which
+     playbook dispatched a run is not a fact the list needs -- a slug beside
+     the name reads as a node id, and the row is not the place to explain
+     it. */
+  it('draws a playbook run like any other row, with no source chip beside the name', async () => {
     rows = [task({ id: 'a', kind: 'dag', status: 'completed', playbook: 'nightly-checks' })]
     await draw()
-    expect(document.querySelector('.tksrc')?.textContent).toBe('nightly-checks')
+    expect(document.querySelector('.sarow.task .nm')?.textContent).toBe('Cross-check quotes')
+    expect(document.querySelector('.sarow.task')?.textContent).not.toContain('nightly-checks')
   })
 
   it('counts products across every node, not per task', async () => {

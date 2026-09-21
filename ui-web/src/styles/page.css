@@ -6387,10 +6387,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .sarow.task[data-st="ok"] .dot { background: var(--faint); box-shadow: none; animation: none; }
 .tline { display: flex; align-items: baseline; gap: 8px; }
 .tline .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Which way this task was started. Quiet and monospaced: it is a category, not
-   a name, and it must not compete with the task's own line. */
-.tsrc { flex: none; font-family: var(--mono); font-size: 10px; color: var(--faint);
-  background: var(--surface); border-radius: 5px; padding: 2px 6px; white-space: nowrap; }
 /* A failed run says so in the one line it has. Colour rather than a word alone,
    because the second line is what the eye lands on when scanning a group. */
 .sarow.task .st.fail { color: var(--clay); }
