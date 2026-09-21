@@ -51,6 +51,39 @@ from raven.permissions.turn import current_tool_call_id, current_turn
 from raven.tracing import trace
 
 
+#: What one evidence value may carry to a prompt. A person reads a prompt; past
+#: a few screens nothing more is read, and the frame is built, serialised and
+#: drawn on the event loop. The filesystem tools cap what they read off disk,
+#: but a brand-new file's whole text, an MCP call's arguments and the fallback's
+#: raw params reach here uncapped, and an approval now waits a day rather than
+#: half a minute -- so the ceiling belongs where every tool's account passes,
+#: not in each tool that remembers to have one.
+_EVIDENCE_MAX_CHARS = 16 * 1024
+
+
+def _clamped(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Cut every oversized string in one tool's account down to what is read.
+
+    Marks what it cut rather than dropping it silently: a prompt showing half a
+    diff has to say so, or the person answers about a change they cannot see.
+    """
+    out: dict[str, Any] = {}
+    for key, value in evidence.items():
+        if isinstance(value, str) and len(value) > _EVIDENCE_MAX_CHARS:
+            out[key] = value[:_EVIDENCE_MAX_CHARS]
+            out["truncated"] = True
+        elif isinstance(value, dict | list | tuple):
+            text = repr(value)
+            if len(text) > _EVIDENCE_MAX_CHARS:
+                out[key] = text[:_EVIDENCE_MAX_CHARS]
+                out["truncated"] = True
+            else:
+                out[key] = value
+        else:
+            out[key] = value
+    return out
+
+
 class PermissionGate:
     """Decide about one tool call before dispatch."""
 
@@ -321,8 +354,8 @@ class PermissionGate:
             # The arguments are the evidence now, and a layout keyed to the
             # kind would draw them as blanks -- a file write with no path -- so
             # the kind follows them.
-            return "unknown", {"input": params}
-        return kind, evidence
+            return "unknown", _clamped({"input": params})
+        return kind, _clamped(evidence)
 
     @staticmethod
     def _annotate(attributes: dict) -> None:

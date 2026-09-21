@@ -301,9 +301,10 @@ class ApprovalBroker:
         """The rule this answer put on disk, or None when it put none there.
 
         Waits for the gate's word, because the answer reaches the client first.
-        Reads the receipt once: a second undo of the same grant finds nothing,
-        which is also what stops an undo from reaching a rule some later prompt
-        wrote under the same text.
+        The receipt is left in place: whether it has been spent is the caller's
+        to say, once it knows whether the removal happened, through
+        :meth:`forget_grant`. A read that comes back None has spent it already
+        -- there is nothing to retry and nothing more to learn.
         """
         grant = self._grants.get(approval_id)
         if grant is None:
@@ -312,14 +313,27 @@ class ApprovalBroker:
             await asyncio.wait_for(grant.reported.wait(), timeout_s)
         except TimeoutError:
             logger.warning("approval_broker: no grant receipt for {} after {}s", approval_id, timeout_s)
-            return None
-        finally:
-            # Dropped on the timeout too, so a gate that reports late finds no
-            # slot and the undo stays refused rather than removing a rule long
-            # after the reader asked. The refusal names the config, which is
-            # where they can still delete it by hand.
+            # Dropped here, so a gate that reports late finds no slot and the
+            # undo stays refused rather than removing a rule long after the
+            # reader asked. The refusal names the rule, which is how they can
+            # still delete it by hand.
             self._grants.pop(approval_id, None)
-        return grant.pattern if grant.written else None
+            return None
+        if not grant.written:
+            self._grants.pop(approval_id, None)
+            return None
+        return grant.pattern
+
+    def forget_grant(self, approval_id: str) -> None:
+        """Spend the receipt, once an undo has done what it was going to do.
+
+        Kept out of :meth:`written_pattern` so that a removal which failed on
+        the way to disk can be tried again: the rule is still there, and the
+        only record of whose it is lives here. Spending it is what stops a
+        second undo from reaching a rule some later prompt wrote under the same
+        text, so it has to happen the moment the first one succeeds.
+        """
+        self._grants.pop(approval_id, None)
 
     def pending(self, conversation_id: str | None = None) -> list[dict[str, Any]]:
         """The requests still waiting, as their ``approval.request`` params were sent.

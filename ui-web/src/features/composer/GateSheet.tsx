@@ -106,13 +106,17 @@ export interface LandedProps {
   readonly onUndo?: () => void
   /** Sends the sentence typed after a refusal. */
   readonly onNote?: (text: string) => void
+  /** Called on every keystroke in the note field, so the sheet's own clock is
+      put back: a reader still typing has not finished, and taking the field
+      away under them loses the sentence with it. */
+  readonly onTyping?: () => void
 }
 
 /* What the sheet becomes once answered. The note field is uncontrolled and
    listened to natively, for the reasons ClarifySheet gives: a component owning
    the value re-renders a field the reader is typing into, and the keydown has
    to stop at the input so the page's shortcuts do not read what is typed. */
-export function LandedSheet({ words, onUndo, onNote }: LandedProps): JSX.Element {
+export function LandedSheet({ words, onUndo, onNote, onTyping }: LandedProps): JSX.Element {
   const field = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
@@ -120,12 +124,13 @@ export function LandedSheet({ words, onUndo, onNote }: LandedProps): JSX.Element
     if (!el || !onNote) return undefined
     const onKeyDown = (e: KeyboardEvent): void => {
       e.stopPropagation()
+      onTyping?.()
       if (composing(e)) return
       if (e.key === 'Enter' && el.value.trim()) onNote(el.value.trim())
     }
     el.addEventListener('keydown', onKeyDown)
     return () => el.removeEventListener('keydown', onKeyDown)
-  }, [onNote])
+  }, [onNote, onTyping])
 
   return (
     <div className="cp-land" role="status">

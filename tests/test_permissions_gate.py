@@ -1356,6 +1356,35 @@ async def test_a_view_that_fails_or_is_missing_falls_back_to_the_arguments():
     ]
 
 
+class _Verbose:
+    """A tool whose account of itself is far longer than anyone reads."""
+
+    approval_kind = "mcp.call"
+
+    def approval_evidence(self, params):
+        return {"server": "notion", "tool": "create", "input": params, "diff": "x" * 200_000}
+
+
+@pytest.mark.asyncio
+async def test_a_tools_account_of_itself_is_cut_to_what_a_person_reads():
+    """The prompt is read by a person and drawn on the event loop, so one tool's
+    evidence cannot be unbounded. The filesystem tools cap what they read off
+    disk; a new file's whole text, an MCP call's arguments and the fallback's
+    raw params do not, so the ceiling sits where every account passes. What was
+    cut is marked, or the prompt would show half a change and say nothing."""
+    gate = gate_for(PermissionsConfig())
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
+    bind(responder)
+
+    await gate.enforce("notion_create", {"body": "y" * 100_000}, tool=_Verbose())
+
+    evidence = responder.calls[0]["evidence"]
+    assert evidence["truncated"] is True
+    assert len(evidence["diff"]) == 16 * 1024
+    assert len(evidence["input"]) == 16 * 1024, "a nested value counts too, or the cap is one key deep"
+    assert evidence["server"] == "notion", "what fits is left alone"
+
+
 class ReportingResponder(Responder):
     """A transport that offers an undo, so the gate owes it a word on the write."""
 

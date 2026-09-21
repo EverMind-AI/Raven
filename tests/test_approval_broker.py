@@ -617,7 +617,12 @@ async def test_only_a_persisted_grant_leaves_a_receipt_to_undo() -> None:
         assert await broker.written_pattern(params["approval_id"], timeout_s=5) is None, choice
 
 
-async def test_a_receipt_is_read_once() -> None:
+async def test_a_receipt_is_spent_by_the_undo_that_succeeded_not_by_reading_it() -> None:
+    """Reading the receipt tells the undo what to remove; spending it says the
+    removal happened. Keeping the two apart is what lets an undo that failed on
+    the way to disk be pressed again -- the rule is still there, and this is the
+    only record of whose it is. Spending it is still what stops a second undo
+    from reaching a rule some later prompt wrote under the same text."""
     frames: list[dict] = []
 
     async def send(frame: dict) -> None:
@@ -639,7 +644,11 @@ async def test_a_receipt_is_read_once() -> None:
     await waiting
 
     broker.record_grant(params["approval_id"], "git push *", True)
+    # Read twice: an undo whose write failed comes back and finds the same rule.
     assert await broker.written_pattern(params["approval_id"]) == "git push *"
+    assert await broker.written_pattern(params["approval_id"]) == "git push *"
+
+    broker.forget_grant(params["approval_id"])
     assert await broker.written_pattern(params["approval_id"], timeout_s=0.02) is None
     # A report for a grant nobody is holding is dropped rather than kept.
     broker.record_grant(params["approval_id"], "git push *", True)

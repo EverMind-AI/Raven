@@ -89,10 +89,16 @@ async def approval_revoke(
     if not pattern:
         return {"ok": False}
     try:
-        return {"ok": remove_exec_pattern(pattern)}
+        removed = remove_exec_pattern(pattern)
     except Exception:  # noqa: BLE001 - the config file is the user's; a failed write is reported, not raised
+        # The receipt is left unspent on purpose: the rule is still on disk and
+        # this is the only record of whose it is, so pressing undo again is
+        # worth something. A disk that is full or read-only now will not be in a
+        # minute.
         logger.exception("approval: could not remove allow rule {!r}", pattern)
         return {"ok": False}
+    approval_broker.forget_grant(approval_id)
+    return {"ok": removed}
 
 
 async def approval_pending(

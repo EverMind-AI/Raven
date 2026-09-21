@@ -415,6 +415,32 @@ describe('the permission approval sheet', () => {
     expect(gate.querySelector('.opt')).toBeTruthy()
   })
 
+  /* The landed sheet after a refusal carries a field. A reader typing into it
+     for longer than the linger would have watched it vanish mid-sentence, with
+     nothing sent and the words gone. */
+  it('keeps the note field up while it is still being typed into', () => {
+    vi.useFakeTimers()
+    try {
+      const said: string[] = []
+      openApproval(base, handlers({ onNote: (text) => said.push(text) }))
+      opts()[0]!.click()
+
+      const field = () => document.querySelector<HTMLInputElement>('.cp-note')
+      expect(field()).toBeTruthy()
+
+      vi.advanceTimersByTime(10_000)
+      field()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }))
+      vi.advanceTimersByTime(10_000)
+      expect(field()).toBeTruthy()
+
+      field()!.value = 'it deletes the wrong file'
+      field()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      expect(said).toEqual(['it deletes the wrong file'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('lays out a write as its path and diff, an MCP call as its tool and input, the rest as arguments', () => {
     const diff = '--- a\n+++ b\n@@ -1 +1 @@\n-x = 1\n+x = 2'
     openApproval(fresh({ ...base, kind: 'file.write', family: '', evidence: { path: '/w/a.py', created: false, diff } }), handlers())

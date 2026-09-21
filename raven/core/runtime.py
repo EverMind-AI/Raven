@@ -213,9 +213,9 @@ def build_runtime(
     # terminal, page, channels -- names the command family on an approval
     # prompt the way the ACP editor does. A family only words the prompt; the
     # tiers still decide whether one is shown.
-    from raven.permissions.shell_policy import DELETE_MATCHERS, EXTERNAL_EFFECT_MATCHERS, set_surface_approval_families
+    from raven.permissions.shell_policy import declare_default_families
 
-    set_surface_approval_families(DELETE_MATCHERS + EXTERNAL_EFFECT_MATCHERS)
+    declare_default_families()
     loop = agent_loop.AgentLoop(
         provider=provider,
         workspace=config.workspace_path,

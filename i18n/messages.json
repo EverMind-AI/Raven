@@ -5456,8 +5456,8 @@
       "zh": "一个操作等待批准超时未回应 · 该操作没有执行"
     },
     "gui.confirm.always": {
-      "en": "Always allow: {pattern}",
-      "zh": "始终允许：{pattern}"
+      "en": "Always allow: {pattern} (every directory)",
+      "zh": "始终允许：{pattern}（所有工作目录）"
     },
     "gui.confirm.title.shell": {
       "en": "Allow {who} to run this command?",
@@ -5560,8 +5560,8 @@
       "zh": "已允许 · 只这一次"
     },
     "gui.confirm.land.always": {
-      "en": "Won't ask again for: {pattern}",
-      "zh": "以后不再问：{pattern}"
+      "en": "Won't ask again for: {pattern}, in every working directory",
+      "zh": "以后不再问：{pattern}，在所有工作目录生效"
     },
     "gui.confirm.land.revoke": {
       "en": "Undo",
@@ -5572,8 +5572,8 @@
       "zh": "已收回，下次还会问你"
     },
     "gui.confirm.land.revoke_failed": {
-      "en": "Could not take the rule back; remove it under permissions.tools.exec in the config",
-      "zh": "没能收回，去配置的 permissions.tools.exec 里删掉它"
+      "en": "Could not take {pattern} back; remove it under permissions.tools.exec in the config",
+      "zh": "没能收回 {pattern}，去配置的 permissions.tools.exec 里删掉它"
     },
     "gui.confirm.land.deny": {
       "en": "Denied, not asked again this turn",

@@ -1639,7 +1639,9 @@ action on the conversation (`permissions/session.py`: for `exec` one key per
 segment no rule covers, with the machine and the directory it runs in; for a
 file tool its path), and a later call whose every such part was granted runs
 without asking. `allow_always` writes the prefix rule the human confirmed --
-suggested by the gate, validated the same way -- into `permissions.tools.exec`,
+suggested by the gate, validated the same way, and editable before it is sent
+on the terminal while the page sends the suggestion as it stands -- into
+`permissions.tools.exec`,
 which the gate reads live, and adds no session grant beside it: the rule alone
 carries the grant, so taking it back (`approval.revoke`) means being asked
 again, and the session grant is the fallback only when the rule could not be

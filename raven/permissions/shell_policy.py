@@ -1111,6 +1111,19 @@ _SURFACE_FAMILIES: ContextVar[tuple[tuple[str, ApprovalMatcher], ...]] = Context
 )
 
 
+def declare_default_families() -> tuple[tuple[str, ApprovalMatcher], ...]:
+    """Declare the set every surface that serves a person asks about, and name it.
+
+    The terminal, the page, the channels and the ACP editor all want the same
+    answer here, and each writing out which matchers that is was how they came
+    to be able to disagree. Returns what it declared so a caller can say how
+    many, without reaching for the lists again.
+    """
+    families = DELETE_MATCHERS + EXTERNAL_EFFECT_MATCHERS
+    set_surface_approval_families(families)
+    return families
+
+
 def set_surface_approval_families(families: tuple[tuple[str, ApprovalMatcher], ...]) -> None:
     """Declare the families every tool on THIS surface must ask about.
 
@@ -1271,6 +1284,7 @@ class ShellCommandPolicy:
 __all__ = [
     "DELETE_MATCHERS",
     "EXTERNAL_EFFECT_MATCHERS",
+    "declare_default_families",
     "ApprovalMatcher",
     "CommandDecision",
     "PolicyOutcome",

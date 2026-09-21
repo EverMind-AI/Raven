@@ -354,7 +354,9 @@ function land(
     const onUndo = handlers.onRevoke
       ? (): void => {
         void handlers.onRevoke!().then((ok) => {
-          show({ text: t(ok ? 'gui.confirm.land.revoked' : 'gui.confirm.land.revoke_failed') })
+          /* The failure names the rule: it is still on disk, and the line is
+             the reader's only pointer to what to delete by hand. */
+          show({ text: t(ok ? 'gui.confirm.land.revoked' : 'gui.confirm.land.revoke_failed', { pattern }) })
           stay(LANDED_MS)
         })
       }
@@ -371,7 +373,10 @@ function land(
         stay(LANDED_MS)
       }
       : undefined
-    show({ text: t('gui.confirm.land.deny'), notePh: t('gui.confirm.note_ph') }, { onNote })
+    /* Every keystroke puts the clock back: a sentence still being typed is not
+       a sheet nobody wants, and taking it away takes the words with it. */
+    const onTyping = onNote ? (): void => stay(LINGER_MS) : undefined
+    show({ text: t('gui.confirm.land.deny'), notePh: t('gui.confirm.note_ph') }, { onNote, onTyping })
     stay(onNote ? LINGER_MS : LANDED_MS)
     return
   }

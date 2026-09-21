@@ -136,6 +136,45 @@ async def test_approval_revoke_takes_back_only_what_that_answer_wrote(monkeypatc
     assert await approval_revoke({"approval_id": "never-asked"}, approval_broker=broker) == {"ok": False}
 
 
+async def test_an_undo_whose_write_failed_can_be_pressed_again(monkeypatch) -> None:
+    """A full or read-only disk is not an answer, and the rule is still there.
+
+    The receipt is the only record of whose rule it is, so spending it on a
+    write that never happened would leave the reader with a rule they took back
+    and no way to take it back again.
+    """
+    from raven.config import update
+    from raven.rpc import connection
+
+    attempts: list[str] = []
+
+    def flaky(pattern: str) -> bool:
+        attempts.append(pattern)
+        if len(attempts) == 1:
+            raise OSError("read-only file system")
+        return True
+
+    monkeypatch.setattr(update, "remove_exec_pattern", flaky)
+
+    frames, send = _collector()
+    broker = ApprovalBroker(send)
+    token = connection.bind_connection()
+    try:
+        connection.claim_conversation("session-a")
+        mine = await _answered_grant(broker, frames, "git push *")
+        broker.record_grant(mine, "git push *", True)
+
+        assert await approval_revoke({"approval_id": mine}, approval_broker=broker) == {"ok": False}
+        assert await approval_revoke({"approval_id": mine}, approval_broker=broker) == {"ok": True}
+        assert attempts == ["git push *", "git push *"], "the second press reached the disk too"
+
+        # And once it lands, the receipt is spent for good.
+        assert await approval_revoke({"approval_id": mine}, approval_broker=broker) == {"ok": False}
+        assert len(attempts) == 2
+    finally:
+        connection.unbind_connection(token)
+
+
 async def test_approval_revoke_is_refused_for_a_conversation_this_socket_does_not_own(monkeypatch) -> None:
     """An id is the whole of what an undo names, so the undo has to be scoped too.
 
