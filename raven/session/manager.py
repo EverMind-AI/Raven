@@ -704,6 +704,13 @@ class SessionManager:
         cached = self._cache.get(key)
         if cached is not None:
             cached.metadata.update(patch)
+            # These keys are on disk now, so they are no longer this copy's
+            # unsaved opinion: left out of the baseline the patch reads as a
+            # local change on every later save and is asserted again over
+            # whatever anybody wrote in between. ``_file_stamp`` deliberately
+            # stays stale -- the file also carries the record this merged into,
+            # and a stale stamp is what makes the next save re-read it.
+            cached._persisted_metadata.update(patch)
         return True
 
     def save(self, session: Session) -> None:

@@ -112,6 +112,33 @@ def test_a_save_does_not_write_back_a_value_it_only_read(tmp_path: Path):
     assert _last_metadata(second.session_path(key)).get("archived") is True
 
 
+def test_a_patch_stops_being_a_local_change_once_it_is_on_disk(tmp_path: Path):
+    """A key this copy wrote through is written, not still pending.
+
+    ``append_metadata_patch`` puts the key on the file and on the cached
+    session, so it is no longer that copy's unsaved opinion. Left out of the
+    baseline it reads as a local change for the rest of the process's life and
+    is asserted again on every later save -- so a client that archived once
+    would undo somebody else's restore with its next ordinary turn.
+    """
+    key = "tui:20260610_100000_patched"
+    first = SessionManager(tmp_path)
+    session = first.get_or_create(key)
+    session.add_message("user", "hello")
+    session.metadata["archived"] = False
+    first.save(session)
+
+    first.append_metadata_patch(key, {"archived": True})
+    assert session.metadata["archived"] is True
+
+    SessionManager(tmp_path).append_metadata_patch(key, {"archived": False})
+
+    session.add_message("user", "an ordinary turn, long after")
+    first.save(session)
+
+    assert _last_metadata(first.session_path(key)).get("archived") is False
+
+
 def test_a_save_does_not_resurrect_a_key_this_copy_cleared(tmp_path: Path):
     """The merge keeps what it did not write, which makes clearing explicit.
 
