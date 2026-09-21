@@ -122,6 +122,14 @@ function anchored(rowTop: number): HTMLButtonElement {
   return row
 }
 
+/* A window for the placement to measure against. happy-dom reports zero for
+   both, and the panel goes down or up by how much room the WINDOW has below the
+   row -- not the dialog, which only decides how far right it may reach. */
+function windowed(w = 1280, h = 900): void {
+  Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: w })
+  Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: h })
+}
+
 /* The panel's own size, which `anchorRow` reads back after parking it at 0,0.
    400 tall is what the settings stylesheet gives it. */
 function sized(): void {
@@ -140,6 +148,7 @@ function sized(): void {
 describe('the picker floats against the row that opened it', () => {
   it('hangs below a row with room under it', () => {
     sized()
+    windowed()
     const row = anchored(200)
     draw({ anchor: row })
     const pop = screen.getByRole('dialog') as HTMLDivElement
@@ -150,7 +159,10 @@ describe('the picker floats against the row that opened it', () => {
 
   it('flips above a row the panel would overrun', () => {
     sized()
-    /* Bottom at 730, and 400 more would end at 1136 -- past the dialog's 780. */
+    windowed()
+    /* Bottom at 730, so the shelf below it in a 900px window is 156 -- under the
+       65% of the panel's height that is worth reading, and the ceiling above is
+       roomier. That is the only case that goes up. */
     const row = anchored(700)
     draw({ anchor: row })
     const pop = screen.getByRole('dialog') as HTMLDivElement
@@ -160,6 +172,7 @@ describe('the picker floats against the row that opened it', () => {
 
   it('closes once the row it names has scrolled away, and not before', () => {
     sized()
+    windowed()
     let top = 200
     const row = anchored(top)
     row.getBoundingClientRect = () => ({ top, bottom: top + 30, left: 700, right: 900, width: 200, height: 30, x: 700, y: top, toJSON: () => ({}) }) as DOMRect
@@ -173,6 +186,7 @@ describe('the picker floats against the row that opened it', () => {
 
   it('re-places rather than closes when a resize slides the row sideways', () => {
     sized()
+    windowed()
     /* The dialog is min(1000px, 94vw), so a narrower window moves the row
        horizontally with its top unchanged. Closing on that would take the panel
        away for a gesture that did not touch the list. */
@@ -181,17 +195,22 @@ describe('the picker floats against the row that opened it', () => {
     row.getBoundingClientRect = () => ({ top: 200, bottom: 230, left, right: left + 200, width: 200, height: 30, x: left, y: 200, toJSON: () => ({}) }) as DOMRect
     const { closes } = draw({ anchor: row })
     const pop = screen.getByRole('dialog') as HTMLDivElement
-    /* Clamped off the dialog's right edge rather than left at the row's own
-       700: 700 plus the panel's 560 would end past the dialog's 1200. */
-    expect(pop.style.left).toBe('632px')
+    /* Left-aligned to the row, with the WIDTH giving way instead: from the row's
+       700 to 20px inside the dialog's 1200 is 480, so nothing crosses the card's
+       edge and the panel still starts where the field does. */
+    expect(pop.style.left).toBe('700px')
+    expect(pop.style.width).toBe('480px')
     left = 420
     act(() => { window.dispatchEvent(new Event('resize')) })
     expect(closes, 'a resize moves the dialog around the row, it does not take the row away').toEqual([])
     expect(pop.style.left).toBe('420px')
+    /* 760 of room now, so the panel takes its full width rather than all of it. */
+    expect(pop.style.width).toBe('560px')
   })
 
   it('does not read a height resize as a row that scrolled away', () => {
     sized()
+    windowed()
     /* The dialog is min(680px, 88vh) and centred, so a shorter window moves the
        row vertically without anything scrolling. The panel follows; the guard's
        baseline has to follow with it, or the next scroll compares against where
