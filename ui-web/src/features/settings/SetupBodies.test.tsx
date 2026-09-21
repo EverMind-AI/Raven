@@ -74,6 +74,32 @@ describe('ModelStepBody', () => {
     expect(screen.queryByText('gui.settings.providers.add')).toBeNull()
   })
 
+  it('groups the vendors the prototype\'s way, the aggregators apart from the vendors they resell', async () => {
+    install(noneConnected())
+    await openBody(ModelStepBody)
+    const groups = [...document.querySelectorAll('.settings-padd select optgroup')]
+    expect(groups.map((g) => g.getAttribute('label'))).toEqual([
+      'gui.settings.providers.filter_direct',
+      'gui.settings.providers.filter_gateway',
+      'gui.settings.providers.filter_oauth',
+      'gui.settings.providers.kind_local',
+    ])
+    const inGroup = (label: string): string[] =>
+      [...groups.find((g) => g.getAttribute('label') === label)!.querySelectorAll('option')].map((o) => o.getAttribute('value')!)
+    expect(inGroup('gui.settings.providers.filter_gateway')).toEqual(['openrouter'])
+    expect(inGroup('gui.settings.providers.filter_direct')).toEqual(['anthropic', 'openai'])
+  })
+
+  it('an aggregator takes an address too, prefilled with the one it ships with', async () => {
+    install(noneConnected())
+    await openBody(ModelStepBody)
+    const select = document.querySelector('.settings-padd select') as HTMLSelectElement
+    expect(screen.queryByLabelText('gui.settings.providers.base')).toBeNull()
+    await act(async () => { fireEvent.change(select, { target: { value: 'openrouter' } }) })
+    const address = screen.getByLabelText('gui.settings.providers.base') as HTMLInputElement
+    expect(address.value).toBe('https://openrouter.ai/api/v1')
+  })
+
   it('the Cancel button is back once a provider is connected', async () => {
     install()
     await openBody(ModelStepBody)
