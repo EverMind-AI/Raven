@@ -18,6 +18,7 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec
+from raven.agent.tools.load_playbook import LoadPlaybookTool
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.config.schema import PlaybookConfig
 from raven.playbook.agent_generator import WorkerTableGenerator
@@ -199,6 +200,78 @@ async def test_live_whole_turn_saves_a_persona_without_a_workflow(
     assert saved.harness is not None and saved.workflow is None
     assert saved.harness.delegate
     assert list((playbook_root / ".runs").glob("*.json"))
+
+
+@pytest.mark.asyncio
+async def test_live_whole_turn_infers_a_travel_assistant_harness_from_user_needs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider = _provider(tmp_path, monkeypatch)
+    playbook_root = tmp_path / "playbooks"
+    loop = AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        model=MODEL,
+        policy=TurnPolicy(max_iterations=3),
+        tools=ToolWiring(plugin_tools=[LoadPlaybookTool()], restrict_to_workspace=True),
+        engine=EngineWiring(
+            runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never")),
+            playbook_config=PlaybookConfig(enabled=True, dir=str(playbook_root), agentHarness="generate"),
+        ),
+    )
+
+    async def emit(*args, **kwargs) -> None:
+        return None
+
+    reply: dict[str, object] = {}
+    await loop.run_turn(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="live-travel-assistant", sender_id="user", chat_type=ChatType.DM),
+            text=(
+                "I travel independently several times a year and want a reusable travel assistant called "
+                "travel-concierge. Later I should only need to provide a destination, dates, budget, and "
+                "preferences. It should produce realistic daily routes that account for distance, transit, "
+                "opening hours, reservations, and fatigue; research current local restrictions, customs, "
+                "neighborhood safety, and changes; balance lodging, transport, food, and admission costs with "
+                "alternatives at different price points; avoid tourist traps; and produce one clear plan I can "
+                "actually follow. For now, create and save the assistant only. Do not plan a specific trip."
+            ),
+            conversation="test:live-travel-assistant",
+        ),
+        emit,
+        lambda: [],
+        stream=False,
+        text_sink=reply,
+    )
+
+    names = PlaybookStore(playbook_root).list_ids()
+    assert len(names) == 1
+    saved = PlaybookStore(playbook_root).load(names[0])
+    assert isinstance(saved, UnifiedPlaybookSpec)
+    assert saved.harness is not None and saved.workflow is None
+    workers = saved.harness.delegate
+    assert workers
+    assert any(worker.label != worker.name for worker in workers)
+    assert all("save the assistant" not in worker.brief.lower() for worker in workers)
+    assert all("do not plan" not in worker.brief.lower() for worker in workers)
+    assert list((playbook_root / ".runs").glob("*.json"))
+
+    print(
+        json.dumps(
+            {
+                "reply": reply.get("text"),
+                "playbook": saved.name,
+                "artifactKind": "harness",
+                "workers": [
+                    {"as": entry.label, "agent": entry.name, "brief": entry.brief} for entry in saved.harness.delegate
+                ],
+                "workflow": None,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 @pytest.mark.asyncio

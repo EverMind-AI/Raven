@@ -79,6 +79,13 @@ SYSTEM_PROMPT = (
     "run_subagent_dag call; a fragmented or failed run is not saved. Never set it merely because "
     "the user asked a question. A digital-person/agent creation request is Harness-only unless "
     "the user also asks to save a process.\n\n"
+    "For artifact and runtime_and_artifact, the workers are the durable Harness itself -- not "
+    "authors tasked with defining or saving that Harness. Give them meaningful role aliases and "
+    "write briefs, system prompts, and stop conditions for how they should behave when the Harness "
+    "is used later (and now for runtime_and_artifact). Do not carry over creation-time meta commands "
+    "such as create/save the assistant, do not execute now, or plan only on future runs. A named "
+    "single persona normally becomes one specialized worker; infer additional complementary workers "
+    "only when the user's needs genuinely justify a team.\n\n"
     "Be sparing. Every worker you name is a separate process the agent has to wait for."
 )
 

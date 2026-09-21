@@ -151,6 +151,9 @@ async def test_resolver_emits_a_durable_harness_with_its_brief() -> None:
     assert result.spec is not None
     assert result.spec.delegate[0].brief == "Find primary sources"
     assert result.table and result.table.get("researcher").brief == "Find primary sources"
+    instructions = provider.calls[0]["messages"][0]["content"]
+    assert "workers are the durable Harness itself" in instructions
+    assert "not authors tasked with defining or saving that Harness" in instructions
 
 
 @pytest.mark.asyncio
