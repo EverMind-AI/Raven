@@ -173,11 +173,11 @@ const SHARED = new Set([
 const LEGACY_SHARED = {
   a: 4, ag: 2, body: 2, btn: 3, cap: 3, cfind: 2, chev: 2, chgs: 2,
   cmd: 2, ct: 2, d: 4, empty: 2, foot: 2, gap: 3,
-  'ghost-ic': 3, h: 3, hd: 3, ic: 3, k: 3, kd: 2, key: 4, l1: 2, l2: 2, lb: 3,
+  'ghost-ic': 3, h: 3, hd: 3, ic: 3, k: 3, key: 4, l1: 2, l2: 2, lb: 3,
   mk: 2, n: 5, ph: 2,
   pmhero: 5,
   rm: 2, row: 2, sheet: 2, shot: 3, sk: 3, skel: 3,
-  step: 2, sulist: 3, sustate: 2, sz: 2, t: 2,
+  step: 2, sulist: 2, sustate: 2, sz: 2, t: 2,
   tipdn: 2, tm: 2, v: 3, val: 2, w: 3, wkg: 3, wsnote: 2,
 }
 
@@ -208,7 +208,10 @@ const LEGACY_LOCAL = {
      what the check read as two domains' it now reads as composer's own. The
      settings rows below fall to zero by the same deletion. */
   composer: 11,
-  connections: 6,
+  /* Up from 6 for `.kd`, which the onboarding wizard's agents step was the
+     other reader of until it took the agent hub's rows; connections' alone
+     now, and counted here instead of on LEGACY_SHARED. */
+  connections: 7,
   /* Up from 15 for `.ff` and `.swi`, which the skills page and the plugins
      page were the other reader of. */
   cron: 17,

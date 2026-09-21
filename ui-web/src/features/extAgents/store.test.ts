@@ -164,16 +164,6 @@ describe('recheck', () => {
   })
 })
 
-describe('the wizard verbs keep their toast', () => {
-  it('toasts a refused connect from the wizard step', async () => {
-    const r = row()
-    install([r], () => 'nope')
-    await store.connect(r)
-    expect(toastWriter.items).toEqual(['gui.agent.failed {"detail":"nope"}'])
-    expect(store.get().failed).toEqual({})
-  })
-})
-
 describe('the model verbs', () => {
   it('sends a host pick with its provider, an agent pick alone, and a clear on its own', async () => {
     const r = row()
