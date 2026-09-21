@@ -11,6 +11,7 @@ import * as pageStore from '../../state/page'
 import { DagGraph, visibleLayers } from './DagGraph'
 import { CARD, SHEET } from './graph';
 
+import type { CardRenderer } from './DagGraph'
 import type { DagNode } from './types'
 import type { Root } from 'react-dom/client'
 
@@ -48,10 +49,10 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-const draw = (nodes: DagNode[], surface: 'card' | 'sheet'): void => {
+const draw = (nodes: DagNode[], surface: 'card' | 'sheet', renderNode?: CardRenderer): void => {
   act(() => {
     root.render(<DagGraph dims={surface === 'card' ? CARD : SHEET} nodes={nodes}
-      now={1000} onPick={() => {}} surface={surface} />)
+      now={1000} onPick={() => {}} surface={surface} renderNode={renderNode} />)
   })
 }
 
@@ -94,6 +95,34 @@ describe('the shared DAG renderer', () => {
 
     expect(host.querySelector('.id')!.textContent).toBe('scan-news')
     expect(host.querySelector('.id')!.getAttribute('class')).toBe('id')
+  })
+
+  it('places each node by absolute coordinates on its shapes, not by a transform on the group', () => {
+    /* WebKit draws a foreignObject without its ancestor group's transform: the
+       box is hit-tested where the layout put it but painted at the SVG's
+       origin, so on Safari every card of a two-step graph sat on the first
+       node's spot with the arrow pointing at empty canvas. The place is
+       therefore written on the shapes, where every engine honours it. */
+    const a = node('scan')
+    const b = { ...node('write'), depends_on: ['scan'] }
+    draw([a, b], 'sheet')
+    const groups = [...host.querySelectorAll<SVGGElement>('.nd')]
+    expect(groups.map((g) => g.getAttribute('transform'))).toEqual([null, null])
+    const boxes = groups.map((g) => g.querySelector('foreignObject')!)
+    const rects = groups.map((g) => g.querySelector('rect')!)
+    /* Two layers, so two different places; the rect and the label box of one
+       node agree on the row, and the label sits inside the rect. */
+    expect(rects[0]!.getAttribute('x')).not.toBe(rects[1]!.getAttribute('x'))
+    expect(boxes[0]!.getAttribute('y')).toBe(rects[0]!.getAttribute('y'))
+    expect(boxes[1]!.getAttribute('y')).toBe(rects[1]!.getAttribute('y'))
+    expect(Number(boxes[0]!.getAttribute('x'))).toBe(Number(rects[0]!.getAttribute('x')) + 31)
+    expect(Number(boxes[1]!.getAttribute('x'))).toBe(Number(rects[1]!.getAttribute('x')) + 31)
+    /* And the caller's own card, when one is given, takes the node's place itself. */
+    draw([a, b], 'sheet', (n) => <span className="mine">{n.id}</span>)
+    const cards = [...host.querySelectorAll<SVGForeignObjectElement>('.nd foreignObject')]
+    expect(cards.map((c) => c.getAttribute('x'))).toEqual(rects.map((r) => r.getAttribute('x')))
+    expect(cards.map((c) => c.getAttribute('y'))).toEqual(rects.map((r) => r.getAttribute('y')))
+    expect(host.querySelectorAll('.mine').length).toBe(2)
   })
 
   it('gives the label the width of its own box to end in, on both surfaces', () => {
