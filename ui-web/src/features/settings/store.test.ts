@@ -81,6 +81,33 @@ describe('settings store', () => {
     expect(calls).toEqual([['tools.disabledTools', ['exec']]])
   })
 
+  it('a device flow that lands closes the add form it started from', async () => {
+    /* The add form is open on the vendor while the code is out. */
+    vi.useFakeTimers()
+    let on = false
+    const data = (): SettingsSnapshot => ({
+      ...snapOf('m'),
+      providers: [{ id: 'minimax_global', name: 'MiniMax Global', models: [], configured: [], on, kind: 'oauth', acceptsKey: false }],
+    })
+    setSources({ settings: {
+      load: async () => data(),
+      oauthLogin: async () => ({ verification_uri: 'https://v.example/device', user_code: 'ABCD', expires_in: 900 }),
+    } as unknown as SettingsSource })
+    store.set({ provAdd: 'minimax_global' })
+    await store.oauthStart('minimax_global')
+    expect(store.get().oauth?.slug).toBe('minimax_global')
+
+    await vi.advanceTimersByTimeAsync(store.OAUTH_POLL_MS + 50)
+    expect(store.get().oauth?.slug).toBe('minimax_global')
+    expect(store.get().provAdd).toBe('minimax_global')
+
+    on = true
+    await vi.advanceTimersByTimeAsync(store.OAUTH_POLL_MS + 50)
+    expect(store.get().oauth).toBeNull()
+    expect(store.get().provAdd).toBeNull()
+    vi.useRealTimers()
+  })
+
   it('lastDays spans today and the days before it, inclusive', () => {
     const r = store.lastDays(7)
     const from = new Date(`${r.from}T00:00:00`)
