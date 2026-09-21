@@ -7463,9 +7463,9 @@
       "en": "{n} not dispatched",
       "zh": "{n} 步没派"
     },
-    "gui.tasks.overflow_more": {
-      "en": "{n} more →",
-      "zh": "还有 {n} 条 →"
+    "gui.tasks.running_n": {
+      "en": "{n} running",
+      "zh": "{n} 个任务在跑"
     },
     "gui.tasks.st_completed": {
       "en": "Completed",

@@ -186,6 +186,14 @@ export function applyRunReplanned(rows: readonly TaskRow[], p: RunReplannedPaylo
 export function applySubagentStatus(rows: readonly TaskRow[], p: SubagentStatusPayload): LiveResult {
   const byCallId = p.call_id ? rows.findIndex((r) => r.kind === 'spawn' && r.id === p.call_id) : -1
   const byTaskId = rows.findIndex((r) => r.kind === 'spawn' && r.id === p.task_id)
+  /* Both can be on the list: the row the pending frame filed under `task_id`,
+     and the record row a list read brought in under `call_id` before the
+     running frame renamed the first (store.ts's `refresh` keeps a row a frame
+     put there). The frame that names both ids is where they become one -- the
+     pending row has nothing the record row lacks, so it goes. */
+  if (byCallId >= 0 && byTaskId >= 0 && byTaskId !== byCallId) {
+    return applySubagentStatus(rows.filter((_, i) => i !== byTaskId), p)
+  }
   const everRunning = byCallId >= 0
   const at = everRunning ? byCallId : byTaskId
 
