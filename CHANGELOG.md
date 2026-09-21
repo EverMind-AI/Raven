@@ -110,10 +110,11 @@ All notable changes to Raven are documented here.
   is entered where a single pattern component names or matches it
   (`*/util/helper.py` reaches through a linked `vendor`) and never under
   `**`, which is how `Path.glob` read it and what keeps a link cycle
-  finite. A noise directory the pattern names first (`node_modules/*.js`)
-  is walked, since the pattern asked for it, where `Path.glob` filtered it
-  out, and `list_dir` on such a path lists it; both tool descriptions say
-  so. Recursive `list_dir` also used to filter on the components of the
+  finite. A noise directory inside a pattern's literal prefix
+  (`node_modules/*.js`, `src/node_modules/*.js`) is walked, since the
+  pattern asked for it, where `Path.glob` filtered it out; one met below
+  the prefix is pruned as before, and `list_dir` on such a path lists it.
+  Both tool descriptions say so. Recursive `list_dir` also used to filter on the components of the
   absolute path, so a workspace beneath a directory named `build`, `dist`,
   `venv` or another noise name listed as empty; it prunes below the listed
   path only now.

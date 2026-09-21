@@ -489,8 +489,9 @@ class FindTool(_FsTool):
         return (
             "Find files by glob pattern (e.g. '*.py', 'src/**/*.ts'). Prefer this over "
             "running find/ls through exec. Returns paths relative to the search root, "
-            "most-recently-modified first. Noise directories (.git, node_modules, etc.) "
-            "are skipped, except one the pattern starts with: 'node_modules/*.js' looks inside it."
+            "most-recently-modified first. Noise directories (.git, node_modules, etc.) are "
+            "skipped below the pattern's literal path prefix; one named inside that prefix, as in "
+            "'src/node_modules/*.js', is entered."
         )
 
     @property

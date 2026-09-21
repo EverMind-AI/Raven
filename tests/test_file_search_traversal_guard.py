@@ -230,7 +230,16 @@ async def test_find_walk_runs_off_the_event_loop(tmp_path, monkeypatch):
 
 
 def _glob_fixture(root: Path) -> None:
-    for rel in ("a.py", "README.md", ".hidden.py", "src/b.py", "src/lib/c.py", "src/lib/c.pyi", "tests/a.py"):
+    for rel in (
+        "a.py",
+        "README.md",
+        ".hidden.py",
+        "src/b.py",
+        "src/lib/c.py",
+        "src/lib/c.pyi",
+        "tests/a.py",
+        "src/node_modules/n.py",
+    ):
         target = root / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("", encoding="utf-8")
@@ -267,13 +276,16 @@ def _glob_fixture(root: Path) -> None:
         "node_modules/x/d.py",
         "node_modules/*/",
         "**/node_modules/*/d.py",
+        "src/node_modules/*.py",
+        "*/node_modules/*.py",
     ],
 )
 async def test_find_matches_what_path_glob_matched(tmp_path, pattern):
     """The rewrite answers exactly what ``Path.glob`` answered for the same
     pattern, less the noise directories beneath the pattern's literal prefix --
-    ``Path.glob`` is the oracle. A noise directory the pattern starts with is
-    walked, since the pattern asked for it; one met further down is pruned."""
+    ``Path.glob`` is the oracle. A noise directory inside that prefix is
+    walked, wherever it sits in it, since the pattern asked for it; one met
+    below the prefix is pruned."""
     _glob_fixture(tmp_path)
 
     result = await FindTool().execute(pattern=pattern, path=str(tmp_path))

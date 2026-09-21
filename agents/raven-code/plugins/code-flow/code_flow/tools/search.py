@@ -110,8 +110,9 @@ class GlobTool(trunk.FindTool):
         return (
             "Find files by glob pattern (e.g. '*.py', 'src/**/*.ts' or '*.{ts,tsx}'). Prefer this over "
             "running find/ls through exec. Returns paths relative to the search root, "
-            "most-recently-modified first. Noise directories (.git, node_modules, etc.) "
-            "are skipped, except one the pattern starts with: 'node_modules/*.js' looks inside it. "
+            "most-recently-modified first. Noise directories (.git, node_modules, etc.) are "
+            "skipped below the pattern's literal path prefix; one named inside that prefix, as in "
+            "'src/node_modules/*.js', is entered. "
             "Use it to locate a file before reading or editing it instead of "
             "guessing at the path. Brace alternatives share one limit after deduplication and sorting. "
             "A notice naming the limit means the result was cut there: raise limit or narrow the pattern. "
