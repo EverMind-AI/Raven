@@ -248,6 +248,7 @@ async def test_content_type_for_known_binaries(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 FAKE_PDF = b"%PDF-1.4 fake\n%%EOF\n"
+FAKE_PNG = b"\x89PNG fake first page"
 
 _FAKE_SOFFICE = """#!/bin/sh
 # The fixture narrows PATH to the fake alone, so the fake names its own tools.
@@ -262,11 +263,21 @@ for a in "$@"; do
   last=$a
 done
 stem=$(basename "$last" .pptx)
+fmt=pdf
+prev=""
+for a in "$@"; do
+  [ "$prev" = "--convert-to" ] && fmt=$a
+  prev=$a
+done
+write() {{
+  if [ "$fmt" = "png" ]; then printf '\\211PNG fake first page' > "$outdir/$stem.png"
+  else printf '%%PDF-1.4 fake\\n%%%%EOF\\n' > "$outdir/$stem.pdf"; fi
+}}
 case $mode in
   hang) sleep 30 ;;
-  slow) sleep 0.4; printf '%%PDF-1.4 fake\\n%%%%EOF\\n' > "$outdir/$stem.pdf" ;;
+  slow) sleep 0.4; write ;;
   empty) echo "failed to launch javaldx; Error: source file could not be loaded" >&2 ;;
-  *) printf '%%PDF-1.4 fake\\n%%%%EOF\\n' > "$outdir/$stem.pdf" ;;
+  *) write ;;
 esac
 """
 
@@ -327,6 +338,43 @@ async def test_a_deck_is_rendered_and_served_as_a_pdf(client: TestClient, tmp_pa
     # running instance and exits 0 having written nothing.
     assert "-env:UserInstallation=file://" in call
     assert "--norestore" in call
+
+
+async def _thumb(client: TestClient, deck: Path):
+    return await client.get("/file", params={"path": str(deck), "render": "thumb"}, headers=auth())
+
+
+async def test_a_deck_tile_gets_its_first_page_as_a_png(
+    client: TestClient, tmp_path: Path, soffice: FakeSoffice
+) -> None:
+    """The delivery tile asks for one picture of a deck, and LibreOffice's PNG export
+    is the first page alone; the same road as the PDF, a different target."""
+    deck = _deck(tmp_path)
+
+    r = await _thumb(client, deck)
+
+    assert r.status == 200
+    assert r.headers["Content-Type"] == "image/png"
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+    assert await r.read() == FAKE_PNG
+    [call] = soffice.calls()
+    assert "--convert-to png" in call and str(deck) in call
+
+
+async def test_the_thumb_and_the_pdf_are_cached_apart(client: TestClient, tmp_path: Path, soffice: FakeSoffice) -> None:
+    """One deck, two renderings: each is made once, and neither answers for the other."""
+    deck = _deck(tmp_path)
+
+    thumb = await _thumb(client, deck)
+    pdf = await _render(client, deck)
+    again = await _thumb(client, deck)
+
+    assert thumb.status == pdf.status == again.status == 200
+    assert await pdf.read() == FAKE_PDF
+    assert await again.read() == FAKE_PNG
+    calls = soffice.calls()
+    assert len(calls) == 2
+    assert sum("--convert-to png" in c for c in calls) == 1 and sum("--convert-to pdf" in c for c in calls) == 1
 
 
 async def test_a_second_click_reads_the_cache(client: TestClient, tmp_path: Path, soffice: FakeSoffice) -> None:

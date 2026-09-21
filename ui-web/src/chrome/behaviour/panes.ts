@@ -26,7 +26,7 @@ interface Pane {
 
 export const PANE: Record<PaneName, Pane> = {
   rail: { v: '--rail', min: 190, max: 420, key: 'raven.gui.railw', edge: 'left' },
-  ws: { v: '--wsw', min: 320, max: 760, key: 'raven.gui.wsw', edge: 'right' },
+  ws: { v: '--wsw', min: 320, max: 1200, key: 'raven.gui.wsw', edge: 'right' },
 }
 
 const names = Object.keys(PANE) as PaneName[]
