@@ -19,13 +19,43 @@ link is named by that same relative spelling so the two are visibly one file.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from raven.spine.message import Media
 
 ATTACHMENTS_NOTE = "[attachments, by absolute path]"
+
+_TURN_MEDIA: ContextVar[tuple[Media, ...] | None] = ContextVar("raven_turn_attachments", default=None)
+
+
+@contextmanager
+def turn_attachments(media: Sequence[Media] | None) -> Iterator[None]:
+    """Hold the turn's attachments where a dispatch inside it can read them.
+
+    A spawn and a DAG node receive no ``media``: the dispatching model writes
+    the paths it wants the lane to have into the task text, from the note the
+    host put on the user's message. What the turn actually carried is a fact
+    the host knows and the text does not settle -- a task names the deck's
+    destination in the same spelling as a template -- so it travels beside
+    the tier, as a ContextVar over the turn's own call graph, for the routing
+    entry to read (``RoutingBackend``).
+    """
+    token = _TURN_MEDIA.set(tuple(media or ()))
+    try:
+        yield
+    finally:
+        _TURN_MEDIA.reset(token)
+
+
+def turn_attachments_in_force() -> tuple[Media, ...]:
+    """The attachments of the turn this dispatch runs inside; empty outside any turn."""
+    return _TURN_MEDIA.get() or ()
+
+
 UNDELIVERABLE_NOTE = "[attachments were sent but not handed over: this agent cannot read local files]"
 
 

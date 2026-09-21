@@ -1826,12 +1826,25 @@ class SubagentRouteConfig(Base):
     work stays here. Empty is every tier, which is what a route that says
     nothing about cost means."""
 
+    needs_file: str = ""
+    """A file suffix (``".pptx"``) the dispatch must hand over for this route to open.
+
+    A target that builds on a file the user supplies -- a deck engine on a
+    template -- is the right lane only where that file is actually there; a
+    dispatch carrying none keeps the work here, whatever it costs. Read off
+    the files the user attached, never off the task text alone: a direct chat
+    hands its attachments over as media, and a spawn or a DAG node hands one
+    over when the task names an attachment of this turn. Empty is every
+    dispatch, which is what a route that builds on nothing means."""
+
     @model_validator(mode="after")
     def _one_source_for_the_note(self) -> "SubagentRouteConfig":
         if self.note and self.note_file:
             raise ValueError("a route declares its note inline or in noteFile, not both")
         if self.min_tier and self.min_tier not in TIER_LADDER:
             raise ValueError(f"a route's minTier is one of {TIER_LADDER}, not {self.min_tier!r}")
+        if self.needs_file and not (self.needs_file.startswith(".") and len(self.needs_file) > 1):
+            raise ValueError(f"a route's needsFile is a suffix such as '.pptx', not {self.needs_file!r}")
         return self
 
 

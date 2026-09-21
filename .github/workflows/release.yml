@@ -144,6 +144,58 @@ jobs:
       - name: Export locked constraints
         run: uv export --locked --all-extras --no-hashes --no-emit-workspace -o dist/raven-constraints.txt
 
+      # 4c) The plugin list: the wheels this release ships beside raven, one
+      #     `name @ url` line each. The upgrade helper (and, once it reads it,
+      #     the installer) takes this file from the release directory next to
+      #     the wheel and the constraints and hands it to `uv tool install
+      #     --with-requirements`, so what a complete install is made of is
+      #     written here once, from what this job just built, and nowhere
+      #     else. Direct URLs on purpose: a bare name would be resolved against
+      #     PyPI, where none of these names are ours. The everos line is what
+      #     the helper keeps when the engines cannot build, so its name is a
+      #     contract (tests/test_release_plugin_list.py).
+      - name: Write the plugin list
+        run: |
+          base="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          : > dist/raven-plugins.txt
+          for whl in dist/everos_memory-*.whl dist/design_engine-*.whl dist/ppt_engine-*.whl; do
+            [ -f "$whl" ] || { echo "no wheel matches $whl"; exit 1; }
+            name="$(basename "$whl" | cut -d- -f1 | tr _ -)"
+            echo "$name @ $base/$(basename "$whl")" >> dist/raven-plugins.txt
+          done
+          cat dist/raven-plugins.txt
+          test "$(wc -l < dist/raven-plugins.txt)" -eq 3
+
+      # 4d) The release installs itself before anything is published: the wheel,
+      #     the constraints, the plugin list and the plugin wheels as one whole,
+      #     through install.sh piped the way users run it. The list's public URLs
+      #     resolve only once a human publishes the draft, so the gate installs
+      #     from a copy of the list rewritten to point at the release directory
+      #     here; the rewrite only matches the exact public prefix, so a list
+      #     that named any other place fails the grep below. Then the installed
+      #     raven has to answer, carry the three plugin packages, and have the
+      #     `web` the installer ends on.
+      - name: Install the release from dist with install.sh
+        env:
+          RAVEN_MINIMAL: "1"
+          RAVEN_NO_LAUNCH: "1"
+          UV_TOOL_DIR: ${{ runner.temp }}/gate/tools
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}/gate/bin
+          UV_CACHE_DIR: ${{ runner.temp }}/gate/cache
+          RAVEN_HOME: ${{ runner.temp }}/gate/home
+        run: |
+          gate="$RUNNER_TEMP/gate/release"
+          mkdir -p "$gate"
+          cp dist/*.whl dist/raven-constraints.txt "$gate/"
+          prefix="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/"
+          sed "s#$prefix#file://$gate/#" dist/raven-plugins.txt > "$gate/raven-plugins.txt"
+          if grep -q "https://" "$gate/raven-plugins.txt"; then echo "plugin list names a URL outside this release"; exit 1; fi
+          wheel="$(ls dist/raven-*-py3-none-any.whl)"
+          RAVEN_WHEEL_URL="file://$gate/$(basename "$wheel")" sh -c 'cat install.sh | sh'
+          "$UV_TOOL_BIN_DIR/raven" --version
+          "$UV_TOOL_DIR/raven/bin/python" -c "import raven_everos, raven_design, raven_ppt"
+          "$UV_TOOL_BIN_DIR/raven" web --help >/dev/null
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -192,7 +244,7 @@ jobs:
             id=""
           fi
           if [ -z "$id" ]; then
-            draft_url=$(gh release create "$tag" dist/*.whl dist/*.tar.gz dist/raven-constraints.txt \
+            draft_url=$(gh release create "$tag" dist/*.whl dist/*.tar.gz dist/raven-constraints.txt dist/raven-plugins.txt \
               --title "Raven $ver ($today)" --notes-file "$RUNNER_TEMP/notes.md" --draft $pre)
             # A draft lives at releases/tag/untagged-<hash> and keeps serving that
             # stale page after publication, with no redirect to the real tag. Print
