@@ -188,9 +188,10 @@ otherwise set it to false. Never put `confirm` on an individual node.
 - `subagent` must come from the available-agents list below.
 - Agent capabilities are hard constraints: use `instance` only when
   `stateful=true`; use path placeholders only when `readsLocalFiles=true`;
-  set `skills` only when `injectableSkills=true`; and set `mcps` only when
-  `injectableMcps=true`. Otherwise leave that field unset or choose a capable
-  agent.
+  and set `mcps` only when `injectableMcps=true`. Otherwise leave that field
+  unset or choose a capable agent. `skills` may be set on any agent: where
+  `injectableSkills=true` the list narrows that agent's own menu, elsewhere the
+  named skills are quoted into the step's prompt before dispatch.
 - `nodeSummary` is this step's title, written before the prompt: the
   length of a chat title, under ten words -- not a sentence and not a
   summary of the prompt. It is the node's row while the run happens, so

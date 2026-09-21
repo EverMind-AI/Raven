@@ -476,6 +476,46 @@ class TestRunning:
 
         assert receipt.startswith("Error") and ".stint/planner.md" in receipt and "Commit or stash" in receipt
 
+    async def test_a_second_stint_of_one_playbook_in_one_conversation_gets_ids_of_its_own(self, tmp_path: Path) -> None:
+        """Node ids are claimed for the life of a conversation, and a round's
+        were `<playbook>-rNN-<role>`: the second run of a probe playbook from
+        the same terminal was refused at round one -- `node id
+        'mcp-probe-r01-probe' is already used by run ...` (2026-09-21)."""
+        from raven.stint.record import FINISHED
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = _spec(confirm=False, roles=[{"as": "probe", "name": "echo", "promptTemplate": "look"}])
+
+        assert not (await driver.start(spec)).startswith("Error")
+        store = StintStore(tool.stints_root("web:stint"))
+        [first] = store.list()
+        first.status = FINISHED
+        store.write(first)
+        assert not (await driver.start(spec)).startswith("Error")
+
+        [one], [two] = tool.submitted
+        assert one["id"] != two["id"]
+        assert one["id"].startswith("game-dev-") and one["id"].endswith("-r01-probe")
+        assert first.token and first.token in one["id"]
+
+    async def test_a_round_the_graph_tool_refused_opens_nothing_and_holds_nothing(self, tmp_path: Path) -> None:
+        """A validation error came back as text with no run id in it, and the
+        driver opened a round on it anyway: a beat started for a run that did
+        not exist, and the terminal holding on that beat never came back."""
+        tool = _FakeTool(tmp_path / "stints")
+        tool.refuse = "Error: invalid DAG -- node id 'x' is already used by run 'r'. No sub-agent was run."
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = _spec(confirm=False, roles=[{"as": "probe", "name": "echo", "promptTemplate": "look"}])
+
+        receipt = await driver.start(spec)
+
+        assert receipt.startswith("Error") and "already used" in receipt
+        [record] = StintStore(tool.stints_root("web:stint")).list()
+        assert record.status == "stopped"
+        assert record.round(1) is None
+        assert driver.holding() is False and driver._beats == {}
+
     async def test_a_first_round_the_person_refused_closes_the_stint_rather_than_leaving_it_open(
         self, tmp_path: Path
     ) -> None:
@@ -991,6 +1031,8 @@ class _FakeTool:
         )
 
     async def run_round(self, nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+        if getattr(self, "refuse", ""):
+            return str(self.refuse)
         if getattr(self, "deny", False) and kwargs.get("confirm"):
             from raven.agent.subagent.prompt_errors import RoundNotApprovedError
 

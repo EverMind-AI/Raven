@@ -1652,21 +1652,15 @@ def test_an_undecided_order_is_refused_only_when_it_would_matter() -> None:
 # --- capability gaps are reported, not refused ---------------------------
 
 
-def test_skills_for_an_agent_that_cannot_take_them_is_a_notice() -> None:
-    """A capability gap downgrades; a safety breach refuses.
-
-    A playbook written on a better-equipped machine should still run here with the
-    parts that work -- but the caller has to be told, or a wrong result is
-    unattributable.
-    """
+def test_skills_for_an_agent_with_no_menu_are_not_a_capability_gap() -> None:
+    """They used to be noticed as ignored. Now they are quoted into the node's
+    prompt by `dag_skills.fold_skills`, so the capability check has nothing to
+    say about them; only a name the catalog lacks is worth a line, and that
+    module says it."""
     spec = _spec({"id": "a", "subagent": "x", "prompt_template": "go", "skills": ["research"]})
     caps = {"x": AgentCapabilities(injectable_skills=False)}
 
-    notices = validate_capabilities(spec, caps)
-
-    assert len(notices) == 1
-    assert "cannot take injected skills" in notices[0]
-    assert "'a'" in notices[0]
+    assert validate_capabilities(spec, caps) == []
 
 
 def test_mcp_injection_is_checked_per_agent_capability() -> None:

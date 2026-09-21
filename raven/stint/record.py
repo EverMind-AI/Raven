@@ -22,6 +22,7 @@ import os
 import socket
 import time
 from collections.abc import Collection, Sequence
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -129,6 +130,21 @@ def mark_adrift(
     return found
 
 
+def stint_token(stint_id: str) -> str:
+    """The part of a stint id that tells it from every other stint, short enough for a node id.
+
+    The stamp's digits between the ``T`` and the ``Z`` -- hour, minute, second
+    and microsecond -- which is what makes two ids differ and reads as a time
+    to a person scanning a run. An id of another shape gets a hash instead.
+    """
+    match = re.fullmatch(r"stint-\d{8}T(\d+)Z", stint_id)
+    if match:
+        return match.group(1)
+    import hashlib
+
+    return hashlib.sha1(stint_id.encode("utf-8")).hexdigest()[:8]
+
+
 def make_stint_id() -> str:
     """A sortable id that reads as a stint at a glance in a directory listing.
 
@@ -228,6 +244,16 @@ class StintRecord:
     branch: str = ""
     round_index: int = 0
     status: str = RUNNING
+    token: str = ""
+    """What this stint's node ids carry so a second stint of the same playbook can run.
+
+    Node ids are claimed for the life of a conversation, and a round's ids were
+    ``<playbook>-rNN-<role>``: the second stint of one playbook in one
+    conversation -- a CLI's keyless session, a chat where a person says "run it
+    again" -- was refused at round one for ids the first stint still owned.
+    Empty on a record written before the field existed, whose ids stay as they
+    were; :func:`stint_token` mints one for a new stint.
+    """
 
     untracked_at_start: list[str] = field(default_factory=list)
     """Paths already in the tree, uncommitted, when the stint opened it.

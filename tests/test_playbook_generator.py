@@ -593,7 +593,6 @@ async def test_capability_errors_feed_one_snapshot_into_the_repair_loop():
     assert source_calls == 1
     repair_msg = gen._provider.calls[1][-1]["content"]
     assert "stateless agent" in repair_msg
-    assert "does not support skill injection" in repair_msg
     assert "cannot receive MCP injection" in repair_msg
     assert "passes local file paths" in repair_msg
 

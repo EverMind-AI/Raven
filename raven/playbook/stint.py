@@ -71,6 +71,7 @@ from raven.stint.record import (
     StintRef,
     StintStore,
     make_stint_id,
+    stint_token,
     mark_adrift,
     peer_stores,
 )
@@ -94,7 +95,7 @@ _RECEIPT_RUN_ID = re.compile(r"DAG run (\S+?) started")
 _ROUND_OUTCOME = re.compile(r"finished: (\d+) completed, (\d+) failed")
 
 
-def namespace(playbook: str, index: int, attempt: int = 0) -> str:
+def namespace(playbook: str, index: int, attempt: int = 0, token: str = "") -> str:
     """The id prefix one round's nodes share.
 
     Carries the round, so a node id is unique across the whole stint with no
@@ -104,11 +105,17 @@ def namespace(playbook: str, index: int, attempt: int = 0) -> str:
     And carries the attempt, for the same reason at a smaller scale: a round
     taken up again after an interruption is a second graph, and the ids of the
     first are claimed whether or not it ever finished.
+
+    And the stint's own ``token``, for the same reason at the largest scale: a
+    second stint of one playbook in one conversation is a second set of thirty
+    graphs, and without it the second was refused at round one for the ids the
+    first still owned (measured 2026-09-21, on the second run of a probe).
     """
-    return f"{playbook}-r{index:02d}" if attempt <= 0 else f"{playbook}-r{index:02d}x{attempt}"
+    head = f"{playbook}-{token}" if token else playbook
+    return f"{head}-r{index:02d}" if attempt <= 0 else f"{head}-r{index:02d}x{attempt}"
 
 
-def charters_for(spec: PlaybookSpec, index: int, attempt: int = 0) -> dict[str, Any]:
+def charters_for(spec: PlaybookSpec, index: int, attempt: int = 0, token: str = "") -> dict[str, Any]:
     """Each role's charter, keyed by the node it will run as.
 
     Built from the same ``playbook`` block a delegate row carries, through the
@@ -120,7 +127,7 @@ def charters_for(spec: PlaybookSpec, index: int, attempt: int = 0) -> dict[str, 
     holds its boundary is the prompt and the pass that undoes what it wrote.
     The shipped playbook is such a role, three times over.
     """
-    prefix = namespace(spec.name, index, attempt)
+    prefix = namespace(spec.name, index, attempt, token)
     found: dict[str, Any] = {}
     for role in spec.roles or []:
         if (payload := build_payload("", role.playbook)) is not None:
@@ -150,6 +157,7 @@ def compile_round(
     satisfied: Mapping[str, str] | None = None,
     attempt: int = 0,
     where: str = "",
+    token: str = "",
 ) -> list[dict[str, Any]]:
     """One round's roles as one graph's nodes.
 
@@ -161,7 +169,7 @@ def compile_round(
     """
     done = dict(satisfied or {})
     entry = journal_entry(spec)
-    prefix = namespace(spec.name, index, attempt)
+    prefix = namespace(spec.name, index, attempt, token)
     marker = spec.stop.until if spec.stop is not None else ""
     last = terminal_roles(spec)
     nodes: list[dict[str, Any]] = []
@@ -307,7 +315,7 @@ class StintDriver:
             "judge_node": context.judge,
             "adjudicate": context.adjudicate,
             "max_continuations": context.max_handbacks,
-            "charters": charters_for(spec, ref.round_index, attempt),
+            "charters": charters_for(spec, ref.round_index, attempt, record.token),
         }
 
     def _start_beat(self, record: StintRecord, store: StintStore) -> None:
@@ -323,15 +331,21 @@ class StintDriver:
         stint_id = record.stint_id
 
         async def beat() -> None:
-            while True:
-                await asyncio.sleep(HEARTBEAT_EVERY_SEC)
-                try:
-                    current = store.read(stint_id)
-                    if current is None or current.status != RUNNING:
-                        return
-                    store.write(current)
-                except Exception as exc:  # noqa: BLE001 - a missed beat is not a failed round
-                    logger.debug("stint {} could not be touched: {}", stint_id, exc)
+            try:
+                while True:
+                    await asyncio.sleep(HEARTBEAT_EVERY_SEC)
+                    try:
+                        current = store.read(stint_id)
+                        if current is None or current.status != RUNNING:
+                            return
+                        store.write(current)
+                    except Exception as exc:  # noqa: BLE001 - a missed beat is not a failed round
+                        logger.debug("stint {} could not be touched: {}", stint_id, exc)
+            finally:
+                # Off the table once it ends, so `holding()` does not count a
+                # beat that has already noticed the stint is over.
+                if self._beats.get(stint_id) is asyncio.current_task():
+                    self._beats.pop(stint_id, None)
 
         self._stop_beat(stint_id)
         try:
@@ -421,8 +435,10 @@ class StintDriver:
                     f"was advancing it, so it was taken up rather than started over.\n{taken}"
                 )
             return _second_plan_refused(already, spec.name, project)
+        stint_id = make_stint_id()
         record = StintRecord(
-            stint_id=make_stint_id(),
+            stint_id=stint_id,
+            token=stint_token(stint_id),
             playbook=spec.name,
             # The whole spec, not the machine block: a stint resumed tomorrow must
             # not depend on the playbook still being installed, on its parameters
@@ -559,7 +575,7 @@ class StintDriver:
         *some* process holds. A refusal leaves nothing held here, and a record
         another process is beating for is not this one's to wait on.
         """
-        if self._beats or self._handing_over:
+        if self._handing_over or any(not task.done() for task in self._beats.values()):
             return True
         live = set(self.dag_tool.active_run_ids())
         if not live:
@@ -1005,7 +1021,7 @@ class StintDriver:
         except Exception as exc:  # noqa: BLE001 - a resume with no registry redoes the round
             logger.warning("stint {} could not read what its last round finished: {}", record.stint_id, exc)
             return {}
-        prefix = namespace(spec.name, index, previous.attempt)
+        prefix = namespace(spec.name, index, previous.attempt, record.token)
         candidates = dict(previous.finished) or {
             role.label: f"{prefix}-{role.label}" for role in (spec.roles or [])
         }
@@ -1039,6 +1055,7 @@ class StintDriver:
             verify=_last_verify(record, index),
             satisfied=satisfied,
             attempt=attempt,
+            token=record.token,
             # A checkout of its own only under `worktree`. `branch` also records
             # one, and the text for a checkout tells the role that the project
             # is elsewhere -- which, in the project itself, sends it looking.
@@ -1064,6 +1081,12 @@ class StintDriver:
         except RoundNotApprovedError:
             return _NOT_APPROVED
         text = _text_of(receipt)
+        if not _run_id_of(text):
+            # Nothing started: a graph the validation refused, a paused
+            # dispatch. Opening a round on it started a beat for a run that
+            # did not exist, and a terminal that holds while a beat is alive
+            # then held on nothing. Said as an error so `start` closes the record.
+            return text if text.startswith("Error") else f"Error: {text}"
         record.open_round(index, _run_id_of(text), attempt=attempt)
         record.claim()
         store.write(record)

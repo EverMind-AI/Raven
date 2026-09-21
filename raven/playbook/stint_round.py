@@ -123,7 +123,8 @@ class RoundContext:
         on a resumed round nothing was enforced, no check ran, and no role's
         work was committed, silently, while the round reported completed.
         """
-        match = re.match(rf"^{re.escape(self.spec.name)}-r{self.index:02d}(?:x\d+)?-(.+)$", node_id)
+        head = re.escape(self.spec.name) + (f"-{re.escape(self.record.token)}" if self.record.token else "")
+        match = re.match(rf"^{head}-r{self.index:02d}(?:x\d+)?-(.+)$", node_id)
         label = match.group(1) if match else node_id
         for role in self.spec.roles or []:
             if role.label == label:
