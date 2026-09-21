@@ -1,11 +1,9 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
-import * as detail from '../../state/detail'
-import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import { MemoryApp } from './MemoryPage'
@@ -42,33 +40,34 @@ function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null
     },
     ...over,
   }
-  const shellCalls: Array<[string, unknown]> = []
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
-  vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
   setSources({ memory: source })
-  document.body.innerHTML =
-    '<section id="memoryPage"><div id="memoryBody"></div></section>' +
-    '<aside id="detail" data-open="false"><b id="dTitle">—</b><div id="dBody"></div></aside>'
-  return { source, calls, shellCalls }
+  document.body.innerHTML = '<div id="memoryBody"></div>'
+  return { source, calls }
 }
 
+/* The section as the dialog hosts it: the island in its own box, and the two
+   reads arriving at the section costs (features/memory/store.ts's `enter`,
+   which state/settings.ts spends -- here it is called by hand, because the
+   dialog is not what this file is about). */
 async function mount() {
   const view = render(<MemoryApp />, { container: document.getElementById('memoryBody')! })
   await act(async () => {
-    store.open()
+    store.setKind('episode')
+    await Promise.all([store.load(), store.refreshStats()])
   })
   return view
 }
 
+/* Scoped to the list: the picked memory carries the same subject in its own
+   header, so an unscoped query answers two elements once a row is open. */
+const row = (text: string): HTMLElement =>
+  within(document.querySelector('.two-pane-side') as HTMLElement).getByText(text)
+
 afterEach(() => {
-  /* Close through the drawer, not the island's closer alone; see
-     ExtAgentsPage.test.tsx. */
-  act(() => {
-    detail.close()
-    store.setKind('episode')
-  })
   cleanup()
+  act(() => { store._resetForTests() })
   vi.restoreAllMocks()
   resetSources()
 })
@@ -82,7 +81,6 @@ describe('memory island', () => {
     await mount()
     expect(await screen.findByText('shipped the island')).toBeTruthy()
     expect(screen.getByText('fixed the flake')).toBeTruthy()
-    expect(screen.getByText('gui.mem.hero')).toBeTruthy()
     expect(await screen.findByText('12')).toBeTruthy()
     expect(screen.getByText('gui.mem.n_total {"n":2}')).toBeTruthy()
   })
@@ -135,39 +133,26 @@ describe('memory island', () => {
     expect(await screen.findByText('shipped the island')).toBeTruthy()
   })
 
-  it('opens the detail drawer from a row', async () => {
+  /* Beside the list rather than in the shared drawer: inside the settings
+     dialog a drawer is a layer over a layer, and the list it covered is what a
+     reader comparing two memories needs to keep. */
+  it('shows the picked memory beside the list', async () => {
     install()
     await mount()
     await act(async () => {
-      ;(await screen.findByText('shipped the island')).click()
+      row('shipped the island').click()
     })
-    expect(document.getElementById('detail')!.dataset.open).toBe('true')
     expect(screen.getByText('gui.mem.sec_detail')).toBeTruthy()
     expect(screen.getByText('the long form of the episode')).toBeTruthy()
   })
 
-  it('repaints its own item after another page borrowed the drawer', async () => {
+  it('says to pick one until a row is picked', async () => {
     install()
     await mount()
-    await act(async () => {
-      ;(await screen.findByText('shipped the island')).click()
-    })
-    expect(screen.getByText('the long form of the episode')).toBeTruthy()
-    /* What the skills opener does when it takes over the shared drawer:
-       wipes #dBody wholesale and re-sets the already-true open flag. */
-    const dBody = document.getElementById('dBody')!
-    await act(async () => {
-      dBody.innerHTML = '<div>SKILL DETAIL</div>'
-      document.getElementById('detail')!.dataset.open = 'true'
-    })
-    await act(async () => {
-      ;(await screen.findByText('shipped the island')).click()
-    })
-    expect(dBody.textContent).toContain('the long form of the episode')
-    expect(dBody.textContent).not.toContain('SKILL DETAIL')
+    expect(await screen.findByText('gui.mem.pick')).toBeTruthy()
   })
 
-  it('keeps the drawer open when a delete fails handled', async () => {
+  it('keeps the memory on screen when a delete fails handled', async () => {
     install({
       remove: async () => {
         // What the live source throws after toasting the reason itself.
@@ -176,7 +161,7 @@ describe('memory island', () => {
     })
     await mount()
     await act(async () => {
-      ;(await screen.findByText('shipped the island')).click()
+      row('shipped the island').click()
     })
     const del = screen.getByText('gui.mem.delete')
     await act(async () => {
@@ -185,16 +170,15 @@ describe('memory island', () => {
     await act(async () => {
       screen.getByText('gui.mem.confirm_del').click()
     })
-    expect(document.getElementById('detail')!.dataset.open).toBe('true')
     expect(screen.getByText('gui.mem.sec_detail')).toBeTruthy()
   })
 
-  it('closes the drawer and reloads after a successful delete', async () => {
+  it('drops the memory and reloads after a successful delete', async () => {
     const { source, calls } = install()
     const listSpy = vi.spyOn(source, 'list')
     await mount()
     await act(async () => {
-      ;(await screen.findByText('shipped the island')).click()
+      row('shipped the island').click()
     })
     await act(async () => {
       screen.getByText('gui.mem.delete').click()
@@ -203,7 +187,7 @@ describe('memory island', () => {
       screen.getByText('gui.mem.confirm_del').click()
     })
     expect(calls).toContain('remove')
-    expect(document.getElementById('detail')!.dataset.open).toBe('false')
+    expect(screen.queryByText('gui.mem.sec_detail')).toBeNull()
     expect(listSpy.mock.calls.length).toBeGreaterThan(1)
   })
 

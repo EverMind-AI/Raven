@@ -1,5 +1,0 @@
-section#connectionsPage.page[data-open=false]
-  header
-    h2
-  div.work
-    div#connectionsBody.wrap

@@ -1,20 +1,20 @@
 /* Which module page is open, and the only place that opens one.
  *
- * Seven writes used to be the whole of the state: "which page is up" was
+ * The open flags used to be the whole of the state: "which page is up" was
  * readable only by asking the DOM what carried data-open="true". The writes
- * stay, and stay here: the flyout,
- * the Escape chain and the desk's own stylesheet rule all read the flag off the
- * elements, the order these seven land in relative to the four effects below is
- * the contract this module's gate pins, and src/App.tsx renders each section
- * with the value the page is served with and then never writes it again. The
- * answer is a field here as well, so a caller can ask without a selector.
+ * stay, and stay here: the Escape chain and the desk's own stylesheet rule
+ * both read the flag off the elements, the order they land in relative to the
+ * effects below is the contract this module's gate pins, and src/App.tsx
+ * renders each section with the value the page is served with and then never
+ * writes it again. The answer is a field here as well, so a caller can ask
+ * without a selector.
  *
- * The two tabs that used to decorate this function subscribe here instead
+ * The two tabs that used to decorate this function subscribe here instead.
  * What a switch asks of an island is registered rather than imported: three
  * calls used to reach into features/ from here, which put every store that
  * opens a page in the closure of every other and made this module the largest
- * single cost in the import graph. The slots below are filled by the page's
- * wiring (src/app/install.ts) and spent in the order `show` spells out.
+ * single cost in the import graph. The slot below is filled by the page's
+ * wiring (src/app/install.ts) and spent where `show` spells out.
  */
 
 import * as detail from './detail'
@@ -54,15 +54,15 @@ export function navState(): { pages: string[]; btnOf(p: string): string | undefi
   }
 }
 
-/** The three things a switch asks of an island, in the order it asks them. */
-const SLOTS = ['markNav', 'closeConnDialog', 'closeCronSheet'] as const
+/** What a switch asks of an island. */
+const SLOTS = ['markNav'] as const
 
-/** One of the three callbacks `show` spends. */
+/** The one callback `show` spends. */
 export type ShowSlot = (typeof SLOTS)[number]
 
 const slots = new Map<ShowSlot, () => void>()
 
-/** Registers what a switch spends on an island. src/app/install.ts fills all three. */
+/** Registers what a switch spends on an island. src/app/install.ts fills it. */
 export function onShow(name: ShowSlot, fn: () => void): void {
   slots.set(name, fn)
 }
@@ -110,12 +110,11 @@ export function show(id: PageId | null): void {
      session behind it stops claiming one too. */
   ;(document.querySelector('.app') as HTMLElement).dataset.page = id ? 'on' : 'off'
   spend('markNav')
-  /* the memory page uses the shared detail drawer */
-  if (id !== 'memoryPage') detail.close()
-  /* Same rule for the overlays a single page owns: the channel drawer and the
-     new-job sheet used to survive the switch and sit over whatever came next,
-     still showing the entry the reader had left behind. */
-  if (id !== 'connectionsPage') spend('closeConnDialog')
-  if (id !== 'cronPage') spend('closeCronSheet')
+  /* The shared drawer, unconditionally. It used to stay open for the one page
+     that filled it -- the memory page, which is a settings section now and has
+     its detail beside its list instead. The one page that still raises the
+     drawer raises it from a row, never from the switch, so a switch is always
+     a reader leaving whatever it was showing. */
+  detail.close()
   for (const fn of [...listeners]) fn()
 }

@@ -24,11 +24,7 @@
  *     chrome that carries it, which is what src/app/install.ts's
  *     installActions() is for; it binds this button by id there, and the dead
  *     second handler the demo layer had is gone.
- *   - #moreFly's data-open, the flag the stylesheet unfolds the group off, and
- *     the aria-current on each row inside it. Both are src/state/navfly.ts's,
- *     and the rail island's markNew() drives the second; the rows themselves
- *     are rendered from that store by src/chrome/MoreFly.tsx.
- *   - the aria-current marks on the six nav buttons (features/rail/store.ts).
+ *   - the aria-current marks on the nav buttons (features/rail/store.ts).
  *   - the update row's text and its hidden flag (src/app/updates.ts), and
  *     #upnote's click.
  *   - #list's children (the rail island's own root) and #railGrip's drag
@@ -43,14 +39,11 @@ import { useSyncExternalStore } from 'react'
 
 import { RavenMark } from '../components/RavenMark'
 import { open as openExtAgents } from '../features/extAgents/store'
-import { openPage as openPlaybooks } from '../features/playbooks/store'
 import { open as openSettings } from '../features/settings/store'
 import { t } from '../i18n/t'
 import * as find from '../state/find'
 import * as lang from '../state/lang'
-import * as navfly from '../state/navfly'
 import * as rail from '../state/rail'
-import { MoreFly } from './MoreFly'
 
 import type { NavButton } from '../state/pages'
 import type { JSX } from 'react'
@@ -96,32 +89,22 @@ function RailTop(): JSX.Element {
   )
 }
 
-/* The five rows that open a module page, in the order the strip renders them.
+/* The rows that open a module page, in the order the strip renders them.
    `button` is typed against the page table (state/pages.ts), so a row can only
    light a button some page declares -- and the mark the rail writes is read off
    that same table (features/rail/store.ts's markNew), which is the pair a page
    used to be able to miss in silence.
 
-   Two destinations, not five: what a reader reaches for daily is a playbook
-   and the agents that run one. Schedules, channels and memory are set up once
-   and then left alone, so they sit behind the fold below (state/navfly.ts). */
+   One destination, not five. Schedules, channels and memory are set up once
+   and then left alone, so they are sections of the settings dialog now, which
+   the foot opens; a playbook is not a place a reader goes at all. What is left
+   on the strip is the one module you go TO. */
 const NAV_ROWS: ReadonlyArray<{
   readonly button: NavButton
   readonly key: string
   readonly open: () => void
   readonly icon: JSX.Element
 }> = [
-  {
-    button: 'playbooksBtn',
-    key: 'gui.nav.pb',
-    open: () => openPlaybooks(),
-    icon: (
-      <>
-        <circle cx="5.5" cy="7" r="2" /><circle cx="5.5" cy="17" r="2" /><circle cx="18.5" cy="12" r="2" />
-        <path d="M7.5 7.6c5 1.4 6.5 2.6 9 3.9M7.5 16.4c5-1.4 6.5-2.6 9-3.9" />
-      </>
-    ),
-  },
   {
     button: 'agentsBtn',
     key: 'gui.nav.agents',
@@ -134,11 +117,9 @@ const NAV_ROWS: ReadonlyArray<{
   },
 ]
 
-/* The nav strip: the draft row, the two module rows, and the fold that holds
-   the three set-up-once ones. */
+/* The nav strip: the draft row and the module rows. */
 function RailNav(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
-  const fold = useSyncExternalStore(navfly.subscribe, navfly.get)
   return (
     <nav className="rail-nav">
       <button className="navi newrun" id="newBtn">
@@ -155,33 +136,6 @@ function RailNav(): JSX.Element {
           <span>{t(row.key)}</span>
         </button>
       ))}
-      {/* Sub-agents / entrances / schedules live one level in: they are
-           set-up-once surfaces,
-           not daily destinations, and seven top-level rows buried the four
-           that are. <MoreFly/> is their home.
-
-           The rows land above this button, not below it, because the button is
-           the fold: it reads "More" while they are hidden and "Less" once they
-           stand in the list, which only works if it sits at the list's end. */}
-      <MoreFly />
-      {/* The click stops here. The document's own click chain takes a panel
-          down, and unfolding the group is not leaving it. */}
-      <button
-        className="navi more"
-        id="moreBtn"
-        aria-expanded={fold.open}
-        aria-controls="moreFly"
-        onClick={(e) => {
-          e.stopPropagation()
-          navfly.toggle()
-        }}
-      >
-        <svg className="chev" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-          <path d="M7 9.8l5 5.4 5-5.4" />
-        </svg>
-        <span className="l-more">{t('gui.nav.more')}</span>
-        <span className="l-less">{t('gui.nav.less')}</span>
-      </button>
     </nav>
   )
 }

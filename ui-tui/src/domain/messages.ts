@@ -181,14 +181,14 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
          trail prints when a delegated result rejoins the conversation, which is
          also the row this replay was missing -- it arrives on an event, and an
          event is not in the transcript. Only a subagent delivery carries
-         `delegated`; a cron/sentinel/heartbeat-opened turn falls back to the
-         older, label-less line rather than fabricating one. */
+         `delegated`; a cron/sentinel/heartbeat-opened turn says what opened it
+         instead, which is the one thing about it a reader may be told. */
       if (delegated) {
         const key = deliveredMessageKey(delegated.status)
 
         folded.push({ role: 'system', text: `↩ ${delegated.label} — ${t(key, key)}` })
       } else {
-        folded.push({ role: 'system', text: `${origin} ${t('gui.deleg.delivered', 'delivered')}` })
+        folded.push({ role: 'system', text: t(`gui.deleg.by_${origin}`, origin) })
       }
 
       continue
