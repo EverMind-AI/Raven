@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 189 methods, 104 component schemas.
+// 192 methods, 105 component schemas.
 
 /* eslint-disable */
 /**
@@ -434,6 +434,21 @@ export interface ChannelStatusRow {
    */
   qr_login?: boolean;
 }
+export interface DeckTemplateRow {
+  /**
+   * The template's stem, which deck.templates.pick takes.
+   */
+  name: string;
+  /**
+   * The stem as words, for the picker's caption.
+   */
+  label: string;
+  size: number;
+  /**
+   * The first page as a JPEG data URL, or null where this host cannot render one.
+   */
+  cover?: string | null;
+}
 export interface FsEntry {
   name: string;
   dir: boolean;
@@ -731,6 +746,10 @@ export interface SubagentRow {
    */
   builtin?: boolean;
   /**
+   * One of raven's own agents, whichever way this install registered it: the built-in row, a product discovered under `agents/`, or a config row whose acp handshake named raven (the shipped installer writes a product as a plain config row). The row a client draws with raven's own mark, and whose unset model reads as following the main Raven. Absent from a server that predates it, which reads as 'not raven's'.
+   */
+  own?: boolean;
+  /**
    * The transport this entry's preset has since moved to, or null when it is current. A configured entry is never rewritten underneath the user, so the mismatch is shown instead.
    */
   upgrade_to?: string;
@@ -744,6 +763,31 @@ export interface SubagentRow {
   last_test_detail?: string;
   last_test_at_ms?: number;
   test_running: boolean;
+  /**
+   * The model this row sends, or null to use the agent's own default.
+   */
+  model?: string | null;
+  /**
+   * The models this row's agent advertised, empty when it advertised none.
+   */
+  model_choices?: {
+    /**
+     * The id the agent takes back.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually far shorter than the value.
+     */
+    name?: string;
+    /**
+     * The agent's own bucketing, a provider typically. Empty when it offered none.
+     */
+    group?: string;
+  }[];
+  /**
+   * What subagents.update accepts for model on this row, by kind -- not ownership, which is own: raven for the built-in row, picking from raven's own provider catalogue; agent for an acp row, raven's own or not, picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all.
+   */
+  model_source?: 'raven' | 'agent' | 'fixed';
 }
 export interface ModelOptionProvider {
   slug: string;
@@ -792,6 +836,10 @@ export interface ModelOptionProvider {
   };
   total_models: number;
   needs_api_base: boolean;
+  /**
+   * The registry's is_gateway: resells other vendors' models under vendor/model ids. The catalogue's gateway filter reads this; absent means false.
+   */
+  gateway?: boolean;
   platforms?: {
     label: string;
     api_base: string;
@@ -823,6 +871,10 @@ export interface ModelLabel {
    * What the model writes: text, image, video, audio, vector.
    */
   output_modalities?: string[];
+  /**
+   * The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text.
+   */
+  kind: 'text' | 'image' | 'audio' | 'video' | 'embedding' | 'reranker';
   /**
    * Tokens the model reads in one request, from the tables that also route rather than from the display registry -- the number shown has to be the number a request is sized with. Absent where no such table names the model.
    */
@@ -2325,6 +2377,15 @@ export interface SubagentsUpdateParams {
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
+  model?: string;
+  /**
+   * The provider whose credential serves model, for the built-in row: the id is stored naming it, the way config.set model stores the host's. Ignored for an acp row, whose values are the agent's own.
+   */
+  provider?: string;
+  /**
+   * Drop the row's own model, reverting to the agent's default. Wins over model when both are sent.
+   */
+  clear_model?: boolean;
 }
 export interface SubagentsUpdateResult {
   updated: boolean;
@@ -2363,7 +2424,7 @@ export interface SubagentsProbeResult {
 }
 export interface SubagentsTestParams {
   name: string;
-  source?: 'config' | 'preset';
+  source?: 'config' | 'preset' | 'vendored';
 }
 export interface SubagentsTestResult {
   ok: boolean;
@@ -3256,6 +3317,49 @@ export interface FsUploadParams {
   session?: string;
 }
 export interface FsUploadResult {
+  /**
+   * Workspace-relative path to hand the agent; uploads never return bytes.
+   */
+  path: string;
+  abs_path: string;
+  size: number;
+}
+export interface DeckTemplatesListParams {
+  /**
+   * False lists the names alone, without rendering a cover for each.
+   */
+  covers?: boolean;
+}
+export interface DeckTemplatesListResult {
+  templates: DeckTemplateRow[];
+  /**
+   * False when the deck engine is not installed here; the picker then stays hidden.
+   */
+  available: boolean;
+  /**
+   * True while a cover is still being drawn in the background; ask again for it.
+   */
+  pending?: boolean;
+}
+export interface DeckTemplatesPagesParams {
+  /**
+   * A row's name from deck.templates.list.
+   */
+  name: string;
+}
+export interface DeckTemplatesPagesResult {
+  /**
+   * Every page as a JPEG data URL, in order; empty where this host cannot render.
+   */
+  pages: string[];
+}
+export interface DeckTemplatesPickParams {
+  /**
+   * A row's name from deck.templates.list.
+   */
+  name: string;
+}
+export interface DeckTemplatesPickResult {
   /**
    * Workspace-relative path to hand the agent; uploads never return bytes.
    */
@@ -4531,6 +4635,9 @@ export interface RpcMethods {
   'fs.list': { params: FsListParams; result: FsListResult };
   'fs.read': { params: FsReadParams; result: FsReadResult };
   'fs.upload': { params: FsUploadParams; result: FsUploadResult };
+  'deck.templates.list': { params: DeckTemplatesListParams; result: DeckTemplatesListResult };
+  'deck.templates.pages': { params: DeckTemplatesPagesParams; result: DeckTemplatesPagesResult };
+  'deck.templates.pick': { params: DeckTemplatesPickParams; result: DeckTemplatesPickResult };
   'fs.reveal': { params: FsRevealParams; result: FsRevealResult };
   'fs.open': { params: FsOpenParams; result: FsOpenResult };
   'deliverables.list': { params: DeliverablesListParams; result: DeliverablesListResult };
@@ -4650,6 +4757,9 @@ export const RPC_METHODS = [
   "cron.set_enabled",
   "dag.get",
   "dag.node",
+  "deck.templates.list",
+  "deck.templates.pages",
+  "deck.templates.pick",
   "delegation.pause",
   "delegation.status",
   "deliverables.list",

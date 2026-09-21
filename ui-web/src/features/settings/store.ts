@@ -17,7 +17,9 @@ import * as settingsDialog from '../../state/settings'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
+import { statedTags } from '../model/types'
 
+import type { Kind } from '../model/types'
 import type {
   ArchivedSession,
   ModelCandidate,
@@ -28,8 +30,12 @@ import type {
   UsageStats,
 } from './types'
 
-export type SectionId = 'general' | 'usage' | 'model' | 'skills' | 'tools' | 'plugins' | 'archive' | 'about'
-export const SECTIONS: SectionId[] = ['general', 'usage', 'model', 'skills', 'tools', 'plugins', 'archive', 'about']
+export type SectionId = 'general' | 'usage' | 'provider' | 'model' | 'skills' | 'tools' | 'plugins' | 'archive' | 'about'
+export const SECTIONS: SectionId[] = ['general', 'usage', 'provider', 'model', 'skills', 'tools', 'plugins', 'archive', 'about']
+
+/* The catalogue column's six. `direct` is the remainder: not a reseller, not an
+   OAuth sign-in, not something you run yourself. */
+export type ProvFilter = 'all' | 'on' | 'direct' | 'gateway' | 'oauth' | 'local'
 
 /* The vendor-list sheet under a provider's models card: what the vendor
    answered, what is ticked, and the typed filter. Kept here rather than in
@@ -37,9 +43,15 @@ export const SECTIONS: SectionId[] = ['general', 'usage', 'model', 'skills', 'to
 export interface Sheet {
   slug: string
   q: string
-  sel: string[]
   state: 'loading' | 'ready' | 'failed'
   items: ModelCandidate[]
+  /* The kind tab in force, or every kind. */
+  kind: 'all' | Kind
+  /* Vendor groups the reader has collapsed, by prefix. */
+  folded: Record<string, boolean>
+  /* What a typed id would be added as, once the reader has said; null means
+     the guess from its name still stands. */
+  typed: Kind | null
 }
 
 /* A device flow in progress: the code the vendor's page asks for, and when
@@ -72,16 +84,18 @@ export interface SettingsState {
   /* undefined = never answered (drawn as loading), null = the counter did not
      answer. */
   usage: UsageStats | null | undefined
-  /* The provider whose detail is open, or null for the list. */
+  /* The provider whose detail pane is drawn, or null for the page's own
+     default (the one serving the chat model). */
   provider: string | null
+  /* The catalogue column's search term and filter. */
+  provQ: string
+  provFilt: ProvFilter
   /* The slug picked in the add-provider block, or null when it is closed. */
   provAdd: string | null
   sheet: Sheet | null
   hdrAdd: string | null
   ovlAdd: string | null
   chatCfg: boolean
-  /* The role whose model picker is open, or null. */
-  picker: string | null
   oauth: Oauth | null
   skill: string | null
   detail: SkillDetail | null
@@ -107,12 +121,13 @@ const initial = (): SettingsState => ({
   range: { kind: '30', ...lastDays(30) },
   usage: undefined,
   provider: null,
+  provQ: '',
+  provFilt: 'all',
   provAdd: null,
   sheet: null,
   hdrAdd: null,
   ovlAdd: null,
   chatCfg: false,
-  picker: null,
   oauth: null,
   skill: null,
   detail: null,
@@ -211,17 +226,27 @@ export function redraw(): void {
    reopen shows the values it already has while the reload runs. */
 export async function open(): Promise<void> {
   redraw()
+  /* The two the pages fetch for themselves are not in the snapshot, so the
+     reload below cannot freshen them: a dialog opened once held its archive
+     list and its usage totals for the life of the page, and a session archived
+     from the rail in between never showed up. Dropping them here is what makes
+     each page ask again -- their own lazy loads already key off these two. */
+  set({ usage: undefined, archived: null })
   settingsDialog.open()
   await refresh()
 }
 
+/* "Nothing is connected, go and connect something" and "this provider has no
+   model added, go and add one" both land on Model providers: since the split
+   that is where a key is entered and a model list is built, and the Model
+   settings page these used to open holds only the roles card. */
 export async function openModels(): Promise<void> {
-  settingsTab.id = 'model'
+  settingsTab.id = 'provider'
   await open()
 }
 
 export async function openProviderModels(slug: string): Promise<void> {
-  settingsTab.id = 'model'
+  settingsTab.id = 'provider'
   set({ provider: slug })
   await open()
 }
@@ -230,8 +255,8 @@ export async function openProviderModels(slug: string): Promise<void> {
 export function setTab(id: string): void {
   settingsTab.id = id
   set({
-    tab: curTab(), err: '', provider: null, provAdd: null, sheet: null, hdrAdd: null, ovlAdd: null,
-    picker: null, skill: null, detail: null, toolOpen: null, plugOpen: null,
+    tab: curTab(), err: '', provider: null, provQ: '', provFilt: 'all', provAdd: null, sheet: null, hdrAdd: null, ovlAdd: null,
+    skill: null, detail: null, toolOpen: null, plugOpen: null,
   })
 }
 
@@ -298,7 +323,7 @@ export async function skillOpen(name: string): Promise<void> {
    with no list endpoint answers a status other than ok, and the sheet then
    takes a typed id alone. */
 export async function sheetOpen(slug: string): Promise<void> {
-  set({ sheet: { slug, q: '', sel: [], state: 'loading', items: [] } })
+  set({ sheet: { slug, q: '', state: 'loading', items: [], kind: 'all', folded: {}, typed: null } })
   let items: ModelCandidate[] = []
   let ok = false
   try {
@@ -312,16 +337,27 @@ export async function sheetOpen(slug: string): Promise<void> {
   if (sheet && sheet.slug === slug) set({ sheet: { ...sheet, state: ok ? 'ready' : 'failed', items } })
 }
 
+/* One row, one write. `add_model` states the kind for a typed id the
+   catalogues cannot describe; a listed row states nothing, because the reply
+   that listed it already carried one.
+   The "a role runs on this model" refusal belongs to the caller, not here: the
+   roles table lives in a component that reads this store, so reaching it from
+   this side closes a cycle -- and hiding that behind a dynamic import only
+   hides it from the gate that checks for one. The tag list beside the popover
+   refuses the same way, in the same place. */
+export async function sheetToggleModel(slug: string, id: string, listed: boolean, kind?: Kind): Promise<void> {
+  const src = source()
+  if (listed) {
+    await run(`prov:${slug}`, () => src.provider('remove_model', { slug, model: id }))
+    return
+  }
+  const stated = kind && kind !== 'text' ? statedTags(kind) : {}
+  await run(`prov:${slug}`, () => src.provider('add_model', { slug, model: id, ...stated }))
+}
+
 export function sheetPatch(patch: Partial<Sheet>): void {
   const sheet = get().sheet
   if (sheet) set({ sheet: { ...sheet, ...patch } })
-}
-
-export function sheetToggle(id: string): void {
-  const sheet = get().sheet
-  if (!sheet) return
-  const sel = sheet.sel.includes(id) ? sheet.sel.filter((m) => m !== id) : [...sheet.sel, id]
-  set({ sheet: { ...sheet, sel } })
 }
 
 /* Start a device flow and watch for it to land: the provider turns connected

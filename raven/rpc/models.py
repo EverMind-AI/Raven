@@ -147,6 +147,16 @@ class SubagentRow(_Strict):
             "not offer a switch, a test or a delete for it."
         ),
     )
+    own: bool = Field(
+        default=False,
+        description=(
+            "One of raven's own agents, whichever way this install registered it: the built-in row, a "
+            "product discovered under `agents/`, or a config row whose acp handshake named raven (the "
+            "shipped installer writes a product as a plain config row). The row a client draws with "
+            "raven's own mark, and whose unset model reads as following the main Raven. Absent from a "
+            "server that predates it, which reads as 'not raven's'."
+        ),
+    )
     group: Literal["builtin", "installed", "uninstalled"]
     upgrade_to: str | None = Field(
         default=None,
@@ -164,6 +174,22 @@ class SubagentRow(_Strict):
     last_test_detail: str | None = None
     last_test_at_ms: int | None = None
     test_running: bool
+    model: str | None = Field(
+        default=None, description="The model this row sends, or null to use the agent's own default."
+    )
+    model_choices: list["SubagentModelChoice"] = Field(
+        default_factory=list, description="The models this row's agent advertised, empty when it advertised none."
+    )
+    model_source: Literal["raven", "agent", "fixed"] = Field(
+        default="agent",
+        description=(
+            "What `subagents.update` accepts for `model` on this row, by kind -- not ownership, which is "
+            "`own`: 'raven' for the built-in row, picking from raven's own provider catalogue; 'agent' for "
+            "an acp row, raven's own or not, picking from the choices its handshake advertised "
+            "(`model_choices`); 'fixed' for an openai row, whose model is a plain config value, and for a "
+            "cli row, which has no menu at all."
+        ),
+    )
 
 
 class DirectTarget(_Strict):
@@ -1532,6 +1558,9 @@ class ModelLabel(_Strict):
     capabilities: list[str] = Field(default_factory=list)
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
+    #: The bucket a model list files this model under, from what it writes
+    #: (``registry_data.kind_of``): a model that reads images is still text.
+    kind: Literal["text", "image", "audio", "video", "embedding", "reranker"]
     #: Tokens the model reads in one request. Resolved from the tables that also
     #: route, never from the display registry -- a window sizes trimming, so the
     #: number a picker shows has to be the number a request is sized with. None
@@ -1587,6 +1616,10 @@ class ModelOptionProvider(_Strict):
     extra_headers: dict[str, str] = Field(default_factory=dict)
     total_models: int
     needs_api_base: bool
+    #: The registry's ``is_gateway``: resells other vendors' models under
+    #: vendor/model ids. The catalogue's filter reads it; no client can derive
+    #: it from a slug.
+    gateway: bool = False
     #: Addresses to pick between, empty for the providers that have only one.
     #: A row that states these is drawn with the list in place of a host field.
     platforms: list[ModelOptionPlatform] = Field(default_factory=list)
@@ -2335,6 +2368,19 @@ class SubagentsUpdateParams(_Strict):
     api_key: str | None = None
     mcps: list[str] | None = None
     allow_mcp_secrets: bool | None = None
+    model: str | None = None
+    provider: str | None = Field(
+        default=None,
+        description=(
+            "The provider whose credential serves `model`, for the built-in row: the id is stored naming it, "
+            "the way `config.set model` stores the host's. Ignored for an acp row, whose values are the "
+            "agent's own."
+        ),
+    )
+    clear_model: bool = Field(
+        default=False,
+        description="Drop the row's own model, reverting to the agent's default. Wins over `model` when both are sent.",
+    )
 
 
 class SubagentsUpdateResult(_Strict):
@@ -2384,7 +2430,7 @@ class SubagentsProbeResult(_Strict):
 
 class SubagentsTestParams(_Strict):
     name: str
-    source: Literal["config", "preset"] = "config"
+    source: Literal["config", "preset", "vendored"] = "config"
 
 
 class SubagentsTestResult(_Strict):
@@ -3461,6 +3507,43 @@ class FsUploadResult(_Strict):
     path: str = Field(..., description="Workspace-relative path to hand the agent; uploads never return bytes.")
     abs_path: str
     size: int
+
+
+class DeckTemplatesListParams(_Strict):
+    covers: bool = Field(True, description="False lists the names alone, without rendering a cover for each.")
+
+
+class DeckTemplateRow(_Strict):
+    name: str = Field(..., description="The template's stem, which deck.templates.pick takes.")
+    label: str = Field(..., description="The stem as words, for the picker's caption.")
+    size: int
+    cover: str | None = Field(
+        None, description="The first page as a JPEG data URL, or null where this host cannot render one."
+    )
+
+
+class DeckTemplatesListResult(_Strict):
+    templates: list[DeckTemplateRow]
+    available: bool = Field(
+        ..., description="False when the deck engine is not installed here; the picker then stays hidden."
+    )
+    pending: bool = Field(
+        False, description="True while a cover is still being drawn in the background; ask again for it."
+    )
+
+
+class DeckTemplatesPagesParams(_Strict):
+    name: str = Field(..., description="A row's name from deck.templates.list.")
+
+
+class DeckTemplatesPagesResult(_Strict):
+    pages: list[str] = Field(
+        ..., description="Every page as a JPEG data URL, in order; empty where this host cannot render."
+    )
+
+
+class DeckTemplatesPickParams(_Strict):
+    name: str = Field(..., description="A row's name from deck.templates.list.")
 
 
 class FsRevealParams(_Strict):
@@ -4736,6 +4819,10 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "fs.list": (FsListParams, FsListResult),
     "fs.read": (FsReadParams, FsReadResult),
     "fs.upload": (FsUploadParams, FsUploadResult),
+    "deck.templates.list": (DeckTemplatesListParams, DeckTemplatesListResult),
+    "deck.templates.pages": (DeckTemplatesPagesParams, DeckTemplatesPagesResult),
+    # The upload's own result: a picked template sits under uploads as an attachment would.
+    "deck.templates.pick": (DeckTemplatesPickParams, FsUploadResult),
     "fs.reveal": (FsRevealParams, FsRevealResult),
     "fs.open": (FsOpenParams, FsOpenResult),
     "deliverables.list": (DeliverablesListParams, DeliverablesListResult),

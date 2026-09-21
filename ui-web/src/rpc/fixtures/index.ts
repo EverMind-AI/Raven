@@ -26,6 +26,7 @@
 import { createBrowser } from './browser'
 import { createChannels } from './channels'
 import { createCron } from './cron'
+import { createDeck } from './deck'
 import { createExt } from './ext'
 import { createFs } from './fs'
 import { createImport } from './import'
@@ -77,6 +78,7 @@ export function demoFixtures(env: FixtureEnv): Fixtures {
     ...createTasks(env).fixtures,
     ...createMemory(env).fixtures,
     ...createFs(env).fixtures,
+    ...createDeck(env).fixtures,
     ...createImport(env).fixtures,
     ...createBrowser(env).fixtures,
     ...createKnowledge(env).fixtures,

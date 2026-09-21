@@ -221,7 +221,30 @@ async def pdf_for(source: Path, *, timeout_s: float | None = None, workspace: Pa
     return cached
 
 
-def _render(source: Path, target: Path, timeout_s: float) -> None:
+async def png_for(source: Path, *, timeout_s: float | None = None) -> Path:
+    """The first page of ``source`` as a PNG, rendered if nothing current exists.
+
+    For a tile with room for one picture and not for a viewer. LibreOffice's PNG
+    export writes the first page alone, which is the thumbnail; no shortcut to a
+    published PDF here, because turning that into a picture would need a
+    rasteriser this package does not carry. Same path policy caveat, same cache
+    and lock as :func:`pdf_for`, keyed apart so the two renderings of one deck
+    do not race for one file.
+    """
+    budget = CONVERT_TIMEOUT_S if timeout_s is None else timeout_s
+    key = cache_key(source) + "-thumb"
+    cached = cache_dir() / f"{key}.png"
+    if cached.is_file():
+        return _touched(cached)
+    lock = _locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        if cached.is_file():
+            return _touched(cached)
+        await asyncio.to_thread(_render, source, cached, budget, "png")
+    return cached
+
+
+def _render(source: Path, target: Path, timeout_s: float, fmt: str = "pdf") -> None:
     executable = find_soffice()
     if executable is None:
         raise PdfPreviewUnavailableError(
@@ -240,7 +263,9 @@ def _render(source: Path, target: Path, timeout_s: float) -> None:
         staged = scratch / "out"
         staged.mkdir()
         try:
-            done = office.to_pdf(source, staged, executable=executable, timeout_s=timeout_s, profile_root=scratch)
+            done = office.to_pdf(
+                source, staged, executable=executable, timeout_s=timeout_s, profile_root=scratch, fmt=fmt
+            )
         except TimeoutError as exc:
             raise PdfPreviewTimeoutError(
                 f"LibreOffice took longer than {timeout_s:g}s to render {source.name} and was stopped"
@@ -254,7 +279,7 @@ def _render(source: Path, target: Path, timeout_s: float) -> None:
         if len(done.produced) != 1 or not done.produced[0].is_file():
             detail = (done.stderr.strip() or done.stdout.strip())[-_LOG_TAIL_CHARS:]
             raise PdfPreviewError(
-                f"LibreOffice did not produce a PDF for {source.name}" + (f": {detail}" if detail else "")
+                f"LibreOffice did not produce a {fmt.upper()} for {source.name}" + (f": {detail}" if detail else "")
             )
         _sweep(root)
         os.replace(done.produced[0], target)

@@ -2166,6 +2166,29 @@
           "schema": {
             "type": "boolean"
           }
+        },
+        {
+          "name": "model",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "provider",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "The provider whose credential serves model, for the built-in row: the id is stored naming it, the way config.set model stores the host's. Ignored for an acp row, whose values are the agent's own."
+          }
+        },
+        {
+          "name": "clear_model",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Drop the row's own model, reverting to the agent's default. Wins over model when both are sent."
+          }
         }
       ],
       "result": {
@@ -2371,7 +2394,8 @@
             "type": "string",
             "enum": [
               "config",
-              "preset"
+              "preset",
+              "vendored"
             ]
           }
         }
@@ -5178,6 +5202,118 @@
           "required": false,
           "schema": {
             "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "FsUploadResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "Workspace-relative path to hand the agent; uploads never return bytes.",
+              "type": "string"
+            },
+            "abs_path": {
+              "type": "string"
+            },
+            "size": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path",
+            "abs_path",
+            "size"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "deck.templates.list",
+      "summary": "The bundled deck templates, with a cover each where this host can render one.",
+      "params": [
+        {
+          "name": "covers",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "False lists the names alone, without rendering a cover for each."
+          }
+        }
+      ],
+      "result": {
+        "name": "DeckTemplatesListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "templates": {
+              "items": {
+                "$ref": "#/components/schemas/DeckTemplateRow"
+              },
+              "type": "array"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when the deck engine is not installed here; the picker then stays hidden."
+            },
+            "pending": {
+              "type": "boolean",
+              "description": "True while a cover is still being drawn in the background; ask again for it."
+            }
+          },
+          "required": [
+            "templates",
+            "available"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "deck.templates.pages",
+      "summary": "Every page of one bundled deck template as JPEG data URLs, for the picker's page viewer.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "A row's name from deck.templates.list."
+          }
+        }
+      ],
+      "result": {
+        "name": "DeckTemplatesPagesResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "pages": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "description": "Every page as a JPEG data URL, in order; empty where this host cannot render."
+            }
+          },
+          "required": [
+            "pages"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "deck.templates.pick",
+      "summary": "Deposit a bundled deck template under agent home's uploads and answer as fs.upload does.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "A row's name from deck.templates.list."
           }
         }
       ],
@@ -9742,6 +9878,35 @@
         ],
         "type": "object"
       },
+      "DeckTemplateRow": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The template's stem, which deck.templates.pick takes."
+          },
+          "label": {
+            "type": "string",
+            "description": "The stem as words, for the picker's caption."
+          },
+          "size": {
+            "type": "integer"
+          },
+          "cover": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first page as a JPEG data URL, or null where this host cannot render one."
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "size"
+        ],
+        "type": "object"
+      },
       "FsEntry": {
         "additionalProperties": false,
         "properties": {
@@ -10438,6 +10603,10 @@
             "type": "boolean",
             "description": "A built-in agent: raven's own in-process loop, on the agent table whether or not config mentions it. Distinct from `configured`, which stays false for one -- not writing a row is how 'use the package's default' is spelled, so there is nothing to delete and no transport to connect. It takes no action at all: `subagents.toggle` answers `config_field_readonly` for it, because an unnamed spawn and a dag node with no sub-agent both dispatch to this row, so it cannot leave the roster. A client must not offer a switch, a test or a delete for it."
           },
+          "own": {
+            "type": "boolean",
+            "description": "One of raven's own agents, whichever way this install registered it: the built-in row, a product discovered under `agents/`, or a config row whose acp handshake named raven (the shipped installer writes a product as a plain config row). The row a client draws with raven's own mark, and whose unset model reads as following the main Raven. Absent from a server that predates it, which reads as 'not raven's'."
+          },
           "upgrade_to": {
             "type": "string",
             "description": "The transport this entry's preset has since moved to, or null when it is current. A configured entry is never rewritten underneath the user, so the mismatch is shown instead."
@@ -10485,6 +10654,44 @@
           },
           "test_running": {
             "type": "boolean"
+          },
+          "model": {
+            "type": ["string", "null"],
+            "description": "The model this row sends, or null to use the agent's own default."
+          },
+          "model_choices": {
+            "type": "array",
+            "description": "The models this row's agent advertised, empty when it advertised none.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "value"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "description": "The id the agent takes back."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "What the agent asked to be shown, usually far shorter than the value."
+                },
+                "group": {
+                  "type": "string",
+                  "description": "The agent's own bucketing, a provider typically. Empty when it offered none."
+                }
+              }
+            }
+          },
+          "model_source": {
+            "type": "string",
+            "enum": [
+              "raven",
+              "agent",
+              "fixed"
+            ],
+            "description": "What subagents.update accepts for model on this row, by kind -- not ownership, which is own: raven for the built-in row, picking from raven's own provider catalogue; agent for an acp row, raven's own or not, picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all."
           }
         }
       },
@@ -10585,6 +10792,10 @@
           "needs_api_base": {
             "type": "boolean"
           },
+          "gateway": {
+            "type": "boolean",
+            "description": "The registry's is_gateway: resells other vendors' models under vendor/model ids. The catalogue's gateway filter reads this; absent means false."
+          },
           "platforms": {
             "type": "array",
             "items": {
@@ -10678,7 +10889,8 @@
         "additionalProperties": false,
         "description": "How a model reads to a person, and what it can do. Absent for a model the registry knows nothing about -- one released since the bundled files, or served by a local deployment -- in which case the id is all there is to show. An empty tag list means nothing is published, not that the model cannot: a surface renders absence as no icon, never as a denial.",
         "required": [
-          "label"
+          "label",
+          "kind"
         ],
         "properties": {
           "label": {
@@ -10707,6 +10919,18 @@
             "items": {
               "type": "string"
             }
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "embedding",
+              "reranker"
+            ],
+            "description": "The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text."
           },
           "context_window": {
             "type": "integer",

@@ -44,9 +44,11 @@ The **agent itself** is never fetched. Its row names the bare executable
 (``hermes acp``, ``opencode acp``), so the agent that answers is the one the user
 installed, at the version they chose, holding the login they already granted --
 and a machine without it says so, because ``_probe_acp`` resolves ``argv[0]`` and
-an ``npx`` command always resolves whether the agent is there or not.
-:data:`SHIM_LAUNCHED_PRESETS` is that split, declared; a test holds every
-command to it.
+an ``npx`` command always resolves whether the agent is there or not. For a shim
+that reaches for a local install the probe therefore asks after that agent as
+well (:data:`SHIM_REQUIRED_EXECUTABLES`), so a machine without ``pi`` reads Pi as
+absent rather than as connectable. :data:`SHIM_LAUNCHED_PRESETS` is that split,
+declared; a test holds every command to it.
 
 Every preset runs unattended, so none of them may stop to ask permission: raven
 answers whatever an ACP agent asks (``raven/acp_client/permissions.py``), and the
@@ -117,7 +119,7 @@ from raven.agent.subagent.acp_registry_presets import (
 #             printed on stderr, matched by sessionIdPattern)
 
 # Pinned deliberately; see the module docstring.
-_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.66.0"
+_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.79.0"
 _CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@1.1.14"
 
 SHIM_LAUNCHED_PRESETS = frozenset({"claude_code", "codex"}) | ACP_REGISTRY_SHIM_PRESETS
@@ -129,6 +131,29 @@ docstring. Every other acp preset must name an executable the user installed.
 Spelled with the preset key, not the row's ``name``: what a package is cannot
 depend on what the row is called, and a configured row's name is the user's to
 change (``test_provenance_survives_a_rename``).
+"""
+
+SHIM_REQUIRED_EXECUTABLES: dict[str, tuple[str, str]] = {
+    "pi": ("pi", "npm install -g @earendil-works/pi-coding-agent"),
+}
+"""The local agent a shim drives, as ``(executable, install command)``, by preset key.
+
+A shim is plumbing in front of an agent the user installs themselves, and its
+``npx`` command resolves whether that agent is there or not. ``_probe_acp`` asks
+after this executable as well, so a machine without it reports the row absent
+with the install beside it, instead of offering a connect that fails a minute
+later inside the adapter with the same sentence. Listed only where the shim
+really does reach for a local install: ``pi-acp`` launches ``pi`` and fails
+with "executable not found" without it. The other two shims bring their agent
+along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
+runs the CLI its ``@anthropic-ai/claude-agent-sdk`` pin carries as a
+per-platform optional dependency (read from the 0.66.0 and 0.79.0 packages on
+2026-09-20/21), so a ``claude`` on PATH is neither needed nor the one that
+answers -- and what either wants is a login, not an install. The pin is also
+what decides which Claude models the row can reach: 0.66.0 bundled CLI 2.1.220,
+which refuses a model newer than it knows ("version 2.1.251 or newer is
+required"), so an account whose Claude settings name a recent model could not
+connect at all; 0.79.0 bundles 2.1.274.
 """
 
 
@@ -292,9 +317,22 @@ def install_hint_for(cfg: Any) -> str | None:
     return ACP_REGISTRY_INSTALL_HINTS.get(preset) if preset else None
 
 
+def shim_requirement_for(cfg: Any) -> tuple[str, str] | None:
+    """The agent a shim-launched row needs installed, with its install, or ``None``.
+
+    By provenance, like :func:`install_hint_for`, and for the same reason: the
+    row's name is its owner's to change, and a hand-written row that merely
+    wears a preset's name runs whatever command it wrote.
+    """
+    preset = getattr(cfg, "preset", None)
+    return SHIM_REQUIRED_EXECUTABLES.get(preset) if preset else None
+
+
 __all__ = [
     "SHIM_LAUNCHED_PRESETS",
+    "SHIM_REQUIRED_EXECUTABLES",
     "install_hint_for",
+    "shim_requirement_for",
     "THIRD_PARTY_SUBAGENT_PRESETS",
     "session_mcp_for",
     "third_party_subagent_presets",

@@ -264,6 +264,15 @@ export function installSources(): void {
       session: sessionCurrent() || '',
     })
   }
+
+  /* A picked deck template lands under uploads exactly as an upload does, so
+     the turn hands it over by the same path and the deck engine's route opens
+     on it. */
+  composer.templates = {
+    list: () => gateway().call('deck.templates.list', { covers: true }),
+    pick: (name) => gateway().call('deck.templates.pick', { name }),
+    pages: (name) => gateway().call('deck.templates.pages', { name }),
+  }
 }
 
 /* ── the pushes: what the gateway says without being asked ───────────────── */

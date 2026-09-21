@@ -32,7 +32,7 @@ from raven.agent.subagent.direct_chat import (
     DirectTurnMeta,
     NotAddressableError,
 )
-from raven.agent.subagent.history import SpawnRecord, session_history_root
+from raven.agent.subagent.history import SpawnRecord, session_history_root, spawn_live_key
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
 from raven.agent.subagent.mode_tiers import resolve_tier, turn_tier_in_force
@@ -53,6 +53,7 @@ from raven.context_engine.segments.render import dispatch_language_line
 from raven.contracts.llm_provider import LLMProvider
 from raven.observability import semconv
 from raven.providers.binding import ModelBinding, resolve
+from raven.providers.pool import ProviderPool, live_pin_resolver
 from raven.sandbox import SandboxConfig, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.spine.message import Media
@@ -78,6 +79,33 @@ _CANCEL_DRAIN_TIMEOUT_S = 5.0
 # refusals below open with this, and the spawn tool tests for it before publishing
 # anything that presumes the run exists.
 SPAWN_REFUSED_PREFIX = "Spawn refused: "
+
+
+def _row_pin(config: Any, pool: Any = None) -> tuple[str | None, str | None]:
+    """A built-in row's own ``model``, with the provider its stored id names.
+
+    The pair, not the id alone: ``subagents.update`` stores the id naming the
+    provider it was picked under, and the pool handed only the id would let a
+    configured gateway take the pin instead (``ProviderPool.bind_pin``) -- the
+    reader's credential choice, silently swapped for another bill. Read with
+    ``stored_provider_name``, the function the write checked the pair with, so
+    a section raven has no spec for resolves here to that section rather than
+    to nothing, which the pool would have read as "derive one".
+
+    ``pool`` lends its provider table for the other direction of that mistake:
+    a hand-written ``deepseek-ai/DeepSeek-V3`` names no section, so its head is
+    part of the id and the provider is left to the pool to derive -- the gateway
+    branch such an id ran through before rows carried their provider.
+    """
+    from raven.providers.wire import stored_provider_name
+
+    model = getattr(config, "model", None)
+    if not model:
+        return None, None
+    providers = getattr(getattr(pool, "config", None), "providers", None)
+    return model, stored_provider_name(model, providers=providers)
+
+
 # Tier mismatches already reported, so a busy session logs one line per agent
 # rather than one per dispatch. Same shape and reason as `_STALE_SNAPSHOT_SEEN`
 # in raven/agent/subagent/backends/__init__.py.
@@ -225,6 +253,7 @@ class SubagentManager:
         target_ready: "TargetReady | None" = None,
         retry_delays: "Sequence[float] | None" = None,
         retry_after_output: bool = False,
+        provider_pool: ProviderPool | None = None,
     ):
         from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 
@@ -274,6 +303,10 @@ class SubagentManager:
         self._unprompted_held: dict[tuple[str, str, str], str] = {}
         self._unprompted_trailing: dict[tuple[str, str, str], asyncio.Task] = {}
         self._fallback = ModelBinding(provider, model or provider.get_default_model())
+        # What pairs a built-in row's own model with a credential
+        # (`build_builtin_backend`). Without one a row's model is unusable and
+        # the row follows the conversation's binding, said once in the log.
+        self.provider_pool = provider_pool
         self.search_api_key = search_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -397,14 +430,29 @@ class SubagentManager:
 
         ``build`` is the already-narrowed pair the registry computed (the row's
         allow-lists intersected with this dispatch's), duck-typed on
-        ``tools_allow`` / ``skills_allow``. The row's own ``model`` and
-        ``restrict_to_workspace`` are per-agent overrides: unset, they inherit this
-        manager's, so a row that says nothing about confinement cannot loosen it.
+        ``tools_allow`` / ``skills_allow``. ``restrict_to_workspace`` is a
+        per-agent override: unset, it inherits this manager's, so a row that says
+        nothing about confinement cannot loosen it.
+
+        The row's own ``model`` is a pin the backend resolves per dispatch and
+        pairs with its own credential through the pool (``live_pin_resolver``),
+        never a value baked in here: this backend is cached across bindings, so
+        a model fixed at construction would be whichever one the manager
+        happened to be on when the row was first dispatched, and a bare id has
+        no key of its own to be sent with. Unusable, the row follows the
+        conversation's binding.
         """
         confine = getattr(row.config, "restrict_to_workspace", None)
+        pin = live_pin_resolver(
+            self.provider_pool,
+            lambda: _row_pin(row.config, self.provider_pool),
+            key=f"subagents.{row.name}.model",
+            follower=f"built-in agent {row.name!r}",
+        )
         return RavenLoopBackend(
             provider=self.provider,
-            model=getattr(row.config, "model", None) or self.model,
+            model=self.model,
+            pin=pin,
             agent_home=self.workspace,
             restrict_to_workspace=self.restrict_to_workspace if confine is None else confine,
             exec_config=self.exec_config,
@@ -1122,7 +1170,7 @@ class SubagentManager:
                             model=self.model,
                             mode=self.resolve_mode(session_key, agent, handle),
                             **optional_keyword(
-                                backend, "session_model", self.instance_model(session_key, agent, handle)
+                                backend, "session_model", self.session_model_for(session_key, agent, handle)
                             ),
                             **optional_keyword(backend, "authored_task", text),
                             **kwargs,
@@ -1311,6 +1359,34 @@ class SubagentManager:
     def instance_model(self, session_key: str | None, agent: str, handle: str) -> str | None:
         """Which model this instance's turns run on, or ``None`` for the agent's own."""
         return self._instance_models.get((session_key or "", agent, handle))
+
+    def row_default_model(self, agent: str) -> str | None:
+        """A third-party acp row's own configured ``model``, absent an instance override.
+
+        ``None`` for every other kind: a builtin row's model is a pin its own
+        backend pairs with a credential (:meth:`build_builtin_backend`), and an
+        openai row's model is not a menu choice this session picks between.
+        """
+        row = self.registry.get(agent)
+        return getattr(row.config, "model", None) if row is not None and row.kind == "acp" else None
+
+    def session_model_for(self, session_key: str | None, agent: str | None, instance: str | None) -> str | None:
+        """The model one acp dispatch runs on: the instance's override, else the row's own.
+
+        The one resolver every lane dispatches through -- a spawn, a direct
+        chat and a DAG node -- so a graph reaching an acp row through a
+        different lane cannot read a different model than a spawn to that same
+        row would.
+
+        ``instance``, not the dispatch's handle, for the reason ``resolve_mode``
+        takes it that way: a call naming no instance has no override to find.
+        """
+        agent = agent or ""
+        if instance:
+            override = self.instance_model(session_key, agent, instance)
+            if override:
+                return override
+        return self.row_default_model(agent)
 
     def set_instance_model(self, session_key: str | None, agent: str, handle: str, model: str | None) -> str | None:
         """Put one instance on ``model`` from its next turn on.
@@ -1609,10 +1685,11 @@ class SubagentManager:
         # publishing into nothing is a no-op. Every exit below therefore has the
         # tool calls and token cost the run got as far as producing -- a failed
         # run's are the ones worth keeping. Keyed into the live index by the
-        # record's own directory name, so `subagent.context` can serve the run
-        # while it is still in flight, and by instance so the conversation view
-        # can: a spawned call is a turn of the same instance a direct chat talks
-        # to, and watching it there is the same question.
+        # record's own address (`spawn_live_key`), so `subagent.context` and
+        # `tasks.list` can serve the run while it is still in flight, and by
+        # instance so the conversation view can: a spawned call is a turn of
+        # the same instance a direct chat talks to, and watching it there is
+        # the same question.
         cancelled = False
         # The record's own id, not its directory's name: the artifacts are a
         # filename prefix in the shared node root now, so the directory names
@@ -1622,7 +1699,7 @@ class SubagentManager:
         # queued behind a direct chat to the same instance is not that
         # instance's turn yet, and registering it here took the slot from the
         # turn that was (see ``activity.collecting``).
-        with activity.collecting(live_key=call_id, prompt=task) as did:
+        with activity.collecting(live_key=spawn_live_key(record.dir, call_id), prompt=task) as did:
             try:
                 backend = self._resolve_backend(agent)
                 # The same message list a direct chat to this handle would carry.
@@ -1674,7 +1751,7 @@ class SubagentManager:
                             **optional_keyword(
                                 backend,
                                 "session_model",
-                                self.instance_model(session_key, agent, origin.get("instance") or ""),
+                                self.session_model_for(session_key, agent, origin.get("instance")),
                             ),
                             **optional_keyword(backend, "authored_task", origin.get("authored_task")),
                             **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),

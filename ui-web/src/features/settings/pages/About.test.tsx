@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../../state/sources'
-import { install, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
+import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { workspacePath } from './About'
 
@@ -15,7 +15,7 @@ vi.mock('../../../lib/openUrl', () => ({ open: (v: string) => { copied.values.pu
 
 
 beforeEach(() => {
-  setSources({ settings: settingsSource })
+  setSources({ settings: settingsSource, model: modelSource })
 })
 
 afterEach(() => {

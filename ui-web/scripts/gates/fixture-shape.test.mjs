@@ -190,20 +190,20 @@ const UNSENT = new Set([
   'knowledge.search.embed_ms', 'knowledge.search.search_ms',
   // knowledge.status: 1
   'knowledge.status.extensions',
-  // model.add_model: 9
-  'model.add_model.provider.accepts_api_key', 'model.add_model.provider.api_base', 'model.add_model.provider.default_api_base', 'model.add_model.provider.docs', 'model.add_model.provider.key_env', 'model.add_model.provider.model_labels', 'model.add_model.provider.platforms', 'model.add_model.provider.protocol_overrides', 'model.add_model.provider.protocols',
+  // model.add_model: 8
+  'model.add_model.provider.accepts_api_key', 'model.add_model.provider.api_base', 'model.add_model.provider.default_api_base', 'model.add_model.provider.docs', 'model.add_model.provider.key_env', 'model.add_model.provider.platforms', 'model.add_model.provider.protocol_overrides', 'model.add_model.provider.protocols',
   // model.fetch_models: 7
   'model.fetch_models.error', 'model.fetch_models.models[].capabilities', 'model.fetch_models.models[].context_window', 'model.fetch_models.models[].description', 'model.fetch_models.models[].input_modalities', 'model.fetch_models.models[].output_modalities', 'model.fetch_models.models[].source',
-  // model.options: 8
-  'model.options.providers[].accepts_api_key', 'model.options.providers[].api_base', 'model.options.providers[].docs', 'model.options.providers[].key_env', 'model.options.providers[].model_labels', 'model.options.providers[].platforms', 'model.options.providers[].protocol_overrides', 'model.options.providers[].protocols',
-  // model.add_models: 9 -- the same provider row as model.options, plus the default address the row above states
-  'model.add_models.provider.accepts_api_key', 'model.add_models.provider.api_base', 'model.add_models.provider.default_api_base', 'model.add_models.provider.docs', 'model.add_models.provider.key_env', 'model.add_models.provider.model_labels', 'model.add_models.provider.platforms', 'model.add_models.provider.protocol_overrides', 'model.add_models.provider.protocols',
-  // model.remove_model: 9
-  'model.remove_model.provider.accepts_api_key', 'model.remove_model.provider.api_base', 'model.remove_model.provider.default_api_base', 'model.remove_model.provider.docs', 'model.remove_model.provider.key_env', 'model.remove_model.provider.model_labels', 'model.remove_model.provider.platforms', 'model.remove_model.provider.protocol_overrides', 'model.remove_model.provider.protocols',
-  // model.save_key: 9
-  'model.save_key.provider.accepts_api_key', 'model.save_key.provider.api_base', 'model.save_key.provider.default_api_base', 'model.save_key.provider.docs', 'model.save_key.provider.key_env', 'model.save_key.provider.model_labels', 'model.save_key.provider.platforms', 'model.save_key.provider.protocol_overrides', 'model.save_key.provider.protocols',
-  // model.set_protocol: 9
-  'model.set_protocol.provider.accepts_api_key', 'model.set_protocol.provider.api_base', 'model.set_protocol.provider.default_api_base', 'model.set_protocol.provider.docs', 'model.set_protocol.provider.key_env', 'model.set_protocol.provider.model_labels', 'model.set_protocol.provider.platforms', 'model.set_protocol.provider.protocol_overrides', 'model.set_protocol.provider.protocols',
+  // model.options: 7
+  'model.options.providers[].accepts_api_key', 'model.options.providers[].api_base', 'model.options.providers[].docs', 'model.options.providers[].key_env', 'model.options.providers[].platforms', 'model.options.providers[].protocol_overrides', 'model.options.providers[].protocols',
+  // model.add_models: 8 -- the same provider row as model.options, plus the default address the row above states
+  'model.add_models.provider.accepts_api_key', 'model.add_models.provider.api_base', 'model.add_models.provider.default_api_base', 'model.add_models.provider.docs', 'model.add_models.provider.key_env', 'model.add_models.provider.platforms', 'model.add_models.provider.protocol_overrides', 'model.add_models.provider.protocols',
+  // model.remove_model: 8
+  'model.remove_model.provider.accepts_api_key', 'model.remove_model.provider.api_base', 'model.remove_model.provider.default_api_base', 'model.remove_model.provider.docs', 'model.remove_model.provider.key_env', 'model.remove_model.provider.platforms', 'model.remove_model.provider.protocol_overrides', 'model.remove_model.provider.protocols',
+  // model.save_key: 8
+  'model.save_key.provider.accepts_api_key', 'model.save_key.provider.api_base', 'model.save_key.provider.default_api_base', 'model.save_key.provider.docs', 'model.save_key.provider.key_env', 'model.save_key.provider.platforms', 'model.save_key.provider.protocol_overrides', 'model.save_key.provider.protocols',
+  // model.set_protocol: 8
+  'model.set_protocol.provider.accepts_api_key', 'model.set_protocol.provider.api_base', 'model.set_protocol.provider.default_api_base', 'model.set_protocol.provider.docs', 'model.set_protocol.provider.key_env', 'model.set_protocol.provider.platforms', 'model.set_protocol.provider.protocol_overrides', 'model.set_protocol.provider.protocols',
   // playbooks.get: 1
   'playbooks.get.playbook.mcp_servers',
   // playbooks.oauth.authorize: 1

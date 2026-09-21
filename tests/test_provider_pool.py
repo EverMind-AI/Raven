@@ -504,6 +504,33 @@ def test_an_unusable_pin_is_reported_once() -> None:
     assert "the curator follows the conversation's model instead" in mine[0]
 
 
+def test_a_later_different_unusable_pin_is_reported_on_its_own() -> None:
+    """The resolver outlives the config that produced it, so once-per-resolver
+    would leave a second wrong pin silent for the life of the process. Once
+    per pin: each distinct problem gets one line, and the same problem still
+    gets only one."""
+    from loguru import logger
+
+    from raven.providers.pool import live_pin_resolver
+
+    said: list[str] = []
+    sink_id = logger.add(lambda message: said.append(message.record["message"]), level="WARNING")
+    try:
+        configured = {"pin": ("unpaired", None)}
+        resolve_pin = live_pin_resolver(
+            _AskedPool(), lambda: configured["pin"], key="context.curator_model", follower="the curator"
+        )
+        assert resolve_pin() is None
+        configured["pin"] = ("unpaired", "deepseek")
+        assert resolve_pin() is None
+        assert resolve_pin() is None
+    finally:
+        logger.remove(sink_id)
+
+    mine = [m for m in said if "context.curator_model" in m]
+    assert len(mine) == 2
+
+
 def test_a_pin_is_resolved_once_for_the_turn_that_holds_it() -> None:
     """The curator asks for its pin once per step of a tool-calling
     conversation that carries the previous steps with it. Answering two steps

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as confirm from '../../../state/confirm'
 import { resetSources, setSources } from '../../../state/sources'
-import { install, mount, source as settingsSource } from '../../../test/settingsHarness'
+import { install, modelSource, mount, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { stripFrontmatter } from './Skills'
 
@@ -14,7 +14,7 @@ vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => 
 
 
 beforeEach(() => {
-  setSources({ settings: settingsSource })
+  setSources({ settings: settingsSource, model: modelSource })
 })
 
 afterEach(() => {

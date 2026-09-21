@@ -1,0 +1,60 @@
+/* This domain's own stylesheet.
+ *
+ * Every class this domain introduces carries the domain's prefix (`cp`), and
+ * the file is imported by the domain's mount -- see mount.tsx -- so nothing
+ * outside features/composer/ has to know it exists. Vite collects the imported
+ * stylesheets of every domain into one asset, which ui-web/build.py inlines
+ * into the page's single <style> block after styles/page.css, in domain order.
+ *
+ * The composer's older rules (the dock, the tray, the queue, the sheets) are
+ * still in styles/page.css, where they landed before there was a per-domain
+ * sheet to put them in; the gate's LEGACY_LOCAL row is what carries that debt
+ * down.
+ */
+
+/* The deck template picker: a rack sheet (it wears page.css's `.csheet` too) whose body is a
+   grid of covers, and behind any cover the template's pages in a strip that
+   snaps one at a time. */
+.cp-tpl-sheet { max-height: min(78vh, 720px); }
+.cp-tpl-sheet .cp-tpl-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows: max-content;
+  gap: 10px; margin-top: 8px;
+}
+.cp-tpl-sheet .cp-tpl-empty { color: var(--faint); font-size: 12px; margin-top: 8px; }
+.cp-tpl-card { display: block; padding: 0; border: 0; background: none; cursor: pointer; min-width: 0; }
+/* The box carries the shape with padding, which nothing in a flex or grid
+   parent can shrink; the picture fills it. */
+.cp-tpl-card .cp-tpl-coverbox { display: block; position: relative; width: 100%; padding-bottom: 56.25%; }
+.cp-tpl-card .cp-tpl-cover {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 8px;
+  border: 1px solid var(--line-soft); background: var(--surface); transition: border-color .12s;
+}
+.cp-tpl-card .cp-tpl-cover.cp-tpl-empty { display: grid; place-items: center; color: var(--faint); font-size: 11px; padding: 6px; text-align: center; }
+.cp-tpl-card:hover .cp-tpl-cover, .cp-tpl-card:focus-visible .cp-tpl-cover { border-color: var(--text); }
+.cp-tpl-sheet .cp-tpl-pages { display: grid; gap: 8px; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-bar { display: flex; align-items: center; gap: 10px; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-back {
+  display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: 12.5px;
+  padding: 4px 8px 4px 4px; border-radius: 7px;
+}
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-back svg { width: 14px; height: 14px; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-back:hover { color: var(--text); background: var(--raised); }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-count { flex: 1; text-align: center; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-use {
+  background: var(--black); color: var(--ink); font-size: 12.5px; font-weight: 600;
+  padding: 6px 14px; border-radius: 8px;
+}
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-use:hover { opacity: .88; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-view { display: grid; grid-template-columns: 28px minmax(0, 1fr) 28px; align-items: center; gap: 4px; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-arrow { color: var(--faint); padding: 6px 2px; border-radius: 7px; display: grid; place-items: center; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-arrow svg { width: 18px; height: 18px; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-arrow:hover:not(:disabled) { color: var(--text); background: var(--raised); }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-arrow:disabled { opacity: .25; cursor: default; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip {
+  display: flex; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; scrollbar-width: none;
+  border-radius: 10px; border: 1px solid var(--line-soft); background: var(--surface); aspect-ratio: 16 / 9; outline: 0;
+}
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip::-webkit-scrollbar { display: none; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip:focus-visible { border-color: var(--text); }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > img { flex: none; width: 100%; height: 100%; object-fit: contain; scroll-snap-align: start; user-select: none; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > .cp-tpl-cover.cp-tpl-empty { position: static; width: 100%; height: 100%; border: 0; }

@@ -4,16 +4,14 @@
  * by the two gates that hold the page's tables complete
  * (scripts/gates/domain-shape.test.mjs, domain-registration.test.mjs).
  *
- * Two names this domain still answers to, and one reason each. Its message
- * keys are `gui.agent.*` -- the namespace that reads as features/subagents/'s
- * and is this domain's: the catalogue is i18n/messages.json at the REPO root,
+ * One name this domain still answers to, and the reason. Its message keys
+ * are `gui.agent.*` -- the namespace that reads as features/subagents/'s and
+ * is this domain's: the catalogue is i18n/messages.json at the REPO root,
  * which the TUI generates its own copy from, so renaming a namespace is an
  * edit to both front ends rather than to this directory (no TUI source reads
  * this one -- measured -- so the rename is safe, just not this tree's to make;
- * scripts/gates/i18n-keys.test.mjs carries the mapping meanwhile). And its
- * detail-card button is `.xaedit`, which src/styles/page.css carries five
- * rules for, so the class prefix waits on the CSS step the way knowledge's
- * page id does.
+ * scripts/gates/i18n-keys.test.mjs carries the mapping meanwhile). Its classes
+ * carry the domain's own prefix, so there is no `cssPrefix` to declare.
  */
 import { ExtAgentsApp } from './ExtAgentsPage'
 

@@ -51,13 +51,13 @@ const pop = (): HTMLElement => document.getElementById('permPop')!
 const rows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('#permList .prow')]
 
 describe('the permission chip', () => {
-  it('defaults to ask, the product default the gate ships with', async () => {
+  it('defaults to smart, the product default the gate ships with', async () => {
     const perm = await load()
-    expect(perm.current()).toBe('ask')
+    expect(perm.current()).toBe('smart')
     perm.draw()
-    expect(document.getElementById('permName')!.textContent).toBe('gui.perm.ask')
+    expect(document.getElementById('permName')!.textContent).toBe('gui.perm.smart')
     expect(chip().classList.contains('risk')).toBe(false)
-    expect(chip().getAttribute('aria-label')).toBe('gui.perm.title: gui.perm.ask')
+    expect(chip().getAttribute('aria-label')).toBe('gui.perm.title: gui.perm.smart')
   })
 
   it('marks the risky tier on the chip itself', async () => {
@@ -78,16 +78,16 @@ describe('the permission chip', () => {
 
   it('ignores a stored tier no build offers any more', async () => {
     const perm = await load('godmode')
-    expect(perm.current()).toBe('ask')
+    expect(perm.current()).toBe('smart')
   })
 
   it('takes the mode the live layer loaded from config', async () => {
     const perm = await load()
-    perm.setFromConfig('smart')
-    expect(perm.current()).toBe('smart')
-    expect(localStorage.getItem('raven.perm')).toBe('smart')
+    perm.setFromConfig('ask')
+    expect(perm.current()).toBe('ask')
+    expect(localStorage.getItem('raven.perm')).toBe('ask')
     perm.setFromConfig('godmode')
-    expect(perm.current()).toBe('smart')
+    expect(perm.current()).toBe('ask')
   })
 
   it('puts the tier icon in the chip slot', async () => {
@@ -111,7 +111,7 @@ describe('the permission popover', () => {
       'gui.perm.full',
     ])
     expect(rows().map((r) => r.getAttribute('role'))).toEqual(['radio', 'radio', 'radio'])
-    expect(rows().map((r) => r.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false'])
+    expect(rows().map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false'])
     /* Only the risky tier wears the class, and only the chosen one has a tick. */
     expect(rows().filter((r) => r.classList.contains('risk')).length).toBe(1)
     expect(pop().querySelectorAll('svg.tick').length).toBe(1)
@@ -237,7 +237,7 @@ describe('persisting a pick', () => {
     rows()[2]!.click()
     await Promise.resolve()
     await Promise.resolve()
-    expect(perm.current()).toBe('ask')
+    expect(perm.current()).toBe('smart')
     expect(localStorage.getItem('raven.perm')).not.toBe('full')
   })
 })

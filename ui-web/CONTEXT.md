@@ -235,6 +235,42 @@ and `src/chrome/PermPopover.tsx` and `TierPopover.tsx` are the two the dock
 raises.
 _Avoid_: "pop" and "panel" for this.
 
+**Kind**:
+Which bucket a model list files a model under: `text`, `image`, `audio`,
+`video`, `embedding` or `reranker`. Derived once, in Python, by
+`raven/providers/registry_data.py`'s `kind_of`, from what a model WRITES -- so
+a model that reads pictures is still `text` -- and carried on the wire as
+`model_labels[<id>].kind`. `features/model/types.ts` reads it (`modelKind`),
+and `guessKind` there is the one place that guesses: a translation of
+`inferred_tags`, for an id a person just typed that no catalogue describes.
+A model with no label entry is `text`.
+_Avoid_: "type" or "category" for this; "kind" alone for a provider's auth
+shape, which the rows call `auth_type`.
+
+**Offer**:
+What ONE opening of the model picker lists, and what a pick there means
+(`Offer` in `features/model/types.ts`): a kind, optionally the providers the
+caller allows, optionally a title and the pair to mark, optionally the write to
+make. The composer's chip opens with none of it and gets the default -- text
+models, every connected provider, switch this conversation. A settings role
+slot opens with its own through `openPicker` in `features/model/source.ts`.
+The kind narrows each provider's column, never the provider list.
+
+**Gateway provider**:
+A provider that resells other vendors' models under `vendor/model` ids --
+`ProviderSpec.is_gateway` in `raven/providers/registry.py`, `gateway` on a
+`model.options` row. Twenty-one of the fifty-five.
+_Avoid_: "gateway" alone, which in this document is the page's one data entry
+point above.
+
+**Provider catalogue**:
+Every provider `model.options` returns, connected or not: the left column of
+the settings dialog's Model providers page
+(`features/settings/providers/ProviderSide.tsx`). Distinct from what a picker
+offers, which is the connected ones.
+_Avoid_: "catalogue" alone, which in the Runtime's `CONTEXT.md` is the Session
+Mode catalogue.
+
 **Task**:
 One row of `tasks.list` as the desk's tasks tab draws it (`features/tasks/`): a spawn or a
 DAG run this conversation started, with its nodes inline. The row is the list's, the pane it
@@ -267,8 +303,11 @@ _Avoid_: "pane" for this -- a pane is a resizable column.
 A card that docks above the composer for as long as one turn needs it: a
 clarifying question, or an approval request
 (`src/features/composer/ClarifySheet.tsx`, `GateSheet.tsx`,
-`AskApproveSheet.tsx`). Filed under the session it was raised in and mounted
-only while that session is open -- see Sheet rack. A delegated graph used to
+`AskApproveSheet.tsx`) -- or for as long as the reader wants it: the deck
+template picker (`TemplateSheet.tsx`, opened by `templates.ts`) docks the same
+way but asks nothing, so the composer stays live under it. Filed under the
+session it was raised in and mounted only while that session is open -- see
+Sheet rack. A delegated graph used to
 dock here too and no longer does -- see Task strip.
 _Avoid_: "dialog" for this -- a dialog is the settings or channel one, which is
 not docked and is not about a turn.
@@ -351,10 +390,12 @@ it rebuilds the conversation from disk.
 
 **Sheet rack**:
 `src/state/sheetRack.ts` plus `src/chrome/SheetRack.tsx` -- what docks above the
-composer (a clarify question, an approval request), filed under the session it
-was raised in and mounted only while that session is open. A parked sheet keeps
-its element and loses its interior, which is why what the reader typed into one
-lives in `src/state/sheetDrafts.ts` rather than in the input.
+composer (a clarify question, an approval request, the deck template picker),
+filed under the session it was raised in and mounted only while that session is
+open. A parked sheet keeps its element and loses its interior, which is why what
+the reader typed into one lives in `src/state/sheetDrafts.ts` rather than in the
+input; a sheet re-added with a new view keeps its id and its place, so a repaint
+is a repaint and not a remount.
 
 **Task strip**:
 `TaskRuns` in `src/features/tasks/TasksPage.tsx`, rendered by

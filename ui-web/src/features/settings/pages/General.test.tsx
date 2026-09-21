@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as notifications from '../../../lib/notifications'
 import * as look from '../../../state/look'
 import { resetSources, setSources } from '../../../state/sources'
-import { install, mount, source as settingsSource } from '../../../test/settingsHarness'
+import { install, modelSource, mount, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -15,7 +15,7 @@ vi.mock('../../../state/toast', () => ({ show: (t: string) => { toasts.calls.pus
 
 
 beforeEach(() => {
-  setSources({ settings: settingsSource })
+  setSources({ settings: settingsSource, model: modelSource })
 })
 
 afterEach(() => {

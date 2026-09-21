@@ -120,6 +120,21 @@ def nodes_root(session_dir: Path) -> Path:
     return session_history_root(session_dir) / _NODES_DIRNAME
 
 
+def spawn_live_key(root: Path, node_id: str) -> str:
+    """The live-index key a spawn's activity is collected under.
+
+    The record's own address -- the node root of its conversation plus its
+    id -- rather than the id alone: a node id is unique for one conversation
+    only, and the live index is one per process, so two conversations that
+    named a spawn alike would otherwise share an entry (and the first to
+    finish would drop the other's). Shared with the readers the way the dag
+    side shares ``node_live_key``; the writer holds the root as
+    ``SpawnRecord.dir`` and a reader as the node files' root, which both
+    resolve from the same session directory.
+    """
+    return f"spawn:{root}:{node_id}"
+
+
 def node_file_in(root: Path, node_id: str, name: str) -> Path:
     """One artifact of one node, under a node root the caller already holds.
 

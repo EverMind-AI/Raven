@@ -2289,7 +2289,11 @@ class TurnPathMixin:
         if turn_hook_meta.get("output_limited"):
             session.metadata["output_limit_turn_at"] = prev_len
         else:
-            session.metadata.pop("output_limit_turn_at", None)
+            # None rather than dropping the key: a save merges its metadata
+            # over the record on disk, so a key left unsaid is kept rather than
+            # cleared (SessionManager._metadata_to_write). The reader asks
+            # whether this is an int, which None is not.
+            session.metadata["output_limit_turn_at"] = None
         self._save_turn(
             session, all_msgs, turn_start_idx, received_at=turn_received_at, inbound_original=inbound_original
         )

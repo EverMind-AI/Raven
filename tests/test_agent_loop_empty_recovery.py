@@ -1286,7 +1286,9 @@ async def test_an_answerless_turn_that_was_not_cut_records_no_output_limit(works
         session_key="s1",
     )
 
-    assert "output_limit_turn_at" not in agent.sessions.get_or_create("s1").metadata
+    # Said rather than left unsaid: a save merges over the record on disk, so
+    # the marker is cleared by writing None. Its reader asks for an int.
+    assert agent.sessions.get_or_create("s1").metadata.get("output_limit_turn_at") is None
 
 
 class _CutThenAnswersProvider(LLMProvider):
@@ -1332,7 +1334,9 @@ async def test_a_turn_that_recovered_from_a_cut_records_no_output_limit(workspac
     )
 
     assert out is not None and out[0] == "the whole answer"
-    assert "output_limit_turn_at" not in agent.sessions.get_or_create("s1").metadata
+    # Said rather than left unsaid: a save merges over the record on disk, so
+    # the marker is cleared by writing None. Its reader asks for an int.
+    assert agent.sessions.get_or_create("s1").metadata.get("output_limit_turn_at") is None
 
 
 @pytest.mark.asyncio
@@ -1356,4 +1360,6 @@ async def test_a_turn_that_was_not_cut_clears_a_marker_left_by_an_earlier_one(wo
         session_key="s1",
     )
 
-    assert "output_limit_turn_at" not in agent.sessions.get_or_create("s1").metadata
+    # Said rather than left unsaid: a save merges over the record on disk, so
+    # the marker is cleared by writing None. Its reader asks for an int.
+    assert agent.sessions.get_or_create("s1").metadata.get("output_limit_turn_at") is None

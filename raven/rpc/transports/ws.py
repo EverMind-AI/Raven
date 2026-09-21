@@ -241,6 +241,8 @@ class WsGateway:
         deck's own bytes. The path goes through the same policy first; what is
         served afterwards is a file this gateway produced or the author's own
         published PDF, never a second path the page chose.
+        ``render=thumb`` asks for the deck's first page as a PNG, for a tile
+        that shows one picture of a delivered file; it takes the same road.
         """
         from raven.rpc.files import MAX_VIEW_BYTES, content_type_for, resolve_readable, sandbox_for
 
@@ -267,8 +269,11 @@ class WsGateway:
             raise web.HTTPNotFound(reason=str(exc)) from None
         except OSError as exc:
             raise web.HTTPBadRequest(reason=str(exc)) from None
-        if request.query.get("render") == "pdf":
+        render = request.query.get("render")
+        if render == "pdf":
             path = await self._rendered_pdf(path, workspace)
+        elif render == "thumb":
+            path = await self._rendered(path, workspace, thumb=True)
         if path.stat().st_size > MAX_VIEW_BYTES:
             raise web.HTTPRequestEntityTooLarge(max_size=MAX_VIEW_BYTES, actual_size=path.stat().st_size)
         return web.FileResponse(
@@ -286,7 +291,11 @@ class WsGateway:
         )
 
     async def _rendered_pdf(self, path: Path, workspace: Path | None = None) -> Path:
-        """The PDF to serve for a deck, or the HTTP error the page can show.
+        return await self._rendered(path, workspace)
+
+    async def _rendered(self, path: Path, workspace: Path | None = None, *, thumb: bool = False) -> Path:
+        """The rendering to serve for a deck (its PDF, or with ``thumb`` its first
+        page as a PNG), or the HTTP error the page can show.
 
         The status codes are the page's only signal: 503 when the host has no
         LibreOffice, 504 when the render outran its budget, 500 when it ran and
@@ -302,6 +311,8 @@ class WsGateway:
         if not pdf_preview.is_renderable(path):
             raise web.HTTPBadRequest(text=f"{path.suffix or path.name} cannot be rendered as a PDF")
         try:
+            if thumb:
+                return await pdf_preview.png_for(path)
             return await pdf_preview.pdf_for(path, workspace=workspace)
         except pdf_preview.PdfPreviewUnavailableError as exc:
             raise web.HTTPServiceUnavailable(text=str(exc)) from None

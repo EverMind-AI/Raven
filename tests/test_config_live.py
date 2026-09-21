@@ -422,7 +422,7 @@ def test_permissions_node_invalid_from_the_start_answers_defaults(tmp_path):
     path = tmp_path / "config.json"
     path.write_text('{"permissions": {"mode": "godmode"}}')
     fresh = permissions_config(LiveConfig(path))
-    assert fresh.mode == "ask"
+    assert fresh.mode == "smart"
     assert fresh.tools == {}
 
 

@@ -98,7 +98,7 @@ describe('workspace geometry', () => {
   })
 
   /* A task pane's board is sized like the agent conversation's -- 440, not
-     the file pane's 720 -- because that is the width its own card grid was
+     the file pane's 960 -- because that is the width its own card grid was
      laid out against. */
   it('opens a task pane at the agent width, not the file width', () => {
     expect(workspaceTransitionWidth({

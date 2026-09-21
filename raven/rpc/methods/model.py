@@ -243,6 +243,7 @@ def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -
     """
     from raven.providers.catalog import describe
     from raven.providers.rates import resolve_context_window
+    from raven.providers.registry_data import kind_of
 
     overlays = _configured_overlays(slug, section=section)
     out: dict[str, dict[str, Any]] = {}
@@ -251,7 +252,7 @@ def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -
         window = resolve_context_window(model, allow_fetch=False)
         if not (row.described or row.tagged or window):
             continue
-        entry: dict[str, Any] = {"label": row.label}
+        entry: dict[str, Any] = {"label": row.label, "kind": kind_of(row.capabilities, row.output_modalities)}
         if row.description:
             entry["description"] = row.description
         if row.capabilities:
@@ -397,6 +398,7 @@ def _build_provider_entry(
         "protocols": protocols,
         "protocol_overrides": overrides,
         "total_models": len(models),
+        "gateway": bool(spec and spec.is_gateway),
         # "An address must be supplied" -- the gate's answer, not the shape's:
         # an endpoint-credential spec that ships a usable default (custom's
         # localhost gateway) runs on a bare key, and the picker must not
