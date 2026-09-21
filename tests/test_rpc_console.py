@@ -1541,7 +1541,7 @@ async def test_a_rejected_language_changes_nothing(tmp_path, monkeypatch) -> Non
 # ---------------------------------------------------------------------------
 
 
-def _console_loop(workspace: Path, monkeypatch: pytest.MonkeyPatch, raw: dict):
+def _console_loop(workspace: Path, monkeypatch: pytest.MonkeyPatch, raw: dict, **extra):
     """A real on-disk config, and a loop assembled from it the production way.
 
     Both halves matter. A hand-built stand-in is what let this defect hide: an
@@ -1572,7 +1572,7 @@ def _console_loop(workspace: Path, monkeypatch: pytest.MonkeyPatch, raw: dict):
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        **wire(media_config=config.effective_media_config(), **kw),
+        **wire(media_config=config.effective_media_config(), **kw, **extra),
     )
     # No withheld source installed here on purpose: AgentLoop installs its own,
     # which reads the live config -- the file above -- and unions the off switch
@@ -2014,15 +2014,19 @@ async def test_ext_list_reports_tool_search_even_when_the_fold_is_off(
     """A meta-tool the loop skipped is still the page's to draw.
 
     ``tool_search`` is registered only when progressive tool disclosure is on
-    (``tools.toolSearch.enabled``, off by default); ``tool_call`` is registered
-    either way. Reporting only what the registry holds left a default install
-    with a card named after tool search containing the one meta-tool that is
-    not tool search, and nothing said the feature existed. The same reasoning
-    as ``_gated_tools``: absent from the list reads as deleted.
+    (``tools.toolSearch.enabled``, which ships on); ``tool_call`` is registered
+    either way. Reporting only what the registry holds left an install that
+    turned the fold off with a card named after tool search containing the one
+    meta-tool that is not tool search, and nothing said the feature existed. The
+    same reasoning as ``_gated_tools``: absent from the list reads as deleted.
+
+    The fold is switched off here rather than left to the default, which is what
+    puts the tool in the absent state this case is about.
     """
     from raven.agent.tools.tool_search import TOOL_CALL_NAME, TOOL_SEARCH_NAME
+    from raven.config.schema import ToolSearchConfig
 
-    loop = _console_loop(tmp_path, monkeypatch, {"providers": {}})
+    loop = _console_loop(tmp_path, monkeypatch, {"providers": {}}, tool_search_config=ToolSearchConfig(enabled=False))
     assert TOOL_SEARCH_NAME not in loop.tools.tool_names, (
         "the fold is on in this fixture, so the absent case below is not being exercised"
     )
