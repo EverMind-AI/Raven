@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from raven.agent.subagent.dag_graph import parse_dag_spec
@@ -17,6 +17,7 @@ class _Skill:
     path: Path
     content: str
     source: str = "workspace"
+    requires: dict = field(default_factory=dict)
 
 
 class _Catalog:
@@ -212,3 +213,69 @@ def test_a_copy_that_cannot_be_made_falls_back_to_the_catalog_path_and_says_so(t
         in folded.nodes[0].prompt_template
     )
     assert len(notices) == 1 and "could not be copied into the working directory" in notices[0]
+
+
+def _on_disk(root: Path, folder: str, name: str, body: str = "body\n") -> _Skill:
+    """A skill that really exists, so the copy has something to copy."""
+    directory = root / folder
+    directory.mkdir(parents=True, exist_ok=True)
+    skill = directory / "SKILL.md"
+    skill.write_text(body, encoding="utf-8")
+    return _Skill(name, "d", skill, body)
+
+
+def test_a_skill_is_copied_under_its_own_directory_not_the_name_it_declares(tmp_path: Path) -> None:
+    """A catalog entry's name is what its SKILL.md frontmatter says, and the
+    registry falls back to the directory only when that field is absent. Built
+    into the copy target it let the skill file choose where it was written:
+    `../../..` walked out of the working directory and nothing said so."""
+    home, work = tmp_path / "home", tmp_path / "project"
+    work.mkdir()
+    entry = _on_disk(home, "oddly-named", "../../../escaped-by-name")
+
+    text, problems = skills_section(["../../../escaped-by-name"], _Catalog(entry), workdir=work)
+
+    assert not (tmp_path / "escaped-by-name").exists(), "the copy stayed inside the working directory"
+    assert (work / SKILLS_DIR / "oddly-named" / "SKILL.md").is_file()
+    assert f"{SKILLS_DIR}/oddly-named/SKILL.md" in text
+    assert problems == []
+
+
+def test_a_skill_that_declares_an_absolute_name_cannot_choose_where_it_lands(tmp_path: Path) -> None:
+    """`Path(base) / "/etc/x"` is `/etc/x`: an absolute name discarded the base
+    entirely, which is sharper than walking out of it."""
+    home, work = tmp_path / "home", tmp_path / "project"
+    work.mkdir()
+    entry = _on_disk(home, "abs-named", str(tmp_path / "pwned"))
+
+    skills_section([str(tmp_path / "pwned")], _Catalog(entry), workdir=work)
+
+    assert not (tmp_path / "pwned").exists()
+    assert (work / SKILLS_DIR / "abs-named" / "SKILL.md").is_file()
+
+
+def test_a_skill_needing_a_tool_no_subagent_gets_is_withheld_and_said(tmp_path: Path) -> None:
+    """The third surface that renders skills into a prompt, held to the same
+    gate as the other two. The DAG guide declares `requires.tools:
+    [run_subagent_dag]` and `WITHHELD_FROM_SUBAGENT` withholds that tool from
+    every sub-agent whatever backend runs it, so this is decidable here without
+    the reader's tool list -- and all three deliveries have to close: the menu
+    entry, the quoted body, and the file copied into the workdir."""
+    home, work = tmp_path / "home", tmp_path / "project"
+    work.mkdir()
+    guide = _on_disk(home, "subagent-dag-orchestration", "subagent-dag-orchestration", "How to orchestrate.\n")
+    guide.requires = {"tools": ["run_subagent_dag"]}
+    ordinary = _on_disk(home, "tidy", "tidy")
+    catalog = _Catalog(guide, ordinary)
+
+    text, problems = skills_section(["subagent-dag-orchestration", "tidy"], catalog, workdir=work)
+
+    assert "subagent-dag-orchestration" not in text
+    assert "tidy" in text
+    assert not (work / SKILLS_DIR / "subagent-dag-orchestration").exists()
+    assert any("run_subagent_dag" in note and "subagent-dag-orchestration" in note for note in problems), problems
+
+    quoted, quoted_problems = skills_section(["subagent-dag-orchestration", "tidy"], catalog, quote_bodies=True)
+
+    assert "How to orchestrate." not in quoted
+    assert any("run_subagent_dag" in note for note in quoted_problems)

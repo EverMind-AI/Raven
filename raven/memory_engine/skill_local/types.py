@@ -14,7 +14,12 @@ class SkillMeta:
     """Unique skill identifier."""
 
     name: str
-    """Skill name (directory name)."""
+    """Skill name, as its SKILL.md frontmatter declares it.
+
+    The directory name only when that field is absent, so this is a display
+    label the skill chooses and not a path component: anything building a path
+    out of it lets the skill file decide where that path goes.
+    """
 
     description: str
     """One-line description shown to the LLM."""

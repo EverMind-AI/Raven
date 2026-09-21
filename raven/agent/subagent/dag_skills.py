@@ -109,6 +109,72 @@ def _match(names: Iterable[str], catalog: CatalogLike) -> tuple[list[SkillLike],
     return found, missing
 
 
+def _gated(found: Sequence[SkillLike]) -> tuple[list[SkillLike], list[tuple[str, str]]]:
+    """The skills this step may actually be shown, and the ones the tool gate holds back.
+
+    This is the third surface that renders skills into a prompt, and the gate's
+    own docstring says why it has to be the same one: a per-surface copy is how
+    "the DAG guide must never reach a sub-agent" ends up enforced by a hardcoded
+    list of names on one side and by the declaration on the other.
+
+    The gate normally takes what a reader *has*, which this surface cannot know
+    -- an acp or cli peer opens its own session with its own tools. What it can
+    know is what no sub-agent is ever given: ``WITHHELD_FROM_SUBAGENT`` is a
+    specification, not a per-backend fact, and the DAG guide declares exactly
+    one of those. So the gate is asked the question this surface can answer.
+
+    Held back is said rather than done quietly: a name the caller wrote is
+    already reported when the catalog lacks it, and a name dropped here without
+    a word would read as a skill that silently did nothing.
+    """
+    from raven.agent.subagent.role import WITHHELD_FROM_SUBAGENT
+    from raven.memory_engine.skill_local.registry import filter_by_required_tools, requires_list
+
+    kept = filter_by_required_tools(list(found), None, denied=WITHHELD_FROM_SUBAGENT)
+    keep = {id(entry) for entry in kept}
+    withheld = [
+        (
+            entry.name,
+            ", ".join(t for t in requires_list(getattr(entry, "requires", None), "tools") if t in WITHHELD_FROM_SUBAGENT),
+        )
+        for entry in found
+        if id(entry) not in keep
+    ]
+    return kept, withheld
+
+
+def _folder_for(entry: SkillLike, source: Path) -> str:
+    """The one directory name this skill is copied under.
+
+    The skill's own directory, never ``entry.name``. A catalog entry's name is
+    what the skill's SKILL.md frontmatter declares -- the registry falls back to
+    the directory only when that field is absent -- so building the copy target
+    from it let the skill file choose where it was written: ``../../..`` walks
+    out of the working directory, and an absolute name discards the base
+    entirely, since ``Path(base) / "/etc/x"`` is ``/etc/x``. A skill is a
+    distribution unit and the name it advertises is the name a generated
+    playbook carries, so the string was never the host's to trust.
+
+    ``source`` is the SKILL.md the catalog resolved, so its parent is a real
+    directory on this machine and a single path component by construction.
+    """
+    folder = source.parent.name
+    return folder or Path(str(entry.name)).name
+
+
+def _inside(target: Path, root: Path) -> bool:
+    """Whether the copy lands under the step's own skills directory.
+
+    Belt to :func:`_folder_for`'s braces, and the thing that makes a refusal
+    sayable: what is refused here goes into the notices the caller already
+    reads, rather than landing somewhere nobody looks.
+    """
+    try:
+        return target.resolve().is_relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def _place(found: Sequence[SkillLike], workdir: Path | None) -> tuple[list[tuple[SkillLike, str]], list[str]]:
     """Each skill with the location the menu should name, and what could not be placed.
 
@@ -127,7 +193,14 @@ def _place(found: Sequence[SkillLike], workdir: Path | None) -> tuple[list[tuple
         if workdir is None or not source.is_file():
             placed.append((entry, str(entry.path)))
             continue
-        target = Path(workdir) / SKILLS_DIR / entry.name
+        folder = _folder_for(entry, source)
+        target = Path(workdir) / SKILLS_DIR / folder
+        if not _inside(target, Path(workdir) / SKILLS_DIR):
+            problems.append(
+                f"skill '{entry.name}' names a directory outside the step's skills directory and was not copied"
+            )
+            placed.append((entry, str(entry.path)))
+            continue
         try:
             shutil.copytree(
                 source.parent,
@@ -139,7 +212,7 @@ def _place(found: Sequence[SkillLike], workdir: Path | None) -> tuple[list[tuple
             problems.append(f"skill '{entry.name}' could not be copied into the working directory ({exc})")
             placed.append((entry, str(entry.path)))
             continue
-        placed.append((entry, f"{SKILLS_DIR}/{entry.name}/{source.name}"))
+        placed.append((entry, f"{SKILLS_DIR}/{folder}/{source.name}"))
     return placed, problems
 
 
@@ -206,6 +279,10 @@ def skills_section(
     """
     found, missing = _match(names, catalog)
     problems = [f"skill '{name}' is not on this machine's catalog" for name in missing]
+    found, withheld = _gated(found)
+    problems.extend(
+        f"skill '{name}' needs a tool no sub-agent is given ({tools}) and was left out of this step" for name, tools in withheld
+    )
     if not found:
         return "", problems
     if quote_bodies:
