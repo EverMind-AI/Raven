@@ -145,9 +145,11 @@ export function approvalRequest(frame: unknown): void {
           ...(pattern ? { pattern } : {}),
         }).then((r) => !!(r as { ok?: boolean } | null)?.ok, () => false)
       },
-      /* The rule a saved grant wrote is the reader's to take back; the call
-         that was allowed has run, and nothing else about it changes. */
-      onRevoke: (pattern: string) => gateway().call('approval.revoke', { pattern })
+      /* The rule this answer wrote is the reader's to take back; the call that
+         was allowed has run, and nothing else about it changes. Named by the
+         answer rather than by the rule's text, so the engine takes back what
+         this grant put on disk and nothing the reader wrote themselves. */
+      onRevoke: () => gateway().call('approval.revoke', { approval_id: p.approval_id })
         .then((r) => !!(r as { ok?: boolean } | null)?.ok, () => false),
       /* A sentence typed after a refusal goes on as the reader's next message:
          the refusal itself has already reached the model. */

@@ -26,7 +26,7 @@ interface Sheet {
   owner: string | null
   answer: (...args: unknown[]) => void
   req?: unknown
-  handlers?: { onRevoke?: (pattern: string) => Promise<boolean>; onNote?: (text: string) => void }
+  handlers?: { onRevoke?: () => Promise<boolean>; onNote?: (text: string) => void }
 }
 
 async function harness({ rows = [] as Row[], current = 'tui:open' as string | null } = {}) {
@@ -101,7 +101,7 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
     seen.sent.push([method, params])
     /* The answers the cases below read: the undo asks whether the rule was
        there, an answer whether the engine took it, a fresh page what is open. */
-    if (method === 'approval.revoke') return Promise.resolve({ ok: (params as { pattern: string }).pattern === 'git push *' })
+    if (method === 'approval.revoke') return Promise.resolve({ ok: (params as { approval_id: string }).approval_id === 'a1' })
     if (method === 'approval.respond') return Promise.resolve({ ok: (params as { approval_id: string }).approval_id === 'a1' })
     if (method === 'approval.pending') return Promise.resolve({ requests: seen.pendingOnEngine })
     return Promise.resolve({})
@@ -320,16 +320,21 @@ describe('the conversation a request is filed under', () => {
     })
   })
 
-  it('takes a saved rule back over the wire and says whether it was there', async () => {
+  it('takes back what this answer wrote, naming the answer rather than the rule', async () => {
+    /* The engine decides what the grant put on disk: an undo that matched on the
+       rule's text could remove one the reader wrote themselves, and could run
+       before the write (measured: respond answers first). */
     const h = await harness({ current: 'tui:open' })
     h.pipeline.approvalRequest({ approval_id: 'a1', command: 'git push', conversation_id: 'tui:asker' })
-    const { onRevoke } = h.sheet('approval').handlers!
+    await expect(h.sheet('approval').handlers!.onRevoke!()).resolves.toBe(true)
 
-    await expect(onRevoke!('git push *')).resolves.toBe(true)
-    await expect(onRevoke!('rm *')).resolves.toBe(false)
+    h.seen.sheets.length = 0
+    h.pipeline.approvalRequest({ approval_id: 'other', command: 'git push', conversation_id: 'tui:asker' })
+    await expect(h.sheet('approval').handlers!.onRevoke!()).resolves.toBe(false)
+
     expect(h.seen.sent).toEqual([
-      ['approval.revoke', { pattern: 'git push *' }],
-      ['approval.revoke', { pattern: 'rm *' }],
+      ['approval.revoke', { approval_id: 'a1' }],
+      ['approval.revoke', { approval_id: 'other' }],
     ])
   })
 
