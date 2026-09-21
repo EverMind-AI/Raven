@@ -489,51 +489,29 @@ class ExecTool(Tool):
         # the separator after it does not prove may or may not have moved it,
         # and both readings have to stay in view until one of them leaves.
         here = [cwd]
+        # Where the running `&&` chain could leave the shell. A chain stops at
+        # its first failure, so what follows one inherits the position after
+        # any prefix of it, from none of it to all of it.
+        chain = [cwd]
         for raw_tokens, separator in segments:
             # A wrapper needs unwrapping here -- `command cd /` names the same
             # builtin. A subshell does not: the splitter treats `(`, `)` and a
             # standalone `{` as operators, so `(cd /; x)` arrives as its own
             # segment with the bracket already gone, and the bracket is now
-            # one more separator that proves nothing.
+            # one more separator that ends a chain.
             tokens = _unwrap_command_wrappers(raw_tokens)
-            if not tokens or tokens[0] not in ("cd", "pushd", "popd"):
-                continue
-            if tokens[0] == "popd":
-                # A stack return lands on a directory some earlier push put
-                # there, and each of those was cleared on the way in. The
-                # shallowest of them is where the command began.
-                here = cls._either(here, [cwd])
-                continue
-            arguments = list(tokens[1:])
-            while arguments and arguments[0] in ("-L", "-P"):
-                arguments.pop(0)
-            if arguments and arguments[0] == "--":
-                # The option terminator is not a destination. Past it every
-                # word is an operand, so a `-` there names a directory rather
-                # than $OLDPWD, and nothing there means what a bare `cd` means.
-                arguments.pop(0)
-            elif arguments and arguments[0] == "-":
-                # ``$OLDPWD`` is a directory some earlier ``cd`` already passed.
-                continue
-            if not arguments and tokens[0] == "pushd":
-                # A bare `pushd` swaps the top two entries rather than naming a
-                # destination. Both were cleared on the way in, so the worst
-                # case is the one `popd` gets.
-                here = cls._either(here, [cwd])
-                continue
-            target = arguments[0] if arguments else env.get("HOME", "")
-            if not target:
-                continue
-            landings: list[Path] = []
-            for start in here:
-                try:
-                    destination = (start / Path(target).expanduser()).resolve()
-                except Exception:
+            if tokens and tokens[0] in ("cd", "pushd", "popd"):
+                moved = cls._moved(tokens, here, cwd, roots, env)
+                if moved is None:
                     return True
-                if not any(root == destination or root in destination.parents for root in roots):
-                    return True
-                landings.append(destination)
-            here = landings if separator == "&&" else cls._either(here, landings)
+                here = moved
+                chain = cls._either(chain, here)
+            if separator != "&&":
+                # Only `&&` proves the command before it succeeded, and it
+                # proves nothing about whether that command ran: a condition
+                # standing earlier in the chain can skip the `cd` entirely.
+                # The chain is therefore the unit, and this is where it ends.
+                here = chain = cls._either(chain, here)
             if len(here) > cls._MAX_WALK_POSITIONS:
                 # Unreachable for a command a person or a model writes: the
                 # list only grows on a `cd` into a directory no earlier step
@@ -541,6 +519,56 @@ class ExecTool(Tool):
                 # the walk from being a place to spend the caller's time.
                 return True
         return False
+
+    @classmethod
+    def _moved(
+        cls,
+        tokens: list[str],
+        here: list[Path],
+        cwd: Path,
+        roots: list[Path],
+        env: dict[str, str],
+    ) -> list[Path] | None:
+        """Where a directory builtin can leave the shell, or ``None`` to refuse.
+
+        ``None`` is the refusal: a destination outside every root, reached from
+        any of the places the shell can currently be.
+        """
+
+        if tokens[0] == "popd":
+            # A stack return lands on a directory some earlier push put there,
+            # and each of those was cleared on the way in. The shallowest of
+            # them is where the command began.
+            return cls._either(here, [cwd])
+        arguments = list(tokens[1:])
+        while arguments and arguments[0] in ("-L", "-P"):
+            arguments.pop(0)
+        if arguments and arguments[0] == "--":
+            # The option terminator is not a destination. Past it every word is
+            # an operand, so a `-` there names a directory rather than $OLDPWD,
+            # and nothing there means what a bare `cd` means.
+            arguments.pop(0)
+        elif arguments and arguments[0] == "-":
+            # ``$OLDPWD`` is a directory some earlier ``cd`` already passed.
+            return here
+        if not arguments and tokens[0] == "pushd":
+            # A bare `pushd` swaps the top two entries rather than naming a
+            # destination. Both were cleared on the way in, so the worst case
+            # is the one `popd` gets.
+            return cls._either(here, [cwd])
+        target = arguments[0] if arguments else env.get("HOME", "")
+        if not target:
+            return here
+        landings: list[Path] = []
+        for start in here:
+            try:
+                destination = (start / Path(target).expanduser()).resolve()
+            except Exception:
+                return None
+            if not any(root == destination or root in destination.parents for root in roots):
+                return None
+            landings.append(destination)
+        return landings
 
     #: How many places the walk will hold at once; see the walk for why the
     #: list grows and why nothing real reaches this.

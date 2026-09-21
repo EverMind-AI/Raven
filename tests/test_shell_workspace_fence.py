@@ -736,6 +736,30 @@ def test_a_proven_walk_survives_a_separator_later_in_the_command(fenced: ExecToo
 
 @pytest.mark.parametrize(
     "command",
+    [
+        "test -d subdir && cd subdir && echo ready; cd ..; ls",
+        "false && cd subdir && echo ready; cd ..; ls",
+        "[ -d subdir ] && cd subdir && echo ready; cd ..; ls",
+        "grep -q x notes.txt && cd subdir && echo ready; cd ..; ls",
+    ],
+    ids=["test-guard", "false-guard", "bracket-guard", "grep-guard"],
+)
+def test_a_cd_a_condition_can_skip_does_not_prove_the_walk(fenced: ExecTool, command: str) -> None:
+    """`&&` after a `cd` proves it succeeded only if the `cd` ran at all.
+
+    A chain is broken by its first failure, so a condition standing before the
+    `cd` can skip it and leave the shell where it began. Reading the `&&` that
+    follows the `cd` as proof discards exactly that reading, and the `;` after
+    the chain then runs from a place the walk is no longer holding.
+
+    The chain is the unit, not the step: what a `;` inherits is the position
+    after any prefix of it, from none of it to all of it.
+    """
+    assert refusal(fenced, command) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
     ["pushd ..; ls", "pushd /; cat etc/passwd", "pushd -- ..; ls"],
     ids=["up", "root", "after-terminator"],
 )
