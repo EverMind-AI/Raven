@@ -7099,10 +7099,6 @@
       "en": "{n} tokens",
       "zh": "{n} tokens"
     },
-    "gui.tasks.tokens_none": {
-      "en": "usage not reported",
-      "zh": "不报用量"
-    },
     "gui.tasks.no_output": {
       "en": "no output",
       "zh": "无输出"
@@ -7110,10 +7106,6 @@
     "gui.tasks.tools_n": {
       "en": "{n} tools",
       "zh": "{n} 次工具"
-    },
-    "gui.tasks.tools_failed_n": {
-      "en": "{n} failed",
-      "zh": "{n} 次失败"
     },
     "gui.tasks.stop": {
       "en": "Stop",

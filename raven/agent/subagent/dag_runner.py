@@ -683,6 +683,9 @@ async def run_dag(
         await _reap_carried(carried)
         _mark_stopped(status)
         await _record_outcome(store, status, cancelled=True)
+        # No manifest will carry them: a stopped run's set-aside accounts
+        # would otherwise outlive it for the life of the process.
+        activity.forget_settled(node_live_key(store.run_id, nid) for nid in status)
         # This run's own memory-record pollers, scheduled for nodes that had
         # already completed before this cancellation landed, would otherwise
         # keep polling with nothing left to reap them.
@@ -1681,6 +1684,11 @@ async def _run_node(
                     finally:
                         stall_watch.cancel()
                         node_activity[node.id] = did.as_meta()
+                        # Set aside for the reader until the manifest carries
+                        # it: `collecting` drops the live entry as this block
+                        # exits, and the manifest is written once the whole
+                        # run is over.
+                        activity.record_settled(node_live_key(store.run_id, node.id), node_activity[node.id])
             # The whole answer when the reply cap cut one: the in-context copy of
             # a terminal output is capped again on the way out (see
             # `_terminal_outputs`), and this file is what the reader, the next
@@ -1958,6 +1966,9 @@ async def _finalize(
 
     summary = _tally(status)
     await store.write_manifest(manifest)
+    # The manifest now carries every node's account; the copies set aside for
+    # the nodes that finished before it was written have done their job.
+    activity.forget_settled(node_live_key(store.run_id, nid) for nid in by_id)
     await _record_outcome(store, status)
     return DagRunResult(
         run_id=store.run_id,
