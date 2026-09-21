@@ -312,6 +312,244 @@ async def test_announce_dag_result_without_a_submit_does_not_raise() -> None:
     await mgr.announce_dag_result("run-1", "summary", {"channel": "cli", "chat_id": "direct", "session_key": "cli"})
 
 
+_DRAIN_ORIGIN = {"channel": "web", "chat_id": "default", "session_key": "web:sess1"}
+_DELIVERABLE = "the finished 4000-word deliverable the user is waiting for"
+
+
+def _draining_submit(_req: object) -> None:
+    from raven.spine.scheduler import SchedulerDrainingError
+
+    raise SchedulerDrainingError("scheduler is draining; new turns are not accepted")
+
+
+async def _announce_spawn_result(mgr: SubagentManager) -> None:
+    await mgr._announce_result(
+        "t1", "Research", "do it", _DELIVERABLE, _DRAIN_ORIGIN, "ok", record_path="/records/t1/out.md"
+    )
+
+
+async def _announce_dag_result(mgr: SubagentManager) -> None:
+    await mgr.announce_dag_result("r1", _DELIVERABLE, _DRAIN_ORIGIN)
+
+
+async def _announce_dag_exception(mgr: SubagentManager) -> None:
+    await mgr.announce_dag_exception("r1", "n1", _DELIVERABLE, _DRAIN_ORIGIN, awaiting_decision=True)
+
+
+async def _announce_unprompted(mgr: SubagentManager) -> None:
+    mgr._inject_unprompted(("web:sess1", "watch", "h1"), _DRAIN_ORIGIN, _DELIVERABLE)
+
+
+@pytest.mark.parametrize(
+    "announce",
+    [_announce_spawn_result, _announce_dag_result, _announce_dag_exception, _announce_unprompted],
+    ids=["spawn", "dag_result", "dag_exception", "unprompted"],
+)
+async def test_an_announce_into_a_draining_scheduler_is_logged_in_full_not_raised(announce) -> None:
+    """A run that finishes while the host shuts down announces into a submit
+    that refuses new turns. That refusal used to leave the announcing task as
+    an exception nothing awaited -- one asyncio line in the log, the result
+    text nowhere -- so the announce now logs the undelivered text itself and
+    says which conversation lost it. No delivered marker: nothing re-entered
+    the conversation, so there is no seam for a client to draw."""
+    from loguru import logger
+
+    mgr = _make_manager(max_concurrent=1)
+    mgr.set_submit(_draining_submit)
+    events: list[dict[str, Any]] = []
+
+    async def _sink(_session_key: str, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    mgr.set_delivery_sink(_sink)
+    logged: list[str] = []
+    sink_id = logger.add(lambda m: logged.append(m.record["message"]), level="ERROR")
+    try:
+        await announce(mgr)
+        await asyncio.sleep(0)
+    finally:
+        logger.remove(sink_id)
+
+    assert len(logged) == 1
+    assert _DELIVERABLE in logged[0]
+    assert "web:sess1" in logged[0]
+    assert "draining" in logged[0]
+    assert events == []
+
+
+async def test_a_completed_run_s_dropped_announce_names_its_record() -> None:
+    """The log line is the last resort, but not the only copy: a completed
+    run wrote its record before announcing, and the announce text carries that
+    path, so the person reading the log knows where the result still is."""
+    from loguru import logger
+
+    mgr = _make_manager(max_concurrent=1)
+    mgr.set_submit(_draining_submit)
+    logged: list[str] = []
+    sink_id = logger.add(lambda m: logged.append(m.record["message"]), level="ERROR")
+    try:
+        await _announce_spawn_result(mgr)
+    finally:
+        logger.remove(sink_id)
+
+    assert "/records/t1/out.md" in logged[0]
+
+
+async def _inner_that_finishes(mgr: SubagentManager):
+    async def _inner(task_id, task, task_summary, origin, executor, provider, model, **_kw) -> None:
+        await mgr._announce_result(task_id, task_summary, task, _DELIVERABLE, origin, "ok")
+
+    return _inner
+
+
+async def _inner_that_fails(_mgr: SubagentManager):
+    async def _inner(*_a, **_kw) -> None:
+        raise RuntimeError("the run failed")
+
+    return _inner
+
+
+@pytest.mark.parametrize("make_inner", [_inner_that_finishes, _inner_that_fails], ids=["finished", "failed"])
+async def test_a_run_ending_while_the_host_drains_does_not_die_of_its_own_announce(monkeypatch, make_inner) -> None:
+    """The traceback this pins ran `_run_subagent -> _run_subagent_inner ->
+    _announce_result -> _inject` and out of the task as SchedulerDrainingError.
+    The failure path was no better: `_run_subagent`'s own handler announces the
+    error, and that announce raised the same way out of the except block."""
+    from loguru import logger
+
+    mgr = _make_manager(max_concurrent=1)
+    mgr.set_submit(_draining_submit)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    monkeypatch.setattr(mgr, "_run_subagent_inner", await make_inner(mgr))
+    sink_id = logger.add(lambda m: None, level="ERROR")
+    try:
+        task = asyncio.create_task(
+            mgr._run_subagent("t1", "do it", "Research", dict(_DRAIN_ORIGIN), mgr.provider, "stub-model")
+        )
+        await asyncio.wait({task})
+    finally:
+        logger.remove(sink_id)
+
+    assert task.exception() is None
+
+
+async def test_a_spawn_is_refused_when_the_shutdown_sweep_lands_while_it_is_starting(monkeypatch):
+    """The sweep snapshots the running tasks once and then yields for up to
+    five seconds while it drains them. A spawn that passed its first check
+    before the sweep began and creates its task inside that drain is a task the
+    snapshot never held and nothing else sweeps: the host seals the spine next,
+    so no later pass reaches it, and a CLI child runs in its own session and
+    would outlive the process. The sweep lands here from inside the spawn's own
+    registry write -- the last await before the task would be created."""
+    mgr = _stub_mgr(monkeypatch)
+    swept: list[int] = []
+
+    async def _sweep_mid_spawn(*_a, **_k) -> None:
+        swept.append(await mgr.cancel_all())
+
+    monkeypatch.setattr(manager_mod, "_write_spawn_status", _sweep_mid_spawn)
+
+    receipt = await mgr.spawn(task="write the report", session_key="web:sess1")
+
+    assert swept == [0], "the sweep did not run inside the spawn, so the race was never posed"
+    assert "Spawn refused" in receipt
+    assert "shutting down" in receipt
+    assert mgr.get_running_count() == 0
+
+
+async def test_a_spawn_after_the_sweep_is_turned_away_before_it_writes_anything(monkeypatch):
+    """Shutdown has already begun, so this one is refused at the top of
+    ``spawn`` -- before the MCP preflight and before a registry row exists for
+    a run that is never going to start."""
+    mgr = _stub_mgr(monkeypatch)
+    await mgr.cancel_all()
+    rows: list[str] = []
+
+    async def _record_row(_session_key, _agent, _handle, status) -> None:
+        rows.append(status)
+
+    monkeypatch.setattr(manager_mod, "_write_spawn_status", _record_row)
+
+    receipt = await mgr.spawn(task="write the report", session_key="web:sess1")
+
+    assert "Spawn refused" in receipt
+    assert "shutting down" in receipt
+    assert rows == []
+    assert mgr.get_running_count() == 0
+
+
+async def test_a_paused_host_that_is_shutting_down_gives_the_terminal_reason(monkeypatch):
+    """Both gates refuse, so their order decides what the model is told. The
+    pause refusal says to ask the user to resume, and during a shutdown nobody
+    can, so the shutdown gate reads first and the reason given is the reason
+    the dispatch cannot go ahead. The paused-only spawn is the control: the
+    pause text is still what a host that is merely paused says."""
+    mgr = _stub_mgr(monkeypatch)
+    mgr.set_paused(True)
+
+    paused_only = await mgr.spawn(task="write the report", session_key="web:sess1")
+    assert "paused" in paused_only
+    assert "resume" in paused_only
+
+    await mgr.cancel_all()
+    both = await mgr.spawn(task="write the report", session_key="web:sess1")
+
+    assert "Spawn refused" in both
+    assert "shutting down" in both
+    assert "paused" not in both
+    assert "resume" not in both
+
+
+async def test_a_dag_run_handed_over_after_the_sweep_is_refused_and_cancelled_unstarted(monkeypatch):
+    """``adopt_background_run`` is the DAG's admission, and the DAG tool adopts
+    the task in the same step that created it -- so the refusing cancel lands
+    before the task's first tick, and a task cancelled then never enters its
+    body. Nothing the body would do on cancellation happens, which is why the
+    refusal comes back as a value: the caller has to settle what the task owed.
+    Tracked, the run would be one the sweep has already passed; left alone, one
+    nothing can reach."""
+    mgr = _stub_mgr(monkeypatch)
+    await mgr.cancel_all()
+    entered: list[int] = []
+
+    async def _run() -> None:
+        entered.append(1)
+        await asyncio.sleep(3600)
+
+    task = asyncio.create_task(_run())
+    refusal = mgr.adopt_background_run("run-1", task, "web:sess1")
+    # Bounded, and the assertions are on the task rather than on this returning:
+    # an unguarded adopt leaves the run going, and an unbounded wait would hang
+    # the suite there instead of failing it.
+    try:
+        await asyncio.wait({task}, timeout=5)
+        assert task.cancelled()
+        assert entered == [], "the task got a tick; the production shape cancels it before its first"
+        assert refusal is not None and "shutting down" in refusal
+        assert mgr.get_running_count() == 0
+    finally:
+        task.cancel()
+
+
+async def test_a_dag_run_charged_after_the_sweep_is_refused_before_it_costs_a_dispatch(monkeypatch):
+    """``charge_dag_run`` is the DAG's first door, before minting and before the
+    task exists; refused there, the graph costs nothing and the model reads the
+    same refusal the second door would give it."""
+    mgr = _stub_mgr(monkeypatch)
+    assert mgr.charge_dag_run("web:sess1") is None
+    await mgr.cancel_all()
+
+    refusal = mgr.charge_dag_run("web:sess2")
+
+    assert refusal is not None and "shutting down" in refusal
+    assert "web:sess2" not in mgr._session_spawn_times
+    unstarted = asyncio.create_task(asyncio.sleep(0))
+    try:
+        assert mgr.adopt_background_run("run-1", unstarted, "web:sess2") == refusal
+    finally:
+        unstarted.cancel()
+
+
 async def test_subagent_continues_after_a_refused_delete(monkeypatch, tmp_path):
     """A refused command no longer ends the run: the sub-agent reads the
     refusal, neither spelling of the catastrophic delete executes, and the

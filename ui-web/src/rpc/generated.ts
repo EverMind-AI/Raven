@@ -718,6 +718,10 @@ export interface SubagentRow {
   probe_status: 'ready' | 'attention' | 'missing' | 'unknown';
   probe_detail: string;
   has_api_key: boolean;
+  /**
+   * The agent answered the handshake and then refused to open a session without a credential. Measured by the capability snapshot, not inferred from probe_status, which reads `attention` both for this and for an installed agent nothing has verified -- two rows that need opposite things from the reader. Always false for a kind with no handshake to be refused in.
+   */
+  needs_auth?: boolean;
   mcps: string[];
   allow_mcp_secrets: boolean;
   last_test_ok?: boolean;

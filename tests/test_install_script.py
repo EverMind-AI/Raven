@@ -1,13 +1,11 @@
 """Tripwires for the two root installers (install.sh and install.ps1).
 
-install.sh builds uv option pairs in scalar variables and expands them
-unquoted (POSIX sh has no arrays), so a requirement carried that way must
-stay a single word: word splitting hands uv each space-separated piece as
-its own argument, uv exits 2, and the retry ladder silently degrades to a
-bare install with the memory plugin and channel extras dropped. The quoted
-positional requirement legitimately keeps the spaced PEP 508 form, so the
-spaced spelling looks natural and keeps getting reintroduced -- this pin
-turns that red in CI instead.
+Both installers resolve the latest release from the release page redirect
+and derive every other URL from that one directory: the wheel, the locked
+constraints and raven-plugins.txt, the list of plugin wheels the release
+ships beside raven. The list is what they hand to `uv tool install
+--with-requirements`; nothing in either script knows a plugin's name or
+guesses one from an asset list, and neither script calls the GitHub API.
 
 The optional capability steps (the chromium download, the LibreOffice offer)
 get pins of their own: they stay skippable via RAVEN_MINIMAL, they read the
@@ -21,8 +19,14 @@ Install-Office) and the closing launch (Start-Web): same decisions, same
 degrade-loudly warns, with the /dev/tty gate traded for a console gate --
 under `irm | iex` Read-Host still reads the console, but CI has none, so the
 guard must make a non-interactive run skip the winget offer cleanly instead of
-hanging on it. The one deliberate divergence is the launch's exit handling,
-pinned below.
+hanging on it.
+
+Both launches obey the probe rule: the scripts are served from main and install
+the latest release, which can predate a subcommand main already knows about
+(`raven web` shipped after 0.1.13 did, and the install ended in "No such
+command 'web'"). So every `raven <sub>` call is preceded by `raven <sub>
+--help`, the probe's failure branch finishes on the one command every release
+has, and neither the stop nor the page's own exit code becomes the script's.
 """
 
 from __future__ import annotations
@@ -45,10 +49,22 @@ def test_the_installer_is_where_this_tripwire_thinks_it_is() -> None:
     assert INSTALL_SH.is_file()
 
 
-def test_the_everos_with_requirement_stays_one_word() -> None:
-    text = INSTALL_SH.read_text(encoding="utf-8")
-    assert "everos-memory@$everos_url" in text
-    assert "everos-memory @ " not in text
+def test_the_installers_read_the_release_plugin_list_and_never_the_api() -> None:
+    """The release writes what it ships; the installer reads it. Grepping the
+    API's JSON for asset names decided on the user's machine what a complete
+    install was, said nothing when an asset was missing, and ran against a
+    60-requests-per-hour quota one office shares."""
+    for script in (INSTALL_SH, INSTALL_PS1):
+        text = script.read_text(encoding="utf-8")
+        assert "api.github.com" not in text, script.name
+        assert "raven-plugins.txt" in text, script.name
+        assert "--with-requirements" in text, script.name
+        assert "everos_memory" not in text, script.name
+    sh = INSTALL_SH.read_text(encoding="utf-8")
+    assert "releases/latest" in sh and "redirect_url" in sh
+    # Without a list the release installs raven alone and says so, as 0.1.13 did.
+    assert "carries no plugin list" in sh
+    assert "carries no plugin list" in INSTALL_PS1.read_text(encoding="utf-8")
 
 
 def test_the_optional_capability_steps_exist_and_are_skippable() -> None:
@@ -62,12 +78,13 @@ def test_the_optional_capability_steps_exist_and_are_skippable() -> None:
 def test_the_install_ends_on_a_running_page() -> None:
     """install.sh finishes in the product: it clears a resident gateway an
     earlier install left behind, then holds the terminal on a fresh one so the
-    browser opens on the build that just landed."""
+    browser opens on the build that just landed. RAVEN_NO_LAUNCH=1 skips the
+    launch, so CI and Dockerfiles get a script that returns."""
     text = INSTALL_SH.read_text(encoding="utf-8")
     assert "launch_web() {" in text
     assert "web --stop" in text
     assert "web --foreground" in text
-    assert "  launch_web\n" in text
+    assert '  [ -n "${RAVEN_NO_LAUNCH:-}" ] || launch_web\n' in text
 
 
 def test_the_launch_invokes_raven_by_absolute_path() -> None:
@@ -77,6 +94,116 @@ def test_the_launch_invokes_raven_by_absolute_path() -> None:
     launch = text[text.index("launch_web() {") :]
     assert 'bin="$(uv tool dir --bin 2>/dev/null || true)/raven"' in launch
     assert '"$bin" web --foreground' in launch
+
+
+def _unprobed_subcommands(text: str, call: str) -> list[str]:
+    """Subcommands the script calls without an earlier `<call> <sub> --help`."""
+    probed: set[str] = set()
+    unprobed: list[str] = []
+    for line in text.splitlines():
+        for m in re.finditer(call + r" ([a-z][a-z-]*)(.*)$", line):
+            sub, rest = m.group(1), m.group(2)
+            if "--help" in rest:
+                probed.add(sub)
+            elif sub not in probed:
+                unprobed.append(sub)
+    return unprobed
+
+
+def test_the_launch_probes_before_calling_a_subcommand_the_release_may_lack() -> None:
+    """The script is served from main and installs the latest release, which
+    can predate a subcommand main already knows about: `raven web` shipped
+    after 0.1.13 did, and every one-line install ended in "No such command
+    'web'" with exit 2. So every `"$bin" <sub>` call is preceded by a `"$bin"
+    <sub> --help` probe whose failure branch ends the install on the one
+    command every release has."""
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    assert '"$bin" web --help' in text
+    assert _unprobed_subcommands(text, r'"\$bin"') == []
+    launch = text[text.index("launch_web() {") :]
+    assert "Raven installed." in launch
+
+
+@pytest.mark.skipif(sys.platform == "win32" or shutil.which("sh") is None, reason="POSIX sh only")
+def test_launch_web_answers_each_release_shape_it_exists_for(tmp_path: Path) -> None:
+    """The text pins cannot tell a probe that gates the launch from one that is
+    merely present. Two fake ravens stand in: the shape of the latest release,
+    which answers `web` the way typer does (usage on stderr, exit 2), and the
+    shape of main, which has it. Every call the fakes receive is logged, so the
+    assertions read what reached the product, not what the script printed."""
+    body = re.search(r"^launch_web\(\) \{.*?^\}$", INSTALL_SH.read_text(encoding="utf-8"), re.S | re.M)
+    assert body is not None
+    harness = tmp_path / "harness.sh"
+    harness.write_text(
+        "ok() { printf 'OK %s\\n' \"$1\"; }\n"
+        "warn() { printf 'WARN %s\\n' \"$1\" >&2; }\n" + body.group(0) + "\nlaunch_web\n",
+        encoding="utf-8",
+    )
+
+    # One pair of fake executables for every case: macOS scans a freshly written
+    # executable on its first run, so a fresh pair per case is what made this
+    # test idle. The shape of the fake raven is chosen per run through the env.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls.log"
+    # `uv tool dir --bin` names the shim directory; the fake answers with ours.
+    (bin_dir / "uv").write_text(f"#!/bin/sh\nprintf '%s' '{bin_dir}'\n", encoding="utf-8")
+    (bin_dir / "raven").write_text(
+        "#!/bin/sh\n"
+        f"echo \"$*\" >> '{log}'\n"
+        'case "$FAKE_SHAPE:$1:$2" in\n'
+        # The latest release: typer answers an unknown command with usage and exit 2.
+        '  without-web:web:*) echo "Usage: raven [OPTIONS] COMMAND [ARGS]..." >&2; '
+        "echo \"No such command 'web'.\" >&2; exit 2 ;;\n"
+        "  stop-fails:web:--stop) exit 1 ;;\n"
+        "  interrupted:web:--foreground) exit 130 ;;\n"
+        "esac\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    for exe in ("uv", "raven"):
+        (bin_dir / exe).chmod(0o755)
+
+    def run(shape: str) -> tuple[int, str, str, list[str]]:
+        log.unlink(missing_ok=True)
+        r = subprocess.run(
+            ["sh", str(harness)],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path), "FAKE_SHAPE": shape},
+        )
+        calls = log.read_text(encoding="utf-8").splitlines() if log.is_file() else []
+        return r.returncode, r.stdout, r.stderr, calls
+
+    code, out, _err, calls = run("without-web")
+    assert code == 0, "a release without `web` must still end the install cleanly"
+    assert "run: raven" in out, "the fallback names the command every release has"
+    assert calls == ["web --help"], "only the probe may reach a release without `web`"
+
+    code, _out, _err, calls = run("with-web")
+    assert code == 0
+    assert calls == ["web --help", "web --stop", "web --foreground"], "a release with `web` gets the launch"
+
+    code, _out, err, calls = run("stop-fails")
+    assert code == 0
+    assert calls[-1] == "web --foreground", "a failed --stop is a warning, not the end of the launch"
+    assert "could not stop" in err
+
+    code, _out, err, calls = run("interrupted")
+    assert code == 0, "the page's own exit code is not the script's"
+    assert calls[-1] == "web --foreground"
+    assert "130" in err and "raven web" in err
+
+
+def test_the_path_hint_precedes_the_launch() -> None:
+    """`uv tool update-shell` only fixes future shells. The page holds this one
+    until Ctrl-C, so the hint about the shim's directory has to land before
+    the launch, and RAVEN_NO_LAUNCH runs must still get it."""
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    main = text[text.index("main() {") :]
+    hint = main.index("open a new terminal, or run: export PATH=")
+    assert hint < main.index("|| launch_web")
 
 
 def test_the_web_assets_rebuild_when_the_frontend_moved_on() -> None:
@@ -296,6 +423,22 @@ def test_the_capability_steps_stay_above_the_closing_launch() -> None:
     assert "libreoffice" not in closing
 
 
+def test_the_ci_gate_installs_the_latest_release_the_way_users_do() -> None:
+    """The text pins above cannot catch the class of defect that shipped: a
+    script on main calling something the latest release lacks. Only a real
+    install of that release with this script can, so CI does one -- piped, as
+    `curl | sh` and `irm | iex` arrive, which is what selects remote mode; run
+    as a file, the script would detect the checkout and install it editable
+    instead, and the gate would be measuring the wrong thing."""
+    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    job = workflow[workflow.index("  installer:") :]
+    job = job[: job.index("\n  windows-upgrade:")]
+    assert "cat install.sh | sh" in job
+    assert "Get-Content install.ps1 -Raw | Invoke-Expression" in job
+    assert 'RAVEN_NO_LAUNCH: "1"' in job
+    assert 'raven.exe" --version' in job and '"$UV_TOOL_BIN_DIR/raven" --version' in job
+
+
 def test_the_windows_installer_is_where_this_tripwire_thinks_it_is() -> None:
     assert INSTALL_PS1.is_file()
 
@@ -315,14 +458,15 @@ def test_the_windows_install_ends_on_a_running_page() -> None:
     assert "function Start-Web" in text
     assert "web --stop" in text
     assert "    & $bin web --foreground" in text
-    assert "    Start-Web $uv\n" in text
+    assert "    if (-not $env:RAVEN_NO_LAUNCH) { Start-Web $uv }\n" in text
 
 
 def test_the_windows_launch_warns_instead_of_exiting_on_a_non_zero_page() -> None:
     """Under `irm | iex` the installer runs in the reader's own interactive
     PowerShell, and Ctrl-C -- the ordinary way to end a foreground page --
     returns non-zero. Exiting on that would close the window they are standing
-    in, so the Windows launch reports where the POSIX one propagates."""
+    in, so the launch reports instead. install.sh does the same since the
+    probe rule landed: the page's exit code is never the script's."""
     text = INSTALL_PS1.read_text(encoding="utf-8")
     launch = text[text.index("function Start-Web") :]
     assert "exit $LASTEXITCODE" not in launch
@@ -335,6 +479,18 @@ def test_the_windows_launch_puts_the_shim_on_path_before_holding_the_session() -
     text = INSTALL_PS1.read_text(encoding="utf-8")
     main = text[text.index("function Main") :]
     assert main.index("Add-ProcessPath") < main.index("Start-Web $uv")
+
+
+def test_the_windows_launch_probes_before_calling_web() -> None:
+    """Same rule as install.sh. The message the old unguarded `--stop` printed
+    on a release without `web` ("could not clear the gateway a previous install
+    left running") described a gateway that never existed."""
+    text = INSTALL_PS1.read_text(encoding="utf-8")
+    assert _unprobed_subcommands(text, r"& \$bin") == []
+    launch = text[text.index("function Start-Web") :]
+    assert "& $bin web --help" in launch
+    assert "Raven installed." in launch
+    assert "could not clear the gateway" not in text
 
 
 def test_the_windows_office_offer_needs_a_real_console() -> None:

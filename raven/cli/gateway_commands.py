@@ -45,6 +45,32 @@ console = Console()
 # in-flight turn and reconnects MCP); see SwapCoordinator.
 _SWAP_MIN_INTERVAL_S = 5.0
 
+_CONTROL_PORT_DEFAULT = 8765
+
+
+async def _control_plane_port() -> int:
+    """The historical control-plane port, or any free one when its span is taken.
+
+    ``pick_port`` probes twenty ports forward and raises when every one is
+    refused. On Windows all twenty can be refused at once: winnat reserves
+    whole hundred-port blocks (``netsh interface ipv4 show excludedportrange``),
+    a host whose dynamic range starts low gets them in the 8000s, and a bind
+    inside one fails with WinError 10013 while netstat shows the port free. The
+    raise reached no handler, so the gateway died on a port nobody asked for --
+    `raven web` could not start at all on such a host.
+
+    Falling back costs nothing: no client needs this port to be predictable,
+    they all read it from the lock payload, and ``ControlPlaneServer.start``
+    reads the bound port back off the socket for exactly this case.
+    """
+    from raven.rpc.transports.ws import pick_port
+
+    try:
+        return await pick_port(_CONTROL_PORT_DEFAULT)
+    except OSError:
+        logger.warning("control plane: no free port from {}; taking an OS-assigned one", _CONTROL_PORT_DEFAULT)
+        return 0
+
 
 def _risk_banner(config) -> str | None:
     """Startup banner for the dangerous default combo: no sandbox + a channel
@@ -1000,7 +1026,6 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
 
             from raven.rpc.control import ControlPlaneServer, register_control_methods
             from raven.rpc.dispatcher import Dispatcher
-            from raven.rpc.transports.ws import pick_port
 
             started_at = time.time()
             shutdown_requested = False
@@ -1048,13 +1073,16 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 shutdown=_shutdown,
             )
             # Never unauthenticated and never configured: the token is minted
-            # per boot and dies with the process; the port is probed forward
-            # from the historical default. Local clients read both from the
-            # lock payload, the same way `doctor` finds the gateway.
+            # per boot and dies with the process; the port comes from
+            # _control_plane_port. Local clients read both from the lock
+            # payload, the same way `doctor` finds the gateway.
             control_token = secrets.token_urlsafe(24)
 
             try:
-                control = ControlPlaneServer(await pick_port(8765), auth_token=control_token)
+                # Not unit-reachable: 520 lines into `run()`, past the whole
+                # gateway bring-up. The call site is pinned instead by
+                # test_the_gateway_takes_its_control_port_from_the_fallback.
+                control = ControlPlaneServer(await _control_plane_port(), auth_token=control_token)  # pragma: no cover
                 control.bind(control_dispatcher)
                 bound_host, bound_port = await control.start()
                 publish_control_endpoint(bound_host, bound_port, control_token)
@@ -1116,8 +1144,6 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     await sentinel_runner.stop()
                 if question_broker is not None:
                     question_broker.cancel_all()  # release any turn blocked on ask_user
-                if page_mount is not None:
-                    await page_mount.teardown()
                 if control is not None:
                     await control.stop()
                 from raven.acp_client.client import begin_drain
@@ -1133,6 +1159,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # on when its process is about to go.
                 begin_drain()
                 await agent.subagents.cancel_all()
+                # The page's spine seals after the sub-agents are cancelled, the
+                # order the generation swap already keeps: a sub-agent whose
+                # conversation lives on the page announces into that spine, and
+                # sealed first it would refuse the result.
+                if page_mount is not None:
+                    await page_mount.teardown()
                 if gw_teardown is not None:
                     await gw_teardown()
                 # ACP agents are launched with start_new_session, so they do not

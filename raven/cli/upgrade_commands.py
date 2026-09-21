@@ -43,16 +43,26 @@ def register(app: typer.Typer) -> None:
             current_key = version_key(current_version)
             latest_key = version_key(release.version)
 
-            if current_key == latest_key:
-                console.print(f"Raven {current_version} is up to date.")
-                return
             if current_key > latest_key:
                 console.print(
                     f"Raven {current_version} is newer than the latest release "
                     f"{release.version}; no downgrade was performed."
                 )
                 return
-            if check:
+            if current_key == latest_key:
+                # An install this version's list says is incomplete -- the
+                # upgrade that put it here ran a helper that knew no plugins --
+                # is repaired by installing the same version again, list and all.
+                missing = _upgrade.missing_plugins(release)
+                if not missing:
+                    console.print(f"Raven {current_version} is up to date.")
+                    return
+                console.print(f"Raven {current_version} is up to date, but this install lacks {', '.join(missing)}.")
+                if check:
+                    console.print("Run [cyan]raven upgrade[/cyan] to reinstall them.")
+                    return
+                console.print(f"Reinstalling Raven {release.version} with its plugins.")
+            elif check:
                 console.print(f"Raven upgrade available: {current_version} -> {release.version}")
                 console.print("Run [cyan]raven upgrade[/cyan] to install it.")
                 return
