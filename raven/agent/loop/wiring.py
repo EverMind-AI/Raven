@@ -681,63 +681,123 @@ class WiringMixin:
         return self._session_charters.pop(session_key, None)
 
     async def _resolve_playbook_turn(self, req: Any, session_key: str, binding: Any):
-        """Retrieve or generate the one Harness decision for this turn."""
+        """Generate, persist and bind the Harness selected by this turn's mode."""
         from raven.playbook.agent_generator import HarnessResolution
 
         cfg = self._playbook_config
         if cfg is None or not cfg.enabled or getattr(cfg, "agent_harness", "default") != "generate":
             return HarnessResolution()
+        mode = getattr(req, "playbook_mode", None) or getattr(cfg, "default_generation_mode", "task")
+        if mode == "off":
+            return HarnessResolution()
         if is_subagent_process() or getattr(req, "direct_target", None) is not None:
             return HarnessResolution()
         try:
-            from dataclasses import replace
-
-            from raven.playbook.agent_generator import WorkerTableGenerator, roster_note
+            from raven.playbook.agent_generator import (
+                PersonaPlaybookGenerator,
+                TaskPlaybookGenerator,
+                persona_roster_profile,
+                task_roster_profile,
+            )
 
             metas = list(self.subagents.list_agents())
             agents = [a.name for a in metas]
             if not agents:
                 return HarnessResolution()
-            notes = {a.name: roster_note(a) for a in metas}
-            tools = sorted((d.get("function", d) or {}).get("name", "") for d in self.tools.get_definitions())
-            candidates = dict(self._playbooks.listing(getattr(req, "text", "") or "")) if self._playbooks else {}
-            resolution = await WorkerTableGenerator(binding.provider, binding.model).resolve(
-                getattr(req, "text", "") or "",
-                agents,
-                [t for t in tools if t],
-                notes,
-                candidates,
-            )
-            if resolution.selected_playbook and self._playbooks is not None:
-                resolution = replace(resolution, table=self._playbooks.harness_table(resolution.selected_playbook))
+            tool_catalog = self.tools.get_definitions()
+            query = getattr(req, "text", "") or ""
+            if mode == "persona":
+                profiles = {meta.name: persona_roster_profile(meta) for meta in metas}
+                names = self._playbooks.names() if self._playbooks is not None else []
+                resolution = await PersonaPlaybookGenerator(binding.provider, binding.model).resolve(
+                    query,
+                    agents,
+                    tool_catalog,
+                    profiles,
+                    names,
+                )
+            else:
+                profiles = {meta.name: task_roster_profile(meta) for meta in metas}
+                resolution = await TaskPlaybookGenerator(binding.provider, binding.model).resolve(
+                    query,
+                    agents,
+                    tool_catalog,
+                    profiles,
+                )
+            if resolution.active:
+                resolution = self._persist_generated_harness(resolution, query)
         except Exception:  # noqa: BLE001 - setup must not cost the turn
             logger.opt(exception=True).warning("agent playbook: resolution failed; running unconfigured")
             return HarnessResolution()
         table = resolution.table
-        if resolution.disposition == "artifact":
-            resolution = replace(resolution, table=None)
-            table = None
         if table:
             logger.info("agent playbook: {} worker(s) for this turn: {}", len(table.workers), table.labels())
-        loader = self.tools.get("load_playbook")
-        setter = getattr(loader, "set_preselected", None)
-        if callable(setter):
-            setter(resolution.selected_playbook)
         return resolution
+
+    def _persist_generated_harness(self, resolution: Any, query: str):
+        """Save a validated Harness now; persistence failure never blocks binding."""
+        if self._playbooks is None or resolution.spec is None:
+            return resolution
+        import re
+        from dataclasses import replace
+
+        from raven.playbook.unified import PlaybookMatch, UnifiedPlaybookSpec
+
+        description = (resolution.description or query.strip().splitlines()[0])[:200]
+        keywords = [word.lower() for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", query)[:8]]
+        artifact = UnifiedPlaybookSpec(
+            name=resolution.artifact_name or resolution.spec.name,
+            description=description,
+            match=PlaybookMatch(summary=description, keywords=keywords or [description[:80]]),
+            harness=resolution.spec,
+        )
+        try:
+            artifact, path = self._save_generated_artifact(artifact)
+            self._playbooks.adopt(artifact.name)
+            harness = artifact.harness
+            logger.info("playbook: saved generated Harness {!r} at {}", artifact.name, path)
+            return replace(
+                resolution,
+                spec=harness,
+                artifact_name=artifact.name,
+                persisted=True,
+            )
+        except Exception:  # noqa: BLE001 - persistence must not cost the turn
+            logger.opt(exception=True).warning("playbook: generated Harness could not be saved; using it in memory")
+            return resolution
+
+    def _save_generated_artifact(self, artifact: Any):
+        """Atomically save under the requested name or the first numeric suffix."""
+        if self._playbooks is None:
+            raise RuntimeError("Playbook runtime is unavailable")
+        from raven.playbook.store import PlaybookExistsError
+
+        base = artifact.name
+        attempt = 1
+        while True:
+            name = base if attempt == 1 else f"{base}-{attempt}"
+            harness = artifact.harness
+            if harness is not None:
+                harness = harness.model_copy(update={"name": name})
+            candidate = artifact.model_copy(update={"name": name, "harness": harness})
+            try:
+                return candidate, self._playbooks.store.save(candidate)
+            except PlaybookExistsError:
+                attempt += 1
 
     async def _write_worker_table(self, req: Any, session_key: str, binding: Any) -> "DelegateTable | None":
         """Backward-compatible table-only face used by focused tests."""
         return (await self._resolve_playbook_turn(req, session_key, binding)).table
 
     async def _finish_playbook_turn(self, resolution: Any, capture: Any, binding: Any) -> None:
-        """Persist run evidence and promote reusable Harness/Workflow artifacts."""
+        """Update a Task artifact with proven Workflow evidence and save the run."""
         if self._playbooks is None:
             return
         from raven.playbook.run_record import RunRecordStore
 
         try:
-            artifact = None
             harness = resolution.spec
+            capture.saved_playbook = resolution.artifact_name if resolution.persisted else None
             if resolution.capture_workflow and capture.dags and not resolution.selected_playbook:
                 from raven.playbook.workflow_compiler import WorkflowCompiler
 
@@ -749,30 +809,18 @@ class WiringMixin:
                     name_hint=resolution.artifact_name,
                     description_hint=resolution.description,
                 )
-            elif resolution.disposition in {"artifact", "runtime_and_artifact"} and harness is not None:
-                import re
-
-                from raven.playbook.unified import PlaybookMatch, PlaybookMetadata, UnifiedPlaybookSpec
-
-                description = (resolution.description or capture.query.strip().splitlines()[0])[:200]
-                keywords = [w.lower() for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", capture.query)[:8]]
-                artifact = UnifiedPlaybookSpec(
-                    name=resolution.artifact_name or harness.name,
-                    description=description,
-                    match=PlaybookMatch(summary=description, keywords=keywords or [description[:80]]),
-                    harness=harness,
-                    workflow=None,
-                    metadata=PlaybookMetadata(source_run_id=capture.run_id),
-                )
-            if artifact is not None:
                 store = self._playbooks.store
-                if store.origin_of(artifact.name) is not None:
-                    suffix = capture.run_id.rsplit("-", 1)[-1]
-                    artifact = artifact.model_copy(update={"name": f"{artifact.name[:54]}-{suffix}"})
-                path = store.save(artifact)
+                if resolution.persisted:
+                    # The compiler parameterizes a proven graph; it does not own
+                    # artifact identity. Keep the numeric suffix chosen by the
+                    # atomic Harness save even when the model ignores nameHint.
+                    artifact = artifact.model_copy(update={"name": resolution.artifact_name, "harness": harness})
+                    path = store.save(artifact, overwrite=True)
+                else:
+                    artifact, path = self._save_generated_artifact(artifact)
                 self._playbooks.adopt(artifact.name)
                 capture.saved_playbook = artifact.name
-                logger.info("playbook: saved reusable artifact {!r} at {}", artifact.name, path)
+                logger.info("playbook: updated Task artifact {!r} with Workflow at {}", artifact.name, path)
             capture.finish()
         except Exception as exc:  # noqa: BLE001 - persistence must not replace the user's answer
             logger.opt(exception=True).warning("playbook: turn finalization failed")

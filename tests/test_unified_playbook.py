@@ -4,13 +4,20 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from raven.agent.subagent.dag_adjudication import Final, Report
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec
 from raven.agent.subagent.dag_runner import DagRunResult
 from raven.agent.subagent.dag_tool import _successful_final
 from raven.agent.subagent.delegate import current_delegate, delegate_scope
-from raven.playbook.agent_generator import EMIT_TOOL, WorkerTableGenerator
+from raven.config.schema import PlaybookConfig
+from raven.playbook.agent_generator import (
+    PERSONA_TOOL,
+    TASK_TOOL,
+    PersonaPlaybookGenerator,
+    TaskPlaybookGenerator,
+)
 from raven.playbook.agent_spec import AgentPlaybookSpec, DelegateEntry
 from raven.playbook.runtime import PlaybookRuntime
 from raven.playbook.store import PlaybookStore
@@ -70,6 +77,13 @@ def _workflow() -> WorkflowSpec:
     )
 
 
+def test_playbook_generation_mode_defaults_and_camel_case_config() -> None:
+    assert PlaybookConfig().default_generation_mode == "task"
+    assert PlaybookConfig(defaultGenerationMode="persona").default_generation_mode == "persona"
+    with pytest.raises(ValidationError):
+        PlaybookConfig(defaultGenerationMode="automatic")
+
+
 def test_unified_composite_round_trips_through_the_existing_store(tmp_path: Path) -> None:
     store = PlaybookStore(tmp_path / "user", builtin_root=tmp_path / "builtin")
     spec = UnifiedPlaybookSpec(
@@ -89,49 +103,48 @@ def test_unified_composite_round_trips_through_the_existing_store(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_resolver_can_choose_an_existing_playbook_without_generating_workers() -> None:
+async def test_task_generator_receives_only_task_selection_inputs() -> None:
     provider = _Provider(
         _call(
-            EMIT_TOOL,
+            TASK_TOOL,
             {
-                "description": "The saved procedure is an exact match",
-                "disposition": "none",
-                "selectedPlaybook": "due-diligence",
-                "captureWorkflow": False,
-                "workers": [],
+                "artifactName": "due-diligence",
+                "description": "Research a company before acquisition",
+                "workers": [{"agent": "Raven", "prompt": "Collect primary evidence", "tools": ["web_search"]}],
             },
         )
     )
 
-    result = await WorkerTableGenerator(provider, "stub").resolve(
+    result = await TaskPlaybookGenerator(provider, "stub").resolve(
         "Run due diligence on Acme",
         ["Raven"],
-        ["web_search"],
-        {"Raven": "general worker"},
+        [{"type": "function", "function": {"name": "web_search", "description": "Search the web"}}],
+        {"Raven": {"description": "general worker", "readsLocalFiles": True}},
         {"due-diligence": "Checks a company before acquisition"},
     )
 
     assert result.active
-    assert result.selected_playbook == "due-diligence"
-    assert result.table is None
-    assert not result.capture_workflow
-    assert "Saved Playbook candidates" in provider.calls[0]["messages"][1]["content"]
+    assert result.selected_playbook is None
+    assert result.capture_workflow
+    assert result.table and result.table.get("Raven").brief == "Collect primary evidence"
+    payload = json.loads(provider.calls[0]["messages"][1]["content"])
+    assert payload["agents"][0]["readsLocalFiles"] is True
+    assert payload["availableTools"] == [{"name": "web_search", "description": "Search the web"}]
+    assert "playbookCandidates" not in payload
 
 
 @pytest.mark.asyncio
 async def test_resolver_emits_a_durable_harness_with_its_brief() -> None:
     provider = _Provider(
         _call(
-            EMIT_TOOL,
+            PERSONA_TOOL,
             {
                 "description": "A citation-first research persona",
-                "disposition": "artifact",
                 "artifactName": "citation-researcher",
-                "captureWorkflow": False,
                 "workers": [
                     {
                         "as": "researcher",
-                        "name": "Raven",
+                        "agent": "Raven",
                         "brief": "Find primary sources",
                         "systemPrompt": "Cite primary sources only.",
                     }
@@ -140,7 +153,7 @@ async def test_resolver_emits_a_durable_harness_with_its_brief() -> None:
         )
     )
 
-    result = await WorkerTableGenerator(provider, "stub").resolve(
+    result = await PersonaPlaybookGenerator(provider, "stub").resolve(
         "Create a citation-first research digital persona",
         ["Raven"],
         ["web_search"],
@@ -148,12 +161,13 @@ async def test_resolver_emits_a_durable_harness_with_its_brief() -> None:
 
     assert result.disposition == "artifact"
     assert result.artifact_name == "citation-researcher"
+    assert not result.capture_workflow
     assert result.spec is not None
     assert result.spec.delegate[0].brief == "Find primary sources"
     assert result.table and result.table.get("researcher").brief == "Find primary sources"
     instructions = provider.calls[0]["messages"][0]["content"]
-    assert "workers are the durable Harness itself" in instructions
-    assert "not authors tasked with defining or saving that Harness" in instructions
+    assert "Workers are operating components of the persona" in instructions
+    assert "Do not design a Workflow" in instructions
 
 
 @pytest.mark.asyncio

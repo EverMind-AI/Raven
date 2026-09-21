@@ -597,6 +597,18 @@
           }
         },
         {
+          "name": "playbook_mode",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "off",
+              "task",
+              "persona"
+            ]
+          }
+        },
+        {
           "name": "channel",
           "required": false,
           "schema": {

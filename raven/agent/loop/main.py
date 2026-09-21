@@ -937,13 +937,20 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             if resolution.disposition == "artifact" and resolution.artifact_name:
                 from raven.agent.subagent.charter import Charter
 
+                artifact_status = (
+                    f"has generated and saved the reusable Persona Harness {resolution.artifact_name!r}"
+                    if resolution.persisted
+                    else (
+                        f"generated the Persona Harness {resolution.artifact_name!r} for this turn, "
+                        "but persistence failed"
+                    )
+                )
                 charter = Charter(
                     prompt=(
-                        f"The platform has prepared the reusable Harness {resolution.artifact_name!r} "
-                        "and will persist it automatically after this turn. Do not search for a persona "
-                        "format and do not write Playbook, skill, persona, Harness, Workflow, or run-record "
-                        "files yourself. Do not execute a Workflow. Reply concisely with what the saved "
-                        "Harness is for and that it will be available by this name."
+                        f"The platform {artifact_status}. Do not call load_playbook, search for a persona "
+                        "format, or write Playbook, skill, persona, Harness, Workflow, or run-record files. "
+                        "Do not spawn workers or execute a Workflow. Reply concisely with what the generated "
+                        "Harness is for and whether it was saved."
                     )
                 )
             with (

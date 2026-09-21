@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 
 import pytest
@@ -14,7 +13,7 @@ from raven.agent.subagent.dag_graph import DagNodeSpec
 from raven.agent.tools.load_playbook import LoadPlaybookTool
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.config.schema import PlaybookConfig
-from raven.playbook.agent_generator import EMIT_TOOL
+from raven.playbook.agent_generator import PERSONA_TOOL, TASK_TOOL
 from raven.playbook.agent_spec import AgentPlaybookSpec, DelegateEntry
 from raven.playbook.store import PlaybookStore
 from raven.playbook.unified import PlaybookMatch, UnifiedPlaybookSpec, WorkflowSpec
@@ -47,26 +46,22 @@ class _WholeTurnProvider(LLMProvider):
 
     async def _answer(self, messages, tools) -> LLMResponse:
         names = _names(tools)
-        if EMIT_TOOL in names:
+        if TASK_TOOL in names:
             self.setup_calls += 1
             return LLMResponse(
                 content="",
                 tool_calls=[
                     ToolCallRequest(
                         id="setup",
-                        name=EMIT_TOOL,
+                        name=TASK_TOOL,
                         arguments={
                             "description": "A reusable evidence workflow",
-                            "disposition": "runtime_and_artifact",
                             "artifactName": "evidence-brief",
-                            "captureWorkflow": True,
                             "workers": [
                                 {
                                     "as": "researcher",
-                                    "name": "Raven",
-                                    "brief": "Return the requested evidence marker",
-                                    "systemPrompt": "Return WORKER_EVIDENCE_OK when done.",
-                                    "stopWhen": "WORKER_EVIDENCE_OK is returned",
+                                    "agent": "Raven",
+                                    "prompt": "Return WORKER_EVIDENCE_OK after collecting the requested evidence",
                                 }
                             ],
                         },
@@ -83,7 +78,7 @@ class _WholeTurnProvider(LLMProvider):
                         id="compile",
                         name=EMIT_WORKFLOW,
                         arguments={
-                            "name": "evidence-brief",
+                            "name": "model-tried-to-rename-the-artifact",
                             "description": "Produce a concise evidence brief",
                             "match": {
                                 "summary": "Produce an evidence brief",
@@ -190,12 +185,13 @@ async def _emit(*args, **kwargs) -> None:
     return None
 
 
-def _request(text: str, chat_id: str) -> TurnRequest:
+def _request(text: str, chat_id: str, *, playbook_mode: str | None = None) -> TurnRequest:
     return TurnRequest(
         origin=Origin.USER,
         source=Source(channel="test", chat_id=chat_id, sender_id="user", chat_type=ChatType.DM),
         text=text,
         conversation=f"test:{chat_id}",
+        playbook_mode=playbook_mode,
     )
 
 
@@ -255,14 +251,14 @@ class _ReuseProvider(LLMProvider):
 
     async def _answer(self, tools) -> LLMResponse:
         names = _names(tools)
-        if EMIT_TOOL in names:
+        if TASK_TOOL in names or PERSONA_TOOL in names:
             self.setup_calls += 1
             return LLMResponse(
                 content="",
                 tool_calls=[
                     ToolCallRequest(
                         id="select",
-                        name=EMIT_TOOL,
+                        name=TASK_TOOL,
                         arguments={
                             "description": "The saved evidence process is an exact match",
                             "disposition": "none",
@@ -294,7 +290,7 @@ class _ReuseProvider(LLMProvider):
 
 
 @pytest.mark.asyncio
-async def test_saved_composite_is_selected_and_executes_its_durable_harness(tmp_path) -> None:
+async def test_off_mode_skips_generation_but_keeps_explicit_playbook_loading(tmp_path) -> None:
     playbook_root = tmp_path / "playbooks"
     PlaybookStore(playbook_root).save(_saved_composite())
     provider = _ReuseProvider()
@@ -311,20 +307,17 @@ async def test_saved_composite_is_selected_and_executes_its_durable_harness(tmp_
     )
 
     await loop.run_turn(
-        _request("Run my primary-source evidence brief for the launch", "reuse"),
+        _request("Run my primary-source evidence brief for the launch", "reuse", playbook_mode="off"),
         _emit,
         lambda: [],
         stream=False,
     )
     await asyncio.gather(*list(loop._playbooks.dag_tool._runs.values()), return_exceptions=True)
 
-    assert provider.setup_calls == 1
+    assert provider.setup_calls == 0
     assert provider.main_calls >= 2
     assert provider.worker_calls >= 1
-    assert len(list((playbook_root / ".runs").glob("*.json"))) == 1
-    record = json.loads(next((playbook_root / ".runs").glob("*.json")).read_text(encoding="utf-8"))
-    assert record["selectedPlaybook"] == "evidence-brief"
-    assert "query" not in record and len(record["queryDigest"]) == 64
+    assert not (playbook_root / ".runs").exists()
 
 
 class _PersonaProvider(LLMProvider):
@@ -345,23 +338,21 @@ class _PersonaProvider(LLMProvider):
 
     async def _answer(self, tools) -> LLMResponse:
         names = _names(tools)
-        if EMIT_TOOL in names:
+        if PERSONA_TOOL in names:
             self.setup_calls += 1
             return LLMResponse(
                 content="",
                 tool_calls=[
                     ToolCallRequest(
                         id="persona",
-                        name=EMIT_TOOL,
+                        name=PERSONA_TOOL,
                         arguments={
                             "description": "A skeptical claim-checking digital persona",
-                            "disposition": "artifact",
                             "artifactName": "skeptical-fact-checker",
-                            "captureWorkflow": False,
                             "workers": [
                                 {
                                     "as": "fact-checker",
-                                    "name": "Raven",
+                                    "agent": "Raven",
                                     "brief": "Challenge unsupported claims and require primary evidence",
                                     "systemPrompt": "Be skeptical, concise, and cite primary evidence.",
                                     "stopWhen": "Every material claim is supported or flagged",
@@ -396,7 +387,11 @@ async def test_digital_persona_saves_harness_only_without_inventing_a_dag(tmp_pa
     )
 
     await loop.run_turn(
-        _request("Create a skeptical fact-checking digital persona; do not run a process", "persona"),
+        _request(
+            "Create a skeptical fact-checking digital persona; do not run a process",
+            "persona",
+            playbook_mode="persona",
+        ),
         _emit,
         lambda: [],
         stream=False,
@@ -407,6 +402,108 @@ async def test_digital_persona_saves_harness_only_without_inventing_a_dag(tmp_pa
     assert saved.harness is not None
     assert saved.workflow is None
     assert saved.harness.delegate[0].brief.startswith("Challenge unsupported")
+    assert provider.setup_calls == provider.main_calls == 1
+    assert provider.compiler_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_persona_name_collision_gets_a_deterministic_numeric_suffix(tmp_path) -> None:
+    playbook_root = tmp_path / "playbooks"
+    provider = _PersonaProvider()
+    loop = AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        model="stub",
+        policy=TurnPolicy(max_iterations=3),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(
+            runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never")),
+            playbook_config=PlaybookConfig(enabled=True, dir=str(playbook_root), agentHarness="generate"),
+        ),
+    )
+
+    for chat_id in ("persona-one", "persona-two"):
+        await loop.run_turn(
+            _request("Create the same skeptical fact-checking persona", chat_id, playbook_mode="persona"),
+            _emit,
+            lambda: [],
+            stream=False,
+        )
+
+    assert PlaybookStore(playbook_root).list_ids() == ["skeptical-fact-checker", "skeptical-fact-checker-2"]
+    suffixed = PlaybookStore(playbook_root).load("skeptical-fact-checker-2")
+    assert isinstance(suffixed, UnifiedPlaybookSpec)
+    assert suffixed.harness is not None and suffixed.harness.name == "skeptical-fact-checker-2"
+
+
+class _TaskWithoutDagProvider(LLMProvider):
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.setup_calls = 0
+        self.main_calls = 0
+        self.compiler_calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        return await self._answer(tools)
+
+    async def chat_with_retry(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        return await self._answer(tools)
+
+    async def _answer(self, tools) -> LLMResponse:
+        names = _names(tools)
+        if TASK_TOOL in names:
+            self.setup_calls += 1
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="task-harness",
+                        name=TASK_TOOL,
+                        arguments={
+                            "artifactName": "concise-answer-task",
+                            "description": "Answer a bounded question concisely",
+                            "workers": [{"agent": "Raven", "prompt": "Answer concisely with cited facts"}],
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+        if EMIT_WORKFLOW in names:
+            self.compiler_calls += 1
+            raise AssertionError("a Task without a successful DAG must not compile a Workflow")
+        self.main_calls += 1
+        return LLMResponse(content="TASK_FINISHED_WITHOUT_DAG_OK", finish_reason="stop")
+
+
+@pytest.mark.asyncio
+async def test_task_without_a_dag_keeps_the_immediately_saved_harness(tmp_path) -> None:
+    playbook_root = tmp_path / "playbooks"
+    provider = _TaskWithoutDagProvider()
+    loop = AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        model="stub",
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(
+            runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never")),
+            playbook_config=PlaybookConfig(enabled=True, dir=str(playbook_root), agentHarness="generate"),
+        ),
+    )
+
+    await loop.run_turn(
+        _request("Answer this bounded question without delegating", "task-no-dag"),
+        _emit,
+        lambda: [],
+        stream=False,
+    )
+
+    saved = PlaybookStore(playbook_root).load("concise-answer-task")
+    assert isinstance(saved, UnifiedPlaybookSpec)
+    assert saved.harness is not None and saved.workflow is None
     assert provider.setup_calls == provider.main_calls == 1
     assert provider.compiler_calls == 0
 
@@ -427,7 +524,7 @@ class _OffProvider(LLMProvider):
         return await self._answer(tools)
 
     async def _answer(self, tools) -> LLMResponse:
-        if EMIT_TOOL in _names(tools):
+        if {TASK_TOOL, PERSONA_TOOL} & _names(tools):
             self.setup_calls += 1
             raise AssertionError("the disabled Playbook feature made a setup model call")
         self.main_calls += 1

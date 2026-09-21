@@ -234,6 +234,27 @@ async def test_turn_send_accepts_optional_channel_chat_id_sender_id() -> None:
     assert (src.channel, src.chat_id, src.sender_id) == ("tui", "default", "user")
 
 
+@pytest.mark.parametrize("mode", ["off", "task", "persona"])
+async def test_turn_send_passes_the_playbook_mode_to_the_turn(mode: str) -> None:
+    scheduler = FakeScheduler()
+
+    await turn_send(
+        {"session_key": "tui:default", "content": "hi", "playbook_mode": mode},
+        scheduler=scheduler,
+        turn_ids={},
+    )
+
+    assert scheduler.submitted[0].playbook_mode == mode
+
+
+async def test_turn_send_rejects_an_unknown_playbook_mode() -> None:
+    with pytest.raises(ValidationError):
+        await turn_send(
+            {"session_key": "tui:default", "content": "hi", "playbook_mode": "automatic"},
+            scheduler=FakeScheduler(),
+        )
+
+
 # --- End-to-end via Dispatcher ---
 
 

@@ -16,12 +16,12 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
+from raven.agent.loop.bundles import EngineWiring, SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec
 from raven.agent.tools.load_playbook import LoadPlaybookTool
 from raven.config.raven import CheckpointConfig, RuntimeConfig
-from raven.config.schema import PlaybookConfig
-from raven.playbook.agent_generator import WorkerTableGenerator
+from raven.config.schema import BuiltinAgentConfig, PlaybookConfig
+from raven.playbook.agent_generator import PersonaPlaybookGenerator, TaskPlaybookGenerator
 from raven.playbook.agent_spec import AgentPlaybookSpec, DelegateEntry
 from raven.playbook.store import PlaybookStore
 from raven.playbook.unified import UnifiedPlaybookSpec
@@ -62,46 +62,36 @@ def _provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> OpenAICodexPro
 
 
 @pytest.mark.asyncio
-async def test_live_resolver_distinguishes_none_persona_and_saved_reuse(
+async def test_live_generators_keep_task_and_persona_contracts_separate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     provider = _provider(tmp_path, monkeypatch)
-    resolver = WorkerTableGenerator(provider, MODEL)
     roster = ["Raven"]
-    notes = {"Raven": "general worker that can research, reason, and use local tools"}
+    profiles = {"Raven": {"description": "general worker that can research, reason, and use local tools"}}
 
-    direct = await resolver.resolve(
-        "Answer only this arithmetic question directly: what is 2 + 2? Do not create an agent or reusable process.",
+    task = await TaskPlaybookGenerator(provider, MODEL).resolve(
+        "Create a reusable primary-source due-diligence task setup for evaluating a company.",
         roster,
         ["spawn", "run_subagent_dag"],
-        notes,
+        profiles,
     )
-    assert direct.disposition == "none"
-    assert direct.table is None
-    assert not direct.capture_workflow
+    assert task.disposition == "runtime_and_artifact"
+    assert task.spec is not None and task.spec.delegate
+    assert task.capture_workflow
+    assert all(entry.playbook is None or not entry.playbook.memory.system_prompt for entry in task.spec.delegate)
 
-    persona = await resolver.resolve(
+    persona = await PersonaPlaybookGenerator(provider, MODEL).resolve(
         "Create and save a reusable digital persona named claim-auditor. "
         "It skeptically audits factual claims, requires primary sources, and flags uncertainty. "
         "Do not run research now and do not create a workflow.",
         roster,
         ["spawn", "run_subagent_dag"],
-        notes,
+        profiles,
     )
     assert persona.disposition == "artifact"
     assert persona.spec is not None and persona.spec.delegate
     assert persona.artifact_name
     assert not persona.capture_workflow
-
-    reused = await resolver.resolve(
-        "Run my claim audit on the launch announcement using the saved claim-auditor Playbook.",
-        roster,
-        ["spawn", "run_subagent_dag"],
-        notes,
-        {"claim-auditor": "Audits factual claims, requires primary sources, and flags uncertainty"},
-    )
-    assert reused.selected_playbook == "claim-auditor"
-    assert reused.spec is None
 
 
 @pytest.mark.asyncio
@@ -187,6 +177,7 @@ async def test_live_whole_turn_saves_a_persona_without_a_workflow(
                 "Do not execute a task and do not create a workflow."
             ),
             conversation="test:live-persona",
+            playbook_mode="persona",
         ),
         emit,
         lambda: [],
@@ -200,6 +191,7 @@ async def test_live_whole_turn_saves_a_persona_without_a_workflow(
     assert saved.harness is not None and saved.workflow is None
     assert saved.harness.delegate
     assert list((playbook_root / ".runs").glob("*.json"))
+    assert not list(tmp_path.glob("skills/**/SKILL.md")), "Persona mode must not duplicate the Harness as a skill"
 
 
 @pytest.mark.asyncio
@@ -218,6 +210,25 @@ async def test_live_whole_turn_infers_a_travel_assistant_harness_from_user_needs
             runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never")),
             playbook_config=PlaybookConfig(enabled=True, dir=str(playbook_root), agentHarness="generate"),
         ),
+        subagents=SubagentWiring(
+            agents=[
+                BuiltinAgentConfig(
+                    name="Raven-Research",
+                    description="Researches current external facts and verifies primary sources.",
+                    owns="live web research, source verification, restrictions, safety, prices, and opening hours",
+                ),
+                BuiltinAgentConfig(
+                    name="Raven-Design",
+                    description="Turns approved content into polished, structured visual deliverables.",
+                    owns="visual hierarchy, document structure, concise layout, and presentation quality",
+                ),
+                BuiltinAgentConfig(
+                    name="Raven-OnCall",
+                    description="Monitors changing conditions and sends time-sensitive updates.",
+                    owns="watched work, availability changes, deadlines, and scheduled reminders",
+                ),
+            ]
+        ),
     )
 
     async def emit(*args, **kwargs) -> None:
@@ -235,9 +246,13 @@ async def test_live_whole_turn_infers_a_travel_assistant_harness_from_user_needs
                 "opening hours, reservations, and fatigue; research current local restrictions, customs, "
                 "neighborhood safety, and changes; balance lodging, transport, food, and admission costs with "
                 "alternatives at different price points; avoid tourist traps; and produce one clear plan I can "
-                "actually follow. For now, create and save the assistant only. Do not plan a specific trip."
+                "actually follow. The final deliverable should be a polished six-section travel brief, with each "
+                "day kept under 180 words. After I approve an itinerary, monitor booking deadlines and material "
+                "availability changes, but send nonurgent reminders only between 18:00 and 21:00 in my local time. "
+                "For now, create and save the assistant only. Do not plan a specific trip."
             ),
             conversation="test:live-travel-assistant",
+            playbook_mode="persona",
         ),
         emit,
         lambda: [],
@@ -252,10 +267,12 @@ async def test_live_whole_turn_infers_a_travel_assistant_harness_from_user_needs
     assert saved.harness is not None and saved.workflow is None
     workers = saved.harness.delegate
     assert workers
+    assert {"Raven-Research", "Raven-Design", "Raven-OnCall"} <= {worker.name for worker in workers}
     assert any(worker.label != worker.name for worker in workers)
     assert all("save the assistant" not in worker.brief.lower() for worker in workers)
     assert all("do not plan a specific trip" not in worker.brief.lower() for worker in workers)
     assert list((playbook_root / ".runs").glob("*.json"))
+    assert not list(tmp_path.glob("skills/**/SKILL.md")), "Persona mode must not duplicate the Harness as a skill"
 
     print(
         json.dumps(

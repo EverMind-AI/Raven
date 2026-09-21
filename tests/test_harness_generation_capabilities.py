@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from raven.agent import harness_capabilities
 from raven.agent.subagent.charter import parse
-from raven.playbook.agent_generator import _spec_from_args, emit_tool
+from raven.playbook.agent_generator import _persona_spec_from_args, persona_tool
 from raven.playbook.agent_spec import AgentPlaybookSpec
 
 
@@ -31,39 +31,40 @@ def _disabled_document(tmp_path, monkeypatch):
 
 
 def test_checked_in_document_exposes_only_enabled_harness_fields() -> None:
-    properties = emit_tool(["worker"], ["read_file"])[0]["function"]["parameters"]["properties"]["workers"]["items"][
+    properties = persona_tool(["worker"], ["read_file"])[0]["function"]["parameters"]["properties"]["workers"]["items"][
         "properties"
     ]
 
-    assert {"systemPrompt", "stopWhen", "tools", "checks", "code", "functions"} <= properties.keys()
-    assert set(properties["functions"]["properties"]) == {"intake", "advise", "salvage"}
+    assert {"systemPrompt", "stopWhen", "tools", "checks", "functions"} <= properties.keys()
+    assert "code" not in properties
+    assert set(properties["functions"]["properties"]) == {"intake", "advise", "judge", "salvage"}
     assert "reasoningEffort" not in properties
 
 
 def test_disabling_fields_removes_them_from_generation(tmp_path, monkeypatch) -> None:
     _disabled_document(tmp_path, monkeypatch)
 
-    properties = emit_tool(["worker"], ["read_file"])[0]["function"]["parameters"]["properties"]["workers"]["items"][
+    properties = persona_tool(["worker"], ["read_file"])[0]["function"]["parameters"]["properties"]["workers"]["items"][
         "properties"
     ]
 
-    assert not ({"systemPrompt", "stopWhen", "tools", "checks", "code", "functions"} & properties.keys())
-    assert {"as", "name", "brief", "timeoutSeconds"} <= properties.keys()
+    assert not ({"systemPrompt", "stopWhen", "tools", "checks", "functions"} & properties.keys())
+    assert {"as", "agent", "brief", "timeoutSeconds"} <= properties.keys()
 
 
 def test_disabling_fields_rejects_generated_and_stored_values(tmp_path, monkeypatch) -> None:
     _disabled_document(tmp_path, monkeypatch)
     worker = {
-        "name": "worker",
+        "agent": "worker",
         "systemPrompt": "special instructions",
         "stopWhen": "done",
         "tools": ["read_file"],
         "checks": [{"tool": "read_file"}],
-        "code": "def judge(name, params, prior):\n    return []",
+        "functions": {"judge": "def judge(name, params, prior):\n    return []"},
     }
 
     with pytest.raises(ValueError, match="disabled harness field"):
-        _spec_from_args({"workers": [worker]}, {"worker"})
+        _persona_spec_from_args({"workers": [worker]}, {"worker"})
     with pytest.raises(ValidationError, match="disabled harness field"):
         AgentPlaybookSpec.model_validate(
             {
@@ -119,7 +120,7 @@ def test_a_non_boolean_switch_is_refused(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(harness_capabilities, "_PATH", path)
 
     with pytest.raises(RuntimeError, match="enabled must be a boolean"):
-        emit_tool(["worker"], ["read_file"])
+        persona_tool(["worker"], ["read_file"])
 
 
 def test_capability_loader_refuses_broken_and_undeclared_catalog_entries(tmp_path, monkeypatch) -> None:
@@ -166,7 +167,7 @@ def test_enabling_an_unwired_catalog_item_fails_loudly(tmp_path, monkeypatch) ->
     monkeypatch.setattr(harness_capabilities, "_PATH", path)
 
     with pytest.raises(RuntimeError, match="enabled but not wired: action.functions.participant.review"):
-        emit_tool(["worker"], ["read_file"])
+        persona_tool(["worker"], ["read_file"])
 
 
 @pytest.mark.parametrize(
@@ -180,7 +181,22 @@ def test_enabling_an_unwired_catalog_item_fails_loudly(tmp_path, monkeypatch) ->
 )
 def test_generator_refuses_malformed_function_payloads(functions, message) -> None:
     with pytest.raises(ValueError, match=message):
-        _spec_from_args({"workers": [{"name": "worker", "functions": functions}]}, {"worker"})
+        _persona_spec_from_args({"workers": [{"agent": "worker", "functions": functions}]}, {"worker"})
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ({"code": "def judge(name, params, prior):\n    return []"}, "Persona worker field.*code"),
+        ({"tools": "read_file"}, "tools must be an array"),
+        ({"checks": {}}, "checks must be an array"),
+        ({"timeoutSeconds": 0}, "timeoutSeconds must be a positive integer"),
+    ],
+)
+def test_persona_generator_refuses_fields_it_cannot_preserve(extra, message) -> None:
+    worker = {"as": "worker", "agent": "worker", "brief": "do it", **extra}
+    with pytest.raises(ValueError, match=message):
+        _persona_spec_from_args({"workers": [worker]}, {"worker"})
 
 
 @pytest.mark.parametrize(
@@ -211,8 +227,8 @@ async def test_enabled_functions_generate_bind_and_execute_through_module_compos
         "advise": ("def advise(step):\n    return 'iteration=' + str(step.get('iteration'))"),
         "salvage": ("def salvage(step):\n    return 'salvaged:' + step.get('question', '')"),
     }
-    spec, briefs = _spec_from_args(
-        {"workers": [{"name": "worker", "brief": "do it", "functions": sources}]},
+    spec, briefs = _persona_spec_from_args(
+        {"workers": [{"as": "worker", "agent": "worker", "brief": "do it", "functions": sources}]},
         {"worker"},
     )
     playbook = spec.delegate[0].playbook
@@ -246,8 +262,8 @@ async def test_enabled_functions_generate_bind_and_execute_through_module_compos
 
 def test_generated_function_signature_is_validated_before_payload_building() -> None:
     with pytest.raises(ValueError, match="must have signature intake\\(text, step\\)"):
-        _spec_from_args(
-            {"workers": [{"name": "worker", "functions": {"intake": "def intake(step):\n    return None"}}]},
+        _persona_spec_from_args(
+            {"workers": [{"agent": "worker", "functions": {"intake": "def intake(step):\n    return None"}}]},
             {"worker"},
         )
 
@@ -275,13 +291,13 @@ def test_disabling_one_function_removes_rejects_and_drops_only_that_function(tmp
     path.write_text(json.dumps(document), encoding="utf-8")
     monkeypatch.setattr(harness_capabilities, "_PATH", path)
 
-    properties = emit_tool(["worker"], ["read_file"])[0]["function"]["parameters"]["properties"]["workers"]["items"][
+    properties = persona_tool(["worker"], ["read_file"])[0]["function"]["parameters"]["properties"]["workers"]["items"][
         "properties"
     ]
-    assert set(properties["functions"]["properties"]) == {"intake", "salvage"}
+    assert set(properties["functions"]["properties"]) == {"intake", "judge", "salvage"}
     with pytest.raises(ValueError, match="disabled harness field.*functions.advise"):
-        _spec_from_args(
-            {"workers": [{"name": "worker", "functions": {"advise": "def advise(step):\n    return 'x'"}}]},
+        _persona_spec_from_args(
+            {"workers": [{"agent": "worker", "functions": {"advise": "def advise(step):\n    return 'x'"}}]},
             {"worker"},
         )
 

@@ -25,7 +25,15 @@ from raven.agent.subagent.prompt_capabilities import AgentCapabilities
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.config.schema import PlaybookConfig
 from raven.playbook import NodeSpec, PlaybookSpec, Triggers
-from raven.playbook.agent_generator import SYSTEM_PROMPT, WorkerTableGenerator, build_table, emit_tool, render_charter
+from raven.playbook.agent_generator import (
+    PERSONA_SYSTEM_PROMPT,
+    TASK_SYSTEM_PROMPT,
+    WorkerTableGenerator,
+    build_table,
+    persona_tool,
+    render_charter,
+    task_tool,
+)
 from raven.playbook.agent_spec import AgentPlaybookSpec
 from raven.providers.base import LLMProvider, LLMResponse
 
@@ -451,25 +459,35 @@ def test_the_brief_stands_in_when_no_prompt_was_written() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_generation_prefers_specialist_owners_over_a_generic_agent() -> None:
-    """One named artifact may need several workers with distinct ownership."""
-    flat = " ".join(SYSTEM_PROMPT.split())
+def test_task_and_persona_generation_have_distinct_instructions() -> None:
+    task = " ".join(TASK_SYSTEM_PROMPT.split())
+    persona = " ".join(PERSONA_SYSTEM_PROMPT.split())
 
-    assert "Choose workers by declared capability ownership" in flat
-    assert "not by whether the user called the result one assistant, persona, or team" in flat
-    assert "A generic agent is only for work with no specialist owner" in flat
-    assert "never let its broad abilities absorb research, visual design, coding, or watched work" in flat
-    assert "implement that gate in intake instead of merely restating it" in flat
-    assert "incidental steps, duplicate ownership" in flat
+    assert "one task instance, not a persona specification" in task
+    assert "Do not invent a DAG here" in task
+    assert "digital-person Harness" in persona
+    assert "Do not design a Workflow" in persona
+    assert "participant functions" not in task.lower()
+    assert "participant functions" in persona.lower()
 
 
 def test_the_roster_and_the_tools_are_enums_not_prose() -> None:
     """A name the host cannot resolve is refused at the boundary rather than
     diagnosed after, which is what keeps it out of the repair budget."""
-    schema = emit_tool(["Raven-Research"], ["web_search"])[0]["function"]["parameters"]
+    schema = task_tool(["Raven-Research"], ["web_search"])[0]["function"]["parameters"]
     worker = schema["properties"]["workers"]["items"]["properties"]
-    assert worker["name"]["enum"] == ["Raven-Research"]
+    assert worker["agent"]["enum"] == ["Raven-Research"]
     assert worker["tools"]["items"]["enum"] == ["web_search"]
+    assert set(worker) <= {"as", "agent", "prompt", "tools"}
+
+
+def test_persona_tool_exposes_rich_harness_fields_and_one_function_surface() -> None:
+    schema = persona_tool(["Raven-Research"], ["web_search"])[0]["function"]["parameters"]
+    worker = schema["properties"]["workers"]["items"]["properties"]
+
+    assert {"agent", "brief", "systemPrompt", "stopWhen", "functions"} <= set(worker)
+    assert set(worker["functions"]["properties"]) == {"intake", "advise", "judge", "salvage"}
+    assert "code" not in worker
 
 
 def test_a_worker_off_the_roster_is_dropped_not_repaired() -> None:
@@ -643,10 +661,8 @@ async def test_the_setup_call_runs_on_the_binding_it_was_handed(workspace) -> No
 def test_the_roster_reaches_the_generator_with_what_each_agent_is_for(workspace) -> None:
     """An enum of names is only selectable when the names say what they are.
     The shipped roster reads that way; a deployment's own does not."""
-    from raven.playbook.agent_generator import emit_tool
-
-    schema = emit_tool(["alpha", "beta"], ["grep"], {"alpha": "owns legal research", "beta": "owns code review"})
-    described = schema[0]["function"]["parameters"]["properties"]["workers"]["items"]["properties"]["name"]
+    schema = persona_tool(["alpha", "beta"], ["grep"], {"alpha": "owns legal research", "beta": "owns code review"})
+    described = schema[0]["function"]["parameters"]["properties"]["workers"]["items"]["properties"]["agent"]
 
     assert described["enum"] == ["alpha", "beta"]
     assert "owns legal research" in described["description"]
@@ -654,11 +670,9 @@ def test_the_roster_reaches_the_generator_with_what_each_agent_is_for(workspace)
 
 
 def test_a_roster_that_says_nothing_still_renders(workspace) -> None:
-    from raven.playbook.agent_generator import emit_tool
-
-    described = emit_tool(["alpha"], ["grep"])[0]["function"]["parameters"]["properties"]["workers"]["items"][
+    described = persona_tool(["alpha"], ["grep"])[0]["function"]["parameters"]["properties"]["workers"]["items"][
         "properties"
-    ]["name"]
+    ]["agent"]
     assert described["description"] == "Which sub-agent this worker is."
 
 
@@ -683,14 +697,14 @@ def test_two_agents_with_blank_descriptions_are_still_told_apart(workspace) -> N
     is about, and a generator shown only names can drop the one that can.
     ``spawn`` gates on these same capabilities, which is why they are shown.
     """
-    from raven.playbook.agent_generator import emit_tool, roster_note
+    from raven.playbook.agent_generator import roster_note
 
     metas = [_Meta("alpha"), _Meta("beta", stateful=True, reads_local_files=True, live_progress=True)]
     notes = {m.name: roster_note(m) for m in metas}
 
-    described = emit_tool(["alpha", "beta"], ["grep"], notes)[0]["function"]["parameters"]["properties"]["workers"][
+    described = persona_tool(["alpha", "beta"], ["grep"], notes)[0]["function"]["parameters"]["properties"]["workers"][
         "items"
-    ]["properties"]["name"]["description"]
+    ]["properties"]["agent"]["description"]
 
     assert "beta: reads local files" in described
     assert "resumable across dispatches" in described
