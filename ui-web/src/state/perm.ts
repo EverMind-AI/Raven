@@ -48,7 +48,11 @@ const DEFAULT_TIER = 'smart'
 
 /* Shields, one per tier, differing only in what is inside them: a question, a
    check, an exclamation. Same outline so the three read as one control's three
-   states rather than three unrelated icons. */
+   states rather than three unrelated icons.
+
+   The chip wears one of these; the popover's rows do not. The visual reference
+   draws the tier list as name-and-sentence alone, and a shield repeated down a
+   list of three says nothing the words beside it do not. */
 const ICO: Record<string, string> = {
   ask:
     '<path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z"/>'
@@ -70,8 +74,6 @@ export interface PermRow {
   readonly name: string
   readonly sub: string
   readonly risk: boolean
-  /** The shield's paths, as markup, because that is how ICO spells them. */
-  readonly ico: string
   readonly ticked: boolean
 }
 
@@ -209,7 +211,6 @@ const rows = (): readonly PermRow[] =>
     name: t(p.label),
     sub: t(p.sub),
     risk: !!p.risk,
-    ico: ICO[p.id] ?? '',
     ticked: p.id === mode,
   }))
 
