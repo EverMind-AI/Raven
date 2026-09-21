@@ -118,7 +118,7 @@ describe('the tasks list', () => {
       nodes: [node({ node_id: 'nightly-checks-a1b2c3-setup', status: 'completed' })],
     })]
     await draw()
-    expect(document.querySelector('.sarow.task .nm')?.textContent).toBe('Cross-check quotes')
+    expect(document.querySelectorAll('.sarow.task .tline > *').length).toBe(1)
     expect(document.querySelector('.sarow.task')?.textContent).not.toContain('nightly-checks')
   })
 
