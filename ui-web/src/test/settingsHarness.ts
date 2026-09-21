@@ -6,24 +6,72 @@ import { act, render } from '@testing-library/react'
 import { createElement } from 'react'
 import { vi } from 'vitest'
 
+import { ModelApp } from '../features/model/ModelPicker'
+import * as modelStore from '../features/model/store'
 import { SettingsApp } from '../features/settings/SettingsApp'
 import * as store from '../features/settings/store'
 import { setTranslator } from '../i18n/t'
 import * as settingsDialog from '../state/settings'
 
+import type { ModelSource, Provider } from '../features/model/types'
 import type { ProviderRow, SettingsSnapshot, SettingsSource } from '../features/settings/types'
 
+/* Every label carries the `kind` the wire carries, because the surfaces read
+   it: `model.options` runs `registry_data.kind_of` over each row, so a fixture
+   without it describes a reply the gateway cannot send -- and every slot would
+   see the whole list as text. The values here are what `kind_of` answers for
+   these ids (the embedding one through `inferred_tags`, from its name). */
 export const providers = (): ProviderRow[] => [
   { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-4-5', 'claude-sonnet-4-5'], configured: ['claude-opus-4-5', 'claude-sonnet-4-5'],
     on: true, kind: 'key', acceptsKey: true, keyUrl: 'https://console.anthropic.com/settings/keys',
-    labels: { 'claude-opus-4-5': { label: 'Opus', description: 'the big one', context_window: 200000 } } },
-  { id: 'openrouter', name: 'OpenRouter', models: ['openai/gpt-4o', 'anthropic/claude-sonnet-4-5', 'text-embedding-3-small'],
-    configured: ['openai/gpt-4o', 'anthropic/claude-sonnet-4-5', 'text-embedding-3-small'], on: true, kind: 'key', acceptsKey: true,
+    labels: { 'claude-opus-4-5': { label: 'Opus', description: 'the big one', context_window: 200000, kind: 'text' } } },
+  { id: 'openrouter', name: 'OpenRouter', models: ['openai/gpt-4o', 'anthropic/claude-sonnet-4-5', 'text-embedding-3-small', 'google/gemini-2.5-flash-image'],
+    configured: ['openai/gpt-4o', 'anthropic/claude-sonnet-4-5', 'text-embedding-3-small', 'google/gemini-2.5-flash-image'],
+    on: true, kind: 'key', acceptsKey: true, gateway: true,
+    /* Only the two the wire would describe: `_model_labels` skips a model no
+       catalogue names and no tag reaches, and these two are reached by
+       `inferred_tags` and by a catalogue row. The label is the id, which is what
+       `describe` falls back to. */
+    labels: {
+      'text-embedding-3-small': { label: 'text-embedding-3-small', kind: 'embedding' },
+      'google/gemini-2.5-flash-image': { label: 'gemini-2.5-flash-image', kind: 'image' },
+    },
     apiBase: 'https://openrouter.ai/api/v1', defaultApiBase: 'https://openrouter.ai/api/v1', headers: { 'X-Title': '****set****' } },
   { id: 'openai', name: 'OpenAI', models: [], configured: [], on: false, kind: 'key', acceptsKey: true, keyUrl: 'https://platform.openai.com/api-keys' },
   { id: 'minimax_global', name: 'MiniMax Global', models: [], configured: [], on: false, kind: 'oauth', acceptsKey: false },
   { id: 'ollama', name: 'Ollama', models: [], configured: [], on: false, kind: 'local', acceptsKey: true, needsBase: true },
 ]
+
+/* The same rows on the model domain's seam. The live page fills both from one
+   `model.options` reply, so a test that gave them different lists would be
+   testing a page that cannot exist -- and the roles card now opens the
+   composer's picker, which reads this one. */
+const asModelProvider = (p: ProviderRow): Provider => ({
+  id: p.id, name: p.name, models: p.models, configured: p.configured,
+  on: p.on, kind: p.kind, labels: p.labels, gateway: p.gateway,
+  current: p.id === 'anthropic',
+})
+
+function modelSourceFor(rows: ProviderRow[], calls: Call[]): ModelSource {
+  return {
+    providers: () => rows.map(asModelProvider),
+    persist: async (model, provider, scope) => { calls.push(['persist', { model, provider, scope }]) },
+    addModel: async (model, provider, kind) => { calls.push(['addModel', { model, provider, kind }]) },
+    openSettings: () => { calls.push(['openSettings', null]) },
+  }
+}
+
+let liveModel: ModelSource | null = null
+
+/* The model domain's seam, the twin of `source` below. A file that mounts the
+   dialog installs both: the pages read the settings source, and the roles card
+   opens the model domain's picker. */
+export const modelSource: ModelSource = new Proxy({} as ModelSource, {
+  get: (_t, prop: string) => {
+    if (!liveModel) throw new Error('install() first')
+    return (liveModel as unknown as Record<string, unknown>)[prop]
+  },
+})
 
 export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   return {
@@ -140,17 +188,25 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
   vi.spyOn(settingsDialog, 'close').mockImplementation(() => {})
   live = built
   document.body.innerHTML = SETTINGS_SHELL
+  liveModel = modelSourceFor(data.providers, calls)
   return { source, calls, data }
 }
 
 /** Forgets the source install() built, so the next file starts from nothing. */
 export function _resetForTests(): void {
   live = null
+  liveModel = null
+  modelStore._resetForTests()
 }
 
 export async function mount(tab = 'general'): Promise<ReturnType<typeof render>> {
   settingsDialog.settingsTab.id = tab
   const view = render(createElement(SettingsApp), { container: document.getElementById('spanels')! })
+  /* The picker is one node at the body, not a child of the dialog: main.tsx
+     mounts it there and a settings row opens it by a call. A harness that
+     rendered only the dialog would make every "open the picker" case silently
+     assert nothing. */
+  render(createElement(ModelApp), { container: document.body.appendChild(document.createElement('div')) })
   await act(async () => { await store.open() })
   return view
 }

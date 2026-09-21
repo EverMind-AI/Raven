@@ -3355,6 +3355,10 @@
       "en": "No models under this account",
       "zh": "这个账号下还没有模型"
     },
+    "gui.picker.empty_kind": {
+      "en": "No {kind} model added here yet",
+      "zh": "这一家还没有添加{kind}模型"
+    },
     "gui.picker.manage": {
       "en": "Manage models & accounts...",
       "zh": "管理模型与账号…"
@@ -6420,8 +6424,12 @@
       "zh": "用量"
     },
     "gui.settings.nav.model": {
-      "en": "Models",
-      "zh": "模型"
+      "en": "Model settings",
+      "zh": "模型配置"
+    },
+    "gui.settings.nav.provider": {
+      "en": "Model providers",
+      "zh": "模型服务商"
     },
     "gui.settings.nav.skills": {
       "en": "Skills",
@@ -6723,6 +6731,10 @@
       "en": "Paste an API key",
       "zh": "粘贴 API Key"
     },
+    "gui.settings.providers.pick_one": {
+      "en": "Choose a provider on the left",
+      "zh": "在左边选一家服务商"
+    },
     "gui.settings.providers.key_first": {
       "en": "Enter the API key first",
       "zh": "先填入 API Key"
@@ -6758,6 +6770,18 @@
     "gui.settings.providers.disconnect": {
       "en": "Disconnect",
       "zh": "断开"
+    },
+    "gui.settings.providers.disconnect_key": {
+      "en": "Disconnect and clear the key",
+      "zh": "断开并清除密钥"
+    },
+    "gui.settings.providers.disconnect_auth": {
+      "en": "Disconnect authorisation",
+      "zh": "断开授权"
+    },
+    "gui.settings.providers.disconnect_local": {
+      "en": "Disconnect this server",
+      "zh": "断开这台服务"
     },
     "gui.settings.providers.connection": {
       "en": "Connection",
@@ -6815,9 +6839,29 @@
       "en": "added",
       "zh": "已添加"
     },
+    "gui.settings.providers.add_model": {
+      "en": "Add model",
+      "zh": "添加模型"
+    },
+    "gui.settings.providers.showing_added": {
+      "en": "showing {n} · added {m}",
+      "zh": "显示 {n} 个 · 已添加 {m}"
+    },
     "gui.settings.providers.fetching": {
       "en": "Fetching the model list from {name}",
       "zh": "正在从 {name} 获取模型列表"
+    },
+    "gui.settings.providers.filter_direct": {
+      "en": "Direct vendors",
+      "zh": "直连厂商"
+    },
+    "gui.settings.providers.filter_gateway": {
+      "en": "Aggregators",
+      "zh": "聚合网关"
+    },
+    "gui.settings.providers.filter_oauth": {
+      "en": "Browser sign-in",
+      "zh": "浏览器授权"
     },
     "gui.settings.providers.no_list": {
       "en": "This vendor has no model list endpoint; type a model id",
@@ -7318,6 +7362,10 @@
     "gui.settings.providers.base_override": {
       "en": "Overrides the default",
       "zh": "覆盖默认"
+    },
+    "gui.settings.providers.base_reset": {
+      "en": "Reset",
+      "zh": "恢复默认"
     },
     "gui.settings.providers.key_optional_ph": {
       "en": "API key, if the server wants one",

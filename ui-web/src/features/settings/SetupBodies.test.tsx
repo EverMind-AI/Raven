@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setGateway } from '../../rpc/gateway'
 import { resetSources, setSources } from '../../state/sources'
-import { install, mount, snap, source as settingsSource } from '../../test/settingsHarness'
+import { install, modelSource, mount, snap, source as settingsSource } from '../../test/settingsHarness'
 import { _resetForTests as resetModelSource, setDefaultPair } from '../model/source'
 import { ModelStepBody, WebStepBody } from './SetupBodies'
 import { _resetForTests as resetSettingsSource, loadSettingsWithProviders, modelStepDone, webStepDone } from './source'
@@ -20,7 +20,7 @@ import type { JSX } from 'react'
 vi.mock('../../state/toast', () => ({ show: () => {}, subscribe: () => () => {}, get: () => [] }))
 
 beforeEach(() => {
-  setSources({ settings: settingsSource })
+  setSources({ settings: settingsSource, model: modelSource })
 })
 
 afterEach(() => {
@@ -128,11 +128,18 @@ describe('WebStepBody', () => {
 })
 
 describe('the dialog path', () => {
-  it('still shows the manage button, not disconnect, on a connected row', async () => {
+  it('opens the provider on the catalogue page, where the wizard disconnects in place', async () => {
+    /* Was: the settings model page showed the same list with a "manage" button
+       that paged into the detail. The catalogue page draws the detail beside
+       the list instead, so there is nothing to page to and no manage button --
+       the wizard, which has no detail pane, keeps its disconnect. */
     install()
-    await mount('model')
-    expect(screen.getAllByText('gui.settings.providers.manage').length).toBeGreaterThan(0)
-    expect(screen.queryByText('gui.settings.providers.disconnect')).toBeNull()
+    await mount('provider')
+    expect(screen.queryByText('gui.settings.providers.manage')).toBeNull()
+    const rows = [...document.querySelectorAll('.settings-tp-row')]
+    expect(rows.length).toBeGreaterThan(0)
+    /* Two columns: the list, and the provider it opened on. */
+    expect(document.querySelector('.settings-tp')!.children.length).toBe(2)
   })
 })
 

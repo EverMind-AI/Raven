@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as confirm from '../../../state/confirm'
 import { resetSources, setSources } from '../../../state/sources'
-import { install, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
+import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { AUTO_ARCHIVE_DAYS } from './Archive'
 
@@ -21,7 +21,7 @@ const rows: ArchivedSession[] = [
 
 
 beforeEach(() => {
-  setSources({ settings: settingsSource })
+  setSources({ settings: settingsSource, model: modelSource })
 })
 
 afterEach(() => {

@@ -12,26 +12,13 @@ import { gateway } from '../../rpc/gateway'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
 import { open as openSettings, openModels, openProviderModels } from '../settings/store'
-import { setCurrent } from './store'
+import { open as openPickerAt, setCurrent, statedTags } from './store'
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { TierReply, TierSource } from '../../state/tier'
-import type { ApiProtocol, ModelSource, Provider } from './types'
+import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
 
 type ProviderWire = ResultOf<'model.options'>['providers'][number]
-
-/* Providers the page does not offer. Both are the generic "some endpoint of
-   your own" row, and the page answers that question twice over without them:
-   the runtimes have named rows of their own -- Ollama, LM Studio, GPUStack,
-   OpenVINO -- and every row carries an API Host field for pointing a vendor at
-   a gateway you run. What was left was a row whose name says nothing about
-   what it reaches, next to fifty that do.
-
-   Hidden here rather than dropped from the registry: a section already
-   configured under either name keeps loading, keeps being served, and keeps
-   routing, and `raven provider list` and the onboarding wizard still offer
-   both -- which is also where a vendor Raven carries no spec for is set up. */
-export const HIDDEN_PROVIDERS = new Set(['hosted_vllm', 'custom'])
 
 let providersLive: Provider[] = []
 let defaultModelLive = ''
@@ -70,6 +57,14 @@ export const showModel = (model: string): void => {
   paintChip()
 }
 
+/* The one door another domain opens the picker through, so nothing outside
+   this feature touches its store (`features/settings` is the caller: a role
+   slot passes its kind, the providers that role may use, its name and its own
+   write). The offer's `current` doubles as the marked model. */
+export function openPicker(anchor: HTMLElement, offer: Offer, after?: () => void): void {
+  openPickerAt(anchor, after, offer.current?.model, offer)
+}
+
 export function openModelsForMissingProvider(): boolean {
   const connected = providersLive.some((p) => p.on)
   const knownMissing = setupState.providerConfigured === false || providersLive.length > 0
@@ -82,7 +77,7 @@ export function openModelsForMissingProvider(): boolean {
    loads below: the per-conversation one, which may drop its answer, and the
    default-scoped one, which never does. */
 const rowsOf = (list: ProviderWire[]): Provider[] =>
-  list.filter((p) => !HIDDEN_PROVIDERS.has(p.slug)).map((p) => ({
+  list.map((p) => ({
     id: p.slug, name: p.name, homepage: p.homepage || '', models: p.models || [], on: p.authenticated,
     docs: p.docs || '',
     keyUrl: p.key_url || '', headers: p.extra_headers || {},
@@ -96,6 +91,9 @@ const rowsOf = (list: ProviderWire[]): Provider[] =>
     labels: p.model_labels || {},
     protocols: p.protocols || {}, protocolOverrides: p.protocol_overrides || {},
     kind: p.auth_type || 'api_key', needsBase: !!p.needs_api_base,
+    // The catalogue page's filter, and the picker's answer to "whose column
+    // does the running model belong in": both are facts only the registry has.
+    gateway: !!p.gateway, current: !!p.is_current,
     // Addresses to choose between. A provider that has them is asked which
     // storefront the key came from instead of being handed a host field --
     // the key does not say, and the three are separate accounts.
@@ -209,6 +207,10 @@ export async function persistModel(
 export const modelSource: ModelSource = {
   providers: () => providersLive,
   persist: persistModel,
+  addModel: async (m: string, provider: string, kind?: Kind) => {
+    await gateway().call('model.add_model', { slug: provider, model: m, ...statedTags(kind ?? 'text') })
+    await loadProviders()
+  },
   setProtocol: async (model: string, provider: string, protocol: ApiProtocol) => {
     await gateway().call('model.set_protocol', { model, slug: provider, protocol })
     await loadProviders()

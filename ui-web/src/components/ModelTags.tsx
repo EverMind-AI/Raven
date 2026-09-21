@@ -193,6 +193,11 @@ export interface ModelTagFacts {
   input_modalities?: string[]
   output_modalities?: string[]
   context_window?: number
+  /* Which bucket a model list files this under, straight off the wire
+     (`registry_data.kind_of`). A string rather than the model domain's `Kind`
+     union: this is `src/components/`, which may not import a feature, and the
+     one reader that cares validates it (`features/model/types.ts`). */
+  kind?: string
 }
 
 function modalitySentence(facts: ModelTagFacts): string {
