@@ -93,6 +93,7 @@ describe('ModelStepBody', () => {
       [...groups.find((g) => g.getAttribute('label') === label)!.querySelectorAll('option')].map((o) => o.getAttribute('value')!)
     expect(inGroup('gui.settings.providers.filter_gateway')).toEqual(['openrouter', 'custom'])
     expect(inGroup('gui.settings.providers.filter_direct')).toEqual(['anthropic', 'openai', 'azure_openai'])
+    expect(inGroup('gui.settings.providers.filter_oauth')).toEqual(['minimax_global'])
     expect(inGroup('gui.model.kind.local')).toEqual(['ollama'])
   })
 

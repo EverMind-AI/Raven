@@ -21,10 +21,10 @@ const KINDS: Array<[string, string]> = [
 ]
 export const kindOf = (p: ProviderRow): string => (p.kind === 'oauth' ? 'oauth' : p.kind === 'local' || p.kind === 'endpoint' ? 'local' : 'key')
 export const kindLabel = (p: ProviderRow): string => t((KINDS.find(([k]) => k === kindOf(p)) || KINDS[0]!)[1])
-/* The add block's vendor groups are the catalogue page's four filter buckets,
-   answered by one function so the two cannot drift: an aggregator first, since
-   it resells whatever shape it takes, then the sign-in and self-hosted shapes,
-   and everything else is a vendor held directly -- an endpoint credential too. */
+/* The four shape buckets, defined here and read by the catalogue page's filter
+   too so the two cannot drift: an aggregator first, since it resells whatever
+   shape it takes, then the sign-in and self-hosted shapes, and everything else
+   is a vendor held directly -- an endpoint credential too. */
 export type ProvGroup = Exclude<ProvFilter, 'all' | 'on'>
 const GROUPS: Array<[ProvGroup, string]> = [
   ['direct', 'gui.settings.providers.filter_direct'],

@@ -21,8 +21,9 @@ import type { ProvFilter } from '../store'
 import type { ProviderRow } from '../types'
 import type { JSX } from 'react'
 
-/* The six the prototype offers; the four shape filters are the wizard's add
-   block's groups, from the same function. */
+/* The six the prototype offers. `direct` is the remainder rather than a fact of
+   its own: a vendor you hold an account with directly is one that is not a
+   reseller, not an OAuth sign-in and not something you run yourself. */
 const FILTERS: Array<[ProvFilter, string]> = [
   ['all', 'gui.model.prov_filter.all'],
   ['on', 'gui.settings.providers.connected'],
