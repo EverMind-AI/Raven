@@ -136,6 +136,44 @@ async def test_approval_revoke_takes_back_only_what_that_answer_wrote(monkeypatc
     assert await approval_revoke({"approval_id": "never-asked"}, approval_broker=broker) == {"ok": False}
 
 
+async def test_approval_revoke_is_refused_for_a_conversation_this_socket_does_not_own(monkeypatch) -> None:
+    """An id is the whole of what an undo names, so the undo has to be scoped too.
+
+    ``approval.pending`` already refuses to show another socket's requests. Without
+    the same test on the way out, a socket holding an id could delete a rule written
+    on a conversation it was never shown. The owner's own undo still works.
+    """
+    from raven.config import update
+    from raven.rpc import connection
+
+    removed: list[str] = []
+    monkeypatch.setattr(update, "remove_exec_pattern", lambda pattern: removed.append(pattern) or True)
+
+    frames, send = _collector()
+    broker = ApprovalBroker(send)
+
+    token = connection.bind_connection()
+    try:
+        connection.claim_conversation("session-a")
+        mine = await _answered_grant(broker, frames, "git push *")
+        broker.record_grant(mine, "git push *", True)
+
+        async def stranger() -> dict[str, bool]:
+            # Its own context copy, so this is a different socket and the owner
+            # keeps the conversation.
+            connection.bind_connection()
+            return await approval_revoke({"approval_id": mine}, approval_broker=broker)
+
+        assert await asyncio.create_task(stranger()) == {"ok": False}
+        assert removed == [], "a socket that was never shown the request took a rule away"
+
+        # The receipt survived the refusal, so the owner can still undo its own grant.
+        assert await approval_revoke({"approval_id": mine}, approval_broker=broker) == {"ok": True}
+        assert removed == ["git push *"]
+    finally:
+        connection.unbind_connection(token)
+
+
 async def test_approval_revoke_waits_for_the_engine_to_say_what_it_wrote(monkeypatch) -> None:
     """Measured: ``approval.respond`` answers the page BEFORE the gate persists.
     An undo matching on the rule's text would find nothing and report a failure

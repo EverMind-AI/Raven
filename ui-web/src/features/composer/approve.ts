@@ -39,6 +39,21 @@ import type { Evidence, GateWords, LandedProps, LandedWords } from './GateSheet'
    without touching a newer one. */
 const openApprovals = new Map<string, () => void>()
 
+/* Marks the one question no clock will ever retire. A clarify ends on its own
+   after ten minutes (question_broker) and a confirm on its own hard limit, so
+   sweeping either away unanswered costs a wait. The permission gate's ask has
+   only a day-long floor under it, so swept away unanswered its call waits until
+   somebody presses stop -- the state this whole change exists to make
+   impossible. Set by `openApproval` alone: `.perm` and `data-asks` do not say
+   this, both being worn by the confirm sheet too. */
+const NO_DEADLINE = 'noDeadline'
+
+/* The sheets a sweep must leave standing. Exported because the sweeps that can
+   reach one are in two modules, and a second copy of this rule is how one of
+   them comes to disagree with the other. */
+export const sparePendingApproval = (el: HTMLElement): boolean =>
+  el.dataset[NO_DEADLINE] === '1' 
+
 export interface Approval {
   /* Takes the sheet down without answering. For a caller that has learned the
      question is moot -- the turn was cancelled, the session closed. */
@@ -66,11 +81,11 @@ export function open(
 
   /* One question at a time in THIS conversation: a new request replaces the
      pending one rather than stacking a second sheet the reader has to answer
-     twice. One sweep does it: every sheet of this kind in this bucket goes,
-     including a pending approval and a clarify question, which wears `.csheet`
-     too -- and each goes down through the rack's teardown, so the one that was
-     holding a key handler unregisters it on the way out. */
-  dropClass('csheet', key)
+     twice. One sweep does it: every sheet of this kind in this bucket goes --
+     and each goes down through the rack's teardown, so the one that was holding
+     a key handler unregisters it on the way out. A pending approval is the one
+     exception, for the reason `sparePendingApproval` gives. */
+  dropClass('csheet', key, sparePendingApproval)
 
   const sheet = document.createElement('div')
   sheet.className = 'csheet perm'
@@ -243,6 +258,7 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
   const sheet = document.createElement('div')
   sheet.className = 'csheet perm'
   sheet.dataset.asks = '1'
+  sheet.dataset[NO_DEADLINE] = '1'
   sheet.setAttribute('role', 'dialog')
   sheet.setAttribute('aria-modal', 'true')
   sheet.setAttribute('aria-label', words.title)

@@ -76,6 +76,9 @@ class _Grant:
 
     #: Set when the gate reports; until then an undo waits on it.
     reported: asyncio.Event
+    #: The conversation that was asked. An undo arrives on whatever socket the
+    #: reader has, so the boundary ``pending`` draws has to be drawn here too.
+    conversation_id: str = ""
     pattern: str = ""
     #: True only when this grant is the reason the rule is on disk. A rule the
     #: person already had is not this prompt's to take away.
@@ -211,7 +214,9 @@ class ApprovalBroker:
             if answer is ApprovalChoice.ALLOW_ALWAYS:
                 # The slot exists before the gate writes, so an undo that
                 # arrives first has something to wait on rather than a miss.
-                self._grants[approval_id] = _Grant(reported=asyncio.Event())
+                self._grants[approval_id] = _Grant(
+                    reported=asyncio.Event(), conversation_id=conversation_id
+                )
             return ApprovalOutcome(choice=answer, feedback=feedback, pattern=pattern, approval_id=approval_id)
         except TimeoutError:
             close_reason = "timeout"
@@ -280,6 +285,17 @@ class ApprovalBroker:
             return
         grant.pattern, grant.written = pattern, written
         grant.reported.set()
+
+    def grant_conversation(self, approval_id: str) -> str | None:
+        """Whose conversation an undo would be undoing, or None when there is no receipt.
+
+        Read without taking the receipt, so the caller can refuse an undo that
+        is not its own before ``written_pattern`` consumes it. WHICH caller may
+        see a conversation is the transport's to decide, the same way it is for
+        ``pending``; this only says which one it is.
+        """
+        grant = self._grants.get(approval_id)
+        return None if grant is None else grant.conversation_id
 
     async def written_pattern(self, approval_id: str, *, timeout_s: float = GRANT_RECEIPT_TIMEOUT_S) -> str | None:
         """The rule this answer put on disk, or None when it put none there.

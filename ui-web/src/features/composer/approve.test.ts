@@ -397,6 +397,24 @@ describe('the permission approval sheet', () => {
     expect(opts().map((b) => b.textContent)).toEqual(['1gui.confirm.deny', '2gui.confirm.always', '3gui.confirm.allow'])
   })
 
+  /* The one sweep that could still strand a turn. A confirm request arriving on
+     the same conversation used to take the gate's pending ask down with it, and
+     nothing under that ask retires it but an answer: the call would then wait
+     for the day-long floor. Confirm and clarify both have deadlines of their
+     own, so sparing this one costs nothing and losing it costs the turn. */
+  it('is left standing when a confirm request arrives on the same conversation', () => {
+    const said: string[] = []
+    openApproval(base, handlers({ onChoice: (c) => { said.push(c) } }))
+    expect(sheets().length).toBe(1)
+
+    open('rm -rf build/', () => said.push('confirm-yes'), () => said.push('confirm-no'))
+    expect(sheets().length).toBe(2)
+    /* And it is still the one that can be answered. */
+    const gate = sheets().find((el) => el.dataset.noDeadline === '1')!
+    expect(gate).toBeTruthy()
+    expect(gate.querySelector('.opt')).toBeTruthy()
+  })
+
   it('lays out a write as its path and diff, an MCP call as its tool and input, the rest as arguments', () => {
     const diff = '--- a\n+++ b\n@@ -1 +1 @@\n-x = 1\n+x = 2'
     openApproval(fresh({ ...base, kind: 'file.write', family: '', evidence: { path: '/w/a.py', created: false, diff } }), handlers())

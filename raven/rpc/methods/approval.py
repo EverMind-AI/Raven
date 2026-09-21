@@ -72,11 +72,18 @@ async def approval_revoke(
     kept, the undo came twice, or the gate never reported (see the broker's
     receipt timeout). None of those is an error the reader caused, and none of
     them may reach for a rule this prompt did not create.
+
+    It also covers an undo for somebody else's conversation. An id is the whole
+    of what an undo names, so without this a socket holding one could delete a
+    rule written on a conversation it was never shown -- the same crossing
+    ``pending`` is filtered for, on the way out instead of the way in.
     """
     from raven.config.update import remove_exec_pattern
 
     approval_id = str(params.get("approval_id") or "").strip()
     if not approval_id:
+        return {"ok": False}
+    if not owns_conversation(approval_broker.grant_conversation(approval_id)):
         return {"ok": False}
     pattern = await approval_broker.written_pattern(approval_id)
     if not pattern:
