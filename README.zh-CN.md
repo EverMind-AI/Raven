@@ -80,7 +80,7 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 <p align="center"><em>Raven-Design 在 PresentBench 幻灯片生成测试中排名第一</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347"><img src="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="95%"></a>
+  <a href="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46"><img src="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="95%"></a>
 </p>
 
 <p align="center"><em>Raven-Design 在视觉设计基准测试中的表现</em></p>
