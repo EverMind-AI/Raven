@@ -57,8 +57,16 @@ export interface ProviderRow {
 
 export interface EverosSection {
   model?: string
-  base_url?: string
+  /* The vendor serving `model`, as stored. The page used to derive it by
+     matching the section's address against every provider's, which answered
+     blank for any endpoint that did not match character for character. */
+  provider?: string
+  /* Whether that vendor has a usable credential -- the same question the
+     memory gate answers, so the card and the gate cannot disagree. */
   api_key_set?: boolean
+  /* Set from exported EVEROS_<ROLE>__* variables, which outrank raven. The
+     slot is read-only: raven cannot edit a shell. */
+  env_managed?: boolean
 }
 
 export interface EverosInfo {
@@ -69,6 +77,13 @@ export interface EverosInfo {
      in a model and a key and have nothing happen. */
   available?: boolean
   note?: string | null
+  /* False for a root the user manages: raven neither starts it nor writes its
+     config, so the slots are shown and not editable. */
+  owned?: boolean
+  config_path?: string
+  /* Which roles each vendor can serve, by provider id. The rerank slot used to
+     offer OpenAI because it asked only whether a provider had a key. */
+  supports?: Record<string, string[]>
 }
 
 export type UsageModelRow = ApiUsageModel
@@ -160,11 +175,13 @@ export interface AuthField {
 export interface SettingsSource {
   load(): Promise<SettingsSnapshot>
   set(key: string, value: unknown): Promise<SettingsSnapshot>
-  /* `borrowFrom` names a provider raven is already connected to: the server
-     copies its key and address into the section. It has to resolve there --
-     the page is only ever shown a redacted key, so it has nothing to send. */
-  everosSet(section: string, fields: Record<string, string> | null,
-    borrowFrom?: string): Promise<SettingsSnapshot>
+  /* A role is a pair: a model and the vendor serving it. No credential travels
+     -- the address and key stay on the provider and are resolved at spawn, so
+     rotating a key is one edit and every role on that vendor follows.
+     `protocol` is rerank against a self-hosted endpoint only: the request shape
+     nothing but the operator can name. A null model clears the role. */
+  everosSet(section: string, model: string | null, provider?: string,
+    protocol?: string): Promise<SettingsSnapshot>
   usage(range: UsageRange): Promise<UsageStats | null>
   provider(op: ProviderOp, params: Record<string, unknown>): Promise<SettingsSnapshot>
   /* Ask the provider what it serves right now. A read: nothing is written

@@ -186,16 +186,19 @@ async def test_settings_everos(workspace: Path, tmp_path: Path, monkeypatch: pyt
     # one raven created, so declare it owned for the test.
     monkeypatch.setattr(ue, "everos_owned", lambda: True)
     _check("settings.everos", await console.settings_everos({}))
-    _check(
-        "settings.everosSet",
-        await console.settings_everos_set({"section": "llm", "fields": {"model": "gpt-4o"}}),
-    )
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("openrouter", {"api_key": "sk-x"})
+    pin = {"section": "llm", "model": "gpt-4o", "provider": "openrouter"}
+    _check("settings.everosSet", await console.settings_everos_set(dict(pin)))
     _check("settings.everosSet", await console.settings_everos_set({"section": "rerank", "clear": True}))
-    _check("settings.everos_set", await console.settings_everos_set({"section": "llm", "fields": {"model": "gpt-4o"}}))
-    # The set has to survive the round trip: a section written and read back is
-    # what the page shows, and it is the branch where `api_key_set` is true.
-    await console.settings_everos_set({"section": "llm", "fields": {"api_key": "sk-x"}})
+    _check("settings.everos_set", await console.settings_everos_set(dict(pin)))
+    # The pin has to survive the round trip: what the page shows is read back
+    # through the same describe. `api_key_set` is the named provider's key now,
+    # never one stored on the role -- no credential reaches this method at all.
     out = _check("settings.everos", await console.settings_everos({}))
+    assert out.sections["llm"].model == "gpt-4o"
+    assert out.sections["llm"].provider == "openrouter"
     assert out.sections["llm"].api_key_set is True
 
 

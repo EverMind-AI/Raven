@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetSources, setSources } from '../../../state/sources'
 import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
-import { ROLES, roleProviders, rolesUsing } from './Roles'
+import { ROLES, everosLocked, roleProviders, roleValue, rolesUsing } from './Roles'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -109,13 +109,68 @@ describe('model roles', () => {
     expect(screen.getAllByText('gui.settings.roles.connect_openrouter').length).toBeGreaterThan(0)
   })
 
-  it('an EverOS role offers only providers with a key of their own and writes the section with borrow_from', async () => {
+  it('an EverOS role offers only vendors that serve it, and writes the pair', async () => {
+    /* Anthropic is connected and holds a key, and used to be offered here for
+       every role. It serves no embeddings, which is what the slot has to ask
+       about -- a key was never the question. */
     const { calls } = install()
     await mount('model')
-    expect(roleProviders(role('embedding'), snap()).map((p) => p.id)).toEqual(['anthropic', 'openrouter'])
+    expect(roleProviders(role('embedding'), snap()).map((p) => p.id)).toEqual(['openrouter'])
     expect(pill('gui.settings.roles.memllm').textContent).toContain('openai/gpt-4o')
     await pick('gui.settings.roles.embedding', 'text-embedding-3-small', 'OpenRouter')
-    expect(calls).toEqual([['everosSet', { section: 'embedding', fields: { model: 'text-embedding-3-small' }, borrowFrom: 'openrouter' }]])
+    expect(calls).toEqual([
+      ['everosSet', { section: 'embedding', model: 'text-embedding-3-small', provider: 'openrouter' }],
+    ])
+  })
+
+  it('a self-hosted endpoint is a vendor here like any other', async () => {
+    /* The reason the slot stopped asking about auth shape: somebody's own box
+       is `local`, never `key`, so the old filter hid every one of them -- and a
+       role pinned to a vendor is the only way one can be recorded at all. */
+    const data = snap()
+    data.providers = data.providers.map((p) => (p.id === 'ollama' ? { ...p, on: true } : p))
+    expect(roleProviders(role('rerank'), data).map((p) => p.id)).toEqual(['openrouter', 'ollama'])
+  })
+
+  it('the slot shows the vendor as stored, with no address to match', async () => {
+    /* The page used to name the vendor by comparing the section's address with
+       every provider's. A self-hosted endpoint matches none of them, so the
+       slot went blank for exactly the case that needed it most. */
+    const data = snap()
+    data.everos = { ...data.everos, sections: { llm: { model: 'qwen3-8b', provider: 'ollama', api_key_set: true } } }
+    expect(roleValue(role('memllm'), data)).toEqual({ model: 'qwen3-8b', provider: 'ollama' })
+  })
+
+  it('a locked slot draws its value with nothing to click', async () => {
+    /* The function answering "locked" is not the promise -- the promise is that
+       the click is gone. A disabled-looking pill that still opens the picker
+       takes a save raven cannot apply and reports it as done. */
+    const data = snap()
+    data.everos = { ...data.everos, owned: false }
+    install(data)
+    await mount('model')
+    const shown = screen.getAllByTitle('gui.settings.roles.locked_foreign')
+    expect(shown.length).toBe(4)
+    for (const el of shown) {
+      expect(el.tagName).not.toBe('BUTTON')
+      expect(el.querySelector('button')).toBe(null)
+    }
+    expect(shown.map((el) => el.textContent).join(' ')).toContain('openai/gpt-4o')
+  })
+
+  it('a root the user manages locks the slots, and exported variables lock one', async () => {
+    const foreign = snap()
+    foreign.everos = { ...foreign.everos, owned: false }
+    expect(everosLocked(role('memllm'), foreign)).toBe('foreign')
+
+    const exported = snap()
+    exported.everos = {
+      ...exported.everos,
+      sections: { rerank: { model: 'm', provider: 'openrouter', api_key_set: true, env_managed: true } },
+    }
+    expect(everosLocked(role('rerank'), exported)).toBe('env')
+    expect(everosLocked(role('memllm'), exported)).toBe(null)
+    expect(everosLocked(role('gate'), foreign)).toBe(null)
   })
 
   it('a typed id is added to the provider before the role names it', async () => {
@@ -165,7 +220,7 @@ describe('model roles', () => {
     await act(async () => { fireEvent.change(box, { target: { value: 'our-finetune' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.model.pick_use {"id":"our-finetune"}')) })
     expect(calls[0]).toEqual(['provider', {
-      op: 'add_model', slug: 'anthropic', model: 'our-finetune',
+      op: 'add_model', slug: 'openrouter', model: 'our-finetune',
       capabilities: ['embedding'], output_modalities: ['vector'],
     }])
   })

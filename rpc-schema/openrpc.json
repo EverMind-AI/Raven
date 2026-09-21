@@ -4826,6 +4826,22 @@
                 "null"
               ],
               "description": "Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted."
+            },
+            "owned": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether raven manages this EverOS root. False makes the role slots read-only: raven neither writes that install's config nor starts or stops its server."
+            },
+            "supports": {
+              "type": "object",
+              "default": {},
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "description": "Which roles each vendor can serve, so a slot does not offer a provider that cannot do the job. Keyed by provider name."
             }
           },
           "required": [
@@ -4839,40 +4855,58 @@
     },
     {
       "name": "settings.everosSet",
-      "summary": "Merge fields into one EverOS section, or clear it. Deprecated spelling of settings.everos_set, kept for the shipped TUI.",
+      "summary": "Record which model and provider serve one EverOS role, or clear the role. Deprecated snake_case alias: settings.everos_set.",
       "params": [
         {
           "name": "section",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "description": "Which EverOS role: llm, embedding, rerank or multimodal."
           }
         },
         {
-          "name": "fields",
-          "required": false,
+          "name": "model",
           "schema": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "description": "Merged into the section; ignored when clearing."
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Model id, as the provider names it."
+          }
+        },
+        {
+          "name": "provider",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Which configured provider serves `model`. Its address and key are what the call goes out on, resolved at spawn time rather than copied -- so rotating a key is one edit in the provider and every role serving on it follows."
+          }
+        },
+        {
+          "name": "protocol",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Rerank only, and only for a self-hosted endpoint: which request shape EverOS must post (`deepinfra` / `vllm` / `dashscope`). A curated vendor's shape comes from the vendor table and this is ignored; somebody's own server is the one case nothing but the operator can answer."
           }
         },
         {
           "name": "clear",
-          "required": false,
           "schema": {
-            "type": "boolean",
-            "description": "Drop the section; refused for llm and embedding."
-          }
-        },
-        {
-          "name": "borrow_from",
-          "required": false,
-          "schema": {
-            "type": "string",
-            "description": "Take api_key and base_url from this connected provider, copied not referenced. Wins over the same keys in `fields`, which cannot carry a real key: the page only ever sees a redacted one."
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null,
+            "description": "Drop the role; refused for llm and embedding."
           }
         }
       ],
@@ -4908,34 +4942,52 @@
           "name": "section",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "description": "Which EverOS role: llm, embedding, rerank or multimodal."
           }
         },
         {
-          "name": "fields",
-          "required": false,
+          "name": "model",
           "schema": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "description": "Merged into the section; ignored when clearing."
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Model id, as the provider names it."
+          }
+        },
+        {
+          "name": "provider",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Which configured provider serves `model`. Its address and key are what the call goes out on, resolved at spawn time rather than copied -- so rotating a key is one edit in the provider and every role serving on it follows."
+          }
+        },
+        {
+          "name": "protocol",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Rerank only, and only for a self-hosted endpoint: which request shape EverOS must post (`deepinfra` / `vllm` / `dashscope`). A curated vendor's shape comes from the vendor table and this is ignored; somebody's own server is the one case nothing but the operator can answer."
           }
         },
         {
           "name": "clear",
-          "required": false,
           "schema": {
-            "type": "boolean",
-            "description": "Drop the section; refused for llm and embedding."
-          }
-        },
-        {
-          "name": "borrow_from",
-          "required": false,
-          "schema": {
-            "type": "string",
-            "description": "Take api_key and base_url from this connected provider, copied not referenced. Wins over the same keys in `fields`, which cannot carry a real key: the page only ever sees a redacted one."
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null,
+            "description": "Drop the role; refused for llm and embedding."
           }
         }
       ],
@@ -8850,7 +8902,10 @@
               }
             },
             "phase": {
-              "type": ["object", "null"],
+              "type": [
+                "object",
+                "null"
+              ],
               "additionalProperties": false,
               "required": [
                 "kind",
@@ -8874,7 +8929,10 @@
               }
             },
             "phases": {
-              "type": ["object", "null"],
+              "type": [
+                "object",
+                "null"
+              ],
               "additionalProperties": false,
               "required": [
                 "status",
@@ -8899,7 +8957,10 @@
               }
             },
             "tier": {
-              "type": ["string", "null"],
+              "type": [
+                "string",
+                "null"
+              ],
               "enum": [
                 "memory_files",
                 "full",
@@ -9803,23 +9864,25 @@
         "additionalProperties": false,
         "properties": {
           "model": {
-            "description": "Empty when the shipped placeholder is still in place.",
-            "type": "string"
-          },
-          "base_url": {
+            "description": "Empty when nothing is pinned for this role.",
             "type": "string"
           },
           "provider": {
-            "type": "string"
+            "type": "string",
+            "description": "The vendor serving `model`. Empty when nothing is pinned."
           },
           "api_key_set": {
-            "description": "Whether a key is stored; the value never goes on the wire.",
+            "description": "Whether that provider has a usable credential -- the same question the memory gate answers, so the card and the gate cannot disagree. No key ever goes on the wire.",
             "type": "boolean"
+          },
+          "env_managed": {
+            "type": "boolean",
+            "default": false,
+            "description": "The endpoint came from exported EVEROS_<ROLE>__* variables, which outrank raven. The slot is read-only: raven cannot edit a shell."
           }
         },
         "required": [
           "model",
-          "base_url",
           "provider",
           "api_key_set"
         ],
@@ -10709,7 +10772,10 @@
             "type": "boolean"
           },
           "model": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "The model this row sends, or null to use the agent's own default."
           },
           "model_choices": {

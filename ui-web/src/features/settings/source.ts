@@ -233,12 +233,11 @@ export const settingsSource: SettingsSource = {
     toast(r.warning || t('gui.settings.saved'))
     return settingsSnapshot()
   })()),
-  /* A null fields object means "clear the section" (optional roles only). */
-  everosSet: (section, fields, borrowFrom) => run((async () => {
-    const p: ParamsOf<'settings.everosSet'> = fields ? { section, fields } : { section, clear: true }
-    /* Only the name travels. The key stays where it is and the server copies
-       it across -- what this page holds is `****set****`. */
-    if (borrowFrom) p.borrow_from = borrowFrom
+  /* A null model means "clear the role" (optional roles only). */
+  everosSet: (section, model, provider, protocol) => run((async () => {
+    const p: ParamsOf<'settings.everosSet'> = model
+      ? { section, model, provider, ...(protocol ? { protocol } : {}) }
+      : { section, clear: true }
     const r = await gateway().call('settings.everosSet', p)
     await loadEveros()
     toast(r.warning || t('gui.settings.saved'))

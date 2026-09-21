@@ -84,7 +84,17 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       providers: { anthropic: { modelOverlay: { 'claude-opus-4-5': { label: 'Opus', description: 'the big one' } } } },
     },
     configPath: '/home/me/.raven/config.json',
-    everos: { available: true, sections: { llm: { model: 'openai/gpt-4o', base_url: 'https://openrouter.ai/api/v1', api_key_set: true } } },
+    everos: {
+      available: true,
+      owned: true,
+      sections: { llm: { model: 'openai/gpt-4o', provider: 'openrouter', api_key_set: true } },
+      supports: {
+        openrouter: ['embedding', 'llm', 'multimodal', 'rerank'],
+        anthropic: ['llm'],
+        custom: ['embedding', 'llm', 'multimodal', 'rerank'],
+        ollama: ['embedding', 'llm', 'multimodal', 'rerank'],
+      },
+    },
     providers: providers(),
     curProvider: 'anthropic',
     model: 'claude-opus-4-5',
@@ -152,7 +162,8 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
   const built: SettingsSource = {
     load: async () => data,
     set: async (key, value) => rec('set', { key, value }),
-    everosSet: async (section, fields, borrowFrom) => rec('everosSet', { section, fields, ...(borrowFrom ? { borrowFrom } : {}) }),
+    everosSet: async (section, model, provider, protocol) =>
+      rec('everosSet', { section, model, provider, ...(protocol ? { protocol } : {}) }),
     usage: async (range) => { calls.push(['usage', range]); return null },
     provider: async (op, params) => rec('provider', { op, ...params }),
     fetchModels: async (slug) => { calls.push(['fetchModels', slug]); return { models: [], status: 'ok' } },
