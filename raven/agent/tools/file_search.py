@@ -534,7 +534,10 @@ class FindTool(_FsTool):
                 return matches, False
             if _matches([], compiled.segments) and (start.is_dir() or not compiled.dirs_only):
                 matches.append((self._mtime(start), f"{shown_prefix}{'/' if start.is_dir() else ''}"))
-            if not start.is_dir():
+            # A pattern that is all literal names exactly one path, file or
+            # directory; what lies beneath a named directory is not asked for,
+            # so there is nothing to walk and no budget to run out of.
+            if not start.is_dir() or not compiled.segments:
                 return matches, False
         start_parts = len(start.parts)
         last_root: str | None = None

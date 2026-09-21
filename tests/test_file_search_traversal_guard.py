@@ -313,6 +313,9 @@ async def test_find_with_a_literal_pattern_answers_without_a_walk(tmp_path, monk
     assert (await FindTool().execute(pattern="src/lib/c.py", path=str(tmp_path))).splitlines() == ["src/lib/c.py"]
     assert (await FindTool().execute(pattern="src/lib/c.py/", path=str(tmp_path))) == "No files found matching pattern."
     assert (await FindTool().execute(pattern="src/nope.py", path=str(tmp_path))) == "No files found matching pattern."
+    # A named directory is the answer itself; its contents were not asked for.
+    assert (await FindTool().execute(pattern="src/lib", path=str(tmp_path))).splitlines() == ["src/lib/"]
+    assert (await FindTool().execute(pattern="src/lib/", path=str(tmp_path))).splitlines() == ["src/lib/"]
 
 
 @pytest.mark.asyncio
