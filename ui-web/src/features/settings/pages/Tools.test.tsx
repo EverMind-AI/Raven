@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../../state/sources'
-import { install, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
+import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import { legacyKey, vendorKey, webVendor } from '../source'
 import * as store from '../store'
 import { TOOL_GROUPS, blocker } from './Tools'
@@ -14,7 +14,7 @@ vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => 
 
 
 beforeEach(() => {
-  setSources({ settings: settingsSource })
+  setSources({ settings: settingsSource, model: modelSource })
 })
 
 afterEach(() => {
@@ -125,7 +125,8 @@ describe('tools page', () => {
     await mount('tools')
     await act(async () => { fireEvent.click(screen.getByText('image_generate')) })
     await act(async () => { fireEvent.click(screen.getByLabelText('gui.settings.roles.change {"role":"gui.settings.roles.image"}')) })
-    await act(async () => { fireEvent.click(screen.getByText('openai/gpt-4o')) })
-    expect(calls[0]).toEqual(['set', { key: 'tools.media.image', value: { model: 'openai/gpt-4o', quality: '' } }])
+    /* The image slot offers image models, here and on the model page alike. */
+    await act(async () => { fireEvent.click(screen.getByText('gemini-2.5-flash-image')) })
+    expect(calls[0]).toEqual(['set', { key: 'tools.media.image', value: { model: 'google/gemini-2.5-flash-image', quality: '' } }])
   })
 })

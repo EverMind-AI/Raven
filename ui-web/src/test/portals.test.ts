@@ -120,7 +120,7 @@ describe('the portal table', () => {
        page installs and .upshade only when an upgrade starts. The table copies
        what is measured, not what the comment intends. */
     expect(BOOT_BODY_ORDER.indexOf('div.tipp')).toBeGreaterThan(-1)
-    expect(PORTALS.find((p) => p.id === '.tipp')!.at).toBe(19)
+    expect(PORTALS.find((p) => p.id === '.tipp')!.at).toBe(14)
     expect(PORTALS.find((p) => p.id === '.upshade')!.at).toBe('last')
   })
 
@@ -166,7 +166,7 @@ describe('the portal table', () => {
 
   it('gives the model picker a place before the two popovers, breaking the tie at 46', () => {
     const picker = PORTALS.find((p) => p.id === 'pickHost')!
-    expect(picker.at).toBe(17)
+    expect(picker.at).toBe(12)
     for (const id of ['#permPop', '#tierPop']) {
       expect(PORTALS.find((p) => p.id === id)!.at).toBe('last')
     }

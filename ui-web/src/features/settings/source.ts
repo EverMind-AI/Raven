@@ -28,9 +28,8 @@ import {
   persistModel,
   providers,
   setDefaultPair,
-  showModel,
 } from '../model/source'
-import { loadSessions } from '../rail/source'
+import { loadSessions, SESS_CHANNELS } from '../rail/source'
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { BannerSource } from '../../state/banner'
@@ -124,8 +123,14 @@ export async function loadSettings(): Promise<void> {
   // provider), while the composer chip shows whatever the open conversation
   // runs. Sharing one value made the settings control display the session's
   // model -- and badge the session's provider -- as the default.
+  //
+  // Which is why this load stops here. It used to paint the chip from the same
+  // defaults, so opening the dialog -- or any settings write, each of which
+  // reloads -- put the default back over a conversation that had switched, and
+  // the switch read as lost until a reload. The chip belongs to
+  // `loadProviders`, which asks `model.options` for the visible conversation
+  // and is run by every path that changes which one that is.
   setDefaultPair(defaults.model || '', defaults.provider || '')
-  if (defaults.model) showModel(defaults.model)
 }
 
 /* The settings plus the provider catalogue behind `model.options`. Deliberately
@@ -258,7 +263,11 @@ export const settingsSource: SettingsSource = {
   pickModel: (model, provider) => run(persistModel(model, provider, 'default').then((r) => r === 'needs_restart')),
   model: () => defaultModel(),
   defaultProvider: () => defaultProvider(),
-  archived: () => gateway().call('session.list', { archived: true }).then((r) => r.sessions || []),
+  /* The same channels the rail lists, because this page is where a row the
+     rail archived has to show up: asking for fewer left an archived scheduled
+     run invisible here and unreachable there. */
+  archived: () => gateway().call('session.list', { archived: true, channels: SESS_CHANNELS })
+    .then((r) => r.sessions || []),
   /* The rail lists by its own read, so it is that read that puts the row back. */
   restore: (id) => run(gateway().call('session.archive', { session_id: id, archived: false })
     .then(() => loadSessions())),

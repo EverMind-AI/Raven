@@ -1048,13 +1048,13 @@ def _usage_range(params: dict):
 async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     """Aggregate API usage for the settings page.
 
-    LLM side reads the UsageTracker telemetry files
-    (``~/.raven/telemetry/usage-YYYY-MM-DD.jsonl``, one JSON row per call);
-    tool side counts ``tool_calls`` entries across session transcripts whose
-    file mtime falls inside the window. Both scans are read-only and bounded
-    by ``days`` (default 30, max 90).
+    Both halves read the same UsageTracker telemetry files
+    (``~/.raven/telemetry/usage-YYYY-MM-DD.jsonl``, one JSON row per call, one
+    per tool call), so one range means one thing across the whole reply. The
+    scan is read-only and bounded by ``days`` (default 30, max 90). Session
+    transcripts are read for their titles only.
     """
-    from datetime import datetime, timedelta
+    from datetime import datetime
 
     from raven.config.loader import load_config
 
@@ -1081,7 +1081,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
 
     selected_session = params.get("session_key") or None
     sessions: set[str] = set()
-    member_sessions: set[str] = {selected_session} if selected_session else set()
     models: dict[str, dict[str, Any]] = {}
     total = empty_totals()
     # The same resolution the writer uses (usage_tracker._default_telemetry_dir):
@@ -1114,8 +1113,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                 sessions.add(root)
             if selected_session and root != selected_session:
                 continue
-            if isinstance(row.get("session_key"), str):
-                member_sessions.add(row["session_key"])
             name = str(row.get("model") or "?")
             acc = models.setdefault(name, {"model": name, **empty_totals()})
             cost = reported_cost(row.get("cost_usd")) if row.get("schema_version") == 2 else None
@@ -1138,7 +1135,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     session_titles: dict[str, str] = {}
     tools: dict[str, int] = {}
     tool_total = 0
-    telemetry_tool_ids: set[str] = set()
     try:
         for day in dates:
             p = tel_dir / f"usage-{day.isoformat()}.jsonl"
@@ -1153,60 +1149,41 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                     if selected_session and root != selected_session:
                         continue
                     name = row.get("name")
-                    if isinstance(row.get("tool_call_id"), str):
-                        telemetry_tool_ids.add(row["tool_call_id"])
                     if isinstance(name, str):
                         tools[name] = tools.get(name, 0) + 1
                         tool_total += 1
             except Exception:
                 continue
+        # Titles only. Tool calls were also counted from transcripts here, to
+        # cover conversations older than the day tool rows started being
+        # written, and a transcript counted as in-range when its file mtime
+        # was -- which gave the range every tool call the conversation had ever
+        # made while its model calls, dated per day, stayed outside it. A reply
+        # cannot carry two readings of one range: a page showing thousands of
+        # tool calls beside no model calls reads as broken, and is.
         sess_root = Path(load_config().workspace_path) / "sessions"
-        # Both ends, because the range is a window rather than a floor: the
-        # daily telemetry files this falls back for are read for the selected
-        # days only, so a transcript touched after `to` would add tool calls
-        # the other two tallies of the same reply do not have.
+        # A floor rather than a window: a transcript last written before the
+        # range cannot name a session the range saw, and which sessions it saw
+        # is what the telemetry above already answered.
         cutoff = datetime.combine(frm, datetime.min.time()).timestamp()
-        until = datetime.combine(to + timedelta(days=1), datetime.min.time()).timestamp()
         for p in sess_root.glob("*/*.jsonl"):
             try:
-                mtime = p.stat().st_mtime
-                if mtime < cutoff or mtime >= until:
+                if p.stat().st_mtime < cutoff:
                     continue
                 lines = p.read_text(encoding="utf-8").splitlines()
             except Exception:
                 continue
-            metadata = None
             for line in lines:
                 try:
                     entry = json.loads(line)
                 except ValueError:
                     continue
-                if isinstance(entry, dict) and entry.get("_type") == "metadata":
-                    metadata = entry
-            if metadata:
-                key = metadata.get("key")
-                title = (metadata.get("metadata") or {}).get("title")
-                if isinstance(key, str) and isinstance(title, str):
+                if not isinstance(entry, dict) or entry.get("_type") != "metadata":
+                    continue
+                key = entry.get("key")
+                title = (entry.get("metadata") or {}).get("title")
+                if isinstance(key, str) and key in sessions and isinstance(title, str):
                     session_titles[key] = title
-            if selected_session and (not metadata or metadata.get("key") not in member_sessions):
-                continue
-            for line in lines:
-                try:
-                    msg = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(msg, dict):
-                    continue
-                for tc in msg.get("tool_calls") or []:
-                    if not isinstance(tc, dict):
-                        continue
-                    name = tc.get("name") or (tc.get("function") or {}).get("name")
-                    call_id = tc.get("id")
-                    if isinstance(call_id, str) and call_id in telemetry_tool_ids:
-                        continue
-                    if name:
-                        tools[str(name)] = tools.get(str(name), 0) + 1
-                        tool_total += 1
     except Exception:
         logger.exception("settings.usage: tool scan failed")
 
@@ -1739,6 +1716,82 @@ async def fs_list(params: dict, *, agent_loop_factory=None) -> dict:
     return {"root": str(root), "path": rel, "entries": entries}
 
 
+async def fs_dirs(params: dict, *, agent_loop_factory=None) -> dict:
+    """``fs.dirs`` -- the subdirectories of one absolute directory.
+
+    What the page's folder picker walks when a person chooses where a new
+    conversation will work. Not rooted at a session like ``fs.list``: the
+    conversation does not exist yet, and the point is to reach a directory the
+    policy default would never have picked. Directories only, since a file
+    cannot be a working directory; dotfiles omitted, as ``fs.list`` omits them.
+
+    Every entry carries ``ok``, the answer ``validate_override`` would give
+    ``session.create`` for that path, so the picker can grey out the agent's
+    own data instead of offering a folder the create is going to refuse. A
+    directory that merely CONTAINS that data answers false too (the validator
+    refuses agent home's ancestors), which says nothing about its children --
+    the picker lets such a row be entered and only withholds the pick.
+
+    The cap counts directories FOUND, not names examined, so a folder is never
+    dropped for sorting late among its siblings: the picker offers no typed
+    path, and a subtree left out of the listing cannot be reached at all.
+    Bounding the input instead would buy speed with the answer. The scan is
+    cheap regardless because the type comes off the dirent -- ``os.scandir``
+    answers ``is_dir`` from what the kernel already returned, so a directory of
+    thirty thousand files costs no stats at all. And the walk runs off the
+    event loop, as ``fs_read`` does, because the directory is the caller's
+    choice and a slow mount would otherwise stall every other client on the
+    shared socket.
+    """
+    from raven.config.loader import load_config
+
+    raw = str(params.get("path") or "")
+    target = Path(raw).expanduser() if raw else Path.home()
+    if not target.is_absolute():
+        raise ConfigValidationError(f"path must be absolute, got {raw!r}", data={"field": "path"})
+    home = load_config().workspace_path
+    return await asyncio.to_thread(_walk_dirs, target, home)
+
+
+def _walk_dirs(target: Path, agent_home: Path) -> dict:
+    """The blocking half of ``fs.dirs``: resolve, list, judge."""
+    from raven.agent.workdir import validate_override
+
+    target = target.resolve()
+    if not target.is_dir():
+        raise ConfigValidationError(f"not a directory: {target}", data={"field": "path"})
+
+    def allowed(path: Path) -> bool:
+        try:
+            validate_override(path, agent_home)
+        except ValueError:
+            return False
+        return True
+
+    try:
+        with os.scandir(target) as scan:
+            children = sorted((c for c in scan if not c.name.startswith(".")), key=lambda c: c.name.lower())
+    except OSError as e:
+        raise ConfigValidationError(str(e)) from None
+    entries = []
+    for child in children:
+        try:
+            if not child.is_dir():
+                continue
+        except OSError:
+            continue
+        entries.append({"name": child.name, "path": child.path, "ok": allowed(Path(child.path))})
+        if len(entries) >= _FS_MAX_ENTRIES:
+            break
+    return {
+        "path": str(target),
+        "parent": None if target.parent == target else str(target.parent),
+        "home": str(Path.home()),
+        "ok": allowed(target),
+        "entries": entries,
+    }
+
+
 _UPLOAD_DIR = "uploads"
 
 
@@ -1816,6 +1869,53 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
         "abs_path": str(target),
         "size": len(data),
     }
+
+
+async def deck_templates_list(params: dict, *, agent_loop_factory=None) -> dict:
+    """The bundled deck templates, with a cover each where this host has drawn one.
+
+    ``available`` is false without the deck engine, and the page hides the
+    picker on it: a button that opens an empty gallery is a broken button.
+    ``pending`` is true while a cover is still being drawn in the background,
+    and the page asks again until it is not.
+    """
+    from raven.rpc import deck_templates
+
+    rows, pending = await deck_templates.listing(with_covers=bool(params.get("covers", True)))
+    return {"templates": rows, "available": deck_templates.templates_dir() is not None, "pending": pending}
+
+
+async def deck_templates_pages(params: dict, *, agent_loop_factory=None) -> dict:
+    """Every page of one bundled template, for the reader to flip through before picking."""
+    from raven.rpc import deck_templates
+
+    name = str(params.get("name") or "").strip()
+    template = deck_templates.find(name)
+    if template is None:
+        raise ConfigValidationError(f"no bundled deck template named {name!r}")
+    pages = await deck_templates.pages_for(template)
+    return {"pages": [deck_templates.data_url(p) for p in pages]}
+
+
+async def deck_templates_pick(params: dict, *, agent_loop_factory=None) -> dict:
+    """Deposit a bundled template under ``<agent home>/uploads`` and answer as ``fs.upload`` does.
+
+    The route that reaches the deck engine opens on a ``.pptx`` the turn hands
+    over, and ``turn.send`` admits exactly the paths ``fs.upload`` mints -- so a
+    picked template is made into one of those rather than into a new kind of
+    thing the turn would have to learn.
+    """
+    from raven.rpc import deck_templates
+
+    name = str(params.get("name") or "").strip()
+    template = deck_templates.find(name)
+    if template is None:
+        raise ConfigValidationError(f"no bundled deck template named {name!r}")
+    try:
+        target = deck_templates.deposit(template, _upload_root() / _UPLOAD_DIR)
+    except OSError as e:
+        raise ConfigValidationError(f"cannot place the template under uploads: {e}") from None
+    return {"path": f"{_UPLOAD_DIR}/{target.name}", "abs_path": str(target), "size": target.stat().st_size}
 
 
 async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
@@ -2034,8 +2134,12 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("channels.configure", bind(channels_configure))
     dispatcher.register("channels.qr", channels_qr)
     dispatcher.register("fs.list", bind(fs_list))
+    dispatcher.register("fs.dirs", bind(fs_dirs))
     dispatcher.register("fs.read", bind(fs_read))
     dispatcher.register("fs.upload", bind(fs_upload))
+    dispatcher.register("deck.templates.list", bind(deck_templates_list))
+    dispatcher.register("deck.templates.pages", bind(deck_templates_pages))
+    dispatcher.register("deck.templates.pick", bind(deck_templates_pick))
     dispatcher.register("fs.reveal", bind(fs_reveal))
     dispatcher.register("fs.open", bind(fs_open))
     dispatcher.register("deliverables.list", bind(deliverables_list))

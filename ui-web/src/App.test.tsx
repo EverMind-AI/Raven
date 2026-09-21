@@ -85,7 +85,6 @@ describe('the page root', () => {
     expect(document.getElementById('toasts')!.children).toHaveLength(0)
     expect(document.getElementById('menu')!.children).toHaveLength(0)
     expect(document.getElementById('jobVeil')!.children).toHaveLength(0)
-    expect(document.getElementById('connVeil')!.children).toHaveLength(0)
   })
 
   it('renders every id the chrome and the islands reach for, once each', () => {
@@ -94,24 +93,25 @@ describe('the page root', () => {
       'cfTitle', 'cfBody', 'cfNo', 'cfYes',
       'dTitle', 'dClose', 'dBody',
       'setModal', 'snav', 'snavList', 'setTitle', 'setSub', 'setClose', 'spanels',
-      'railShow', 'split', 'jobVeil', 'connVeil', 'menu', 'toasts',
-      'extAgentsPage', 'connectionsPage', 'memoryPage', 'playbooksPage', 'cronPage',
-      'extAgentsBody', 'connectionsBody', 'memoryBody', 'playbooksBody', 'cronBody',
+      'railShow', 'split', 'jobVeil', 'menu', 'toasts',
+      'extAgentsPage', 'extAgentsBody',
+      'connectionsBody', 'memoryBody', 'cronBody',
     ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
   })
 
-  /* Shared ground: the four detail-drawer openers append their own host under
+  /* Shared ground: the detail-drawer openers append their own host under
      #dBody, the settings island portals its nav into #snavList and roots its
-     panels in #spanels, and each module page's body is the root of its own
-     island. React owning any of those child lists would tear down what the
-     other side put there. */
+     panels in #spanels, each module page's body is the root of its own island,
+     and the three sections another domain fills are rooted in a box of their
+     own beside #spanels. React owning any of those child lists would tear down
+     what the other side put there. */
   it('hands the shared grounds over empty', () => {
     render()
     for (const id of [
       'dBody', 'snavList', 'spanels',
-      'extAgentsBody', 'connectionsBody', 'memoryBody', 'playbooksBody', 'cronBody',
+      'extAgentsBody', 'connectionsBody', 'memoryBody', 'cronBody',
     ]) {
       expect(document.getElementById(id)!.childNodes, id).toHaveLength(0)
     }
@@ -149,7 +149,7 @@ describe('the page root', () => {
     for (const id of ['cfTitle', 'cfNo', 'cfYes', 'dTitle', 'setTitle']) {
       expect(document.getElementById(id)!.textContent, id).not.toBe('')
     }
-    for (const sel of ['#extAgentsPage h2', '#connectionsPage h2', '#memoryPage h2', '#playbooksPage h2', '#cronPage h2']) {
+    for (const sel of ['#extAgentsPage h2']) {
       expect(document.querySelector(sel)!.textContent, sel).not.toBe('')
     }
     expect(document.querySelector('.wm')!.textContent).not.toBe('')
@@ -192,24 +192,24 @@ describe('the page root once a language is applied', () => {
   })
 
   /* The flags another store writes on a region this root renders. A pick
-     re-renders all seven sections, and React diffs against the props it
+     re-renders every section, and React diffs against the props it
      rendered last rather than against the document -- so a value it never
      changes is a value it never writes again, which is what lets
-     state/page.ts stay the one writer of the seven open flags. */
+     state/page.ts stay the one writer of the open flags. */
   it('keeps the open flag the page store wrote through a re-render', () => {
     render()
     act(() => {
-      page.show('cronPage')
+      page.show('extAgentsPage')
     })
-    expect(document.getElementById('cronPage')!.dataset.open).toBe('true')
+    expect(document.getElementById('extAgentsPage')!.dataset.open).toBe('true')
     act(() => {
       lang.set('zh')
     })
-    expect(document.getElementById('cronPage')!.dataset.open).toBe('true')
+    expect(document.getElementById('extAgentsPage')!.dataset.open).toBe('true')
     act(() => {
       page.show(null)
     })
-    expect(document.getElementById('cronPage')!.dataset.open).toBe('false')
+    expect(document.getElementById('extAgentsPage')!.dataset.open).toBe('false')
   })
 })
 

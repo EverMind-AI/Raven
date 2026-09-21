@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as settingsDialog from '../../state/settings'
 import { resetSources, setSources } from '../../state/sources'
-import { install, mount, settle, snap, source as settingsSource } from '../../test/settingsHarness'
+import { install, modelSource, mount, settle, snap, source as settingsSource } from '../../test/settingsHarness'
 import { SettingsApp } from './SettingsApp'
 import * as store from './store'
 
@@ -15,7 +15,7 @@ vi.mock('../../state/toast', () => ({ show: () => {}, subscribe: () => () => {},
 
 
 beforeEach(() => {
-  setSources({ settings: settingsSource })
+  setSources({ settings: settingsSource, model: modelSource })
 })
 
 afterEach(() => {
@@ -48,13 +48,15 @@ describe('settings root', () => {
     expect(document.querySelectorAll('.settings-row').length).toBeGreaterThan(0)
   })
 
-  it('portals eight nav entries into the shell and titles the header with the open section', async () => {
+  it('portals every nav entry into the shell and titles the header with the open section', async () => {
     install()
     await mount('general')
     const nav = document.querySelectorAll('#snavList .settings-nitem')
     expect([...nav].map((b) => b.textContent)).toEqual([
-      'gui.settings.nav.general', 'gui.settings.nav.usage', 'gui.settings.nav.model', 'gui.settings.nav.skills',
-      'gui.settings.nav.tools', 'gui.settings.nav.plugins', 'gui.settings.nav.archive', 'gui.settings.nav.about',
+      'gui.settings.nav.general', 'gui.settings.nav.usage', 'gui.settings.nav.provider',
+      'gui.settings.nav.model', 'gui.settings.nav.skills', 'gui.settings.nav.tools',
+      'gui.settings.nav.plugins', 'gui.settings.nav.channels', 'gui.settings.nav.cron',
+      'gui.settings.nav.memory', 'gui.settings.nav.archive', 'gui.settings.nav.about',
     ])
     expect(nav[0]!.getAttribute('aria-current')).toBe('true')
     expect(document.getElementById('setTitle')!.textContent).toBe('gui.settings.nav.general')
@@ -73,7 +75,7 @@ describe('settings root', () => {
   it('every section renders from the fixture snapshot without a load of its own failing', async () => {
     install()
     await mount('general')
-    for (const id of ['usage', 'model', 'skills', 'tools', 'plugins', 'archive', 'about'] as const) {
+    for (const id of ['usage', 'provider', 'model', 'skills', 'tools', 'plugins', 'archive', 'about'] as const) {
       await act(async () => { store.setTab(id) })
       expect(document.querySelector(`.settings-panel[data-section="${id}"] .settings-card`), id).toBeTruthy()
     }

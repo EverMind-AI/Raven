@@ -589,6 +589,9 @@ def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:
         "updated_at": _ts(info.get("last_message_at")) or _ts(info.get("updated_at")) or started_at,
         "title": title,
         "pinned": bool(meta.get("pinned")),
+        # The override session.create stored, and nothing else: a session on the
+        # policy default answers null, which is how the rail tells the two apart.
+        "workdir": str(meta["workdir"]) if meta.get("workdir") else None,
     }
 
 
@@ -776,14 +779,15 @@ async def session_title(
         # answering with the raw text would have the caller draw a name that is
         # not the one on disk.
         title = session.metadata["title"]
-        if mgr.exists(session_key):
-            try:
-                mgr.save(session)
-            except Exception:
-                logger.warning("session.title: failed to persist title for {}", session_key)
-                return {"title": title, "session_key": session_key, "pending": True}
-            return {"title": title, "session_key": session_key, "pending": False}
-        return {"title": title, "session_key": session_key, "pending": True}
+        # Two keys rather than a saved session: ``set_title`` drops the
+        # ``title_auto`` marker, which a patch says as an explicit False --
+        # both readers of that marker ask whether it is true.
+        try:
+            persisted = mgr.append_metadata_patch(session_key, {"title": title, "title_auto": False})
+        except Exception:
+            logger.warning("session.title: failed to persist title for {}", session_key)
+            persisted = False
+        return {"title": title, "session_key": session_key, "pending": not persisted}
 
     raw = mgr.peek(session_key)
     current_title = None
@@ -811,19 +815,17 @@ async def session_pin(
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
     mgr = manager_for(agent_loop, config)
-    session = mgr.get_or_create(session_key)
-    if pinned:
-        session.metadata["pinned"] = True
-    else:
-        session.metadata.pop("pinned", None)
-    if mgr.exists(session_key):
-        try:
-            mgr.save(session)
-        except Exception:
-            logger.warning("session.pin: failed to persist pin for {}", session_key)
-            return {"pinned": pinned, "session_key": session_key, "pending": True}
-        return {"pinned": pinned, "session_key": session_key, "pending": False}
-    return {"pinned": pinned, "session_key": session_key, "pending": True}
+    # Unpinning writes False rather than dropping the key: a patch can set a
+    # key, not remove one, and both readers of this flag ask whether it is
+    # true, so the two spellings read the same.
+    try:
+        persisted = mgr.append_metadata_patch(session_key, {"pinned": pinned})
+    except Exception:
+        logger.warning("session.pin: failed to persist pin for {}", session_key)
+        persisted = False
+    if not persisted:
+        mgr.get_or_create(session_key).metadata["pinned"] = pinned
+    return {"pinned": pinned, "session_key": session_key, "pending": not persisted}
 
 
 async def session_archive(
@@ -839,19 +841,23 @@ async def session_archive(
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
     mgr = manager_for(agent_loop, config)
-    session = mgr.get_or_create(session_key)
     # Restore writes an explicit False rather than dropping the key: the auto
     # archive pass in session.list skips any session that carries the key, so
     # a restored session stays out of its reach for good.
-    session.metadata["archived"] = archived
-    if mgr.exists(session_key):
-        try:
-            mgr.save(session)
-        except Exception:
-            logger.warning("session.archive: failed to persist archive state for {}", session_key)
-            return {"archived": archived, "session_key": session_key, "pending": True}
-        return {"archived": archived, "session_key": session_key, "pending": False}
-    return {"archived": archived, "session_key": session_key, "pending": True}
+    #
+    # One appended key rather than a saved session, the same way the auto
+    # archive pass writes it: ``save`` rewrites the whole metadata record from
+    # this process's copy of it, so a second client holding the conversation
+    # from before the archive dropped the flag on its next save of anything --
+    # a title, a model -- and the conversation came back.
+    try:
+        persisted = mgr.append_metadata_patch(session_key, {"archived": archived})
+    except Exception:
+        logger.warning("session.archive: failed to persist archive state for {}", session_key)
+        persisted = False
+    if not persisted:
+        mgr.get_or_create(session_key).metadata["archived"] = archived
+    return {"archived": archived, "session_key": session_key, "pending": not persisted}
 
 
 async def session_clear(

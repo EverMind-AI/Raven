@@ -308,6 +308,9 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 result = replace(result, status="attention")
         last = result.last_test
         task = _RUNNING.get(cfg.name)
+        # One store read per acp row, handed to `agent_meta` so it is not read
+        # twice. Not cached across rows or listings: a cache is what keeps
+        # serving a stale verdict after a verify has already fixed it.
         snapshot = acp_snapshot_for(cfg) if cfg.kind == "acp" else None
         meta = agent_meta(cfg, snapshot=snapshot)
         # One of raven's own, whichever way this install registered it: the
@@ -344,6 +347,13 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "probe_status": result.status,
                 "probe_detail": result.detail,
                 "has_api_key": bool((getattr(cfg, "api_key", "") or "").strip()),
+                # Measured by the handshake, not guessed from the status: an
+                # `attention` row is equally "wants a credential" and "installed
+                # but never verified", and those ask the reader for opposite
+                # things. Always present, never omitted -- a client cannot tell
+                # a missing key from a false one, and one day it will mean
+                # "this server predates the field".
+                "needs_auth": bool(getattr(snapshot, "needs_auth", False)),
                 "mcps": list(getattr(cfg, "mcps", None) or []),
                 "allow_mcp_secrets": bool(getattr(cfg, "allow_mcp_secrets", False)),
                 "last_test_ok": None if last is None else last.ok,

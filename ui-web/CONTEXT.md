@@ -14,7 +14,7 @@ the Layout table in `README.md`, and the conventions a domain follows are
 One directory under `src/features/`, and everything the page knows about one
 subject: its contract types, everything it knows about the gateway, its state,
 its components and the one declaration the page reads it through
-(`features/knowledge/` is the shape). Twenty of them. The directory name is the
+(`features/knowledge/` is the shape). Eighteen of them. The directory name is the
 domain's name everywhere else as well -- the seam key, the i18n namespace, the
 DOM id prefix, the component prefix and the CSS prefix are the same word -- so
 nothing has to be translated to be found. `scripts/gates/domain-shape.test.mjs`
@@ -143,10 +143,10 @@ to the open step re-renders that leaf and nothing else -- and why a resident
 conversation keeps the detached host its lane is mounted in.
 
 **Region**:
-One of the sixteen things `src/App.tsx` renders at the body, in the standing
-order `src/state/portals.ts`'s `BOOT_BODY_ORDER` declares: `div.app`, the
-collapse's twin, the seven module pages, the four veils, the shared drawer and
-the two standing hosts. A region is markup plus the flags its store writes --
+One of the things `src/App.tsx` renders at the body, in the standing order
+`src/state/portals.ts`'s `BOOT_BODY_ORDER` declares: `div.app`, the collapse's
+twin, the module page, the three veils, the shared drawer and the two standing
+hosts. A region is markup plus the flags its store writes --
 never its contents: a region that is shared ground (`#capsBody`, `#wsBody`,
 `#list`, `#stage`, ...) is rendered with no children at all, because an island
 root or a tab module fills it. `src/test/__golden__/region-*.txt` holds one
@@ -158,14 +158,32 @@ _Avoid_: "writer" for whatever fills one: name it, and call the act a DOM touch
 **Module page**:
 One row of `src/state/pages.ts`: a `<section>` id, the empty box its island
 fills, the rail button it lights, its rank in the Escape chain, and the keys its
-heading and accessible name speak. Seven rows, in the order they sit among the
-body's children -- and every table that names a page derives from them:
+heading and accessible name speak. In the order they sit among the body's
+children -- and every table that names a page derives from them:
 `src/App.tsx`'s sections, `state/page.ts`'s `PageId` and open flags,
 `state/escapeOrder.ts`'s Escape rows, `state/portals.ts`'s body order,
 `chrome/Rail.tsx`'s nav strip, `features/rail/store.ts`'s marks and
 `src/test/regions.test.ts`'s goldens. Adding a page is adding a row.
+
+One row today, because a place and a setting are different things: what a
+reader goes TO is the agent hub, while schedules, channels and memory are set
+up once and then left alone, so those three are **settings sections** instead.
 _Avoid_: "page" for the whole document, or for a dialog -- the settings dialog
 and the model picker are overlays, not module pages.
+
+**Settings section**:
+One row of `features/settings/store.ts`'s `SECTIONS`: a pane of the settings
+dialog. Nine of the twelve are that domain's own components. The other three --
+channels, schedules, memory -- are another domain's island, rooted in a box
+`src/App.tsx` renders beside `#spanels` and named by that store's `HOSTED`,
+because a React root inside the settings island's own tree would be unmounted
+the moment the reader picked another section. Which one is on screen is
+`data-section` on the veil, written by the settings island on every draw, and
+the stylesheet is what shows the box it names. A domain that is a section
+registers what arriving at it costs on `state/settings.ts`'s `onEnter`, and
+what leaving it costs on `onLeave`.
+_Avoid_: "page" for one -- a page is a row of `state/pages.ts` and has a rail
+button.
 
 **Manifest**:
 `features/<domain>/manifest.ts` -- what one domain declares about itself: its
@@ -173,7 +191,7 @@ name (`domain`), the module page it owns (`page`), the seam keys it answers
 (`sources`), the root `src/main.tsx` mounts for it (`root`) and the box that
 root goes into when it is not the page's own body (`host`), plus the class
 prefix it already uses where that is not its own name (`cssPrefix`).
-`features/manifests.ts` is the assembly point that reads all twenty; no domain
+`features/manifests.ts` is the assembly point that reads all eighteen; no domain
 may read it back -- an import the other way would put every island in every
 island's closure. Two fields a reader may look for are deliberately absent, and
 that file says why: an `i18n` namespace and an `onLangChange`.
@@ -235,6 +253,42 @@ and `src/chrome/PermPopover.tsx` and `TierPopover.tsx` are the two the dock
 raises.
 _Avoid_: "pop" and "panel" for this.
 
+**Kind**:
+Which bucket a model list files a model under: `text`, `image`, `audio`,
+`video`, `embedding` or `reranker`. Derived once, in Python, by
+`raven/providers/registry_data.py`'s `kind_of`, from what a model WRITES -- so
+a model that reads pictures is still `text` -- and carried on the wire as
+`model_labels[<id>].kind`. `features/model/types.ts` reads it (`modelKind`),
+and `guessKind` there is the one place that guesses: a translation of
+`inferred_tags`, for an id a person just typed that no catalogue describes.
+A model with no label entry is `text`.
+_Avoid_: "type" or "category" for this; "kind" alone for a provider's auth
+shape, which the rows call `auth_type`.
+
+**Offer**:
+What ONE opening of the model picker lists, and what a pick there means
+(`Offer` in `features/model/types.ts`): a kind, optionally the providers the
+caller allows, optionally a title and the pair to mark, optionally the write to
+make. The composer's chip opens with none of it and gets the default -- text
+models, every connected provider, switch this conversation. A settings role
+slot opens with its own through `openPicker` in `features/model/source.ts`.
+The kind narrows each provider's column, never the provider list.
+
+**Gateway provider**:
+A provider that resells other vendors' models under `vendor/model` ids --
+`ProviderSpec.is_gateway` in `raven/providers/registry.py`, `gateway` on a
+`model.options` row. Twenty-one of the fifty-five.
+_Avoid_: "gateway" alone, which in this document is the page's one data entry
+point above.
+
+**Provider catalogue**:
+Every provider `model.options` returns, connected or not: the left column of
+the settings dialog's Model providers page
+(`features/settings/providers/ProviderSide.tsx`). Distinct from what a picker
+offers, which is the connected ones.
+_Avoid_: "catalogue" alone, which in the Runtime's `CONTEXT.md` is the Session
+Mode catalogue.
+
 **Task**:
 One row of `tasks.list` as the desk's tasks tab draws it (`features/tasks/`): a spawn or a
 DAG run this conversation started, with its nodes inline. The row is the list's, the pane it
@@ -267,8 +321,11 @@ _Avoid_: "pane" for this -- a pane is a resizable column.
 A card that docks above the composer for as long as one turn needs it: a
 clarifying question, or an approval request
 (`src/features/composer/ClarifySheet.tsx`, `GateSheet.tsx`,
-`AskApproveSheet.tsx`). Filed under the session it was raised in and mounted
-only while that session is open -- see Sheet rack. A delegated graph used to
+`AskApproveSheet.tsx`) -- or for as long as the reader wants it: the deck
+template picker (`TemplateSheet.tsx`, opened by `templates.ts`) docks the same
+way but asks nothing, so the composer stays live under it. Filed under the
+session it was raised in and mounted only while that session is open -- see
+Sheet rack. A delegated graph used to
 dock here too and no longer does -- see Task strip.
 _Avoid_: "dialog" for this -- a dialog is the settings or channel one, which is
 not docked and is not about a turn.
@@ -335,12 +392,12 @@ the served markup does not carry is one applyI18n would not have written
 either.
 
 **Language repaint**:
-`src/state/lang/effects.ts` -- the twelve steps a pick asks of everything that
+`src/state/lang/effects.ts` -- the steps a pick asks of everything that
 draws itself rather than rendering: the rail's own draw and the capabilities
 page's, three stores whose draw commits a field their component renders (the
 permission chip, the rail foot, the context ring), the model label -- the one
-step left that writes an element by id -- the settings dialog's epoch, the nav
-flyout's marks, the transcript's per-lane version bump, the composer's queue,
+step left that writes an element by id -- the settings dialog's epoch,
+the transcript's per-lane version bump, the composer's queue,
 the shared drawer (closed rather than redrawn: nothing above it could hand back
 the subject it was drawn from) and one conversation reload. An island that only needs to
 re-render is not in it: each `<Domain>App` subscribes to the language itself
@@ -351,10 +408,12 @@ it rebuilds the conversation from disk.
 
 **Sheet rack**:
 `src/state/sheetRack.ts` plus `src/chrome/SheetRack.tsx` -- what docks above the
-composer (a clarify question, an approval request), filed under the session it
-was raised in and mounted only while that session is open. A parked sheet keeps
-its element and loses its interior, which is why what the reader typed into one
-lives in `src/state/sheetDrafts.ts` rather than in the input.
+composer (a clarify question, an approval request, the deck template picker),
+filed under the session it was raised in and mounted only while that session is
+open. A parked sheet keeps its element and loses its interior, which is why what
+the reader typed into one lives in `src/state/sheetDrafts.ts` rather than in the
+input; a sheet re-added with a new view keeps its id and its place, so a repaint
+is a repaint and not a remount.
 
 **Task strip**:
 `TaskRuns` in `src/features/tasks/TasksPage.tsx`, rendered by

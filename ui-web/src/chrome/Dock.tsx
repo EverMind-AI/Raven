@@ -40,8 +40,8 @@
  *     ground: the sheet rack and the composer's own roots fill them, and
  *     page.css reads `.dock .sheets:has(>*)` off the rack, so it renders with
  *     no children at all rather than a placeholder.
- *   - #go's icon and disabled state, #meter's text, #attBtn's click (the
- *     composer store), #modelName and #modelChip's title
+ *   - #go's icon and disabled state, #meter's text, #attBtn's click and
+ *     #tplBtn's click and hidden flag (the composer store), #modelName and #modelChip's title
  *     (features/model/chip.ts), #envName's label (state/envChip.ts), and
  *     #slashPop's data-open.
  *   - where #permPop and #tierPop stand. Both stores move the node to the body
@@ -91,6 +91,17 @@ function DockIn(): JSX.Element {
           {' '}
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
             <path d="M15 7l-6.2 6.2a2.6 2.6 0 0 0 3.7 3.7L19 10a4.4 4.4 0 0 0-6.2-6.2L6 10.5a6.2 6.2 0 0 0 8.8 8.8l3.4-3.4" />
+          </svg>
+          {' '}
+        </button>
+        {/* Hidden until the composer says a template can be picked here
+            (features/composer/mount.tsx): the demo canvas has no server to
+            list them from. */}
+        <button className="tool-btn" id="tplBtn" hidden data-tip={lang.attr('gui.tpl.pick')} aria-label={lang.attr('gui.tpl.pick')}>
+          {' '}
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            <rect x="3" y="4.5" width="18" height="12" rx="2" />
+            <path d="M8 20.5h8M12 16.5v4M7 9h6M7 12.5h10" />
           </svg>
           {' '}
         </button>

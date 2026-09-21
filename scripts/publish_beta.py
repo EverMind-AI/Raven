@@ -121,8 +121,30 @@ def _next_version(base_version: str, published: str | None) -> str:
     return f"{target}b{serial}"
 
 
-def _build(root: Path, version: str) -> tuple[Path, Path]:
-    """Build the wheel at ``version``, returning ``(wheel, constraints)``.
+# The plugin distributions a complete install carries beside raven. The release
+# workflow builds the same three (tests/test_release_plugin_list.py holds the
+# two lists equal); the beta channel has to ship them too, or the upgrade
+# helper, which refuses to install raven without its version's plugin list,
+# would have nothing to read.
+PLUGIN_DISTRIBUTIONS = ("everos-memory", "design-engine", "ppt-engine")
+PLUGIN_LIST_NAME = "raven-plugins.txt"
+
+
+def _plugin_list(wheels: list[Path], base_url: str) -> str:
+    """The ``name @ url`` lines the upgrade helper installs from, one per wheel.
+
+    The name comes from the wheel's own filename (``everos_memory-1.2.0-...``),
+    so the list can only ever name what was built.
+    """
+    lines = []
+    for wheel in wheels:
+        name = wheel.name.split("-", 1)[0].replace("_", "-")
+        lines.append(f"{name} @ {base_url}/{wheel.name}")
+    return "".join(line + "\n" for line in lines)
+
+
+def _build(root: Path, version: str) -> tuple[Path, Path, list[Path]]:
+    """Build the wheels at ``version``, returning ``(wheel, constraints, plugin wheels)``.
 
     The version reaches the wheel through pyproject, which is restored before
     this returns whether the build worked or not -- a half-published beta must
@@ -161,6 +183,8 @@ def _build(root: Path, version: str) -> tuple[Path, Path]:
         pyproject.write_text(stamped, encoding="utf-8")
         print(f"Building the wheel at {version}...", flush=True)
         _run(["uv", "build", "--wheel"], cwd=root)
+        for plugin in PLUGIN_DISTRIBUTIONS:
+            _run(["uv", "build", "--wheel", f"plugins-dist/{plugin}", "-o", "dist"], cwd=root)
         _run(
             ["uv", "export", "--all-extras", "--no-hashes", "--no-emit-workspace", "-o", "dist/raven-constraints.txt"],
             cwd=root,
@@ -180,8 +204,14 @@ def _build(root: Path, version: str) -> tuple[Path, Path]:
         raise PublishError(f"Expected {wheel.name} in dist/, found: {found}")
     if not constraints.is_file():
         raise PublishError("Constraints export did not land")
+    plugin_wheels = []
+    for plugin in PLUGIN_DISTRIBUTIONS:
+        matches = sorted(dist.glob(f"{plugin.replace('-', '_')}-*.whl"))
+        if len(matches) != 1:
+            raise PublishError(f"Expected one {plugin} wheel in dist/, found: {[m.name for m in matches]}")
+        plugin_wheels.append(matches[0])
     _verify_wheel(wheel)
-    return wheel, constraints
+    return wheel, constraints, plugin_wheels
 
 
 def _verify_wheel(wheel: Path) -> None:
@@ -240,6 +270,7 @@ def _publish(
     version: str,
     wheel: Path,
     constraints: Path,
+    plugin_wheels: list[Path],
     installer: bytes | None,
 ) -> None:
     """Upload the build, then move the pointer -- never the other way round.
@@ -252,6 +283,13 @@ def _publish(
         _upload(client, f"{api_base}/{version}/{wheel.name}", token, wheel.read_bytes())
         print("Uploading raven-constraints.txt...", flush=True)
         _upload(client, f"{api_base}/{version}/raven-constraints.txt", token, constraints.read_bytes())
+        for plugin_wheel in plugin_wheels:
+            print(f"Uploading {plugin_wheel.name} ({plugin_wheel.stat().st_size // 1024} KiB)...", flush=True)
+            _upload(client, f"{api_base}/{version}/{plugin_wheel.name}", token, plugin_wheel.read_bytes())
+        # Plain URLs: the helper copies the wheel URL's credentials onto them.
+        print(f"Uploading {PLUGIN_LIST_NAME}...", flush=True)
+        plugin_list = _plugin_list(plugin_wheels, f"{api_base}/{version}").encode("utf-8")
+        _upload(client, f"{api_base}/{version}/{PLUGIN_LIST_NAME}", token, plugin_list)
         if installer is not None:
             print("Uploading beta.sh...", flush=True)
             _upload(client, f"{api_base}/latest/beta.sh", token, installer)
@@ -279,11 +317,12 @@ def main(argv: list[str] | None = None) -> int:
         if installer is None:
             print("note: no tester token configured, so beta.sh will not be refreshed", flush=True)
 
-        wheel, constraints = _build(root, version)
+        wheel, constraints, plugin_wheels = _build(root, version)
         if args.dry_run:
-            print(f"\nDry run: built {wheel.name}, uploaded nothing.")
+            built = ", ".join([wheel.name] + [p.name for p in plugin_wheels])
+            print(f"\nDry run: built {built}, uploaded nothing.")
             return 0
-        _publish(api_base, publish_token, version, wheel, constraints, installer)
+        _publish(api_base, publish_token, version, wheel, constraints, plugin_wheels, installer)
     except PublishError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

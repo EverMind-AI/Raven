@@ -740,8 +740,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .navi .k { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--faint); }
 
 /* ── main ──────────────────────────────────────────────────────────── */
+/* The conversation's ground is the whole content pane's, not the chat column's.
+   It sat on .chat, which ends where the workspace begins -- so a desk pane, a
+   docked panel or the gutter beside one stood on flat --page while the
+   transcript two pixels away stood on the wash, and the join between them read
+   as a seam down the middle of the window. One ground under both: the panes are
+   transparent over it (`.desk-ready .ws`) and now share the gradient instead of
+   interrupting it. --page is the wash's own last layer, so this is the same
+   colour where no gradient stop reaches. */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  background: var(--page);
+  background: var(--wash);
   transition: padding-right .24s ease; }
 .main[data-shift="true"] { padding-right: 340px; }
 
@@ -763,8 +771,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* rename affordance: an icon that appears on hover, editing only the title box */
 #renameBtn { opacity: 0; transition: opacity .14s; }
 .top:hover #renameBtn, #renameBtn:focus-visible { opacity: 1; }
+/* The box is the name's width, not a fixed slot: a two-word conversation opened
+   a 420px field with most of it empty paper. `field-sizing: content` is what
+   makes an input measure its own value, so the width follows what is typed.
+   The cap is the heading's own (`.top h1`), which is what keeps a rename from
+   widening the header past where the title already sat, and the floor keeps a
+   field you have just emptied from collapsing to a sliver you cannot aim at.
+   Without `field-sizing` an input falls back to its default intrinsic width,
+   which is narrower than the slot this replaces rather than wider. */
 .top .titin {
-  min-width: 0; width: min(420px, 52%); background: var(--ink);
+  field-sizing: content; min-width: 7ch; max-width: min(420px, 52%); background: var(--ink);
   border: 1px solid var(--faint); border-radius: 7px; padding: 4px 9px; outline: 0;
   font-size: var(--step-0); font-weight: 600; color: var(--text); font-family: inherit;
 }
@@ -869,19 +885,30 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chip.risk { color: var(--clay); }
 .chip.risk:hover { color: var(--clay); background: color-mix(in oklab, var(--clay) 10%, transparent); }
 
-/* Permission rows: a shield per tier, the name, and the sentence that decides
-   the choice -- a reader picking a permission level is reading the consequence,
-   not the label, so the sentence is not a hover away. */
-.pop .prow { align-items: flex-start; padding: 8px 9px; }
-.pop .prow .pic { flex: none; width: 15px; height: 15px; margin-top: 1px; color: var(--faint); }
-.pop .prow .pic svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; }
-.pop .prow.risk .pic { color: var(--clay); }
-.pop .prow .nm { font-weight: 600; }
-.pop .prow .sub { display: block; font-size: 11px; line-height: 1.5; color: var(--faint); margin-top: 2px;
+/* Permission rows: the name, and the sentence that decides the choice -- a
+   reader picking a permission level is reading the consequence, not the label,
+   so the sentence is not a hover away.
+   Geometry and type measured off the visual reference's chip menu, which is
+   this control there: 268px wide, 7px/9px rows, the name at
+   13.5px/500 going to 600 when it is the one in force, the sentence at
+   11.5px/1.5 in --faint, and a 14px amber tick with a 2px stroke sitting 3px
+   down so it lines up with the name's cap height rather than its box.
+   What the tick marks is the whole of the "this is the one" signal there --
+   no filled band behind the row, which on a translucent panel reads as a
+   second material -- and no shield beside each name (see state/perm.ts). */
+#permPop { width: 268px; }
+/* The heading's left edge on the row's text, not 1px inside it. The face stays
+   the page's own `.lab` -- mono, tracked, uppercase -- rather than the
+   prototype's plain sans: #tierPop opens from the chip next door and wears the
+   same heading, and one of the two in a different face is worse than either. */
+#permPop .hd { padding: 5px 9px 6px; }
+#permPop .prow { align-items: flex-start; gap: 8px; padding: 7px 9px; border-radius: 8px; }
+#permPop .prow .nm { font-weight: 500; font-size: 13.5px; }
+#permPop .prow[aria-checked="true"] .nm { font-weight: 600; }
+#permPop .prow .sub { display: block; font-size: 11.5px; line-height: 1.5; color: var(--faint); margin-top: 2px;
   white-space: normal; }
-.pop .prow .txt { flex: 1; min-width: 0; text-align: left; }
-.pop .prow[aria-checked="true"] { background: color-mix(in oklab, var(--text) 9%, transparent); }
-.pop .prow .tick { flex: none; width: 13px; height: 13px; color: var(--amber); margin-top: 2px; }
+#permPop .prow .txt { flex: 1; min-width: 0; text-align: left; }
+#permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--amber); margin-top: 3px; }
 .pop .note { padding: 7px 9px 4px; font-size: 10.5px; line-height: 1.5; color: var(--faint); }
 
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
@@ -1293,40 +1320,79 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    value looked like a link would say nothing about which one goes somewhere. */
 .dlg .dgr .v.gov { cursor: pointer; }
 .dlg .dgr .v.gov:hover { text-decoration: underline; text-underline-offset: 3px; }
-/* The delivery seam: where a delegated run's result re-entered the flow. Quiet
-   like a tool row (this is plumbing, not an answer), but distinct from one --
-   the return arrow and the amber-tinted name say something came BACK, and the
-   reply right under it is that something retold. */
-.sdlv { margin: 10px 0 2px; min-width: 0; font-size: 11.5px; color: var(--faint); }
-.sdlv .sdhd { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.sdlv .ic { width: 13px; height: 13px; flex: none; stroke: var(--amber); }
+/* The delivery seam: where a delegated run's result re-entered the flow. Two
+   things on the row and no more: which task, and how it went. The name is the
+   reading size rather than a mono label -- it is a sentence somebody wrote, not
+   an identifier -- and the verdict is a dot and one word, the same vocabulary a
+   task row uses, so "did it work" is answerable without reading either. */
+.sdlv { margin: 12px 0 2px; min-width: 0; font-size: 12px; color: var(--faint); }
+.sdlv .sdhd { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 22px; }
+.sdlv .ic { width: 13px; height: 13px; flex: none; stroke: var(--faint); }
+/* Capped, with the whole of it in the tooltip: a long task sentence must not
+   push the verdict out of sight. */
 .sdlv .nm {
-  font-family: var(--mono); font-size: 11px; color: var(--muted);
-  padding: 0; border: 0; background: none; cursor: pointer;
-  max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: inherit; font-size: 12.5px; color: var(--text);
+  padding: 0; border: 0; background: none; cursor: pointer; border-radius: 4px;
+  min-width: 0; max-width: min(340px, 60%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.sdlv .nm:hover { color: var(--amber); text-decoration: underline; text-underline-offset: 2px; }
-.sdlv .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sdlv.err .ic { stroke: var(--clay); }
-.sdlv.err .tx { color: var(--clay); }
-.sdlv.warn .ic { stroke: var(--gold); }
-.sdlv.warn .tx { color: var(--gold); }
-/* What came back, folded. It is the sub-agent's words, not Raven's, so it is
-   set apart from the answer below it by a rule rather than a card: a card would
-   compete with the retelling the reader is meant to read first. */
+.sdlv .nm:hover {
+  color: var(--amber); text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklab, var(--amber) 55%, transparent);
+}
+.sdlv .st { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--muted); }
+.sdlv .st .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
+.sdlv.good .st .dot { background: var(--moss); }
+.sdlv.bad .st { color: var(--clay); }
+.sdlv.bad .st .dot { background: var(--clay); }
+.sdlv.warn .st { color: var(--gold); }
+.sdlv.warn .st .dot { background: var(--gold); }
+.sdlv.dim .st { color: var(--faint); }
+/* What came back, folded. It is the sub-agent's words, not Raven's, so the
+   fold sets them apart as a block of their own -- and the caption inside says
+   what they are, which is the text that entered the turn rather than a
+   retelling of it. */
 .sdlv .sdcv {
-  display: flex; align-items: center; gap: 4px; flex: none; margin-left: auto;
-  color: var(--faint); padding: 1px 5px; border-radius: 6px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 1px; flex: none; margin-left: auto;
+  font: inherit; font-size: 11.5px; color: var(--faint);
+  padding: 2px 3px 2px 9px; border-radius: 999px; cursor: pointer;
 }
-.sdlv .sdcv:hover { color: var(--muted); background: var(--surface); }
-.sdlv .sdcv .lb { font-family: var(--mono); font-size: 10.5px; }
-.sdlv .sdcv .cv { width: 11px; height: 11px; transition: transform .15s; }
+.sdlv .sdcv:hover { color: var(--muted); background: var(--hover); }
+.sdlv .sdcv .cv { width: 12px; height: 12px; transition: transform .15s; }
 .sdlv.open .sdcv .cv { transform: rotate(90deg); }
 .sdlv .sdbd {
-  margin: 6px 0 4px; padding: 0 0 0 11px; border-left: 1px solid var(--line);
+  margin: 8px 0 4px 21px; padding: 10px 14px 12px; border-radius: 10px;
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--ring);
   min-width: 0; overflow-x: auto;
 }
-.sdlv .sdbd .prose { font-size: 13px; color: var(--muted); }
+.sdlv .sdbd .cap {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 12px 0 4px;
+}
+.sdlv .sdbd .cap:first-child { margin-top: 0; }
+.sdlv .sdbd .raw {
+  margin: 0; font-family: var(--mono); font-size: 11px; line-height: 1.6;
+  color: var(--muted); white-space: pre-wrap; word-break: break-word;
+}
+.sdlv .sdbd .prose { font-size: 13px; color: var(--text); line-height: 1.7; }
+.sdlv .sdbd .prose p { margin: 0 0 6px; }
+.sdlv .sdbd .prose p:last-child { margin-bottom: 0; }
+
+/* A turn the runtime opened, on the reader's own side: outlined rather than
+   filled, because nobody typed it. Under the chip is the reader's own sentence
+   and nothing else -- the rest of the entry is wording for the model
+   (raven/agent/loop/_shared.py) -- and an origin whose reminder nothing reads
+   leaves the chip standing alone. */
+.msg.me[data-auto] {
+  background: transparent; color: var(--text); box-shadow: none; border: 1px dashed var(--line);
+}
+/* Its own line above the sentence, sized to its words: the bubble is a bubble
+   again, and the chip is what heads it. */
+.transcript-auto {
+  display: flex; width: max-content; align-items: center; gap: 6px; margin-bottom: 6px;
+  padding: 3px 9px; border-radius: 8px; background: var(--surface); color: var(--muted);
+  font-size: 12px; font-weight: 500;
+}
+.transcript-auto svg { width: 12px; height: 12px; flex: none; color: var(--amber); }
 @media (prefers-reduced-motion: reduce) { .sdlv .sdcv .cv { transition: none; } }
 
 /* ── the turn's products ──────────────────────────────────────────────
@@ -1633,8 +1699,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .dtl .act2 button { font: 11px var(--mono); color: var(--sky); padding: 0; }
 .dtl .act2 button:hover { text-decoration: underline; }
 
-/* hot-update notice: dist on disk is newer than the loaded page — a quiet
-   amber row in the rail foot; reloading is always the reader's click */
+/* the update row: something newer exists -- a rebuilt dist, a released
+   version, or sources the served page is behind; a quiet amber row in the rail
+   foot whose action is always the reader's click (app/updates.ts) */
 .upnote {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 7px 10px; margin-bottom: 6px; border-radius: 8px;
@@ -1801,9 +1868,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* --lift is the measured height of everything docked at the bottom (composer,
    queued rows, a clarify sheet). A constant here would be wrong the moment the
    composer grows a line, which is exactly when the pill matters. */
+/* Centred on the COLUMN, not on the chat: the anchored desk takes a strip off
+   the chat's right edge and the transcript re-centres in what is left
+   (`--desk-reserve`), so a pill at the chat's own centre sits half that strip
+   to the right of the text it belongs to -- 162px of it at the default panel
+   width. Half the reserve is exactly what the column moved. */
 .backpill {
-  position: absolute; left: 50%; bottom: calc(var(--lift, 96px) + 12px);
-  transform: translateX(-50%); transition: bottom .18s ease;
+  position: absolute; left: calc(50% - var(--desk-reserve, 0px) / 2);
+  bottom: calc(var(--lift, 96px) + 12px);
+  transform: translateX(-50%); transition: bottom .18s ease, left .19s cubic-bezier(.16, 1, .3, 1);
   width: 32px; height: 32px; display: grid; place-items: center; padding: 0;
   background: var(--ink); color: var(--muted); border: 1px solid var(--line);
   border-radius: 50%; z-index: 5;
@@ -1836,15 +1909,20 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* The footer belongs to the message the pointer is on, not to the page: at rest
    a turn is just what was said, and the actions and the time arrive when they
    can be used. The row keeps its space either way, so nothing shifts on hover
-   -- and focus reveals it too, since a keyboard has no pointer to hover with. */
-.answer .acts, .answer .turnmeta, .turn.ai > .ansfoot .acts,
-.turn.ai > .ansfoot .turnmeta, .turn.me .acts, .turn.me .turnmeta {
-  opacity: 0; transition: opacity .12s;
-}
+   -- and focus reveals it too, since a keyboard has no pointer to hover with.
+
+   A turn's own footer fades as ONE element rather than as its two children.
+   Fading the children is what hid the answer's footer for good, measured on the
+   running page: `.turn.ai > .ansfoot .acts` is four
+   classes and the reveal it was paired with, `.turn:hover .acts`, is three, so
+   the transparent rule outweighed the hover and the copy and branch buttons
+   never came back. One element, and the reveal outranks the rest by its own
+   pseudo-class. */
+.turn > .ansfoot { opacity: 0; transition: opacity .12s; }
+.turn:hover > .ansfoot, .turn:focus-within > .ansfoot { opacity: 1; }
+.answer .acts, .answer .turnmeta { opacity: 0; transition: opacity .12s; }
 .answer:hover .acts, .answer:hover .turnmeta,
-.answer:focus-within .acts, .answer:focus-within .turnmeta,
-.turn:hover .acts, .turn:hover .turnmeta,
-.turn:focus-within .acts, .turn:focus-within .turnmeta { opacity: 1; }
+.answer:focus-within .acts, .answer:focus-within .turnmeta { opacity: 1; }
 /* Any control can carry its label in a hover pill instead of on the row: set
    data-tip and the row stays icons only. .tipdn prefers the pill below, for
    controls docked against the top of the window.
@@ -2307,6 +2385,8 @@ textarea:focus, textarea:focus-visible,
 /* capability popover above the composer */
 /* model picker: provider column + model column, fixed height so a provider
    with 100+ models cannot grow the popover past the window */
+/* model picker: provider column + model column, fixed height so a provider
+   with 100+ models cannot grow the popover past the window */
 /* The shared model picker's own rules (components/ModelPicker.tsx).
  *
  * Unprefixed on purpose: a component is page vocabulary, not a domain's, and
@@ -2404,6 +2484,21 @@ textarea:focus, textarea:focus-visible,
 .mpick .models .row .nm.named { font-family: var(--sans); font-size: 12.5px; }
 .mpick .models .row .model-tags { margin-left: auto; }
 .mpick .empty { padding: 18px 12px; font-size: 12.5px; color: var(--faint); text-align: center; }
+/* The slot's name, where a settings row opened the picker; absent for the
+   composer chip, whose own label already says what is being changed. */
+.mpick .model-slot { font-family: var(--disp); font-weight: 600; font-size: 13px; color: var(--text); }
+/* The row for an id the provider does not list yet, and the chip saying what
+   the person is declaring it to be. */
+.mpick .model-typed { color: var(--amber); }
+.mpick .model-typed .nm { font-family: var(--mono); }
+.mpick .model-typed-hr { height: 1px; background: var(--line-soft); margin: 6px 4px; }
+.mpick .model-kind {
+  display: inline-flex; align-items: center; gap: 4px; flex: none; cursor: pointer;
+  padding: 1px 6px; border: 1px solid var(--line); border-radius: 99px;
+  font-family: var(--sans); font-size: 10.5px; color: var(--muted);
+}
+.mpick .model-kind:hover { border-color: var(--amber); color: var(--text); }
+.mpick .model-kind .model-tag { width: 11px; height: 11px; color: inherit; }
 .mpick .foot { border-top: 1px solid var(--line-soft); padding: 7px 12px;
   display: flex; justify-content: space-between; align-items: center; }
 .mpick .foot button { font-size: 11.5px; color: var(--amber); }
@@ -2459,8 +2554,9 @@ textarea:focus, textarea:focus-visible,
     padding-left: var(--tl-pad, 78px);
   }
 }
-.chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative;
-  background: var(--wash); }
+/* No ground of its own: the wash is .main's, so the column and whatever stands
+   beside it read as one surface (see .main). */
+.chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
 /* New-task state: no header title, the composer holds the centre line. */
 .chat[data-fresh] #title, .chat[data-fresh] #renameBtn { visibility: hidden; }
 /* The landing page does not move the composer. It used to float it up to the
@@ -2934,6 +3030,16 @@ textarea:focus, textarea:focus-visible,
    refuses its PDF viewer inside any sandboxed frame, so for a PDF the header is
    the whole isolation. */
 .fview iframe { width: 100%; height: min(72vh, 720px); border: 0; background: var(--paper); display: block; }
+/* A framed document fills the pane: the viewer inside the frame scrolls its own
+   pages, so the body around it stops scrolling and the frame takes every pixel
+   under the bar, whatever the pane's height. */
+.fpane .fbody:has(> .fview.workspace-fill) { overflow: hidden; display: flex; flex-direction: column; }
+.fview.workspace-fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.fview.workspace-fill iframe { flex: 1; height: auto; min-height: 0; }
+.fview.workspace-fill .vspin { flex: none; }
+.fbar .workspace-deck-acts { display: flex; align-items: center; gap: 6px; flex: none; }
+.fbar .workspace-deck-acts .mini { display: inline-flex; align-items: center; padding: 3px 9px;
+  font-size: 11.5px; line-height: 1.3; text-decoration: none; }
 .fview .csvw { overflow-x: auto; padding: 12px 14px 26px; }
 .fview table.csvt { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
 .fview table.csvt th, .fview table.csvt td {
@@ -2970,16 +3076,18 @@ textarea:focus, textarea:focus-visible,
 .fview .vnote-run { flex: none; }
 
 /* ── switch ────────────────────────────────────────────────────────── */
-.swi {
+.swi, .two-pane-swi {
   flex: none; width: 32px; height: 18px; border-radius: 10px; background: var(--line);
   position: relative; transition: background .16s;
 }
-.swi::after {
+.swi::after, .two-pane-swi::after {
   content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
   border-radius: 50%; background: var(--faint); transition: transform .16s, background .16s;
 }
-.swi[aria-checked="true"] { background: var(--amber-dp); }
-.swi[aria-checked="true"]::after { transform: translateX(14px); background: var(--amber); }
+.swi[aria-checked="true"], .two-pane-swi[aria-checked="true"] { background: var(--amber-dp); }
+.swi[aria-checked="true"]::after,
+.two-pane-swi[aria-checked="true"]::after { transform: translateX(14px); background: var(--amber); }
+.two-pane-swi:disabled { opacity: .45; }
 
 .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line-soft);
   border: 1px solid var(--line-soft); border-radius: 9px; overflow: hidden; }
@@ -3784,6 +3892,112 @@ details[open] summary { margin-bottom: 8px; }
 .shd .sub { font-size: 12.5px; color: var(--muted); margin: 3px 0 0; line-height: 1.5; }
 .spanels { overflow-y: auto; min-height: 0; padding: 18px 20px 26px; }
 
+/* Three sections are another domain's island, rooted in a box of its own
+   beside #spanels rather than inside it (src/App.tsx renders all four, and
+   features/settings/store.ts's HOSTED says why the roots stay separate). One
+   of the four is on screen, and the section the dialog stands on is what picks
+   it -- `data-section` on the veil, written by the settings island on every
+   draw. Rows: .sbody is a two-row grid, and `display: none` takes the other
+   three out of it rather than leaving three empty tracks. */
+.sbody > .spanels[data-for] { display: none; }
+.setveil[data-section="channels"] .spanels[data-for="channels"],
+.setveil[data-section="cron"] .spanels[data-for="cron"],
+.setveil[data-section="memory"] .spanels[data-for="memory"] { display: block; }
+.setveil[data-section="channels"] #spanels,
+.setveil[data-section="cron"] #spanels,
+.setveil[data-section="memory"] #spanels { display: none; }
+
+/* ── the two-pane section frame ─────────────────────────────────────────
+   Three sections are a list and what the picked row is: channels, schedules
+   and memory. The frame is src/components/TwoPane.tsx, which owns these names
+   and is why all three read as one dialog rather than three pages that
+   happened to move. Beside the dialog's own rules, not in a domain's sheet,
+   because no one domain owns it.
+
+   The hosted panel does not scroll: the two columns inside it do, each on its
+   own, so a long channel list never carries the form on the right down with
+   it. */
+.setveil[data-section="channels"] .spanels[data-for="channels"],
+.setveil[data-section="cron"] .spanels[data-for="cron"],
+.setveil[data-section="memory"] .spanels[data-for="memory"] {
+  display: grid; grid-template-rows: minmax(0, 1fr); overflow: hidden;
+}
+.two-pane {
+  display: grid; grid-template-columns: 276px minmax(0, 1fr);
+  border: 1px solid var(--line); border-radius: 10px; background: var(--paper);
+  overflow: hidden; min-height: 0;
+}
+.two-pane-side {
+  border-right: 1px solid var(--line-soft); padding: 12px;
+  display: flex; flex-direction: column; gap: 9px; min-width: 0; min-height: 0; overflow: hidden;
+}
+.two-pane-find { display: flex; gap: 8px; align-items: center; }
+.two-pane-search {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--paper); padding: 7px 11px;
+}
+.two-pane-search svg { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--faint); stroke-width: 1.7; stroke-linecap: round; }
+.two-pane-search input { flex: 1; min-width: 0; font: inherit; font-size: 13px; border: 0; background: none; color: var(--text); outline: none; }
+.two-pane-add {
+  flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
+  border: 1px solid var(--line); background: var(--paper); color: var(--muted);
+}
+.two-pane-add:hover { background: var(--raised); color: var(--text); }
+.two-pane-add svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.two-pane-list {
+  display: flex; flex-direction: column; gap: 1px; flex: 1; min-height: 0;
+  overflow-y: auto; margin: 0 -5px; padding: 0 5px 2px;
+}
+.two-pane-grp {
+  font-size: 11px; font-weight: 500; color: var(--faint); padding: 14px 9px 5px; letter-spacing: .04em;
+}
+.two-pane-list > .two-pane-grp:first-child { padding-top: 4px; }
+.two-pane-row { display: flex; align-items: center; gap: 4px; min-width: 0; border-radius: 8px; }
+.two-pane-row:hover { background: var(--surface); }
+.two-pane-row[aria-current="true"] { background: var(--raised); }
+.two-pane-hit {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
+  font: inherit; text-align: left; padding: 8px 9px; border-radius: 8px; color: var(--text);
+}
+.two-pane-hit:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.two-pane-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.two-pane-txt .nm { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.two-pane-row[aria-current="true"] .two-pane-txt .nm { font-weight: 500; }
+.two-pane-txt .ds { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.two-pane-txt .ds.warn { color: var(--gold); }
+.two-pane-txt .ds.live { color: var(--moss); }
+.two-pane-txt .ds.bad { color: var(--clay); }
+.two-pane-when {
+  font-family: var(--mono); font-size: 11px; color: var(--faint);
+  flex: none; align-self: flex-start; margin-top: 3px;
+}
+.two-pane-off .two-pane-txt .nm { color: var(--muted); }
+.two-pane-row > .two-pane-swi { margin-right: 8px; transform: scale(.88); }
+.two-pane-main { padding: 16px 20px 20px; min-width: 0; min-height: 0; overflow-y: auto; }
+.two-pane-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 15px; }
+.two-pane-head .ttl { flex: 1; min-width: 0; }
+.two-pane-head .ttl .nm { font-size: 16px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.two-pane-meta {
+  font-size: 12.5px; color: var(--muted); margin-top: 5px;
+  display: flex; flex-wrap: wrap; gap: 4px 9px; align-items: center;
+}
+/* The one fact under the name: a dot and a word. What the row's own second
+   line says, said once more for the thing that is open. */
+.two-pane-meta .st { display: inline-flex; align-items: center; gap: 5px; color: var(--faint); }
+.two-pane-meta .st::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.two-pane-meta .st.ok { color: var(--moss); }
+.two-pane-meta .st.bad { color: var(--clay); }
+.two-pane-meta .st.warn { color: var(--gold); }
+.two-pane-sec { margin-top: 18px; }
+.two-pane-head + .two-pane-sec { margin-top: 3px; }
+.two-pane-lab { display: flex; align-items: center; gap: 10px; font-size: 13.5px; font-weight: 600; margin-bottom: 8px; }
+.two-pane-sp { flex: 1; }
+/* A credential form in the right column. The sheet it used to be drawn in gave
+   it its rhythm (`.sheet > .subody`); here the column does. */
+.two-pane-main > .subody { display: grid; gap: 15px; align-content: start; color: var(--muted); font-size: 13.5px; }
+.two-pane-main > .subody > * { margin-top: 0; }
+.two-pane-none { display: grid; place-items: center; padding: 60px 20px; color: var(--faint); font-size: 13px; text-align: center; }
+
 /* ── settings building blocks ───────────────────────────────────────────
    A module is a few cards, not a table: the card is what carries a heading,
    a purpose and, when the value cannot be written from here, one honest note
@@ -4064,40 +4278,28 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 }
 
 /* ── data & memory: stat-tab band + rows + kv profile ───────────────── */
-.memstats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 0 14px; }
+/* The kind switch. Four cards down the width of a page became four segments
+   down the width of a column: same buttons, same counts, no room for the
+   sentence under each -- which is one line under the switch now, for whichever
+   kind is picked. */
+.memstats {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; margin: 0;
+  padding: 2px; background: var(--surface); border-radius: 9px;
+}
 .mstat {
-  text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--ink);
-  box-shadow: var(--elev); padding: 12px 14px 11px; min-width: 0;
-  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+  text-align: center; border-radius: 7px; padding: 5px 2px 4px; min-width: 0;
+  transition: background .15s ease;
 }
-.mstat:hover { border-color: var(--faint); box-shadow: var(--elev-up); }
-.mstat[aria-pressed="true"] {
-  border-color: color-mix(in oklab, var(--amber) 50%, transparent);
-  background: color-mix(in oklab, var(--amber) 6%, var(--ink));
-}
-.mstat .k { font-family: var(--mono); font-size: 11px; color: var(--muted); }
-.mstat .v { font-family: var(--mono); font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 3px 0 1px; }
+.mstat:hover { background: var(--raised); }
+.mstat[aria-pressed="true"] { background: var(--paper); box-shadow: inset 0 0 0 1px var(--line-soft); }
+.mstat .k { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mstat[aria-pressed="true"] .k { color: var(--text); }
+.mstat .v { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--faint); }
 .mstat[aria-pressed="true"] .v { color: var(--amber); }
-.mstat .h { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.memtools { display: flex; gap: 10px; align-items: center; margin: 0 0 14px; }
-.memtools .cfind { max-width: 420px; }
-.memtools .n { font-family: var(--mono); font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
-.memlist { display: grid; gap: 10px; }
-.memrow {
-  text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--ink);
-  box-shadow: var(--elev); padding: 12px 15px 11px; display: grid; gap: 4px; cursor: pointer;
-  transition: border-color .15s ease, box-shadow .15s ease;
-}
-.memrow:hover { border-color: var(--faint); box-shadow: var(--elev-up); }
-.memrow:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
-.memrow .t { display: flex; gap: 9px; align-items: baseline; min-width: 0; }
-.memrow .t b { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.memrow .t .when { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--faint); flex: none; font-variant-numeric: tabular-nums; }
-.memrow .s {
-  font-size: 12.5px; color: var(--muted); line-height: 1.65;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.memrow .meta { display: flex; gap: 8px; align-items: center; margin-top: 3px; flex-wrap: wrap; }
+/* The line under the switch, and the count under the list. */
+.two-pane-side > .memnote { margin: -3px 2px 0; }
+.two-pane-side > .hubpage { margin: 4px 0 0; }
+.two-pane-side .errline-lite { margin: 4px 0; }
 .mmeter { width: 76px; height: 4px; border-radius: 999px; background: var(--raised); overflow: hidden; flex: none; }
 .mmeter i { display: block; height: 100%; background: var(--amber); border-radius: 999px; }
 .memkv {
@@ -4752,6 +4954,13 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
     scrollbar-width: thin;
   }
   .snav button.sitem { flex: none; white-space: nowrap; }
+  /* The hosted sections stack with it. A 276px list track beside the detail
+     leaves the detail about forty pixels at this width, which is a pane you
+     can open and cannot use -- so the list becomes a capped band above it and
+     the two scroll on their own. */
+  .two-pane { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .two-pane-side { border-right: 0; border-bottom: 1px solid var(--line-soft); max-height: 38vh; }
+  .two-pane-main { padding: 14px 16px 18px; }
   /* Sentence-cards stack; the visual pickers (theme / font minis) stay 3-up:
      a miniature blown up to full width reads as a wireframe, not an option. */
   .spick.n3:not(.thpick):not(.fpick), .kbdg { grid-template-columns: 1fr; }
@@ -4782,9 +4991,30 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .sp-in { display: flex; flex-direction: column; align-items: center;
   transition: transform .5s ease; }
 #splash[data-off] .sp-in { transform: scale(.985); }
-.sp-rv { width: 132px; height: auto; user-select: none;
+/* The mark, near the size its own drawing carries: assets/raven.png is 86x86 --
+   square, because the same file is the favicon and a tab scales it into a
+   square box -- with the bird 68px of that and the rest transparent air. So a
+   box much past 86 is upscaling a flat silhouette; the old illustrated crow was
+   960px wide and could take 132. Square here too, or the padding stretches. */
+.sp-rv { width: 111px; height: 111px; user-select: none;
   filter: drop-shadow(0 12px 10px rgba(17, 21, 30, .22));
   animation: spfloat 3.2s ease-in-out infinite; }
+/* Inverted on the dark ground, the way the page's own mono marks are
+   (`.agent-mark[data-tone="mono"]`, pinned by scripts/gates/agent-mark-css).
+   The mark is a silhouette -- one solid body with the eyes cut out of it -- so
+   on --ink at #1d1d1d the body measures 1.25:1 and what is left is two white
+   eyes floating on black. Inverting takes the body to 16.9:1 and turns the eyes
+   into the holes they are, which is what RavenMark draws from `currentColor`
+   and `--mark-eye` on the rest of the page. Both dark paths, because they are
+   not one rule: an explicit choice stamps `data-theme` and the system setting
+   stamps nothing. The shadow rides after the invert so it is not inverted too,
+   and it is restated because `filter` takes one list. */
+:root[data-theme="dark"] .sp-rv {
+  filter: invert(1) drop-shadow(0 12px 10px rgba(17, 21, 30, .22)); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sp-rv {
+    filter: invert(1) drop-shadow(0 12px 10px rgba(17, 21, 30, .22)); }
+}
 .sp-wl { margin-top: 20px; font-family: var(--serif); font-size: 30px;
   letter-spacing: -.008em; color: var(--text); line-height: 1; }
 .sp-bar { margin-top: 36px; width: 104px; height: 2px; border-radius: 1px;
@@ -4838,10 +5068,31 @@ body:has(#onb:not([hidden])) #veil { z-index: calc(var(--z-onboarding) + 1); }
    choosing, or would not leave a readable column behind -- and the fallback of
    zero is then what applies, which is today's behaviour exactly.
 
-   Padding on the two containers rather than a transform on their contents: both
-   centre a fixed-width child with `margin: 0 auto`, so a right inset both slides
-   the column clear AND lets it narrow once there is less than a column's width
-   left. A transform would only ever slide it, off the left edge.
+   The composer takes it as padding; the scroller's three columns take it as a
+   cap and a slide, and the pair is arithmetically the same inset. Centred in a
+   box narrowed on the right by R, a column of its own capped width lands half
+   of R to the left and narrows to what is left once R has eaten into the cap --
+   which is `max-width: min(cap, 100% - R)` plus `translate: -R/2`, case for
+   case, including the clamped one where both land the column's left edge on the
+   scroller's. #bannerHost is full width and left-aligned rather than centred,
+   so narrowing alone re-centres the card inside it; a slide there would take it
+   twice.
+
+   Why not the scroller itself, which is one declaration instead of three: the
+   inset is animated, and a padding animation on a SCROLL CONTAINER re-lays the
+   whole transcript out on every frame of it. That is the standing suspect for
+   the reported stale band -- a turn left painted at its old offset while the
+   turn above it had moved -- which is a raster fault rather than a layout one
+   and has not been reproduced here. Either way the column's own box is the
+   thing that has to move, and moving it moves nothing else: `translate` is
+   composited, and `max-width` only does layout in the clamped case, where the
+   prose has to rewrap anyway.
+
+   A `translate` makes its element a containing block for positioned
+   descendants. Nothing in the three columns depends on an outer one today
+   (measured on the running page: one absolute element, inside its own
+   positioned parent) -- a new `position: fixed` inside the transcript is what
+   this would catch out.
 
    Native scrollbars are off globally (`* { scrollbar-width: none }`) and the
    thumbs are drawn in their own fixed layer, so no scroller furniture is
@@ -4852,21 +5103,29 @@ body:has(#onb:not([hidden])) #veil { z-index: calc(var(--z-onboarding) + 1); }
    Its composer, wordmark and crows are placed by three rules of their own, so
    an inset that moves only the composer leaves three different centres on one
    screen. */
-.chat:not([data-fresh]) .scroll, .chat:not([data-fresh]) .dock {
-  transition: padding-right .19s cubic-bezier(.16, 1, .3, 1); }
-/* The scroller carries no side inset of its own -- `.col` holds the 22px -- so
-   this is the whole of its right padding. The composer's 22px is its own and is
-   kept.
+.chat:not([data-fresh]) .scroll > *, .chat:not([data-fresh]) .dock {
+  transition: translate .19s cubic-bezier(.16, 1, .3, 1),
+    max-width .19s cubic-bezier(.16, 1, .3, 1),
+    padding-right .19s cubic-bezier(.16, 1, .3, 1); }
+/* The two centred columns: capped and slid. `.col` holds the scroller's own
+   22px of side air, so neither carries a right padding to add this to.
 
    The composer moves because the column does, not because the panel was on it:
    the anchored panel ends well above the composer (measured, it does not reach
    it in a 900px-tall window). But the composer is centred UNDER the column, and
    a column that slides 162px left over a composer that does not would read as a
-   layout fault. One inset, both containers. */
-.chat:not([data-fresh]) .scroll { padding-right: var(--desk-reserve, 0px); }
+   layout fault. One inset, every container. The composer's own 36px is not the
+   desk's to spend, so its padding adds to it rather than replacing it. */
+.chat:not([data-fresh]) .scroll > .col, .chat:not([data-fresh]) .scroll > .flash {
+  max-width: min(calc(var(--col) + 72px), calc(100% - var(--desk-reserve, 0px)));
+  translate: calc(var(--desk-reserve, 0px) / -2) 0; }
+.chat:not([data-fresh]) .scroll > #bannerHost { max-width: calc(100% - var(--desk-reserve, 0px)); }
 .chat:not([data-fresh]) .dock { padding-right: calc(36px + var(--desk-reserve, 0px)); }
 @media (prefers-reduced-motion: reduce) {
-  .chat:not([data-fresh]) .scroll, .chat:not([data-fresh]) .dock { transition: none; }
+  .chat:not([data-fresh]) .scroll > *, .chat:not([data-fresh]) .dock { transition: none; }
+  /* The pill still follows the column's height; what it stops doing is sliding
+     across with it. */
+  .backpill { transition: bottom .18s ease; }
 }
 
 #deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 30px; --desk-launcher-edge: 12px;
@@ -5076,9 +5335,14 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   overflow: hidden; color: var(--muted); }
 .agent-mark svg { display: block; width: 14px; height: 14px; stroke-linecap: round; stroke-linejoin: round; }
 .agent-mark img { display: block; width: 14px; height: 14px; object-fit: contain; }
-/* The one mark that IS a tile: MiroMind's file is a favicon and carries its own
-   rounded card, so it fills the frame instead of sitting a card inside one. */
+/* The two marks that ARE tiles fill the frame instead of sitting a card inside
+   one. MiroMind's file is a favicon and carries its own rounded card. */
 .agent-mark img[data-agent="mirothinker"] { width: 100%; height: 100%; }
+/* The second mark that is a tile: raven.svg carries an opaque plate of its own,
+   for the reason the color-scheme comment below records. Keyed by file, because
+   `data-agent` carries the preset and raven's own rows have none -- the same
+   reason agent-mark.tsx holds it outside MARKS. */
+.agent-mark img[src$="agents/raven.svg"] { width: 100%; height: 100%; }
 /* Only the marks that draw in currentColor, which an <img> resolves against its
    own document and so renders black. `mono` is every shape, so the whole file
    inverts, as the provider marks already do. `hybrid` is qoder alone: brand
@@ -5094,15 +5358,17 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   :root:not([data-theme="light"]) .agent-mark img[data-tone="mono"] { filter: invert(1); }
   :root:not([data-theme="light"]) .agent-mark img[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
 }
-/* Two marks answer the theme from inside their own file, each with a
-   prefers-color-scheme rule: miromind.svg, which is a favicon, and raven.svg,
-   which is a black bird and would otherwise sit at 1.2:1 on the dark surface --
-   no tone filter can help it, because it is not one colour to invert. An
+/* miromind.svg answers the theme from inside its own file, with a
+   prefers-color-scheme rule of its own. An
    <img>'s SVG evaluates that rule against the used color-scheme of the element
    embedding it, NOT against this page's data-theme, so without these two lines
-   both follow the operating system while the rest of the roster follows the
+   it follows the operating system while the rest of the roster follows the
    switch -- and since the app's default is explicitly light, a fresh install on
    a dark OS is a normal way to see it.
+   raven.svg once needed the same treatment for the opposite reason: a black bird
+   sits at 1.2:1 on the dark surface and no tone filter can lift it, because it is
+   not one colour to invert. It now carries an opaque plate, which is theme
+   independent, so these two lines no longer decide anything for it.
    Declared on the tile rather than on :root: there it would also hand every
    native scrollbar and form control to the dark palette, which is a change to
    the whole page and not to a mark. */

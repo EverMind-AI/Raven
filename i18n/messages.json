@@ -512,24 +512,56 @@
       "zh": "打开这次运行的详情"
     },
     "gui.deleg.delivered": {
-      "en": "finished; its result just joined this conversation",
-      "zh": "已完成，结果已注入本轮对话"
+      "en": "finished",
+      "zh": "已完成"
     },
     "gui.deleg.body": {
       "en": "what came back",
       "zh": "交付内容"
+    },
+    "gui.deleg.body_cap": {
+      "en": "what entered this turn",
+      "zh": "注入本轮对话的内容"
+    },
+    "gui.deleg.body_hide": {
+      "en": "collapse",
+      "zh": "收起"
+    },
+    "gui.deleg.by_cron": {
+      "en": "Scheduled",
+      "zh": "定时触发"
+    },
+    "gui.deleg.by_heartbeat": {
+      "en": "Heartbeat",
+      "zh": "心跳触发"
+    },
+    "gui.deleg.by_sentinel": {
+      "en": "Sentinel",
+      "zh": "哨兵触发"
+    },
+    "gui.deleg.by_subagent": {
+      "en": "Sub-agent report",
+      "zh": "子智能体回报"
+    },
+    "gui.deleg.dlv_partial": {
+      "en": "partly done",
+      "zh": "部分完成"
+    },
+    "gui.deleg.dlv_stopped": {
+      "en": "stopped",
+      "zh": "已停止"
     },
     "gui.deleg.body_aria": {
       "en": "Show what the delegated run delivered",
       "zh": "展开子智能体交付的内容"
     },
     "gui.deleg.delivered_err": {
-      "en": "failed; the error just joined this conversation",
-      "zh": "运行失败，失败详情已注入本轮对话"
+      "en": "failed",
+      "zh": "失败"
     },
     "gui.deleg.delivered_exception": {
-      "en": "hit an exception and is waiting on a decision; its report just joined this conversation",
-      "zh": "遇到异常，等待裁决，报告已注入本轮对话"
+      "en": "waiting on a decision",
+      "zh": "等待裁决"
     },
     "gui.deleg.dag_title": {
       "en": "Task graph",
@@ -751,6 +783,10 @@
       "en": "Connect",
       "zh": "接入"
     },
+    "gui.agent.connecting": {
+      "en": "Connecting...",
+      "zh": "连接中..."
+    },
     "gui.agent.disconnect": {
       "en": "Disconnect",
       "zh": "断开"
@@ -782,6 +818,14 @@
     "gui.agent.kind_openai": {
       "en": "openai",
       "zh": "openai"
+    },
+    "gui.agent.not_installed": {
+      "en": "Not Installed",
+      "zh": "未安装"
+    },
+    "gui.agent.unauthorized": {
+      "en": "Unauthorized",
+      "zh": "未授权"
     },
     "gui.agent.none": {
       "en": "Nothing connected yet.",
@@ -862,6 +906,66 @@
     "gui.attach": {
       "en": "Attach",
       "zh": "附件"
+    },
+    "gui.tpl.pick": {
+      "en": "Deck template",
+      "zh": "PPT 模板"
+    },
+    "gui.tpl.prev": {
+      "en": "Previous page",
+      "zh": "上一页"
+    },
+    "gui.tpl.next": {
+      "en": "Next page",
+      "zh": "下一页"
+    },
+    "gui.tpl.title": {
+      "en": "Pick a deck template",
+      "zh": "选一个 PPT 模板"
+    },
+    "gui.tpl.hint": {
+      "en": "The deck is built on the template you pick, by the deck engine. Skip this to have it designed from scratch.",
+      "zh": "选中后，这份 PPT 会由模板引擎在该模板上制作；不选则从零设计。"
+    },
+    "gui.tpl.loading": {
+      "en": "Loading the templates...",
+      "zh": "正在读取模板…"
+    },
+    "gui.tpl.none": {
+      "en": "No deck templates are installed here.",
+      "zh": "这里没有安装 PPT 模板。"
+    },
+    "gui.tpl.unavailable": {
+      "en": "The deck engine is not installed here, so there are no templates to pick from.",
+      "zh": "这里没有安装模板引擎，没有可选的模板。"
+    },
+    "gui.tpl.close": {
+      "en": "Close",
+      "zh": "关闭"
+    },
+    "gui.tpl.fail": {
+      "en": "{name} could not be attached",
+      "zh": "{name} 没能加为附件"
+    },
+    "gui.tpl.back": {
+      "en": "All templates",
+      "zh": "全部模板"
+    },
+    "gui.tpl.use": {
+      "en": "Use this template",
+      "zh": "用这个模板"
+    },
+    "gui.tpl.pages_loading": {
+      "en": "Loading the pages...",
+      "zh": "正在读取页面…"
+    },
+    "gui.tpl.pages_none": {
+      "en": "This host cannot render the pages; the template is still usable.",
+      "zh": "这里渲染不了页面预览，模板仍可使用。"
+    },
+    "gui.tpl.page": {
+      "en": "{n} / {total}",
+      "zh": "{n} / {total}"
     },
     "gui.auth.checking": {
       "en": "Sign-in was refused - checking whether the service is still up",
@@ -1283,6 +1387,22 @@
       "en": "enabled",
       "zh": "启用"
     },
+    "gui.conn.none": {
+      "en": "No channels in the catalogue yet.",
+      "zh": "渠道目录还是空的。"
+    },
+    "gui.conn.none_match": {
+      "en": "No channel matches.",
+      "zh": "没有匹配的渠道。"
+    },
+    "gui.conn.pick": {
+      "en": "Pick a channel on the left",
+      "zh": "在左边选一个渠道"
+    },
+    "gui.conn.search": {
+      "en": "Search channels…",
+      "zh": "搜索渠道…"
+    },
     "gui.conn.g_on": {
       "en": "In service",
       "zh": "已接入"
@@ -1435,6 +1555,22 @@
       "en": "Paused",
       "zh": "已暂停"
     },
+    "gui.cron.g_on": {
+      "en": "On",
+      "zh": "已启用"
+    },
+    "gui.cron.g_off": {
+      "en": "Off",
+      "zh": "已停用"
+    },
+    "gui.cron.pick": {
+      "en": "Pick a schedule on the left",
+      "zh": "在左边选一个任务"
+    },
+    "gui.cron.search": {
+      "en": "Search schedules…",
+      "zh": "搜索任务…"
+    },
     "gui.cron.f_none": {
       "en": "Nothing under this filter.",
       "zh": "这个筛选下没有任务。"
@@ -1520,8 +1656,8 @@
       "zh": "下次 {next}"
     },
     "gui.cron.none": {
-      "en": "No schedules yet. Add one from the top right, e.g. \"summarise yesterday's errors every morning at 8\".",
-      "zh": "还没有定时任务。点右上角新建一个，比如「每天早八点汇总昨天的错误日志」。"
+      "en": "No schedules yet. Say \"every morning at 8...\" in a conversation, or add one here.",
+      "zh": "还没有定时任务。在对话里说「每天早上八点……」，或在这里新建。"
     },
     "gui.cron.ok": {
       "en": "ok",
@@ -2515,6 +2651,10 @@
       "zh": "第 {p} / {n} 页",
       "en": "Page {p} of {n}"
     },
+    "gui.mem.pick": {
+      "en": "Pick a memory on the left",
+      "zh": "在左边选一条记忆"
+    },
     "gui.mem.prev": {
       "zh": "上一页",
       "en": "Previous"
@@ -3260,16 +3400,16 @@
       "zh": "完全访问"
     },
     "gui.perm.full_h": {
-      "en": "No prompts - but operations that the platform deems dangerous are still refused.",
-      "zh": "不弹审批；平台级高危操作仍会被拒绝"
+      "en": "No prompts, and it may run dangerous operations; deny rules still hold.",
+      "zh": "不弹审批，可能执行危险操作；禁止规则仍然生效"
     },
     "gui.perm.smart": {
       "en": "smart",
       "zh": "智能模式"
     },
     "gui.perm.smart_h": {
-      "en": "An AI reviewer pre-screens each action and asks you only when unsure.",
-      "zh": "AI 预审每个操作，拿不准才请求你审批"
+      "en": "The model decides when to ask for approval.",
+      "zh": "模型决定是否请求审批"
     },
     "gui.perm.title": {
       "en": "Permission mode",
@@ -3278,6 +3418,10 @@
     "gui.picker.empty_provider": {
       "en": "No models under this account",
       "zh": "这个账号下还没有模型"
+    },
+    "gui.picker.empty_kind": {
+      "en": "No {kind} model added here yet",
+      "zh": "这一家还没有添加{kind}模型"
     },
     "gui.picker.manage": {
       "en": "Manage models & accounts...",
@@ -3763,6 +3907,10 @@
       "en": "Nothing here yet",
       "zh": "暂无会话"
     },
+    "gui.rail.no_workdir": {
+      "en": "No folder",
+      "zh": "无工作区"
+    },
     "gui.rail.pinned": {
       "en": "Pinned",
       "zh": "已固定"
@@ -3770,6 +3918,10 @@
     "gui.rail.recent": {
       "en": "Recent",
       "zh": "最近"
+    },
+    "gui.rail.workdir": {
+      "en": "With a folder",
+      "zh": "有工作区"
     },
     "gui.rail.search_hits": {
       "en": "Results - {n}",
@@ -4119,6 +4271,22 @@
       "en": "Unpinned",
       "zh": "已取消固定"
     },
+    "gui.update.behind": {
+      "en": "Stale page build",
+      "zh": "页面构建落后于源码"
+    },
+    "gui.update.behind_body": {
+      "en": "ui-web/src or i18n/messages.json changed after dist/index.html was built, so this page is older than the code it runs on. In the repository root run make build-ui, then reload this page.",
+      "zh": "ui-web/src 或 i18n/messages.json 在 dist/index.html 构建之后有改动，这个页面比它背后的代码旧。在仓库根目录运行 make build-ui，然后刷新本页。"
+    },
+    "gui.update.behind_how": {
+      "en": "How to rebuild",
+      "zh": "如何重建"
+    },
+    "gui.update.behind_title": {
+      "en": "Rebuild the page",
+      "zh": "重建页面"
+    },
     "gui.update.note": {
       "en": "UI updated on disk",
       "zh": "界面有更新"
@@ -4174,6 +4342,62 @@
     "gui.upg.working": {
       "en": "Upgrading Raven...",
       "zh": "正在升级 Raven…"
+    },
+    "gui.wd.back": {
+      "en": "Back",
+      "zh": "返回"
+    },
+    "gui.wd.blocked": {
+      "en": "Not a workspace: Raven's own data is here or beneath it. Its folders may still be.",
+      "zh": "这里不能作为工作区：Raven 自己的数据在此处或其下；里面的文件夹可以"
+    },
+    "gui.wd.empty": {
+      "en": "No subfolders",
+      "zh": "没有子文件夹"
+    },
+    "gui.wd.failed": {
+      "en": "Could not read the folder - {detail}",
+      "zh": "读取目录失败 · {detail}"
+    },
+    "gui.wd.home": {
+      "en": "Home",
+      "zh": "主目录"
+    },
+    "gui.wd.locked": {
+      "en": "The workspace is fixed once the conversation starts",
+      "zh": "对话开始后工作区不可更改"
+    },
+    "gui.wd.none": {
+      "en": "No folder",
+      "zh": "无文件夹"
+    },
+    "gui.wd.none_h": {
+      "en": "Work in the default directory",
+      "zh": "在默认目录里工作"
+    },
+    "gui.wd.not_live": {
+      "en": "Browsing folders needs a running gateway",
+      "zh": "离线预览无法浏览文件夹"
+    },
+    "gui.wd.open": {
+      "en": "Open folder...",
+      "zh": "打开文件夹…"
+    },
+    "gui.wd.recent": {
+      "en": "Recent",
+      "zh": "最近"
+    },
+    "gui.wd.title": {
+      "en": "Workspace",
+      "zh": "工作区"
+    },
+    "gui.wd.up": {
+      "en": "Up one level",
+      "zh": "上一级"
+    },
+    "gui.wd.use": {
+      "en": "Use this folder",
+      "zh": "选择此文件夹"
     },
     "gui.workspace": {
       "en": "Workspace",
@@ -4470,6 +4694,10 @@
     "gui.ws.dlv_turn": {
       "en": "turn {n}",
       "zh": "第 {n} 轮"
+    },
+    "gui.ws.download": {
+      "en": "Download",
+      "zh": "下载"
     },
     "gui.ws.dlv_here": {
       "en": "delivered this turn",
@@ -6267,9 +6495,13 @@
       "en": "Usage",
       "zh": "用量"
     },
+    "gui.settings.nav.provider": {
+      "en": "Model providers",
+      "zh": "模型服务商"
+    },
     "gui.settings.nav.model": {
-      "en": "Models",
-      "zh": "模型"
+      "en": "Model settings",
+      "zh": "模型配置"
     },
     "gui.settings.nav.skills": {
       "en": "Skills",
@@ -6282,6 +6514,18 @@
     "gui.settings.nav.plugins": {
       "en": "Plugins",
       "zh": "插件"
+    },
+    "gui.settings.nav.channels": {
+      "en": "Channels",
+      "zh": "渠道"
+    },
+    "gui.settings.nav.cron": {
+      "en": "Schedules",
+      "zh": "定时任务"
+    },
+    "gui.settings.nav.memory": {
+      "en": "Memory",
+      "zh": "记忆管理"
     },
     "gui.settings.nav.archive": {
       "en": "Archive",
@@ -6571,6 +6815,10 @@
       "en": "Paste an API key",
       "zh": "粘贴 API Key"
     },
+    "gui.settings.providers.pick_one": {
+      "en": "Choose a provider on the left",
+      "zh": "在左边选一家服务商"
+    },
     "gui.settings.providers.key_first": {
       "en": "Enter the API key first",
       "zh": "先填入 API Key"
@@ -6606,6 +6854,18 @@
     "gui.settings.providers.disconnect": {
       "en": "Disconnect",
       "zh": "断开"
+    },
+    "gui.settings.providers.disconnect_key": {
+      "en": "Disconnect and clear the key",
+      "zh": "断开并清除密钥"
+    },
+    "gui.settings.providers.disconnect_auth": {
+      "en": "Disconnect authorisation",
+      "zh": "断开授权"
+    },
+    "gui.settings.providers.disconnect_local": {
+      "en": "Disconnect this server",
+      "zh": "断开这台服务"
     },
     "gui.settings.providers.connection": {
       "en": "Connection",
@@ -6663,9 +6923,29 @@
       "en": "added",
       "zh": "已添加"
     },
+    "gui.settings.providers.add_model": {
+      "en": "Add model",
+      "zh": "添加模型"
+    },
+    "gui.settings.providers.showing_added": {
+      "en": "showing {n} · added {m}",
+      "zh": "显示 {n} 个 · 已添加 {m}"
+    },
     "gui.settings.providers.fetching": {
       "en": "Fetching the model list from {name}",
       "zh": "正在从 {name} 获取模型列表"
+    },
+    "gui.settings.providers.filter_direct": {
+      "en": "Direct vendors",
+      "zh": "直连厂商"
+    },
+    "gui.settings.providers.filter_gateway": {
+      "en": "Aggregators",
+      "zh": "聚合网关"
+    },
+    "gui.settings.providers.filter_oauth": {
+      "en": "Browser sign-in",
+      "zh": "浏览器授权"
     },
     "gui.settings.providers.no_list": {
       "en": "This vendor has no model list endpoint; type a model id",
@@ -7166,6 +7446,10 @@
     "gui.settings.providers.base_override": {
       "en": "Overrides the default",
       "zh": "覆盖默认"
+    },
+    "gui.settings.providers.base_reset": {
+      "en": "Reset",
+      "zh": "恢复默认"
     },
     "gui.settings.providers.key_optional_ph": {
       "en": "API key, if the server wants one",

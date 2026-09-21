@@ -5128,6 +5128,58 @@
       }
     },
     {
+      "name": "fs.dirs",
+      "summary": "List the subdirectories of one absolute directory, for picking a session's working directory.",
+      "params": [
+        {
+          "name": "path",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Absolute directory to list the subdirectories of; the user's home directory when omitted."
+          }
+        }
+      ],
+      "result": {
+        "name": "FsDirsResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "The directory listed, resolved."
+            },
+            "parent": {
+              "type": "string",
+              "description": "One level up; null at the filesystem root."
+            },
+            "home": {
+              "type": "string",
+              "description": "The user's home directory, where the browser starts."
+            },
+            "ok": {
+              "type": "boolean",
+              "description": "Whether the listed directory itself may be a session's working directory."
+            },
+            "entries": {
+              "description": "Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.",
+              "items": {
+                "$ref": "#/components/schemas/FsDirEntry"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "path",
+            "home",
+            "ok",
+            "entries"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "fs.read",
       "summary": "Read one working-directory file, capped.",
       "params": [
@@ -5202,6 +5254,118 @@
           "required": false,
           "schema": {
             "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "FsUploadResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "Workspace-relative path to hand the agent; uploads never return bytes.",
+              "type": "string"
+            },
+            "abs_path": {
+              "type": "string"
+            },
+            "size": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path",
+            "abs_path",
+            "size"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "deck.templates.list",
+      "summary": "The bundled deck templates, with a cover each where this host can render one.",
+      "params": [
+        {
+          "name": "covers",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "False lists the names alone, without rendering a cover for each."
+          }
+        }
+      ],
+      "result": {
+        "name": "DeckTemplatesListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "templates": {
+              "items": {
+                "$ref": "#/components/schemas/DeckTemplateRow"
+              },
+              "type": "array"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when the deck engine is not installed here; the picker then stays hidden."
+            },
+            "pending": {
+              "type": "boolean",
+              "description": "True while a cover is still being drawn in the background; ask again for it."
+            }
+          },
+          "required": [
+            "templates",
+            "available"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "deck.templates.pages",
+      "summary": "Every page of one bundled deck template as JPEG data URLs, for the picker's page viewer.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "A row's name from deck.templates.list."
+          }
+        }
+      ],
+      "result": {
+        "name": "DeckTemplatesPagesResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "pages": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "description": "Every page as a JPEG data URL, in order; empty where this host cannot render."
+            }
+          },
+          "required": [
+            "pages"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "deck.templates.pick",
+      "summary": "Deposit a bundled deck template under agent home's uploads and answer as fs.upload does.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "A row's name from deck.templates.list."
           }
         }
       ],
@@ -9766,6 +9930,35 @@
         ],
         "type": "object"
       },
+      "DeckTemplateRow": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The template's stem, which deck.templates.pick takes."
+          },
+          "label": {
+            "type": "string",
+            "description": "The stem as words, for the picker's caption."
+          },
+          "size": {
+            "type": "integer"
+          },
+          "cover": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first page as a JPEG data URL, or null where this host cannot render one."
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "size"
+        ],
+        "type": "object"
+      },
       "FsEntry": {
         "additionalProperties": false,
         "properties": {
@@ -9784,6 +9977,28 @@
           "name",
           "dir",
           "size"
+        ],
+        "type": "object"
+      },
+      "FsDirEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "Absolute."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "True when a session may be pinned here; false inside the agent's own data (see raven.agent.workdir)."
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "ok"
         ],
         "type": "object"
       },
@@ -10210,6 +10425,10 @@
           "pinned": {
             "type": "boolean",
             "description": "User pinned this session to the top of the picker."
+          },
+          "workdir": {
+            "type": "string",
+            "description": "The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by."
           }
         }
       },
@@ -10493,6 +10712,10 @@
           "has_api_key": {
             "type": "boolean"
           },
+          "needs_auth": {
+            "type": "boolean",
+            "description": "The agent answered the handshake and then refused to open a session without a credential. Measured by the capability snapshot, not inferred from probe_status, which reads `attention` both for this and for an installed agent nothing has verified -- two rows that need opposite things from the reader. Always false for a kind with no handshake to be refused in."
+          },
           "mcps": {
             "type": "array",
             "items": {
@@ -10651,6 +10874,10 @@
           "needs_api_base": {
             "type": "boolean"
           },
+          "gateway": {
+            "type": "boolean",
+            "description": "The registry's is_gateway: resells other vendors' models under vendor/model ids. The catalogue's gateway filter reads this; absent means false."
+          },
           "platforms": {
             "type": "array",
             "items": {
@@ -10744,7 +10971,8 @@
         "additionalProperties": false,
         "description": "How a model reads to a person, and what it can do. Absent for a model the registry knows nothing about -- one released since the bundled files, or served by a local deployment -- in which case the id is all there is to show. An empty tag list means nothing is published, not that the model cannot: a surface renders absence as no icon, never as a denial.",
         "required": [
-          "label"
+          "label",
+          "kind"
         ],
         "properties": {
           "label": {
@@ -10773,6 +11001,18 @@
             "items": {
               "type": "string"
             }
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "embedding",
+              "reranker"
+            ],
+            "description": "The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text."
           },
           "context_window": {
             "type": "integer",

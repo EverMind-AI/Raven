@@ -21,6 +21,27 @@ from raven.spine.runner import Emit, TurnOutcome, TurnRunner
 from raven.spine.turn import BusyPolicy, Origin, TurnRequest
 
 
+def describe_failure(exc: BaseException) -> str:
+    """The text a failed turn's event carries: the exception's class, and its message when it has one.
+
+    ``str(exc)`` alone was the whole report, and a bare ``TimeoutError`` --
+    what a stalled model stream raises -- has an empty one, so the client was
+    told ``turn_failed`` and nothing else, and the parent of a sub-agent read
+    that as a crash of whatever tool call it saw last.
+    """
+    text = str(exc).strip()
+    name = type(exc).__name__
+    if not text:
+        return name
+    # Several SDK errors already open with their own class name; a second
+    # copy would read as a stutter. Decided here, on the text alone, rather
+    # than by the provider layer's own prefix rule: the kernel does not import
+    # providers.
+    if text.startswith(f"{name}:") or text.startswith(f"{name} ") or text == name:
+        return text
+    return f"{name}: {text}"
+
+
 def conversation_id(req: TurnRequest) -> str:
     """The lane key a request runs on: its explicit conversation, else
     ``<channel>:<chat_id>``.
@@ -458,9 +479,10 @@ class Lane:
             self._payload_reported = True
             raise
         except Exception as exc:
-            # The event carries only str(exc) to the front-end, so this is the
-            # only place the traceback is ever recorded — without it a failed
-            # turn leaves no trace on the process side at all.
+            # The event carries only the exception's class and message to the
+            # front-end, so this is the only place the traceback is ever
+            # recorded — without it a failed turn leaves no trace on the process
+            # side at all.
             logger.opt(exception=exc).error("Turn failed on {}: {}", self._conversation_id, exc)
             # Unpaired with TurnStarted when the failure came from acquiring the pool
             # or from the sink's own TurnStarted call, both of which sit inside the
@@ -472,7 +494,7 @@ class Lane:
             # consult.
             await self._sink(
                 TurnFailed(
-                    error=str(exc),
+                    error=describe_failure(exc),
                     cancelled=False,
                     conversation_id=self._conversation_id,
                     turn_id=turn_id,

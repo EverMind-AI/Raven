@@ -254,15 +254,6 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
    row it hangs off lives inside .spanels, whose overflow clips an absolutely
    positioned child, so the panel resolves against .smodal instead and the
    dialog is what bounds it. Only the size is CSS's to say. */
-.settings-ctl .model-picker {width:min(560px, calc(100vw - 32px)); height:400px}
-.settings-ctl .model-picker-search {padding:10px 14px}
-.settings-ctl .model-picker-search input {font-size:14px}
-.settings-ctl .model-picker-body {grid-template-columns:170px 1fr}
-.settings-ctl .model-picker-prov {font-size:13.5px; padding:7px 10px}
-.settings-ctl .model-picker-model {font-size:13px; padding:7px 10px}
-.settings-ppcard .model-picker-search {padding:10px 14px}
-.settings-ppcard .model-picker-search input {font-size:14px}
-.settings-ppcard .model-picker-body {grid-template-columns:190px 1fr}
 .settings-tag2.settings-pick {cursor:pointer; font-family:var(--mono)}
 .settings-tag2.settings-pick:hover {border-color:var(--amber); color:var(--text)}
 .settings-spin {display:inline-block; width:11px; height:11px; margin-right:7px; vertical-align:-1px;
@@ -415,3 +406,77 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-xname .settings-xn {font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .settings-xrow.settings-open .settings-chev {transform:rotate(90deg); border-color:var(--amber); color:var(--gold); background:var(--amber-dp)}
 .settings-lnkico {margin-left:6px; vertical-align:middle}
+
+/* ---- Model providers: the catalogue in two columns ------------------------
+   The prototype's `tp-*` family, prefixed. Left: every provider the wire
+   returns, searchable and filtered; right: the selected one's connection.
+   The shape is one page's for now -- the prototype shares it with channels and
+   memory, which are not built here, so it is copied when they are rather than
+   abstracted for pages that do not exist. */
+.settings-tp {display:grid; grid-template-columns:286px minmax(0,1fr); border:1px solid var(--line); border-radius:12px; overflow:hidden; min-height:420px; max-height:calc(100vh - 220px)}
+.settings-tp-side {border-right:1px solid var(--line-soft); padding:13px; display:flex; flex-direction:column; gap:9px; min-height:0}
+.settings-tp-find {display:flex; gap:8px; align-items:center}
+.settings-tp-find input {flex:1; min-width:0; font:inherit; font-size:13px; padding:7px 11px; border:1px solid var(--line); border-radius:9px; background:var(--paper); color:var(--text); outline:none}
+.settings-tp-find input:focus-visible {border-color:var(--amber)}
+.settings-tp-find select {flex:none; font:inherit; font-size:12.5px; padding:7px 8px; border:1px solid var(--line); border-radius:9px; background:var(--paper); color:var(--muted); cursor:pointer; color-scheme:light dark}
+.settings-tp-list {display:flex; flex-direction:column; gap:1px; flex:1; min-height:0; overflow-y:auto; margin:0 -5px}
+.settings-tp-row {display:flex; align-items:center; border-radius:8px}
+.settings-tp-row:hover {background:var(--surface)}
+.settings-tp-row[aria-current="true"] {background:var(--raised)}
+.settings-tp-hit {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; background:none; border:0; color:var(--text); padding:7px 9px; cursor:pointer}
+.settings-tp-nm {flex:1; min-width:0; font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-tp-row[aria-current="true"] .settings-tp-nm {font-weight:600}
+.settings-tp-def {flex:none; font-size:10.5px; color:var(--gold); border:1px solid var(--line); border-radius:99px; padding:0 6px}
+.settings-tp-dot {width:7px; height:7px; border-radius:50%; background:var(--moss); flex:none}
+.settings-tp-empty {padding:12px 9px; color:var(--faint); font-size:12.5px}
+.settings-tp-main {padding:17px 20px 20px; min-width:0; min-height:0; overflow-y:auto}
+.settings-tp-none {display:grid; place-items:center; padding:40px 20px; color:var(--faint); font-size:13px}
+.settings-tp-head {display:flex; align-items:center; gap:10px}
+.settings-tp-head .provider-icon {width:30px; height:30px; border-radius:8px}
+.settings-tp-ttl {min-width:0}
+.settings-tp-name {display:flex; align-items:center; gap:7px; font-family:var(--disp); font-size:17px; font-weight:600}
+.settings-tp-state {font-size:12.5px; color:var(--muted); margin-top:4px}
+.settings-tp-state.settings-tp-live {color:var(--moss)}
+.settings-exlink {color:var(--gold); text-decoration:none; font-size:13px}
+.settings-exlink:hover {text-decoration:underline}
+
+/* ---- Add model: a catalogue that hangs off its button ---------------------
+   The prototype's `apop` family, prefixed. Positioned in JS against the button
+   (AddModelPop.tsx) because its height follows the room, not the list. */
+/* At the body, so above the settings veil (--z-veil 40) like the picker. */
+.settings-apop {position:fixed; z-index:47; width:min(470px, calc(100vw - 32px)); display:flex; flex-direction:column; background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:var(--elev-up); overflow:hidden}
+.settings-apsearch {display:flex; align-items:center; gap:9px; padding:9px 13px; border-bottom:1px solid var(--line-soft)}
+.settings-apsearch svg {width:14px; height:14px; flex:none; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
+.settings-apsearch input {flex:1; min-width:0; font:inherit; font-size:13px; border:0; background:none; color:var(--text); outline:none}
+.settings-apkinds {display:flex; flex-wrap:wrap; gap:5px; padding:8px 10px 6px; border-bottom:1px solid var(--line-soft)}
+.settings-mkind {display:inline-flex; align-items:center; gap:5px; font:inherit; font-size:12px; color:var(--muted); background:none; border:1px solid transparent; border-radius:7px; padding:3px 8px; cursor:pointer}
+.settings-mkind:hover {background:var(--surface)}
+.settings-mkind[aria-pressed="true"] {border-color:var(--line); background:var(--surface); color:var(--text)}
+.settings-mkind .model-tag {width:12px; height:12px; color:inherit}
+.settings-mkind i {font-style:normal; font-family:var(--mono); font-size:10px; color:var(--faint)}
+.settings-apbody {flex:1; min-height:0; overflow-y:auto; padding:6px}
+.settings-apwait {padding:22px 14px; color:var(--faint); font-size:13px; text-align:center}
+.settings-mgroup {display:flex; align-items:center; gap:4px; padding:8px 6px 3px}
+.settings-gt {flex:1; min-width:0; display:flex; align-items:center; gap:7px; font:inherit; background:none; border:0; color:var(--muted); padding:2px 4px; border-radius:6px; cursor:pointer; text-align:left}
+.settings-gt:hover {background:var(--surface)}
+.settings-gn {font-size:11px; font-weight:600; letter-spacing:.04em}
+.settings-gc {font-family:var(--mono); font-size:10px; color:var(--faint)}
+.settings-ga {flex:none; width:22px; height:22px; border:0; border-radius:6px; background:none; color:var(--faint); cursor:pointer; font-size:14px; line-height:1}
+.settings-ga:hover:not([disabled]) {background:var(--raised); color:var(--text)}
+.settings-ga[disabled] {opacity:.3; cursor:not-allowed}
+.settings-apm {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; font-size:12.5px; background:none; border:0; color:var(--text); padding:6px 8px; border-radius:7px; cursor:pointer}
+.settings-apm:hover {background:var(--surface)}
+.settings-aptick {width:15px; height:15px; flex:none; border-radius:4px; border:1.5px solid var(--line); display:grid; place-items:center; font-size:10px; color:var(--ink)}
+.settings-apm[aria-checked="true"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-accent)}
+.settings-apnm {flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono); font-size:12px}
+.settings-apm[aria-checked="true"] .settings-apnm {color:var(--muted)}
+.settings-apsd {font-family:var(--sans); font-size:11.5px; color:var(--faint); flex:none}
+.settings-apadd {color:var(--gold)}
+.settings-apadd .settings-aptick {border-style:dashed; border-color:var(--gold); color:var(--gold)}
+.settings-apadd .settings-apsd {color:var(--gold)}
+.settings-apkind {display:inline-flex; align-items:center; gap:4px; flex:none; font:inherit; font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:6px; padding:1px 7px; background:var(--paper); cursor:pointer}
+.settings-apkind:hover {border-color:var(--amber); color:var(--text)}
+.settings-apkind .model-tag {width:11px; height:11px; color:inherit}
+.settings-aphr {height:1px; background:var(--line-soft); margin:6px 4px}
+.settings-apfoot {display:flex; align-items:center; gap:8px; padding:8px 12px; border-top:1px solid var(--line-soft)}
+.settings-apnote {padding:7px 9px; margin:2px 2px 4px; border-radius:7px; background:var(--surface); color:var(--muted); font-size:12px}

@@ -209,12 +209,26 @@ def set_skill_blocked(
     The blocklist is read at process start (AgentLoop / context engine
     construction), so a change takes effect on the next agent/gateway
     start, not on a running process.
+
+    Respects whichever key casing (camelCase / snake_case) the file already
+    uses for the block itself: the loader accepts both spellings, but writing
+    the second one alongside the first leaves the config unloadable.
     """
     path = config_path or get_config_path()
 
     def _apply(_text: str | None) -> tuple[str | None, tuple[list[str], bool]]:
         data = read_raw_or_raise(path)
-        section = data.setdefault("skillForge", {})
+        # Reuse whichever spelling the file already carries. The loader accepts
+        # both, but a second block under the other one is an extra input to a
+        # model that forbids extras: the whole config then stops loading, and
+        # the blocklist we just read came from the empty block we created.
+        if isinstance(data.get("skillForge"), dict):
+            sf_key = "skillForge"
+        elif isinstance(data.get("skill_forge"), dict):
+            sf_key = "skill_forge"
+        else:
+            sf_key = "skillForge"
+        section = data.setdefault(sf_key, {})
         current = [str(x) for x in (section.get("blocklist") or [])]
         lowered = {x.casefold() for x in current}
         if blocked:
@@ -231,7 +245,7 @@ def set_skill_blocked(
     current, wrote = atomic_update(path, _apply)
     if wrote:
         logger.info(
-            "config/update: skillForge.blocklist now {!r} ({} {!r})",
+            "config/update: skill blocklist now {!r} ({} {!r})",
             current,
             "blocked" if blocked else "unblocked",
             name,

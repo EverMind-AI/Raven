@@ -8,15 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { FixtureTransport } from '../../rpc/fixtureTransport'
 import { setGateway } from '../../rpc/gateway'
-import {
-  resetExtAgentsSeen,
-  extAgentsFetch,
-  extAgentRowOf,
-  extAgentsSource,
-  isFound,
-  sectionOf,
-  wizardSection,
-} from './source'
+import { resetExtAgentsSeen, extAgentsFetch, extAgentRowOf, extAgentsSource, isFound, sectionOf, stageOf, wizardSection } from './source'
 
 import type { ExtAgentRowWire, Section } from './source'
 import type { ExtAgentRow } from './types'
@@ -272,5 +264,32 @@ describe('the wizard step sections', () => {
     expect(sectionOf(row)).toBe(hub)
     expect(wizardSection(row)).toBe(section)
     expect(isFound(row)).toBe(found)
+  })
+})
+
+/* A refusal the handshake already measured is named on the row instead of
+   offered as a Connect that would spend a launch to be refused again. */
+describe('a credential refusal the handshake measured', () => {
+  it('rides the wire as needs_auth, and reads false from a server that predates it', () => {
+    expect(extAgentRowOf(wire({ needs_auth: true })).needs_auth).toBe(true)
+    expect(extAgentRowOf(wire({})).needs_auth).toBe(false)
+  })
+
+  it('names the row unauthorized only while it is off the roster', () => {
+    const refused: Partial<ExtAgentRow> = {
+      kind: 'acp',
+      configured: false,
+      enabled: false,
+      probe_status: 'attention',
+      needs_auth: true,
+    }
+    expect(stageOf(fullRow(refused))).toBe('unauthorized')
+    expect(sectionOf(fullRow(refused))).toBe('avail')
+    /* Connected: Disconnect stays whatever the credential has since done. */
+    expect(stageOf(fullRow({ ...refused, configured: true, enabled: true }))).toBe('live')
+    /* An endpoint's credential is the key field, settled by its own probe. */
+    expect(stageOf(fullRow({ ...refused, kind: 'openai' }))).toBe('key')
+    /* The same row without the refusal is a preset to add. */
+    expect(stageOf(fullRow({ ...refused, needs_auth: false }))).toBe('add')
   })
 })

@@ -1070,7 +1070,7 @@ class OpsTuneStatusTool(Tool):
         import json as _json
 
         from oncall_flow.backend import JobStatus
-        from oncall_flow.backends import backend_from_meta
+        from oncall_flow.backends import backend_from_meta, billing_only
         from oncall_flow.ledger import Ledger
 
         # No ledger given: fall back to the one campaign under the ops home, so the
@@ -1155,7 +1155,7 @@ class OpsTuneStatusTool(Tool):
             try:
                 from oncall_flow.instrument import log_event
 
-                backend = backend_from_meta(meta)
+                backend = billing_only(backend_from_meta(meta), led)
                 try:
                     budget_spent = await backend.spent_minutes()
                     budget_remaining = await backend.remaining_minutes()
@@ -1818,7 +1818,7 @@ class OpsSubmitTool(_OpsScheduler):
         **kwargs: Any,
     ) -> str:
         from oncall_flow.backend import JobBackendError, JobResult, JobSpec, JobStatus
-        from oncall_flow.backends import backend_from_meta, prepare_from_meta
+        from oncall_flow.backends import backend_from_meta, billing_only, prepare_from_meta
         from oncall_flow.ledger import Ledger
         from oncall_flow.proposer import config_key
 
@@ -2159,7 +2159,7 @@ class OpsSubmitTool(_OpsScheduler):
         if round == 0:
             prepare_from_meta(meta, app_dir=app_dir)
 
-        backend = backend_from_meta(meta)
+        backend = billing_only(backend_from_meta(meta), Ledger(ledger))
 
         # The apparatus, checked against what this campaign was set up with. The
         # first submit is where the baseline is taken -- it is the last moment the
@@ -2782,9 +2782,10 @@ class OpsCampaignsTool(Tool):
             # stay cheap enough to ask casually.
             if not concluded.exists():
                 try:
-                    from oncall_flow.backends import backend_from_meta
+                    from oncall_flow.backends import backend_from_meta, billing_only
+                    from oncall_flow.ledger import Ledger
 
-                    spent = await backend_from_meta(meta).spent_minutes()
+                    spent = await billing_only(backend_from_meta(meta), Ledger(d / "ledger.json")).spent_minutes()
                     total = (meta.get("budget") or {}).get("total")
                     unit = (meta.get("budget") or {}).get("unit") or ""
                     bits.append(f"spent {spent:.2f}" + (f" of {total} {unit}" if total else ""))
@@ -2906,7 +2907,7 @@ class OpsKillTool(Tool):
         import json as _json
 
         from oncall_flow.backend import JobResult, JobStatus
-        from oncall_flow.backends import backend_from_meta
+        from oncall_flow.backends import backend_from_meta, billing_only
         from oncall_flow.instrument import log_event
         from oncall_flow.ledger import Ledger
 
@@ -2919,7 +2920,7 @@ class OpsKillTool(Tool):
         if refusal:
             return refusal
         meta = _json.loads(meta_path.read_text(encoding="utf-8"))
-        backend = backend_from_meta(meta)
+        backend = billing_only(backend_from_meta(meta), Ledger(ledger_path))
         led = Ledger(ledger_path)
         killed, skipped, notes = [], [], []
         for key in trials:

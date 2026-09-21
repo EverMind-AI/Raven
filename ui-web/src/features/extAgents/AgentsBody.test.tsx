@@ -141,6 +141,18 @@ describe('the onboarding wizard\'s agents step', () => {
     expect(sectionNamed('gui.agent.g_on')).toBeNull()
   })
 
+  it('names a refused row instead of offering to connect it', async () => {
+    const { acts } = await mounted([row({ name: 'refused', kind: 'acp', probe_status: 'attention', needs_auth: true })])
+    expect(sectionCount('gui.agent.g_avail')).toBe('1')
+    const btn = control('refused') as HTMLButtonElement
+    expect(btn.textContent).toBe('gui.agent.unauthorized')
+    expect(btn.disabled).toBe(true)
+    await act(async () => {
+      fireEvent.click(btn)
+    })
+    expect(acts).toEqual([])
+  })
+
   it('a row is a plain row: nothing to press but its one control, and no sheet opens', async () => {
     await mounted([row({ name: 'preset_a' })])
     const r = rowNamed('preset_a')

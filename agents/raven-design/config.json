@@ -5,6 +5,7 @@
       "contextWindowTokens": 262144,
       "maxToolIterations": 400,
       "llmCallTimeout": 1800,
+      "llmRetryAfterOutput": true,
       "compaction": {
         "enabled": true,
         "triggerRatio": 0.8,

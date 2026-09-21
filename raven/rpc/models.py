@@ -168,6 +168,15 @@ class SubagentRow(_Strict):
     probe_status: Literal["ready", "attention", "missing", "unknown"]
     probe_detail: str
     has_api_key: bool
+    needs_auth: bool = Field(
+        default=False,
+        description=(
+            "The agent answered the handshake and then refused to open a session without a credential. "
+            "Measured by the capability snapshot, not inferred from probe_status, which reads `attention` "
+            "both for this and for an installed agent nothing has verified -- two rows that need opposite "
+            "things from the reader. Always false for a kind with no handshake to be refused in."
+        ),
+    )
     mcps: list[str]
     allow_mcp_secrets: bool
     last_test_ok: bool | None = None
@@ -1198,6 +1207,13 @@ class SessionListItem(_Strict):
     updated_at: float = Field(..., description="Unix timestamp of the latest user or assistant message.")
     title: str
     pinned: bool = Field(default=False, description="User pinned this session to the top of the picker.")
+    workdir: str | None = Field(
+        default=None,
+        description=(
+            "The directory this session was pinned to when it was created, absolute; absent for a "
+            "session that runs where the policy default puts it. What the rail groups by."
+        ),
+    )
 
 
 class SessionListParams(_Strict):
@@ -1558,6 +1574,9 @@ class ModelLabel(_Strict):
     capabilities: list[str] = Field(default_factory=list)
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
+    #: The bucket a model list files this model under, from what it writes
+    #: (``registry_data.kind_of``): a model that reads images is still text.
+    kind: Literal["text", "image", "audio", "video", "embedding", "reranker"]
     #: Tokens the model reads in one request. Resolved from the tables that also
     #: route, never from the display registry -- a window sizes trimming, so the
     #: number a picker shows has to be the number a request is sized with. None
@@ -1613,6 +1632,10 @@ class ModelOptionProvider(_Strict):
     extra_headers: dict[str, str] = Field(default_factory=dict)
     total_models: int
     needs_api_base: bool
+    #: The registry's ``is_gateway``: resells other vendors' models under
+    #: vendor/model ids. The catalogue's filter reads it; no client can derive
+    #: it from a slug.
+    gateway: bool = False
     #: Addresses to pick between, empty for the providers that have only one.
     #: A row that states these is drawn with the list in place of a host field.
     platforms: list[ModelOptionPlatform] = Field(default_factory=list)
@@ -3478,6 +3501,32 @@ class FsListResult(_Strict):
     entries: list[FsEntry] = Field(..., description="Directories first, dotfiles omitted, capped at 500.")
 
 
+class FsDirsParams(_Strict):
+    path: str | None = Field(
+        default=None,
+        description="Absolute directory to list the subdirectories of; the user's home directory when omitted.",
+    )
+
+
+class FsDirEntry(_Strict):
+    name: str
+    path: str = Field(..., description="Absolute.")
+    ok: bool = Field(
+        ...,
+        description="True when a session may be pinned here; false inside the agent's own data (see raven.agent.workdir).",
+    )
+
+
+class FsDirsResult(_Strict):
+    path: str = Field(..., description="The directory listed, resolved.")
+    parent: str | None = Field(..., description="One level up; null at the filesystem root.")
+    home: str = Field(..., description="The user's home directory, where the browser starts.")
+    ok: bool = Field(..., description="Whether the listed directory itself may be a session's working directory.")
+    entries: list[FsDirEntry] = Field(
+        ..., description="Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found."
+    )
+
+
 class FsReadParams(_Strict):
     path: str
     max_bytes: int | None = None
@@ -3500,6 +3549,43 @@ class FsUploadResult(_Strict):
     path: str = Field(..., description="Workspace-relative path to hand the agent; uploads never return bytes.")
     abs_path: str
     size: int
+
+
+class DeckTemplatesListParams(_Strict):
+    covers: bool = Field(True, description="False lists the names alone, without rendering a cover for each.")
+
+
+class DeckTemplateRow(_Strict):
+    name: str = Field(..., description="The template's stem, which deck.templates.pick takes.")
+    label: str = Field(..., description="The stem as words, for the picker's caption.")
+    size: int
+    cover: str | None = Field(
+        None, description="The first page as a JPEG data URL, or null where this host cannot render one."
+    )
+
+
+class DeckTemplatesListResult(_Strict):
+    templates: list[DeckTemplateRow]
+    available: bool = Field(
+        ..., description="False when the deck engine is not installed here; the picker then stays hidden."
+    )
+    pending: bool = Field(
+        False, description="True while a cover is still being drawn in the background; ask again for it."
+    )
+
+
+class DeckTemplatesPagesParams(_Strict):
+    name: str = Field(..., description="A row's name from deck.templates.list.")
+
+
+class DeckTemplatesPagesResult(_Strict):
+    pages: list[str] = Field(
+        ..., description="Every page as a JPEG data URL, in order; empty where this host cannot render."
+    )
+
+
+class DeckTemplatesPickParams(_Strict):
+    name: str = Field(..., description="A row's name from deck.templates.list.")
 
 
 class FsRevealParams(_Strict):
@@ -4773,8 +4859,13 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "channels.configure": (ChannelsConfigureParams, ChannelsConfigureResult),
     "channels.qr": (ChannelsQrParams, ChannelsQrResult),
     "fs.list": (FsListParams, FsListResult),
+    "fs.dirs": (FsDirsParams, FsDirsResult),
     "fs.read": (FsReadParams, FsReadResult),
     "fs.upload": (FsUploadParams, FsUploadResult),
+    "deck.templates.list": (DeckTemplatesListParams, DeckTemplatesListResult),
+    "deck.templates.pages": (DeckTemplatesPagesParams, DeckTemplatesPagesResult),
+    # The upload's own result: a picked template sits under uploads as an attachment would.
+    "deck.templates.pick": (DeckTemplatesPickParams, FsUploadResult),
     "fs.reveal": (FsRevealParams, FsRevealResult),
     "fs.open": (FsOpenParams, FsOpenResult),
     "deliverables.list": (DeliverablesListParams, DeliverablesListResult),

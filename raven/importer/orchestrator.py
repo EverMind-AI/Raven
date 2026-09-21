@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,12 +18,26 @@ from raven.importer.types import ImportMessage, ImportSession, Scanner, ScanResu
 # message_id from (session_id, timestamp_ms, index-within-batch), so those
 # boundaries are part of the id: two messages sharing a millisecond collide,
 # and one is dropped, if they land at the same index in different batches.
-# Fifty, not a hundred: EverOS extracts on every add, and that cost is
-# superlinear in the message count -- against a real service a 15-message
-# batch took 12s and a 52-message batch 24s, while a batch of 100 ran past the
-# six-minute extraction budget and failed every memory-file source.
-_BATCH_MSG_LIMIT = 50
+# Ten: EverOS extracts on every add, and that cost is superlinear in the
+# message count -- against a real service a 15-message batch took 12s and a
+# 52-message batch 24s, while a batch of 100 ran past the six-minute
+# extraction budget and failed every memory-file source. With a slower
+# extraction model, batches of 50 took 2.4-7.4 minutes and six of seven
+# memory-file sources died on that same budget. Ten is the maintainer's
+# call: a batch that finishes well inside the budget on any model matters
+# more than the fixed cost of about 7s that every add carries -- which is
+# also why it is not one message per add.
+_BATCH_MSG_LIMIT = 10
 _BATCH_CHAR_LIMIT = 30_000
+
+# A batch the memory service refuses is sent again before its source is given
+# up on. The refusals seen against a real service were transient -- a rate
+# limit at the extraction provider, an answer the extractor could not parse, a
+# slow answer past the budget -- and a source that fails on one of them takes
+# every message behind it down with it, then the next source runs straight
+# into the same wall. Three retries with these waits cover a rate-limit window
+# of a couple of minutes; the wait polls the stop file so a stop lands in it.
+_STORE_RETRY_BACKOFF_S: tuple[float, ...] = (30.0, 60.0, 120.0)
 
 
 @dataclass(frozen=True)
@@ -206,8 +221,10 @@ async def _feed_session(
     cancel_path: Path | None = None,
 ) -> bool:
     """Store the session in batches. Returns False when a stop request arrived
-    between two batches, leaving the rest unsent; a long conversation is many
-    batches, and a stop that waited for the whole source was not a stop."""
+    between two batches or during a retry wait, leaving the rest unsent; a long
+    conversation is many batches, and a stop that waited for the whole source
+    was not a stop. A batch the backend refuses is retried on
+    ``_STORE_RETRY_BACKOFF_S`` before the source counts as failed."""
     if not session.messages:
         return True
     all_dicts = [_to_store_dict(m) for m in session.messages]
@@ -217,34 +234,69 @@ async def _feed_session(
     def _cancelled() -> bool:
         return cancel_path is not None and cancel_path.exists()
 
-    async def _flush(*, is_final: bool) -> None:
+    async def _flush(*, is_final: bool) -> bool:
         nonlocal batch, batch_chars
         # bulk: nothing waits on an import write; the backend budgets it as extraction.
         metadata: dict[str, Any] = {"is_final": is_final, "bulk": True}
         _log_store_request(session.session_id, batch, metadata, batch_chars)
-        landed = await backend.store(session.session_id, batch, metadata=metadata)
-        if landed is False:
-            raise MemoryWriteDroppedError(
-                f"memory service did not accept a batch for {session.session_id}; source left unsubmitted"
+        for attempt, wait in enumerate((*_STORE_RETRY_BACKOFF_S, None), start=1):
+            try:
+                landed = await backend.store(session.session_id, batch, metadata=metadata)
+                reason = "memory service did not accept a batch"
+            except Exception as exc:
+                landed, reason = False, (str(exc) or repr(exc))
+            if landed is not False:
+                break
+            if wait is None:
+                raise MemoryWriteDroppedError(
+                    f"{reason} for {session.session_id} after {attempt} attempts; source left unsubmitted"
+                )
+            logger.warning(
+                "batch for {} not accepted ({}); retrying in {}s ({}/{})",
+                session.session_id,
+                reason,
+                int(wait),
+                attempt,
+                len(_STORE_RETRY_BACKOFF_S),
             )
+            if not await _pause(wait, _cancelled):
+                return False
         logger.debug("store completed: session_id={}", session.session_id)
         batch = []
         batch_chars = 0
+        return True
 
     for msg_dict in all_dicts:
         msg_chars = len(msg_dict["content"])
         if batch and (len(batch) >= _BATCH_MSG_LIMIT or batch_chars + msg_chars > _BATCH_CHAR_LIMIT):
             if _cancelled():
                 return False
-            await _flush(is_final=False)
+            if not await _flush(is_final=False):
+                return False
         batch.append(msg_dict)
         batch_chars += msg_chars
 
     if batch:
         if _cancelled():
             return False
-        await _flush(is_final=True)
+        if not await _flush(is_final=True):
+            return False
     return True
+
+
+async def _pause(seconds: float, cancelled: Callable[[], bool]) -> bool:
+    """Wait out a retry backoff a second at a time, so a stop lands inside it.
+
+    Returns False when the stop arrived."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while True:
+        if cancelled():
+            return False
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return True
+        await asyncio.sleep(min(1.0, remaining))
 
 
 def _log_store_request(

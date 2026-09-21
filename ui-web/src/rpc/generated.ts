@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 189 methods, 104 component schemas.
+// 193 methods, 106 component schemas.
 
 /* eslint-disable */
 /**
@@ -434,6 +434,21 @@ export interface ChannelStatusRow {
    */
   qr_login?: boolean;
 }
+export interface DeckTemplateRow {
+  /**
+   * The template's stem, which deck.templates.pick takes.
+   */
+  name: string;
+  /**
+   * The stem as words, for the picker's caption.
+   */
+  label: string;
+  size: number;
+  /**
+   * The first page as a JPEG data URL, or null where this host cannot render one.
+   */
+  cover?: string | null;
+}
 export interface FsEntry {
   name: string;
   dir: boolean;
@@ -441,6 +456,17 @@ export interface FsEntry {
    * Zero for a directory.
    */
   size: number;
+}
+export interface FsDirEntry {
+  name: string;
+  /**
+   * Absolute.
+   */
+  path: string;
+  /**
+   * True when a session may be pinned here; false inside the agent's own data (see raven.agent.workdir).
+   */
+  ok: boolean;
 }
 /**
  * One row, projected card-sized. ``kind`` decides which optional fields
@@ -611,6 +637,10 @@ export interface SessionListItem {
    * User pinned this session to the top of the picker.
    */
   pinned?: boolean;
+  /**
+   * The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by.
+   */
+  workdir?: string;
 }
 export interface SessionMessage {
   /**
@@ -742,6 +772,10 @@ export interface SubagentRow {
   probe_status: 'ready' | 'attention' | 'missing' | 'unknown';
   probe_detail: string;
   has_api_key: boolean;
+  /**
+   * The agent answered the handshake and then refused to open a session without a credential. Measured by the capability snapshot, not inferred from probe_status, which reads `attention` both for this and for an installed agent nothing has verified -- two rows that need opposite things from the reader. Always false for a kind with no handshake to be refused in.
+   */
+  needs_auth?: boolean;
   mcps: string[];
   allow_mcp_secrets: boolean;
   last_test_ok?: boolean;
@@ -821,6 +855,10 @@ export interface ModelOptionProvider {
   };
   total_models: number;
   needs_api_base: boolean;
+  /**
+   * The registry's is_gateway: resells other vendors' models under vendor/model ids. The catalogue's gateway filter reads this; absent means false.
+   */
+  gateway?: boolean;
   platforms?: {
     label: string;
     api_base: string;
@@ -852,6 +890,10 @@ export interface ModelLabel {
    * What the model writes: text, image, video, audio, vector.
    */
   output_modalities?: string[];
+  /**
+   * The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text.
+   */
+  kind: 'text' | 'image' | 'audio' | 'video' | 'embedding' | 'reranker';
   /**
    * Tokens the model reads in one request, from the tables that also route rather than from the display registry -- the number shown has to be the number a request is sized with. Absent where no such table names the model.
    */
@@ -3272,6 +3314,34 @@ export interface FsListResult {
    */
   entries: FsEntry[];
 }
+export interface FsDirsParams {
+  /**
+   * Absolute directory to list the subdirectories of; the user's home directory when omitted.
+   */
+  path?: string;
+}
+export interface FsDirsResult {
+  /**
+   * The directory listed, resolved.
+   */
+  path: string;
+  /**
+   * One level up; null at the filesystem root.
+   */
+  parent?: string;
+  /**
+   * The user's home directory, where the browser starts.
+   */
+  home: string;
+  /**
+   * Whether the listed directory itself may be a session's working directory.
+   */
+  ok: boolean;
+  /**
+   * Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.
+   */
+  entries: FsDirEntry[];
+}
 export interface FsReadParams {
   path: string;
   max_bytes?: number;
@@ -3294,6 +3364,49 @@ export interface FsUploadParams {
   session?: string;
 }
 export interface FsUploadResult {
+  /**
+   * Workspace-relative path to hand the agent; uploads never return bytes.
+   */
+  path: string;
+  abs_path: string;
+  size: number;
+}
+export interface DeckTemplatesListParams {
+  /**
+   * False lists the names alone, without rendering a cover for each.
+   */
+  covers?: boolean;
+}
+export interface DeckTemplatesListResult {
+  templates: DeckTemplateRow[];
+  /**
+   * False when the deck engine is not installed here; the picker then stays hidden.
+   */
+  available: boolean;
+  /**
+   * True while a cover is still being drawn in the background; ask again for it.
+   */
+  pending?: boolean;
+}
+export interface DeckTemplatesPagesParams {
+  /**
+   * A row's name from deck.templates.list.
+   */
+  name: string;
+}
+export interface DeckTemplatesPagesResult {
+  /**
+   * Every page as a JPEG data URL, in order; empty where this host cannot render.
+   */
+  pages: string[];
+}
+export interface DeckTemplatesPickParams {
+  /**
+   * A row's name from deck.templates.list.
+   */
+  name: string;
+}
+export interface DeckTemplatesPickResult {
   /**
    * Workspace-relative path to hand the agent; uploads never return bytes.
    */
@@ -4567,8 +4680,12 @@ export interface RpcMethods {
   'channels.configure': { params: ChannelsConfigureParams; result: ChannelsConfigureResult };
   'channels.qr': { params: ChannelsQrParams; result: ChannelsQrResult };
   'fs.list': { params: FsListParams; result: FsListResult };
+  'fs.dirs': { params: FsDirsParams; result: FsDirsResult };
   'fs.read': { params: FsReadParams; result: FsReadResult };
   'fs.upload': { params: FsUploadParams; result: FsUploadResult };
+  'deck.templates.list': { params: DeckTemplatesListParams; result: DeckTemplatesListResult };
+  'deck.templates.pages': { params: DeckTemplatesPagesParams; result: DeckTemplatesPagesResult };
+  'deck.templates.pick': { params: DeckTemplatesPickParams; result: DeckTemplatesPickResult };
   'fs.reveal': { params: FsRevealParams; result: FsRevealResult };
   'fs.open': { params: FsOpenParams; result: FsOpenResult };
   'deliverables.list': { params: DeliverablesListParams; result: DeliverablesListResult };
@@ -4688,10 +4805,14 @@ export const RPC_METHODS = [
   "cron.set_enabled",
   "dag.get",
   "dag.node",
+  "deck.templates.list",
+  "deck.templates.pages",
+  "deck.templates.pick",
   "delegation.pause",
   "delegation.status",
   "deliverables.list",
   "ext.list",
+  "fs.dirs",
   "fs.list",
   "fs.open",
   "fs.read",

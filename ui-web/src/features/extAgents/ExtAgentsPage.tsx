@@ -346,6 +346,27 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
         ) : null}
       </>
     )
+  } else if (stage === 'unauthorized' && shown === 'off') {
+    /* The same sentence the row carries, and beside it the one press that
+       can take it back: Test re-measures the handshake, and a sign-in that
+       has happened since lets the row return to Connect. */
+    actions = (
+      <>
+        <button className="mini" disabled>
+          {t('gui.agent.unauthorized')}
+        </button>
+        {testing ? (
+          <button className="mini danger" onClick={() => store.stopTest(row)}>
+            <Spin />
+            {t('gui.stop')}
+          </button>
+        ) : (
+          <button className="mini" onClick={() => void store.runTest(row)}>
+            {t('gui.agent.test_label')}
+          </button>
+        )}
+      </>
+    )
   } else {
     actions = (
       <button className="mini go" disabled={primaryDisabled} onClick={primary}>

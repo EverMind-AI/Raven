@@ -2,6 +2,8 @@ import { createRoot } from 'react-dom/client'
 
 import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
+import './styles.css'
+import { open as openTemplates } from './templates'
 export * as turn from './turn'
 
 import type { Root } from 'react-dom/client'
@@ -204,6 +206,15 @@ export function install(): void {
     attBtn.onclick = () => {
       ensure()
       store.pickFiles(openPicker)
+    }
+  }
+  /* Shown or hidden by store.goPaint, which runs once the source exists;
+     here the source does not yet, so only the click is wired. */
+  const tplBtn = document.getElementById('tplBtn')
+  if (tplBtn) {
+    tplBtn.onclick = () => {
+      ensure()
+      openTemplates()
     }
   }
 

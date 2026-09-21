@@ -128,6 +128,13 @@ function RowControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Ele
       </button>
     )
   }
+  if (stageOf(row) === 'unauthorized') {
+    return (
+      <button className="mini" disabled>
+        {t('gui.agent.unauthorized')}
+      </button>
+    )
+  }
   return (
     <button className="mini go" onClick={() => connect(row)}>
       {t('gui.agent.connect')}

@@ -26,13 +26,13 @@
 import { createBrowser } from './browser'
 import { createChannels } from './channels'
 import { createCron } from './cron'
+import { createDeck } from './deck'
 import { createExt } from './ext'
 import { createFs } from './fs'
 import { createImport } from './import'
 import { createKnowledge } from './knowledge'
 import { createMemory } from './memory'
 import { createModel } from './model'
-import { createPlaybooks } from './playbooks'
 import { createPlughub } from './plughub'
 import { createSessions } from './sessions'
 import { createSettings } from './settings'
@@ -72,11 +72,11 @@ export function demoFixtures(env: FixtureEnv): Fixtures {
     ...ext.fixtures,
     ...createSkillhub(env, ext).fixtures,
     ...createPlughub(env, ext).fixtures,
-    ...createPlaybooks(env).fixtures,
     ...createSubagents(env).fixtures,
     ...createTasks(env).fixtures,
     ...createMemory(env).fixtures,
     ...createFs(env).fixtures,
+    ...createDeck(env).fixtures,
     ...createImport(env).fixtures,
     ...createBrowser(env).fixtures,
     ...createKnowledge(env).fixtures,

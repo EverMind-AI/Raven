@@ -18,6 +18,7 @@ from raven.config import update_tools
 from raven.config.env_file import MIRRORED_KEYS
 from raven.config.schema import WEB_VENDOR_ENV_VARS
 from raven.contracts.tool import Tool
+from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import console as console_module
 from raven.rpc.methods.console import _SETTINGS_SIMPLE_KEYS, _hub_marker_name
 
@@ -712,11 +713,12 @@ async def test_fs_list_asks_for_the_named_session(tmp_path: Path) -> None:
 
 
 def _agent_home(monkeypatch, home: Path):
-    """Point ``_upload_root`` at ``home``. Patched on the loader module because
-    the handler imports the name inside the function."""
+    """Point the handlers that read the agent home (``fs.upload``, ``fs.dirs``,
+    the deck templates) at ``home``. Patched on the loader module because
+    each handler imports the name inside the function."""
     from raven.config import loader as config_loader
 
-    monkeypatch.setattr(config_loader, "load_config", lambda: SimpleNamespace(workspace_path=str(home)))
+    monkeypatch.setattr(config_loader, "load_config", lambda: SimpleNamespace(workspace_path=home))
 
 
 async def test_fs_upload_lands_in_agent_home_not_the_session_workdir(tmp_path: Path, monkeypatch) -> None:
@@ -1900,3 +1902,398 @@ async def test_ext_list_reports_a_registered_meta_tool_once(tmp_path: Path, monk
     payload = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
     names = [t["name"] for t in payload["tools"]]
     assert names.count(TOOL_CALL_NAME) == 1
+
+
+# ---------------------------------------------------------------------------
+# deck.templates.*: the picker's list, and a pick that lands as an upload would
+# ---------------------------------------------------------------------------
+
+
+def _bundled_templates(monkeypatch, root: Path, names: tuple[str, ...]) -> None:
+    """Stand in for the installed engine's template directory, and for a host
+    that cannot draw covers -- the picture is the renderer's business, tested
+    where it lives; what these handlers owe is the list and the copy."""
+    from raven.rpc import deck_templates
+
+    root.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (root / f"{name}.pptx").write_bytes(b"PK" + name.encode())
+    monkeypatch.setattr(deck_templates, "templates_dir", lambda: root)
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: False)
+
+
+async def test_deck_templates_list_names_every_bundled_template_in_a_stable_order(tmp_path: Path, monkeypatch) -> None:
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("warm_bauhaus_quarterly_review", "amber_wave_quarterly_summary"))
+
+    r = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+
+    assert r["available"] is True
+    assert [row["name"] for row in r["templates"]] == ["amber_wave_quarterly_summary", "warm_bauhaus_quarterly_review"]
+    assert r["templates"][0]["label"] == "Amber Wave Quarterly Summary"
+    assert r["templates"][0]["size"] == len(b"PKamber_wave_quarterly_summary")
+    # No renderer here, so no picture and nothing on its way -- and still a
+    # list, because a picker with names alone still picks.
+    assert all(row["cover"] is None for row in r["templates"])
+    assert r["pending"] is False
+
+
+async def test_deck_templates_list_answers_at_once_and_draws_the_covers_behind_it(tmp_path: Path, monkeypatch) -> None:
+    """Ten templates are a minute and a half of LibreOffice on first sight. The
+    list does not wait for that: it answers with what is on disk, says a cover
+    is pending, and the next ask finds the picture."""
+    import base64
+
+    from raven.rpc import deck_templates
+
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("gold_panel_year_end_summary",))
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
+    drawn: list[str] = []
+
+    async def draw(template):
+        drawn.append(template.name)
+        target = deck_templates.cover_cache_dir() / f"{deck_templates._cover_key(template.path)}.jpg"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"\xff\xd8jpeg")
+        return target
+
+    monkeypatch.setattr(deck_templates, "cover_for", draw)
+
+    first = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert first["pending"] is True and first["templates"][0]["cover"] is None
+    await asyncio.sleep(0)
+    again = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert again["pending"] is False
+    assert again["templates"][0]["cover"] == "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8jpeg").decode()
+    assert drawn == ["gold_panel_year_end_summary"], "one render per template, not one per ask"
+
+
+async def test_deck_templates_list_draws_at_most_three_covers_at_once(tmp_path: Path, monkeypatch) -> None:
+    """A cold gallery asks for every template in one walk. The covers are still
+    drawn behind the answer, but three LibreOffice at a time, not ten: the
+    fourth waits for one of the first three to finish."""
+    from raven.rpc import deck_templates, pdf_preview
+
+    names = tuple(f"template_{n}" for n in range(10))
+    _bundled_templates(monkeypatch, tmp_path / "tpl", names)
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
+    monkeypatch.setattr(deck_templates, "_failed", set())
+    monkeypatch.setattr(deck_templates, "_drawing", {})
+    monkeypatch.setattr(deck_templates, "_render_gate", asyncio.Semaphore(deck_templates.COVER_RENDERS_AT_ONCE))
+    in_flight = 0
+    peak = 0
+    release = asyncio.Event()
+
+    async def slow_pdf(path, **_):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await release.wait()
+        in_flight -= 1
+        return path
+
+    def rasterise(pdf, target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"\xff\xd8jpeg")
+
+    monkeypatch.setattr(pdf_preview, "pdf_for", slow_pdf)
+    monkeypatch.setattr(deck_templates, "_rasterise_first_page", rasterise)
+
+    first = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert first["pending"] is True
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert peak == deck_templates.COVER_RENDERS_AT_ONCE, "ten misses start three conversions, not ten"
+    release.set()
+    await asyncio.gather(*deck_templates._drawing.values())
+    again = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert again["pending"] is False and all(row["cover"] for row in again["templates"])
+    assert peak == deck_templates.COVER_RENDERS_AT_ONCE
+
+
+async def test_deck_templates_list_stops_asking_for_a_cover_that_cannot_be_drawn(tmp_path: Path, monkeypatch) -> None:
+    """A render that fails is not retried on the next ask, and the answer stops
+    saying pending -- or the page would poll forever and start LibreOffice each
+    time for a picture that never comes."""
+    from raven.rpc import deck_templates, pdf_preview
+
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("teal_illustrated_work_analysis",))
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
+    monkeypatch.setattr(deck_templates, "_failed", set())
+    asked: list[str] = []
+
+    async def no_pdf(source, **_kw):
+        asked.append(source.name)
+        raise pdf_preview.PdfPreviewUnavailableError("no soffice")
+
+    monkeypatch.setattr(pdf_preview, "pdf_for", no_pdf)
+
+    first = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert first["pending"] is True
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    again = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert again["pending"] is False and again["templates"][0]["cover"] is None
+    assert asked == ["teal_illustrated_work_analysis.pptx"]
+
+
+async def test_deck_templates_list_is_empty_and_unavailable_without_the_engine(monkeypatch) -> None:
+    from raven.rpc import deck_templates
+
+    monkeypatch.setattr(deck_templates, "templates_dir", lambda: None)
+
+    r = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+
+    assert r == {"templates": [], "available": False, "pending": False}
+
+
+async def test_deck_templates_pick_lands_under_uploads_as_fs_upload_answers(tmp_path: Path, monkeypatch) -> None:
+    """The route to the deck engine opens on a .pptx the turn hands over, and
+    turn.send admits the paths fs.upload mints; a pick is made into one of those."""
+    home = tmp_path / "home"
+    home.mkdir()
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("mint_memphis_thesis_defense",))
+
+    r = await console_module.deck_templates_pick(
+        {"name": "mint_memphis_thesis_defense"}, agent_loop_factory=_loop_factory(None)
+    )
+
+    assert r["path"] == "uploads/mint_memphis_thesis_defense.pptx"
+    assert r["abs_path"] == str(home.resolve() / "uploads" / "mint_memphis_thesis_defense.pptx")
+    assert r["size"] == len(b"PKmint_memphis_thesis_defense")
+    assert (home / "uploads" / "mint_memphis_thesis_defense.pptx").read_bytes() == b"PKmint_memphis_thesis_defense"
+
+    # Picked twice, the second copy sits beside the first rather than over it,
+    # the way a second upload of the same name does.
+    again = await console_module.deck_templates_pick(
+        {"name": "mint_memphis_thesis_defense.pptx"}, agent_loop_factory=_loop_factory(None)
+    )
+    assert again["path"] == "uploads/mint_memphis_thesis_defense-1.pptx"
+
+
+async def test_deck_templates_pick_says_why_when_the_copy_cannot_land(tmp_path: Path, monkeypatch) -> None:
+    from raven.rpc import deck_templates
+    from raven.rpc.errors import ConfigValidationError
+
+    home = tmp_path / "home"
+    home.mkdir()
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("mint_memphis_thesis_defense",))
+
+    def full_disk(template, uploads):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(deck_templates, "deposit", full_disk)
+    with pytest.raises(ConfigValidationError, match="cannot place the template under uploads"):
+        await console_module.deck_templates_pick(
+            {"name": "mint_memphis_thesis_defense"}, agent_loop_factory=_loop_factory(None)
+        )
+
+
+async def test_deck_templates_pick_refuses_a_name_that_is_not_a_bundled_template(tmp_path: Path, monkeypatch) -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    home = tmp_path / "home"
+    home.mkdir()
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("mint_memphis_thesis_defense",))
+
+    for name in ("", "nope", "../mint_memphis_thesis_defense", "tpl/mint_memphis_thesis_defense", ".hidden"):
+        with pytest.raises(ConfigValidationError):
+            await console_module.deck_templates_pick({"name": name}, agent_loop_factory=_loop_factory(None))
+    assert not (home / "uploads").exists()
+
+
+async def test_deck_templates_pages_renders_every_page_once_and_refuses_a_stranger(tmp_path: Path, monkeypatch) -> None:
+    from raven.rpc import deck_templates
+    from raven.rpc.errors import ConfigValidationError
+
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("blue_minimal_general_analysis",))
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
+    rendered: list[str] = []
+
+    async def pdf_for(source, **_kw):
+        return source
+
+    def every_page(pdf, stem):
+        out = []
+        for n in (1, 2, 3):
+            target = stem.with_name(f"{stem.name}-p{n:02d}.jpg")
+            if not target.is_file():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"jpeg%d" % n)
+                rendered.append(target.name)
+            out.append(target)
+        return out
+
+    monkeypatch.setattr(
+        deck_templates.pdf_preview
+        if hasattr(deck_templates, "pdf_preview")
+        else __import__("raven.rpc.pdf_preview", fromlist=["x"]),
+        "pdf_for",
+        pdf_for,
+    )
+    monkeypatch.setattr(deck_templates, "_rasterise_every_page", every_page)
+
+    r = await console_module.deck_templates_pages(
+        {"name": "blue_minimal_general_analysis"}, agent_loop_factory=_loop_factory(None)
+    )
+    assert r["pages"] == [
+        "data:image/jpeg;base64," + __import__("base64").b64encode(b"jpeg%d" % n).decode() for n in (1, 2, 3)
+    ]
+    again = await console_module.deck_templates_pages(
+        {"name": "blue_minimal_general_analysis"}, agent_loop_factory=_loop_factory(None)
+    )
+    assert again == r and len(rendered) == 3, "the second ask reads the cache"
+
+    with pytest.raises(ConfigValidationError):
+        await console_module.deck_templates_pages({"name": "nope"}, agent_loop_factory=_loop_factory(None))
+
+
+# ---------------------------------------------------------------------------
+# fs.dirs -- the folder picker's directory walk
+# ---------------------------------------------------------------------------
+
+
+async def test_fs_dirs_lists_subdirectories_only_and_marks_agent_home(tmp_path: Path, monkeypatch) -> None:
+    """Directories only, dotfiles omitted, sorted by name; the agent's own home
+    is listed but marked not ok, since `session.create` would refuse it."""
+    root = tmp_path / "root"
+    for name in ("Zeta", "alpha", ".hidden", "agent"):
+        (root / name).mkdir(parents=True)
+    (root / "notes.md").write_text("x")
+    _agent_home(monkeypatch, root / "agent")
+
+    r = await console_module.fs_dirs({"path": str(root / "alpha")})
+    assert r["path"] == str((root / "alpha").resolve())
+    assert r["parent"] == str(root.resolve())
+    assert r["home"] == str(Path.home())
+    assert r["ok"] is True
+
+    r = await console_module.fs_dirs({"path": str(root)})
+    assert [e["name"] for e in r["entries"]] == ["agent", "alpha", "Zeta"]
+    by_name = {e["name"]: e for e in r["entries"]}
+    assert by_name["alpha"]["ok"] is True
+    assert by_name["alpha"]["path"] == str((root / "alpha").resolve())
+    assert by_name["agent"]["ok"] is False
+    # The parent of the agent's home is refused too (see validate_override), so
+    # the listing itself says it cannot be used even though its children can.
+    assert r["ok"] is False
+
+
+async def test_fs_dirs_starts_at_the_user_home_and_stops_at_the_root(tmp_path: Path, monkeypatch) -> None:
+    """No path means the home directory, which is where a person's projects
+    are; the filesystem root has no parent to offer."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
+
+    r = await console_module.fs_dirs({})
+    assert r["path"] == str(tmp_path.resolve())
+
+    top = await console_module.fs_dirs({"path": str(Path(tmp_path.anchor))})
+    assert top["parent"] is None
+
+
+async def test_fs_dirs_marks_the_listed_directory_itself(tmp_path: Path, monkeypatch) -> None:
+    """The picker's "use this folder" button follows `ok` on the listing, so a
+    person standing inside raven's data is told before pressing it."""
+    home = tmp_path / ".raven" / "workspace"
+    (home / "skills").mkdir(parents=True)
+    (tmp_path / "proj").mkdir()
+    _agent_home(monkeypatch, home)
+
+    inside = await console_module.fs_dirs({"path": str(home / "skills")})
+    assert inside["ok"] is False
+    above = await console_module.fs_dirs({"path": str(tmp_path)})
+    assert above["ok"] is False
+    beside = await console_module.fs_dirs({"path": str(tmp_path / "proj")})
+    assert beside["ok"] is True
+
+
+async def test_fs_dirs_refuses_a_relative_path_and_a_file(tmp_path: Path, monkeypatch) -> None:
+    _agent_home(monkeypatch, tmp_path / "home")
+    (tmp_path / "f.txt").write_text("x")
+
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_dirs({"path": "relative/dir"})
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_dirs({"path": str(tmp_path / "f.txt")})
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_dirs({"path": str(tmp_path / "missing")})
+
+
+async def test_fs_dirs_reports_a_directory_it_cannot_read(tmp_path: Path, monkeypatch) -> None:
+    _agent_home(monkeypatch, tmp_path / "home")
+    target = tmp_path / "sealed"
+    target.mkdir()
+
+    def boom(path):
+        raise PermissionError("no")
+
+    monkeypatch.setattr(console_module.os, "scandir", boom)
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_dirs({"path": str(target)})
+
+
+async def test_fs_dirs_finds_a_directory_that_sorts_past_the_files(tmp_path: Path, monkeypatch) -> None:
+    """The cap counts directories found, so the files a folder sits behind
+    cannot hide it. Bounding the names examined instead would answer "no
+    subfolders" here, and the picker has no typed path to reach it by."""
+    _agent_home(monkeypatch, tmp_path / "home")
+    root = tmp_path / "root"
+    root.mkdir()
+    for i in range(600):
+        (root / f"f{i:04d}.txt").write_text("x")
+    (root / "zzz-dir").mkdir()
+
+    r = await console_module.fs_dirs({"path": str(root)})
+    assert [e["name"] for e in r["entries"]] == ["zzz-dir"]
+
+
+async def test_fs_dirs_returns_at_most_500_directories(tmp_path: Path, monkeypatch) -> None:
+    """The cap still bounds the answer, and it keeps the first 500 by name so
+    the same directory lists the same way on every machine."""
+    _agent_home(monkeypatch, tmp_path / "home")
+    root = tmp_path / "root"
+    root.mkdir()
+    for i in range(600):
+        (root / f"d{i:04d}").mkdir()
+
+    r = await console_module.fs_dirs({"path": str(root)})
+    names = [e["name"] for e in r["entries"]]
+    assert len(names) == 500
+    assert names == sorted(names)
+    assert names[0] == "d0000"
+    assert names[-1] == "d0499"
+
+
+async def test_fs_dirs_skips_a_child_that_vanishes_mid_listing(tmp_path: Path, monkeypatch) -> None:
+    _agent_home(monkeypatch, tmp_path / "home")
+    root = tmp_path / "root"
+    (root / "keep").mkdir(parents=True)
+    (root / "gone").mkdir()
+
+    class _Entry:
+        def __init__(self, child: Path) -> None:
+            self.name = child.name
+            self.path = str(child)
+
+        def is_dir(self) -> bool:
+            if self.name == "gone":
+                raise OSError("vanished")
+            return True
+
+    class _Scan:
+        def __enter__(self):
+            return iter([_Entry(root / "keep"), _Entry(root / "gone")])
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+    monkeypatch.setattr(console_module.os, "scandir", lambda path: _Scan())
+    r = await console_module.fs_dirs({"path": str(root)})
+    assert [e["name"] for e in r["entries"]] == ["keep"]

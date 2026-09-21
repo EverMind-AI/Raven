@@ -477,12 +477,19 @@ def render_config(source: Path, partition: Path, mode: str | None = None, *, una
         # a reply and exits, so the gate refuses every write and every command
         # instead of prompting (measured 2026-09-08: the model could not edit
         # one line and reported the task incomplete), and trunk's own one-shot
-        # spine names this the operator's call. The ACP hosting keeps the
-        # default: raven dispatching a sub-agent answers those prompts itself,
-        # and a person in an editor should still be asked. Builtin refusals
-        # (the catastrophic-command list) hold in every mode, and an explicit
+        # spine names this the operator's call. Builtin refusals (the
+        # catastrophic-command list) hold in every mode, and an explicit
         # permissions block in a custom config wins.
         config.setdefault("permissions", {}).setdefault("mode", "full")
+    else:
+        # The ACP hosting used to inherit trunk's default because that default
+        # was the ask tier; it has since moved to smart, where a reviewer
+        # speaks for that tier and lets most of it through. That is a product
+        # decision about raven's own surfaces, and this is not one of them:
+        # the person here is in an editor, watching an agent work on their
+        # checkout, and the prompt is how they see each write before it lands.
+        # Pinned rather than inherited so the tier stops moving under them.
+        config.setdefault("permissions", {}).setdefault("mode", "ask")
 
     # Declared, not merged: the engine composes a profile per session from the
     # catalogue over session/set_mode, and --mode only picks the starting entry.

@@ -554,6 +554,25 @@ export interface ChannelStatusRow {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplateRow".
+ */
+export interface DeckTemplateRow {
+  /**
+   * The template's stem, which deck.templates.pick takes.
+   */
+  name: string;
+  /**
+   * The stem as words, for the picker's caption.
+   */
+  label: string;
+  size: number;
+  /**
+   * The first page as a JPEG data URL, or null where this host cannot render one.
+   */
+  cover?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "FsEntry".
  */
 export interface FsEntry {
@@ -563,6 +582,21 @@ export interface FsEntry {
    * Zero for a directory.
    */
   size: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsDirEntry".
+ */
+export interface FsDirEntry {
+  name: string;
+  /**
+   * Absolute.
+   */
+  path: string;
+  /**
+   * True when a session may be pinned here; false inside the agent's own data (see raven.agent.workdir).
+   */
+  ok: boolean;
 }
 /**
  * One row, projected card-sized. ``kind`` decides which optional fields
@@ -760,6 +794,10 @@ export interface SessionListItem {
    * User pinned this session to the top of the picker.
    */
   pinned?: boolean;
+  /**
+   * The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by.
+   */
+  workdir?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -915,6 +953,10 @@ export interface SubagentRow {
   probe_status: 'ready' | 'attention' | 'missing' | 'unknown';
   probe_detail: string;
   has_api_key: boolean;
+  /**
+   * The agent answered the handshake and then refused to open a session without a credential. Measured by the capability snapshot, not inferred from probe_status, which reads `attention` both for this and for an installed agent nothing has verified -- two rows that need opposite things from the reader. Always false for a kind with no handshake to be refused in.
+   */
+  needs_auth?: boolean;
   mcps: string[];
   allow_mcp_secrets: boolean;
   last_test_ok?: boolean;
@@ -998,6 +1040,10 @@ export interface ModelOptionProvider {
   };
   total_models: number;
   needs_api_base: boolean;
+  /**
+   * The registry's is_gateway: resells other vendors' models under vendor/model ids. The catalogue's gateway filter reads this; absent means false.
+   */
+  gateway?: boolean;
   platforms?: {
     label: string;
     api_base: string;
@@ -1032,6 +1078,10 @@ export interface ModelLabel {
    * What the model writes: text, image, video, audio, vector.
    */
   output_modalities?: string[];
+  /**
+   * The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text.
+   */
+  kind: 'text' | 'image' | 'audio' | 'video' | 'embedding' | 'reranker';
   /**
    * Tokens the model reads in one request, from the tables that also route rather than from the display registry -- the number shown has to be the number a request is sized with. Absent where no such table names the model.
    */
@@ -4396,6 +4446,42 @@ export interface FsListResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsDirsParams".
+ */
+export interface FsDirsParams {
+  /**
+   * Absolute directory to list the subdirectories of; the user's home directory when omitted.
+   */
+  path?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsDirsResult".
+ */
+export interface FsDirsResult {
+  /**
+   * The directory listed, resolved.
+   */
+  path: string;
+  /**
+   * One level up; null at the filesystem root.
+   */
+  parent?: string;
+  /**
+   * The user's home directory, where the browser starts.
+   */
+  home: string;
+  /**
+   * Whether the listed directory itself may be a session's working directory.
+   */
+  ok: boolean;
+  /**
+   * Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.
+   */
+  entries: FsDirEntry[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "FsReadParams".
  */
 export interface FsReadParams {
@@ -4432,6 +4518,73 @@ export interface FsUploadParams {
  * via the `definition` "FsUploadResult".
  */
 export interface FsUploadResult {
+  /**
+   * Workspace-relative path to hand the agent; uploads never return bytes.
+   */
+  path: string;
+  abs_path: string;
+  size: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplatesListParams".
+ */
+export interface DeckTemplatesListParams {
+  /**
+   * False lists the names alone, without rendering a cover for each.
+   */
+  covers?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplatesListResult".
+ */
+export interface DeckTemplatesListResult {
+  templates: DeckTemplateRow[];
+  /**
+   * False when the deck engine is not installed here; the picker then stays hidden.
+   */
+  available: boolean;
+  /**
+   * True while a cover is still being drawn in the background; ask again for it.
+   */
+  pending?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplatesPagesParams".
+ */
+export interface DeckTemplatesPagesParams {
+  /**
+   * A row's name from deck.templates.list.
+   */
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplatesPagesResult".
+ */
+export interface DeckTemplatesPagesResult {
+  /**
+   * Every page as a JPEG data URL, in order; empty where this host cannot render.
+   */
+  pages: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplatesPickParams".
+ */
+export interface DeckTemplatesPickParams {
+  /**
+   * A row's name from deck.templates.list.
+   */
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DeckTemplatesPickResult".
+ */
+export interface DeckTemplatesPickResult {
   /**
    * Workspace-relative path to hand the agent; uploads never return bytes.
    */

@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { PARAMS, PLAYBOOKS } from '../fixture-params.mjs'
+import { PARAMS } from '../fixture-params.mjs'
 
 const contract = JSON.parse(readFileSync(resolve(process.cwd(), '../rpc-schema/openrpc.json'), 'utf8'))
 const schemas = contract.components.schemas
@@ -144,8 +144,8 @@ function optionals(schema, value, path, declared, sent) {
    five `info` fields, which are what a gateway says about ITSELF. The
    ones worth a second look are the fields a row on the page draws and this
    library has never exercised: `dag.get`'s node_summary and terminal_outputs,
-   `session.resume`'s diff / delegated / notice / origin, `subagents.list`'s
-   stateful and upgrade_to, `ext.list`'s tools[].needs. */
+   `session.resume`'s diff and notice, `subagents.list`'s stateful and
+   upgrade_to, `ext.list`'s tools[].needs. */
 const UNSENT = new Set([
   // browser.close: 7
   'browser.close.can_back', 'browser.close.can_forward', 'browser.close.error', 'browser.close.headful', 'browser.close.loading', 'browser.close.title', 'browser.close.url',
@@ -190,24 +190,20 @@ const UNSENT = new Set([
   'knowledge.search.embed_ms', 'knowledge.search.search_ms',
   // knowledge.status: 1
   'knowledge.status.extensions',
-  // model.add_model: 9
-  'model.add_model.provider.accepts_api_key', 'model.add_model.provider.api_base', 'model.add_model.provider.default_api_base', 'model.add_model.provider.docs', 'model.add_model.provider.key_env', 'model.add_model.provider.model_labels', 'model.add_model.provider.platforms', 'model.add_model.provider.protocol_overrides', 'model.add_model.provider.protocols',
+  // model.add_model: 8
+  'model.add_model.provider.accepts_api_key', 'model.add_model.provider.api_base', 'model.add_model.provider.default_api_base', 'model.add_model.provider.docs', 'model.add_model.provider.key_env', 'model.add_model.provider.platforms', 'model.add_model.provider.protocol_overrides', 'model.add_model.provider.protocols',
   // model.fetch_models: 7
   'model.fetch_models.error', 'model.fetch_models.models[].capabilities', 'model.fetch_models.models[].context_window', 'model.fetch_models.models[].description', 'model.fetch_models.models[].input_modalities', 'model.fetch_models.models[].output_modalities', 'model.fetch_models.models[].source',
-  // model.options: 8
-  'model.options.providers[].accepts_api_key', 'model.options.providers[].api_base', 'model.options.providers[].docs', 'model.options.providers[].key_env', 'model.options.providers[].model_labels', 'model.options.providers[].platforms', 'model.options.providers[].protocol_overrides', 'model.options.providers[].protocols',
-  // model.add_models: 9 -- the same provider row as model.options, plus the default address the row above states
-  'model.add_models.provider.accepts_api_key', 'model.add_models.provider.api_base', 'model.add_models.provider.default_api_base', 'model.add_models.provider.docs', 'model.add_models.provider.key_env', 'model.add_models.provider.model_labels', 'model.add_models.provider.platforms', 'model.add_models.provider.protocol_overrides', 'model.add_models.provider.protocols',
-  // model.remove_model: 9
-  'model.remove_model.provider.accepts_api_key', 'model.remove_model.provider.api_base', 'model.remove_model.provider.default_api_base', 'model.remove_model.provider.docs', 'model.remove_model.provider.key_env', 'model.remove_model.provider.model_labels', 'model.remove_model.provider.platforms', 'model.remove_model.provider.protocol_overrides', 'model.remove_model.provider.protocols',
-  // model.save_key: 9
-  'model.save_key.provider.accepts_api_key', 'model.save_key.provider.api_base', 'model.save_key.provider.default_api_base', 'model.save_key.provider.docs', 'model.save_key.provider.key_env', 'model.save_key.provider.model_labels', 'model.save_key.provider.platforms', 'model.save_key.provider.protocol_overrides', 'model.save_key.provider.protocols',
-  // model.set_protocol: 9
-  'model.set_protocol.provider.accepts_api_key', 'model.set_protocol.provider.api_base', 'model.set_protocol.provider.default_api_base', 'model.set_protocol.provider.docs', 'model.set_protocol.provider.key_env', 'model.set_protocol.provider.model_labels', 'model.set_protocol.provider.platforms', 'model.set_protocol.provider.protocol_overrides', 'model.set_protocol.provider.protocols',
-  // playbooks.get: 1
-  'playbooks.get.playbook.mcp_servers',
-  // playbooks.oauth.authorize: 1
-  'playbooks.oauth.authorize.error',
+  // model.options: 7
+  'model.options.providers[].accepts_api_key', 'model.options.providers[].api_base', 'model.options.providers[].docs', 'model.options.providers[].key_env', 'model.options.providers[].platforms', 'model.options.providers[].protocol_overrides', 'model.options.providers[].protocols',
+  // model.add_models: 8 -- the same provider row as model.options, plus the default address the row above states
+  'model.add_models.provider.accepts_api_key', 'model.add_models.provider.api_base', 'model.add_models.provider.default_api_base', 'model.add_models.provider.docs', 'model.add_models.provider.key_env', 'model.add_models.provider.platforms', 'model.add_models.provider.protocol_overrides', 'model.add_models.provider.protocols',
+  // model.remove_model: 8
+  'model.remove_model.provider.accepts_api_key', 'model.remove_model.provider.api_base', 'model.remove_model.provider.default_api_base', 'model.remove_model.provider.docs', 'model.remove_model.provider.key_env', 'model.remove_model.provider.platforms', 'model.remove_model.provider.protocol_overrides', 'model.remove_model.provider.protocols',
+  // model.save_key: 8
+  'model.save_key.provider.accepts_api_key', 'model.save_key.provider.api_base', 'model.save_key.provider.default_api_base', 'model.save_key.provider.docs', 'model.save_key.provider.key_env', 'model.save_key.provider.platforms', 'model.save_key.provider.protocol_overrides', 'model.save_key.provider.protocols',
+  // model.set_protocol: 8
+  'model.set_protocol.provider.accepts_api_key', 'model.set_protocol.provider.api_base', 'model.set_protocol.provider.default_api_base', 'model.set_protocol.provider.docs', 'model.set_protocol.provider.key_env', 'model.set_protocol.provider.platforms', 'model.set_protocol.provider.protocol_overrides', 'model.set_protocol.provider.protocols',
   // plug.auth: 1
   'plug.auth.mcp',
   // plug.install: 2
@@ -224,8 +220,10 @@ const UNSENT = new Set([
   'session.compress.info.config_notices', 'session.compress.info.endpoint', 'session.compress.info.update_available', 'session.compress.info.update_command', 'session.compress.info.usage.context_estimated', 'session.compress.messages', 'session.compress.summary.note', 'session.compress.summary.token_line', 'session.compress.usage',
   // session.create: 5
   'session.create.info.config_notices', 'session.create.info.endpoint', 'session.create.info.update_available', 'session.create.info.update_command', 'session.create.info.usage.context_estimated',
-  // session.resume: 14
-  'session.resume.info.config_notices', 'session.resume.info.endpoint', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].delegated', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].origin', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
+  // session.list: 1 -- no offline conversation is pinned to a folder; the chip that pins one is not on this tree yet
+  'session.list.sessions[].workdir',
+  // session.resume: 12
+  'session.resume.info.config_notices', 'session.resume.info.endpoint', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
   // settings.everos: 1
   'settings.everos.note',
   // settings.everosSet: 1 -- the gateway's re-index warning, which only a real embedding move raises
@@ -277,34 +275,15 @@ describe('the offline fixture library', () => {
       if (resultOf.has(method)) await walk(method, PARAMS[method] ?? {})
     }
     /* The rows one call answers differently per argument, so a field sent for
-       the second playbook or the second conversation counts as sent. */
-    for (const session_id of ['a', 'b', 'g']) await walk('session.resume', { session_id })
-    for (const name of PLAYBOOKS) {
-      await walk('playbooks.get', { name })
-      await walk('playbooks.credentials.get', { name })
-    }
+       the second conversation counts as sent. The three `k` rows are the
+       scheduled ones, and the only place the library sends `origin` and
+       `delegated` -- the two entries a reader never types. */
+    for (const session_id of ['a', 'b', 'g', 'k1', 'k2', 'k3']) await walk('session.resume', { session_id })
     const unsent = [...declared].filter((at) => !sent.has(at)).sort()
     expect(unsent.filter((at) => !UNSENT.has(at)), 'send the field, or add it to UNSENT under its method')
       .toEqual([])
     expect([...UNSENT].filter((at) => !unsent.includes(at)), 'the library sends these now, or they are gone: take them off UNSENT')
       .toEqual([])
-  })
-
-  /* Each playbook in turn, not just the first: the library answers `get` from
-     one object per playbook, and a field missing from the seventh is exactly
-     what a single-row walk would let through. */
-  it('answers every playbook the same way', async () => {
-    const transport = await library()
-    const failures = []
-    const listed = await transport.call('playbooks.list', {})
-    expect(listed.playbooks.map((p) => p.name)).toEqual(PLAYBOOKS)
-    for (const name of PLAYBOOKS) {
-      for (const method of ['playbooks.get', 'playbooks.credentials.get']) {
-        const answer = await transport.call(method, { name })
-        check(resultOf.get(method), answer, `${method}(${name})`, failures)
-      }
-    }
-    expect(failures).toEqual([])
   })
 
   /* The two canvases the URL asks for, held to the same contract: they are

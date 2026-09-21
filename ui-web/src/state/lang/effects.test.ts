@@ -18,19 +18,17 @@ const ORDER = [
   'drawPerm',
   'drawCtx',
   'settings.redraw',
-  'nav.draw',
   'detail.close',
   'transcript.redraw',
   'queueDraw',
   'sessionOpen',
 ]
 
-/* The three steps that are not a re-render, as the step's name in ORDER above,
+/* The two steps that are not a re-render, as the step's name in ORDER above,
    the module it really lives in, and the export it is called by: the settings
-   dialog's epoch, the flyout's marks, the transcript's per-lane version bump. */
+   dialog's epoch, and the transcript's per-lane version bump. */
 const ISLAND_STEPS: Array<[string, string, string]> = [
   ['settings.redraw', 'src/features/settings/store', 'redraw'],
-  ['nav.draw', 'src/state/navfly', 'draw'],
   ['transcript.redraw', 'src/features/transcript/mount', 'redraw'],
 ]
 

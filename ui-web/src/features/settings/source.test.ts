@@ -11,18 +11,21 @@ const seen: Array<[string, unknown]> = []
 const toasts: string[] = []
 const opened: string[] = []
 const railReloads: number[] = []
+const chipWrites: string[] = []
 
 async function load(answers: Record<string, unknown> = {}): Promise<Source> {
   seen.length = 0
   toasts.length = 0
   opened.length = 0
   railReloads.length = 0
+  chipWrites.length = 0
   const mod = await loadPart(() => import('./source'), {
     fakes: {
       'src/state/toast': { show: (text: string) => { toasts.push(text) } },
       'src/lib/openUrl': { open: (url: string) => { opened.push(url) } },
-      'src/features/rail/source': { loadSessions: async () => { railReloads.push(1) } },
+      'src/features/rail/source': { loadSessions: async () => { railReloads.push(1) }, SESS_CHANNELS: ['tui', 'cron'] },
       'src/state/banner': { draw: () => {} },
+      'src/features/model/source': { showModel: (m: string) => { chipWrites.push(m) } },
       'src/i18n/t': { t: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key) },
     },
   }) as Source
@@ -70,6 +73,19 @@ describe('settings source', () => {
     expect(toasts[1]).toContain('tools.web.proxy is not editable here')
   })
 
+  it('a settings load moves the default pair and leaves the conversation chip alone', async () => {
+    /* The chip is the open conversation's model, which is not in this reply.
+       Painting it from `agents.defaults` here put the default back over a
+       conversation that had switched -- on every dialog open and on every
+       settings write, each of which reloads -- and the switch read as lost
+       until the page was reloaded, though the turns kept running on it. */
+    const settings = { agents: { defaults: { model: 'deepseek/pro', provider: 'deepseek' } } }
+    const mod = await load({ 'settings.get': { settings, config_path: '/c.json' } })
+    await mod.loadSettings()
+    expect(mod.settingsSnapshot().model).toBe('deepseek/pro')
+    expect(chipWrites).toEqual([])
+  })
+
   it('usage asks for the two dates, inclusive', async () => {
     const mod = await load({ 'settings.usage': { days: 2 } })
     await mod.settingsSource.usage({ from: '2026-09-01', to: '2026-09-02' })
@@ -83,10 +99,13 @@ describe('settings source', () => {
     expect(railReloads).toEqual([1])
   })
 
-  it('archived lists only the archived sessions', async () => {
+  it('archived lists the archived sessions of every channel the rail shows', async () => {
+    /* Fewer channels here than the rail lists means a row the rail archived is
+       invisible on this page and unreachable on that one: a scheduled run
+       could be archived and then neither restored nor deleted. */
     const mod = await load({ 'session.list': { sessions: [{ id: 'a' }] } })
     expect(await mod.settingsSource.archived()).toEqual([{ id: 'a' }])
-    expect(seen).toEqual([['session.list', { archived: true }]])
+    expect(seen).toEqual([['session.list', { archived: true, channels: ['tui', 'cron'] }]])
   })
 
   it('oauthLogin opens the verification page on this browser and returns the code', async () => {
