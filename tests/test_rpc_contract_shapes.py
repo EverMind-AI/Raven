@@ -22,8 +22,6 @@ Not covered, and each for a reason rather than for convenience:
 
 * ``system.upgrade`` -- its only reachable branch outside a live ``raven serve``
   is the refusal, so there is no result to check. Its params are empty.
-* ``memory.delete`` -- the delete goes through EverOS's own repository layer,
-  imported inside the call. Faking that is faking the thing under test.
 * the ``plug.* / plughub.* / skillhub.*`` group and the rest of ``subagents.*``
   -- validated against ``METHOD_MODELS`` in their own modules, where the
   fixtures that drive those handlers already live. This file used to claim that

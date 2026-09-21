@@ -1,21 +1,16 @@
 """``memory.*`` RPC handlers -- the GUI's data & memory surface.
 
-Three methods back the memory page:
+Two methods back the memory page:
 
 * ``memory.stats``  — per-kind totals for the four EverOS memory kinds.
 * ``memory.list``   — paginated listing (``/get``) or semantic search
   (``/search``) over one kind, projected to card-sized rows.
-* ``memory.delete`` — remove one memory row, with the episode family
-  cascade (facts / foresights sharing the episode's memcell).
 
-Read paths go over EverOS's HTTP API (the same server the memory
-backend talks to), so the service boundary stays intact. The delete
-path is the one exception: EverOS 1.1.3 exposes no delete endpoint, so
-``memory.delete`` uses EverOS's own repository layer in-process against
-the same index (LanceDB commits are atomic + optimistically concurrent,
-so a raven-side delete and a server-side write do not corrupt each
-other). When upstream grows ``DELETE /api/v1/memory/...`` this handler
-should switch to it.
+Both go over EverOS's HTTP API (the same server the memory backend
+talks to), so the service boundary stays intact. The page is read-only:
+EverOS exposes no memory deletion, and the one destructive operation it
+does have is internal reconciliation after a skill rename, not a
+retirement path a reader can be offered.
 
 Kind names follow EverOS's ``/get`` contract verbatim: ``episode`` /
 ``profile`` (user track) and ``agent_case`` / ``agent_skill`` (agent
@@ -247,71 +242,12 @@ async def memory_list(params: dict) -> dict:
         raise InternalError(f"everos unreachable: {e}") from e
 
 
-def _memory_backend(agent_loop_factory):
-    """The backend this deployment is running, for a call that is not a turn.
-
-    The live loop's own instance when the gateway has one, so a delete goes
-    through the object that has the service running; otherwise one built the
-    way ``raven doctor`` builds it, since the browser answers in processes
-    that never assembled a loop.
-    """
-    from raven.config.raven import load_raven_config
-
-    loop = agent_loop_factory() if agent_loop_factory is not None else None
-    backend = getattr(loop, "backend", None) if loop is not None else None
-    if backend is not None:
-        return backend
-
-    from raven.config import load_config
-    from raven.core.plugin_stack import maybe_build_memory_backend
-
-    return maybe_build_memory_backend(load_config().workspace_path, load_raven_config())
-
-
-async def memory_delete(params: dict, *, agent_loop_factory=None) -> dict:
-    """Remove one memory through the backend that owns it.
-
-    ``kind`` travels to the backend as the opaque string the listing handed
-    out. The host does not know how any backend stores a memory, and the one
-    time it acted as though it did -- deleting the row out of EverOS's index
-    while its markdown, the source of truth, kept the text -- the memory came
-    back on the next rebuild of that file, after the user had been told it was
-    gone.
-    """
-    kind = str(params.get("kind") or "")
-    mem_id = str(params.get("id") or "")
-    if kind not in _KINDS:
-        raise ConfigValidationError(f"unknown memory kind: {kind!r}")
-    if not mem_id:
-        raise ConfigValidationError("id is required")
-
-    backend = _memory_backend(agent_loop_factory)
-    if backend is None:
-        raise InternalError(
-            everos_plugin_missing_note() if not everos_plugin_installed() else "no memory backend is configured"
-        )
-    try:
-        removed = await backend.delete(mem_id, kind=kind)
-    except Exception as e:  # noqa: BLE001 - surface as a typed RPC error
-        raise InternalError(f"delete failed: {e}") from e
-    if not removed:
-        raise InternalError(f"this backend cannot delete a {kind} memory")
-    logger.info("memory.delete: removed {} {}", kind, mem_id)
-    return {"ok": True, "removed": 1}
-
-
-def register_memory_methods(dispatcher: "Dispatcher", *, agent_loop_factory=None) -> None:
+def register_memory_methods(dispatcher: "Dispatcher") -> None:
     dispatcher.register("memory.stats", memory_stats)
     dispatcher.register("memory.list", memory_list)
 
-    async def _delete(params: dict) -> dict:
-        return await memory_delete(params, agent_loop_factory=agent_loop_factory)
-
-    dispatcher.register("memory.delete", _delete)
-
 
 __all__ = [
-    "memory_delete",
     "memory_list",
     "memory_stats",
     "register_memory_methods",

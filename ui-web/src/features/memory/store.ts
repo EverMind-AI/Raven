@@ -48,7 +48,6 @@ const store = makeStore<MemoryState>({
   detail: null,
 })
 let debounce: ReturnType<typeof setTimeout> | undefined
-let busy = false
 
 export const { get, subscribe, _resetForTests } = store
 
@@ -131,23 +130,4 @@ export function openDetail(it: MemItem): void {
 
 function closeDetail(): void {
   set({ detail: null })
-}
-
-export function remove(it: MemItem): void {
-  if (busy) return
-  busy = true
-  source()
-    .remove(it)
-    .then(() => {
-      closeDetail()
-      void refreshStats()
-      return load()
-    })
-    .catch((e: unknown) => {
-      if ((e as { handled?: boolean }).handled) return
-      console.error('memory delete', e)
-    })
-    .finally(() => {
-      busy = false
-    })
 }

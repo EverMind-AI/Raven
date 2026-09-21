@@ -51,5 +51,4 @@ export interface MemListResult {
 export interface MemorySource {
   stats(): Promise<MemStats | null>
   list(req: MemListRequest): Promise<MemListResult>
-  remove(it: MemItem): Promise<unknown>
 }
