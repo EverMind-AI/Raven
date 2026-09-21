@@ -441,12 +441,106 @@ async def test_a_reader_refusing_the_key_pauses_the_tool(
     assert "not sent" in second["detail"] and "Tell the user" in second["detail"]
     assert FETCH_PROVIDERS[vendor].config_path in first["detail"]
     assert "tools.web.fetch.provider" in first["detail"]
+    # Each remedy says when it takes effect; the vendor is fixed at registration.
+    assert "restart with another vendor selected under tools.web.fetch.provider" in first["detail"]
     # The failure streak reads a refusal as a deterministic failure, so a model
     # that keeps calling meets the stop-repeating nudge rather than a retry.
     from raven.agent.loop.failure_streak import failure_class, is_hard_tool_failure
 
     assert is_hard_tool_failure(json.dumps(second))
     assert failure_class(json.dumps(first)) == failure_class(json.dumps(second))
+
+
+class _RotatingInFlight:
+    """Stands in for ``httpx.AsyncClient``: refuses ``KEY-OLD`` with a 402 and,
+    while that request is in flight, rotates the key source to ``KEY-NEW``,
+    which it serves."""
+
+    def __init__(self, keys: dict[str, str], served: Any) -> None:
+        self.keys, self.served = keys, served
+        self.sent: list[str] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> "_RotatingInFlight":
+        return self
+
+    async def __aenter__(self) -> "_RotatingInFlight":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    def _answer(self, method: str, url: str, kwargs: dict[str, Any]) -> httpx.Response:
+        headers = kwargs.get("headers") or {}
+        sent = headers.get("Authorization", "").removeprefix("Bearer ") or headers.get("X-API-KEY") or ""
+        self.sent.append(sent)
+        request = httpx.Request(method, url)
+        if sent == "KEY-OLD":
+            self.keys["k"] = "KEY-NEW"
+            return httpx.Response(402, json={}, request=request)
+        return httpx.Response(200, json=self.served, request=request)
+
+    async def post(self, url: str, **kwargs: Any) -> httpx.Response:
+        return self._answer("POST", url, kwargs)
+
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        return self._answer("GET", url, kwargs)
+
+
+_TOOLS_ON_A_LIVE_KEY: dict[str, tuple[Any, Any, Any, Any]] = {
+    "web_search": (
+        lambda src: WebSearchTool(api_key=src, provider="tavily"),
+        lambda tool: tool.execute("q"),
+        {"results": [{"title": "T", "url": "https://a.example", "content": "S"}]},
+        lambda out: out.startswith("Results for: q"),
+    ),
+    "image_search": (
+        lambda src: web_mod.ImageSearchTool(api_key=src, provider="serper"),
+        lambda tool: tool.execute(query="sky"),
+        {"images": [{"title": "T", "imageUrl": "https://i.example/a.png", "imageWidth": 1280, "imageHeight": 720}]},
+        lambda out: "1. T" in out,
+    ),
+    "web_fetch": (
+        lambda src: WebFetchTool(api_key=src, provider="tavily"),
+        lambda tool: tool.execute("https://a.example"),
+        {"results": [{"url": "https://a.example", "raw_content": "PAGE"}]},
+        lambda out: json.loads(out).get("text") == "PAGE",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_TOOLS_ON_A_LIVE_KEY))
+async def test_a_key_rotated_while_a_request_is_in_flight_is_tried_before_it_is_paused(
+    name: str, monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    """The key is read once per call and that one value is what the request
+    carries and what a refusal is recorded against. Read again at ``note``
+    time, a key the user replaced during the request's flight was paused
+    without ever having been sent, and the main loop's tools serve every
+    session of the process, so all of them lost the tool for the pause."""
+    build, call, served, is_served = _TOOLS_ON_A_LIVE_KEY[name]
+    keys = {"k": "KEY-OLD"}
+    reads: list[str] = []
+
+    def source() -> str:
+        reads.append(keys["k"])
+        return keys["k"]
+
+    transport = _RotatingInFlight(keys, served)
+    monkeypatch.setattr(web_mod.httpx, "AsyncClient", transport)
+    tool = build(source)
+
+    refused = await call(tool)
+
+    assert transport.sent == ["KEY-OLD"]
+    assert reads == ["KEY-OLD"], "one read per call: the value sent is the value paused"
+    assert "refused the key (HTTP 402)" in refused
+    reads.clear()
+
+    again = await call(tool)
+
+    assert transport.sent == ["KEY-OLD", "KEY-NEW"], "the replacement is tried, not answered from the pause"
+    assert is_served(again), again
+    assert reads == ["KEY-NEW"]
 
 
 async def test_a_new_key_lifts_the_pause_at_once(monkeypatch: pytest.MonkeyPatch, _open_gate: None) -> None:
@@ -576,6 +670,7 @@ async def test_a_search_vendor_refusing_the_key_pauses_the_tool(
     assert second.startswith(f"Error: {label} refused the key (HTTP {status}). ")
     assert "SECRET-KEY-123" not in first + second
     assert "tools.web.search.provider" in first and "not sent" in second
+    assert "restart with another vendor selected under tools.web.search.provider" in first
 
 
 async def test_an_image_search_refusal_pauses_the_later_queries(monkeypatch: pytest.MonkeyPatch) -> None:

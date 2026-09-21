@@ -460,6 +460,14 @@ class RavenLoopBackend:
                     follow_binding=False,
                 )
             )
+
+        def live_key(vendor: str) -> Callable[[], str]:
+            # Read on every call, as the main loop's are: a refused key pauses
+            # the tool and points the user at the config slot, so the slot has
+            # to be what the next call reads -- for all three tools, since all
+            # three carry that advice.
+            return lambda: live_vendor_key(_LIVE_CONFIG, vendor, boot=self._web_key(vendor))
+
         # Withheld without a key, same as the main loop: a sub-agent that reaches
         # for a search it cannot run reports the failure to its caller, and that
         # text ends up in the parent turn. The whitelist stacks on top: a
@@ -467,14 +475,14 @@ class RavenLoopBackend:
         if allowed("web_search"):
             search_provider = self.web_search_provider
             web_search = WebSearchTool(
-                api_key=self._web_key(search_provider), proxy=self.web_proxy, provider=search_provider
+                api_key=live_key(search_provider), proxy=self.web_proxy, provider=search_provider
             )
             if web_search.api_key:
                 tools.register(web_search)
         if self.image_search and allowed("image_search"):
             picture_vendor = image_search_vendor(self.web_search_provider, self._web_key)
             image_search = ImageSearchTool(
-                api_key=self._web_key(picture_vendor), proxy=self.web_proxy, provider=picture_vendor
+                api_key=live_key(picture_vendor), proxy=self.web_proxy, provider=picture_vendor
             )
             if image_search.api_key:
                 tools.register(image_search)
@@ -482,15 +490,8 @@ class RavenLoopBackend:
             fetch_provider = WebFetchTool.effective_provider(
                 self.web_fetch_provider, self._web_key(self.web_fetch_provider)
             )
-            # Live for the same reason the main loop's is: a refused key pauses
-            # the tool and points the user at the config slot, so the slot has
-            # to be what the next call reads.
             tools.register(
-                WebFetchTool(
-                    api_key=lambda: live_vendor_key(_LIVE_CONFIG, fetch_provider, boot=self._web_key(fetch_provider)),
-                    proxy=self.web_proxy,
-                    provider=fetch_provider,
-                )
+                WebFetchTool(api_key=live_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
             )
         # The same browser the parent drives, in a tab of this run's own: the
         # tools name the run in flight as their owner, so two sub-agents

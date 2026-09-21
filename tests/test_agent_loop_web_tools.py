@@ -287,7 +287,10 @@ async def test_a_reader_key_set_after_a_refusal_reaches_the_next_call(workspace,
 
 
 @pytest.mark.asyncio
-async def test_the_subagent_lanes_reader_reads_its_key_live_too(tmp_path: Path, monkeypatch) -> None:
+async def test_the_subagent_lanes_web_tools_read_their_keys_live_too(tmp_path: Path, monkeypatch) -> None:
+    """All three tools carry the advice to set a key at the config slot, so all
+    three read it there; a boot-snapshot key on two of them made that advice
+    false for one sub-agent run."""
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
     from raven.agent.tools.registry import ToolRegistry
 
@@ -307,18 +310,22 @@ async def test_the_subagent_lanes_reader_reads_its_key_live_too(tmp_path: Path, 
         provider=_StubProvider(),
         model="stub",
         agent_home=tmp_path,
+        web_search_provider="tavily",
         web_fetch_provider="tavily",
         web_provider_keys={"tavily": "sk-boot"},
+        image_search=True,
     )
     await backend.run("task", task_id="t1", workspace=tmp_path, executor=None)
-    (tool,) = [t for t in registered if t.name == "web_fetch"]
-    assert tool.provider == "tavily" and tool.api_key == "sk-boot"
+    tools = {t.name: t for t in registered if t.name in ("web_search", "image_search", "web_fetch")}
+    assert sorted(tools) == ["image_search", "web_fetch", "web_search"]
+    assert {t.provider for t in tools.values()} == {"tavily"}
+    assert {t.api_key for t in tools.values()} == {"sk-boot"}
 
     cfg.write_text(
         json.dumps({"tools": {"web": {"providers": {"tavily": {"apiKey": "sk-rotated"}}}}}), encoding="utf-8"
     )
 
-    assert tool.api_key == "sk-rotated"
+    assert {name: t.api_key for name, t in tools.items()} == {name: "sk-rotated" for name in tools}
 
 
 @pytest.mark.asyncio

@@ -101,11 +101,14 @@ All notable changes to Raven are documented here.
   answered without a request, with the same `error` (so the loop's failure
   streak reads them as one cause), what the status means, and what the user
   has to do (`tools.web.providers.<vendor>.apiKey`, the env var, the sign-up
-  page, or another vendor under `tools.web.<search|fetch>.provider`). The
-  reader now reads its key live, in both the main loop and the sub-agent
-  lane, so a key set at that slot reaches the next call and lifts the
-  pause without a restart; otherwise one real request is sent again after
-  ten minutes and re-arms it if refused. A request that carried no key is
+  page, or another vendor under `tools.web.<search|fetch>.provider`; the
+  env var and the vendor take effect on restart, the slot on the next
+  call). All three tools read their key live, in both the main loop and
+  the sub-agent lane, and once per call, so the key a request carried is
+  the key its refusal is recorded against; a key set at that slot reaches
+  the next call and lifts the pause without a restart, and otherwise one
+  real request is sent again after ten minutes and re-arms it if refused.
+  A request that carried no key is
   never paused, and a reader's 403 pauses nothing: the default reader, Jina
   without a key, answers a domain it has blocked with 403, and Firecrawl
   answers 403 for a site its policy does not scrape, so through a reader
