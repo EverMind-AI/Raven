@@ -195,14 +195,18 @@ class _DispatchBackend:
             raise AttributeError(name)
         return getattr(backend, name)
 
-    async def run(self, *args: Any, **kwargs: Any) -> str:
+    async def run(self, *args: Any, authored_task: str | None = None, **kwargs: Any) -> str:
         if self.drop_mcps:
             kwargs.pop("mcps", None)
         elif self.mcp_grant is not None:
             resolver = getattr(self.backend, "resolve_mcp_grant_async", None) or self.backend.resolve_mcp_grant
             grant = resolver(kwargs.get("mcps"))
             kwargs["mcp_grant"] = await grant if inspect.isawaitable(grant) else grant
-        return await self.backend.run(*args, **kwargs)
+        return await self.backend.run(
+            *args,
+            **optional_keyword(self.backend, "authored_task", authored_task),
+            **kwargs,
+        )
 
 
 @dataclass(frozen=True)

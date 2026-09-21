@@ -327,9 +327,8 @@ async def test_worker_backend_keeps_legacy_run_signatures_and_can_be_copied() ->
             self.calls.append(task)
             return "done"
 
-    wrapped = deepcopy(_WorkerBackend(_LegacyBackend(), charter="BRIEF\n\n"))
-    dispatched = deepcopy(_DispatchBackend(wrapped))
-    result = await dispatched.run(
+    wrapped = deepcopy(_WorkerBackend(_DispatchBackend(_LegacyBackend(), drop_mcps=True), charter="BRIEF\n\n"))
+    result = await wrapped.run(
         "task",
         task_id="n1",
         workspace="/tmp/work",
@@ -338,7 +337,7 @@ async def test_worker_backend_keeps_legacy_run_signatures_and_can_be_copied() ->
     )
 
     assert result == "done"
-    assert dispatched.backend.backend.calls == ["BRIEF\n\ntask"]
+    assert wrapped.backend.backend.calls == ["BRIEF\n\ntask"]
 
 
 def test_each_worker_carries_its_brief_into_the_description(workspace) -> None:
