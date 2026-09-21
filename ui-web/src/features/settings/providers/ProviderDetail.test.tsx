@@ -200,6 +200,24 @@ describe('provider detail', () => {
     expect(calls[calls.length - 1]).toEqual(['provider', { op: 'add_model', slug: 'anthropic', model: 'typed-one' }])
   })
 
+  it('treats one model written two ways as one row, already added', async () => {
+    /* `model.fetch_models` returns provider-qualified ids; a model added by
+       hand is stored as it was typed. The backend calls them the same model
+       (`wire.py` merge_key); drawing them as two rows offered to add one that
+       was already there and left "add all" at a number it could never reach. */
+    const calls = await catalogue([
+      { id: 'anthropic/claude-opus-4-5', label: 'Opus', kind: 'text', added: true },
+      { id: 'anthropic/claude-sonnet-4-5', label: 'Sonnet', kind: 'text', added: true },
+      { id: 'anthropic/claude-haiku', label: 'Haiku', kind: 'text', added: false },
+    ])
+    /* The harness's anthropic carries the two bare spellings as configured. */
+    expect(popRows().map((r) => r.getAttribute('aria-checked'))).toEqual(['true', 'true', 'false'])
+    expect(popRows()).toHaveLength(3)
+    expect(screen.getByText('gui.model.add_all {"n":"1"}')).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByText('gui.model.add_all {"n":"1"}')) })
+    expect(calls[calls.length - 1]).toEqual(['addModels', { slug: 'anthropic', models: ['anthropic/claude-haiku'] }])
+  })
+
   it('adds everything shown in one call', async () => {
     const calls = await catalogue([
       { id: 'a', label: 'a', kind: 'text', added: false },
