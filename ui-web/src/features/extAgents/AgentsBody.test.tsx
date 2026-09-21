@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
-/* The onboarding wizard's agents pane: the two buckets it draws over the
- * extAgents roster, and the two writes a row's own button can make.
+/* The onboarding wizard's agents step: the hub's rows in the two sections a
+ * first run decides on, the writes a row's one control makes, and what the
+ * step counts as done.
  */
 
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
@@ -28,7 +29,7 @@ function row(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
   return {
     name: 'claude_code',
     preset: 'claude_code',
-    kind: 'cli',
+    kind: 'acp',
     configured: false,
     enabled: false,
     probe_status: 'ready',
@@ -45,9 +46,9 @@ function row(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
 
 /* Same seam production wires: a stand-in translator on setTranslator (it
    returns its key, so tests assert catalogue keys, not translations) and a
-   fixture source on sources.extAgents -- see ExtAgentsPage.test.tsx's own
-   `install`. */
-function install(rows: ExtAgentRow[], over: Partial<ExtAgentsSource> = {}) {
+   fixture source on sources.extAgents. `refuse` names rows whose write the
+   source rejects with that sentence. */
+function install(rows: ExtAgentRow[], refuse: Record<string, string> = {}) {
   const acts: Array<[string, string, ExtAgentActArgs]> = []
   const loads: boolean[] = []
   const source: ExtAgentsSource = {
@@ -57,10 +58,11 @@ function install(rows: ExtAgentRow[], over: Partial<ExtAgentsSource> = {}) {
     },
     act: async (op, r, args) => {
       acts.push([op, r.name, args || {}])
+      if (refuse[r.name]) throw { data: { detail: refuse[r.name] } }
       if (op === 'toggle') r.enabled = !!(args as { enabled?: boolean } | undefined)?.enabled
+      if (op === 'connect') { r.configured = true; r.enabled = true }
       return rows
     },
-    ...over,
   }
   toastWriter.items = []
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
@@ -68,13 +70,22 @@ function install(rows: ExtAgentRow[], over: Partial<ExtAgentsSource> = {}) {
   return { source, acts, loads }
 }
 
-const rowsOf = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.surow')]
-const rowNamed = (name: string): HTMLElement => rowsOf().find((r) => r.querySelector('.nm b')!.textContent === name)!
-const actBtn = (name: string): HTMLButtonElement => rowNamed(name).querySelector('.suact button')!
-const groupNamed = (label: string): HTMLElement | null =>
-  [...document.querySelectorAll<HTMLElement>('.sugrp')].find((g) => g.querySelector('.hd b')!.textContent === label) ??
-  null
-const groupCount = (label: string): string | null => groupNamed(label)?.querySelector('.hd .n')?.textContent ?? null
+const rowsOf = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.extAgents-row')]
+const rowNamed = (name: string): HTMLElement => rowsOf().find((r) => r.querySelector('.extAgents-t')!.textContent === name)!
+const control = (name: string): HTMLElement => rowNamed(name).querySelector('.extAgents-ctl')!.firstElementChild as HTMLElement
+const sectionOf = (name: string): string => rowNamed(name).closest('.extAgents-sec')!.querySelector('.extAgents-hd b')!.textContent!
+const sectionNamed = (label: string): HTMLElement | null =>
+  [...document.querySelectorAll<HTMLElement>('.extAgents-sec')].find((g) => g.querySelector('.extAgents-hd b')!.textContent === label) ?? null
+const sectionCount = (label: string): string | null => sectionNamed(label)?.querySelector('.extAgents-n')?.textContent ?? null
+
+const mounted = async (rows: ExtAgentRow[], refuse: Record<string, string> = {}) => {
+  const h = install(rows, refuse)
+  render(<AgentsStepBody />)
+  await act(async () => {
+    await store.load(true)
+  })
+  return h
+}
 
 afterEach(() => {
   cleanup()
@@ -83,16 +94,17 @@ afterEach(() => {
   confirmStore._resetForTests()
 })
 
-describe('the onboarding wizard\'s agents pane', () => {
+describe('the onboarding wizard\'s agents step', () => {
   it('shows a scanning placeholder before the first answer lands', async () => {
     let resolveLoad: (rows: ExtAgentRow[]) => void = () => {}
-    install([], { load: () => new Promise((res) => (resolveLoad = res)) })
+    install([])
+    setSources({ extAgents: { load: () => new Promise((res) => (resolveLoad = res)), act: async () => [] } })
     render(<AgentsStepBody />)
     await act(async () => {
       void store.load(true)
     })
     expect(screen.getByText('gui.agent.setup_scanning')).toBeTruthy()
-    expect(groupCount('gui.agent.setup_available')).toBe('0')
+    expect(sectionCount('gui.agent.g_avail')).toBe('0')
 
     await act(async () => {
       resolveLoad([])
@@ -100,98 +112,86 @@ describe('the onboarding wizard\'s agents pane', () => {
     expect(screen.queryByText('gui.agent.setup_scanning')).toBeNull()
   })
 
-  it('splits found rows into available and connected, with their counts', async () => {
-    install([
+  it('draws the hub\'s two sections, available first, with the hub\'s labels and counts', async () => {
+    await mounted([
       row({ name: 'preset_a', configured: false, enabled: false }),
-      row({ name: 'shipped', preset: undefined, vendored: true, configured: false, enabled: true }),
       row({ name: 'switched_on', configured: true, enabled: true }),
+      row({ name: 'shipped', vendored: true, configured: false, enabled: true }),
     ])
-    render(<AgentsStepBody />)
-    await act(async () => {
-      await store.load(true)
-    })
-
-    expect(groupCount('gui.agent.setup_available')).toBe('1')
-    expect(groupCount('gui.agent.setup_connected')).toBe('2')
-    expect(rowNamed('preset_a').closest('.sugrp')!.querySelector('.hd b')!.textContent).toBe(
-      'gui.agent.setup_available',
-    )
-    expect(rowNamed('shipped').closest('.sugrp')!.querySelector('.hd b')!.textContent).toBe('gui.agent.setup_connected')
-    expect(rowNamed('switched_on').closest('.sugrp')!.querySelector('.hd b')!.textContent).toBe(
-      'gui.agent.setup_connected',
-    )
-    expect(actBtn('preset_a').textContent).toBe('gui.agent.connect')
-    expect(actBtn('shipped').textContent).toBe('gui.agent.disconnect')
+    const labels = [...document.querySelectorAll('.extAgents-sec .extAgents-hd b')].map((b) => b.textContent)
+    expect(labels).toEqual(['gui.agent.g_avail', 'gui.agent.g_on'])
+    expect(sectionCount('gui.agent.g_avail')).toBe('1')
+    expect(sectionCount('gui.agent.g_on')).toBe('2')
+    expect(sectionOf('preset_a')).toBe('gui.agent.g_avail')
+    expect(sectionOf('shipped')).toBe('gui.agent.g_on')
+    expect(control('preset_a').textContent).toBe('gui.agent.connect')
+    expect(control('switched_on').textContent).toBe('gui.agent.disconnect')
+    /* Raven's own first inside a section, the way the hub orders it. */
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['preset_a', 'shipped', 'switched_on'])
   })
 
-  it('hides the built-in agent, a missing row and an unfound row entirely', async () => {
-    install([
-      row({ name: 'raven', kind: 'builtin', builtin: true }),
-      row({ name: 'not_here', probe_status: 'missing' }),
+  it('leaves out the built-in loop, an openai endpoint and a command this machine has not got', async () => {
+    await mounted([
+      row({ name: 'Raven', kind: 'builtin', builtin: true, enabled: true }),
+      row({ name: 'miro', kind: 'openai', configured: true, enabled: true, has_api_key: true }),
+      row({ name: 'gone', kind: 'cli', configured: false, enabled: false, probe_status: 'missing' }),
     ])
-    render(<AgentsStepBody />)
-    await act(async () => {
-      await store.load(true)
-    })
-
     expect(rowsOf()).toEqual([])
-    expect(groupNamed('gui.agent.setup_available')).toBeNull()
-    expect(groupNamed('gui.agent.setup_connected')).toBeNull()
+    expect(sectionNamed('gui.agent.g_avail')).toBeNull()
+    expect(sectionNamed('gui.agent.g_on')).toBeNull()
   })
 
-  it('leaves an openai row out of the available bucket', async () => {
-    install([row({ name: 'miro', kind: 'openai', configured: false, enabled: false, has_api_key: false })])
-    render(<AgentsStepBody />)
+  it('names a refused row instead of offering to connect it', async () => {
+    const { acts } = await mounted([row({ name: 'refused', kind: 'acp', probe_status: 'attention', needs_auth: true })])
+    expect(sectionCount('gui.agent.g_avail')).toBe('1')
+    const btn = control('refused') as HTMLButtonElement
+    expect(btn.textContent).toBe('gui.agent.unauthorized')
+    expect(btn.disabled).toBe(true)
     await act(async () => {
-      await store.load(true)
+      fireEvent.click(btn)
     })
-
-    expect(rowsOf()).toEqual([])
+    expect(acts).toEqual([])
   })
 
-  it('connects a preset through act(connect)', async () => {
-    const { acts } = install([row({ name: 'preset_a', configured: false, enabled: false })])
-    render(<AgentsStepBody />)
+  it('a row is a plain row: nothing to press but its one control, and no sheet opens', async () => {
+    await mounted([row({ name: 'preset_a' })])
+    const r = rowNamed('preset_a')
+    expect(r.getAttribute('role')).toBeNull()
+    expect(r.getAttribute('tabindex')).toBeNull()
     await act(async () => {
-      await store.load(true)
+      fireEvent.click(r)
     })
-
-    await act(async () => {
-      actBtn('preset_a').click()
-    })
-
-    expect(acts).toEqual([['connect', 'preset_a', {}]])
+    expect(store.get().sheet).toBeNull()
   })
 
-  it('connects a disabled configured row through act(toggle, {enabled: true})', async () => {
-    const { acts } = install([row({ name: 'off_one', configured: true, enabled: false })])
-    render(<AgentsStepBody />)
+  it('connects a preset through act(connect) and a switched-off configured row through act(toggle)', async () => {
+    const { acts } = await mounted([
+      row({ name: 'preset_a', configured: false, enabled: false }),
+      row({ name: 'off_one', configured: true, enabled: false }),
+    ])
     await act(async () => {
-      await store.load(true)
+      fireEvent.click(control('preset_a'))
     })
-
     await act(async () => {
-      actBtn('off_one').click()
+      fireEvent.click(control('off_one'))
     })
-
-    expect(acts).toEqual([['toggle', 'off_one', { enabled: true }]])
+    expect(acts).toEqual([
+      ['connect', 'preset_a', {}],
+      ['toggle', 'off_one', { enabled: true }],
+    ])
+    expect(sectionOf('preset_a')).toBe('gui.agent.g_on')
+    expect(sectionOf('off_one')).toBe('gui.agent.g_on')
   })
 
-  it('connects a stale row through act(migrate) only after the confirm the settings page asks is answered', async () => {
+  it('connects a stale row through act(migrate) only after the hub\'s confirm is answered', async () => {
     /* A flag would have left `upgrade_to` standing and the old command line
-       in place -- the migration the card offered and never did. The remove
-       plus add drops the handles of runs in flight, hence the confirm; the
-       tag beside the kind says where the row moves to. The real confirm
-       store answers here, so the write is seen to wait for the answer. */
-    const { acts } = install([row({ name: 'pi', configured: true, enabled: false, upgrade_to: 'acp' })])
-    render(<AgentsStepBody />)
-    await act(async () => {
-      await store.load(true)
-    })
-    expect(rowNamed('pi').textContent).toContain('gui.agent.stale_to {"to":"gui.agent.kind_acp"}')
+       in place; the remove plus add drops the handles of runs in flight,
+       hence the question -- the same one the hub asks. */
+    const { acts } = await mounted([row({ name: 'pi', configured: true, enabled: false, upgrade_to: 'acp' })])
+    expect(rowNamed('pi').querySelector('.extAgents-one')!.textContent).toContain('gui.agent.tag_stale')
 
     await act(async () => {
-      actBtn('pi').click()
+      fireEvent.click(control('pi'))
     })
     expect(confirmStore.get().open).toBe(true)
     expect(confirmStore.get().title).toBe('gui.agent.migrate_do')
@@ -200,68 +200,91 @@ describe('the onboarding wizard\'s agents pane', () => {
     await act(async () => {
       confirmStore.answer(true)
     })
-
-    expect(confirmStore.get().open).toBe(false)
     expect(acts).toEqual([['migrate', 'pi', {}]])
   })
 
   it('offers a shipped agent switched off, and switches it back on', async () => {
-    const { acts } = install([row({ name: 'raven_coder', vendored: true, configured: false, enabled: false })])
-    render(<AgentsStepBody />)
-    await act(async () => {
-      await store.load(true)
-    })
-    expect(rowNamed('raven_coder').closest('.sugrp')!.querySelector('.hd b')!.textContent).toBe('gui.agent.setup_available')
+    await mounted([row({ name: 'raven_coder', vendored: true, configured: false, enabled: false })])
+    expect(sectionOf('raven_coder')).toBe('gui.agent.g_avail')
     expect(store.stepDone()).toBe(false)
-
     await act(async () => {
-      actBtn('raven_coder').click()
+      fireEvent.click(control('raven_coder'))
     })
-
-    expect(acts).toEqual([['toggle', 'raven_coder', { enabled: true }]])
-    expect(rowNamed('raven_coder').closest('.sugrp')!.querySelector('.hd b')!.textContent).toBe('gui.agent.setup_connected')
+    expect(sectionOf('raven_coder')).toBe('gui.agent.g_on')
+    /* Drawn as connected, still not counted: the step is about an external agent. */
+    expect(store.stepDone()).toBe(false)
   })
 
-  it('disables the row and shows the connecting state while the write is in flight', async () => {
-    let settle = (): void => {}
-    const { acts } = install([row({ name: 'preset_a', configured: false, enabled: false })], {
-      act: async (op, r, args) => {
-        acts.push([op, r.name, args || {}])
-        await new Promise<void>((res) => (settle = res))
-        return [r]
+  it('says connecting on the row while the write is in flight', async () => {
+    let release: (rows: ExtAgentRow[]) => void = () => {}
+    const rows = [row({ name: 'preset_a' })]
+    install(rows)
+    setSources({
+      extAgents: {
+        load: async () => rows,
+        act: () => new Promise<ExtAgentRow[]>((res) => (release = res)),
       },
     })
     render(<AgentsStepBody />)
     await act(async () => {
       await store.load(true)
     })
+    await act(async () => {
+      fireEvent.click(control('preset_a'))
+    })
+    expect(control('preset_a').tagName).toBe('SPAN')
+    expect(control('preset_a').textContent).toBe('gui.agent.setup_connecting')
+    expect(rowNamed('preset_a').querySelector('.extAgents-one-work')).not.toBeNull()
 
     await act(async () => {
-      actBtn('preset_a').click()
+      release([row({ name: 'preset_a', configured: true, enabled: true })])
     })
+    expect(control('preset_a').textContent).toBe('gui.agent.disconnect')
+  })
 
-    expect(actBtn('preset_a').hasAttribute('disabled')).toBe(true)
-    expect(actBtn('preset_a').textContent).toContain('gui.agent.setup_connecting')
-
+  it('keeps a refused connect on the row in red with Retry, and Retry sends it again', async () => {
+    /* The hub's rule, not the toast the old step used: a refusal is a state
+       the row is in, so the reason is still there when the reader looks. */
+    const refuse: Record<string, string> = { preset_a: 'did not answer a test message' }
+    const { acts } = await mounted([row({ name: 'preset_a' })], refuse)
     await act(async () => {
-      settle()
+      fireEvent.click(control('preset_a'))
     })
+    expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')!.textContent).toBe('did not answer a test message')
+    expect(control('preset_a').textContent).toBe('gui.retry')
+    expect(toastWriter.items).toEqual([])
 
-    expect(actBtn('preset_a').hasAttribute('disabled')).toBe(false)
-    expect(actBtn('preset_a').textContent).toBe('gui.agent.connect')
+    delete refuse.preset_a
+    await act(async () => {
+      fireEvent.click(control('preset_a'))
+    })
+    expect(acts).toEqual([
+      ['connect', 'preset_a', {}],
+      ['connect', 'preset_a', {}],
+    ])
+    expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')).toBeNull()
+    expect(control('preset_a').textContent).toBe('gui.agent.disconnect')
   })
 
   it('disconnects a connected row through act(toggle, {enabled: false})', async () => {
-    const { acts } = install([row({ name: 'switched_on', configured: true, enabled: true })])
-    render(<AgentsStepBody />)
+    const { acts } = await mounted([row({ name: 'switched_on', configured: true, enabled: true })])
     await act(async () => {
-      await store.load(true)
+      fireEvent.click(control('switched_on'))
     })
-
-    await act(async () => {
-      actBtn('switched_on').click()
-    })
-
     expect(acts).toEqual([['toggle', 'switched_on', { enabled: false }]])
+    expect(sectionOf('switched_on')).toBe('gui.agent.g_avail')
+  })
+
+  it('is done once an external agent is connected, whatever the shipped ones do', async () => {
+    await mounted([
+      row({ name: 'shipped', vendored: true, configured: false, enabled: true }),
+      row({ name: 'preset_a', configured: false, enabled: false }),
+    ])
+    expect(store.stepDone()).toBe(false)
+    await act(async () => {
+      fireEvent.click(control('preset_a'))
+    })
+    expect(store.stepDone()).toBe(true)
+    expect(store.found().map((r) => r.name)).toEqual(['preset_a'])
   })
 })

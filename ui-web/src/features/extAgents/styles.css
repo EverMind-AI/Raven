@@ -34,9 +34,13 @@
   padding: 11px 14px; width: 100%; text-align: left; min-height: 56px;
   /* A grid item defaults to min-width: auto, and without this the long one-liner
      pushes the row past its container and the ellipsis never gets its turn. */
-  min-width: 0; cursor: pointer; color: inherit;
+  min-width: 0; color: inherit;
 }
-.extAgents-row:hover { background: var(--surface); }
+/* Only a row that opens the sheet (Rows.tsx gives it the button role) reads as
+   pressable; the wizard's rows are plain and get neither the hand nor the
+   hover. */
+.extAgents-row[role="button"] { cursor: pointer; }
+.extAgents-row[role="button"]:hover { background: var(--surface); }
 .extAgents-row:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
 .extAgents-row[aria-current="true"] { background: var(--surface); }
 

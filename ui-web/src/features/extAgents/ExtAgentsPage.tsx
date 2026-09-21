@@ -2,19 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { AgentMark } from '../../components/AgentMark'
 import { KeyInput } from '../../components/KeyInput'
 import { ModelPicker } from '../../components/ModelPicker'
 import { t } from '../../i18n/t'
-import { ask as confirmAsk } from '../../state/confirm'
 import * as lang from '../../state/lang'
 import { loadDefaultProviders, providers as hostProviders } from '../model/source'
 import { offered } from '../model/types'
-import { byOf, installOf, isOwnRow, shortOf } from './catalogue'
+import { byOf, installOf, isOwnRow } from './catalogue'
+import { SectionBlock, Spin, Tile, connect, ordered, shownOf } from './Rows'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
 import type { PickerProvider } from '../../components/ModelPicker'
+import type { Shown } from './Rows'
 import type { Section } from './source'
 import type { ExtAgentsState } from './store'
 import type { ExtAgentRow } from './types'
@@ -37,188 +37,6 @@ import './styles.css'
  * offer nothing else meanwhile; a refusal stays on the row as red text with a
  * Retry, rather than as a toast that is gone before the reader looks up.
  */
-
-const kindText = (kind: string): string =>
-  t(
-    kind === 'builtin'
-      ? 'gui.agent.kind_builtin'
-      : kind === 'openai'
-        ? 'gui.agent.kind_openai'
-        : kind === 'acp'
-          ? 'gui.agent.kind_acp'
-          : 'gui.agent.kind_cli',
-  )
-
-/* The states a row and its sheet are drawn in. `pending` and `failed` are
-   this page's own, about a write in flight or refused; the other three are the
-   section the server's facts put the row in. */
-type Shown = 'pending' | 'failed' | 'missing' | 'on' | 'off'
-
-function shownOf(row: ExtAgentRow, s: ExtAgentsState): Shown {
-  if (s.joining.includes(row.name)) return 'pending'
-  if (s.failed[row.name]) return 'failed'
-  const section = sectionOf(row)
-  return section === 'missing' ? 'missing' : section === 'on' ? 'on' : 'off'
-}
-
-function Spin(): JSX.Element {
-  return <span className="extAgents-spin" aria-hidden="true" />
-}
-
-/* The dot: green for a working agent, gold when the probe has a caveat, amber
-   and pulsing while a write is in flight, red for a refusal. None at all for a
-   row that is merely off or absent -- "not connected" is what the section
-   already says. */
-function Led({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
-  if (shown === 'pending') return <span className="extAgents-led extAgents-led-busy" />
-  if (shown === 'failed') return <span className="extAgents-led extAgents-led-bad" />
-  if (shown !== 'on') return null
-  const warn = !row.builtin && row.probe_status === 'attention'
-  return <span className={'extAgents-led' + (warn ? ' extAgents-led-warn' : '')} />
-}
-
-function Tile({ row }: { row: ExtAgentRow }): JSX.Element {
-  const own = isOwnRow(row)
-  return (
-    <span className={'extAgents-tile' + (own ? ' extAgents-tile-own' : '')}>
-      <AgentMark preset={row.preset} own={own} />
-    </span>
-  )
-}
-
-/* The line under the name: the catalogue's one sentence about the agent, or --
-   for a row nobody catalogued -- the probe's own verdict when it has one, else
-   how Raven reaches it. A refusal replaces it in red; a write in flight
-   replaces it with the ring. */
-function oneLine(row: ExtAgentRow): string {
-  const short = shortOf(row)
-  const stale = stageOf(row) === 'stale' ? t('gui.agent.tag_stale') : ''
-  const base =
-    short || ((row.probe_status === 'attention' || row.probe_status === 'missing') && row.probe_detail) || kindText(row.kind)
-  return stale ? `${base} · ${stale}` : base
-}
-
-/* Connect, by what the row's stage calls for. The one case with a question in
-   it is a preset that moved transport: connecting it removes the entry and adds
-   it back from the preset, which drops the handles of runs already in flight. */
-function connect(row: ExtAgentRow): void {
-  if (stageOf(row) === 'key') {
-    store.sheetOpen(row)
-    return
-  }
-  if (stageOf(row) === 'stale') {
-    confirmAsk(
-      t('gui.agent.migrate_do'),
-      t('gui.agent.migrate_body', { name: row.name, to: kindText(row.upgrade_to || '') }),
-      t('gui.agent.migrate_do'),
-      () => store.connectRow(row),
-    )
-    return
-  }
-  store.connectRow(row)
-}
-
-/* The one control a row carries. Exactly one, or none for the built-in loop,
-   which is always on and has nothing to do. */
-function RowControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
-  if (shown === 'pending') return <span className="extAgents-state">{t('gui.agent.setup_connecting')}</span>
-  if (shown === 'failed') {
-    return (
-      <button className="mini danger" onClick={() => store.retry(row)}>
-        {t('gui.retry')}
-      </button>
-    )
-  }
-  if (shown === 'missing') {
-    return (
-      <button className="mini" onClick={() => store.sheetOpen(row)}>
-        {t('gui.agent.go_install')}
-      </button>
-    )
-  }
-  if (shown === 'on') {
-    if (row.builtin) return null
-    return (
-      <button className="mini" onClick={() => store.disconnectRow(row)}>
-        {t('gui.agent.disconnect')}
-      </button>
-    )
-  }
-  return (
-    <button className="mini go" onClick={() => connect(row)}>
-      {t('gui.agent.connect')}
-    </button>
-  )
-}
-
-function AgentRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Element {
-  const shown = shownOf(row, s)
-  const failed = s.failed[row.name]
-  const open = (): void => store.sheetOpen(row)
-  return (
-    <div
-      className="extAgents-row"
-      role="button"
-      tabIndex={0}
-      aria-current={s.sheet === row.name ? 'true' : undefined}
-      onClick={open}
-      onKeyDown={(e) => {
-        /* The row's own keys only: a keydown on the control inside bubbles to
-           here, and preventing it would cancel that button's own activation. */
-        if (e.target !== e.currentTarget) return
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          open()
-        }
-      }}
-    >
-      <Tile row={row} />
-      <div className="extAgents-who">
-        <div className="extAgents-nm">
-          <Led row={row} shown={shown} />
-          <span className="extAgents-t">{row.name}</span>
-        </div>
-        {shown === 'pending' ? (
-          <div className="extAgents-one extAgents-one-work">
-            <Spin />
-            {t('gui.agent.setup_connecting')}
-          </div>
-        ) : shown === 'failed' && failed ? (
-          <div className="extAgents-one extAgents-one-bad">{failed.detail}</div>
-        ) : (
-          <div className="extAgents-one">{oneLine(row)}</div>
-        )}
-      </div>
-      {/* The control stops the click here: pressing Connect must not also open
-          the sheet. */}
-      <div className="extAgents-ctl" onClick={(e) => e.stopPropagation()}>
-        <RowControl row={row} shown={shown} />
-      </div>
-    </div>
-  )
-}
-
-/* Raven's own first, then the server's order. */
-const ordered = (rows: ExtAgentRow[]): ExtAgentRow[] =>
-  [...rows].sort((a, b) => Number(isOwnRow(b)) - Number(isOwnRow(a)))
-
-function SectionBlock({ label, rows, s }: { label: string; rows: ExtAgentRow[]; s: ExtAgentsState }): JSX.Element {
-  return (
-    <section className="extAgents-sec">
-      <div className="extAgents-hd">
-        <b>{label}</b>
-        <span className="extAgents-n">{String(rows.length)}</span>
-      </div>
-      {rows.length ? (
-        <div className="extAgents-set">
-          {rows.map((row) => (
-            <AgentRow key={row.name} row={row} s={s} />
-          ))}
-        </div>
-      ) : null}
-    </section>
-  )
-}
 
 function OutIcon(): JSX.Element {
   return (
@@ -528,6 +346,27 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
         ) : null}
       </>
     )
+  } else if (stage === 'unauthorized' && shown === 'off') {
+    /* The same sentence the row carries, and beside it the one press that
+       can take it back: Test re-measures the handshake, and a sign-in that
+       has happened since lets the row return to Connect. */
+    actions = (
+      <>
+        <button className="mini" disabled>
+          {t('gui.agent.unauthorized')}
+        </button>
+        {testing ? (
+          <button className="mini danger" onClick={() => store.stopTest(row)}>
+            <Spin />
+            {t('gui.stop')}
+          </button>
+        ) : (
+          <button className="mini" onClick={() => void store.runTest(row)}>
+            {t('gui.agent.test_label')}
+          </button>
+        )}
+      </>
+    )
   } else {
     actions = (
       <button className="mini go" disabled={primaryDisabled} onClick={primary}>
@@ -604,9 +443,9 @@ export function ExtAgentsApp(): JSX.Element {
       {/* The connected section is always there, even empty: it is the answer to
           the page's first question. The other two are only drawn with rows in
           them -- a heading over nothing is a heading about nothing. */}
-      <SectionBlock label={t('gui.agent.g_on')} rows={on} s={s} />
-      {avail.length ? <SectionBlock label={t('gui.agent.g_avail')} rows={avail} s={s} /> : null}
-      {missing.length ? <SectionBlock label={t('gui.agent.g_missing')} rows={missing} s={s} /> : null}
+      <SectionBlock label={t('gui.agent.g_on')} onOpen={store.sheetOpen} rows={on} s={s} />
+      {avail.length ? <SectionBlock label={t('gui.agent.g_avail')} onOpen={store.sheetOpen} rows={avail} s={s} /> : null}
+      {missing.length ? <SectionBlock label={t('gui.agent.g_missing')} onOpen={store.sheetOpen} rows={missing} s={s} /> : null}
       {sheetRow ? <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} /> : null}
     </>
   )

@@ -225,8 +225,11 @@ const LEGACY_LOCAL = {
      prefix, and its rules live in features/extAgents/styles.css. Up to three
      with the playbooks page gone -- `.kd`, `.pmhero` and `.sulist` were shared
      with it, so they are this domain's alone now and are counted here rather
-     than on the shared tally. Nothing was added. */
-  extAgents: 3,
+     than on the shared tally. Nothing was added. Down to one with the
+     onboarding wizard's agents step drawing the hub's rows: `.kd` and
+     `.sulist` were the step's alone, and nothing names them now; `.pmhero`
+     on the page's hero is what remains. */
+  extAgents: 1,
   importSync: 0,
   installed: 0,
   /* Down from 14 with the memory section: the page's hero, its own list and
