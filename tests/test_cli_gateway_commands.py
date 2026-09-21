@@ -1193,6 +1193,68 @@ async def test_the_control_plane_falls_back_to_an_os_assigned_port(monkeypatch) 
     assert await _control_plane_port() == 0
 
 
+def _hold_exclusively(sock) -> None:
+    """Ask for the exclusivity the running platform actually means by it.
+
+    ``SO_REUSEADDR`` is what POSIX needs: with a live listener behind it the
+    port is taken, and the option only lets the test reclaim it without waiting
+    out TIME_WAIT. Winsock reads the same option as permission for a second
+    socket to bind the identical address and port, which is the opposite of
+    what the holder wants, so Windows gets ``SO_EXCLUSIVEADDRUSE`` instead.
+
+    Keyed on the constant rather than on ``sys.platform`` because the constant
+    is the thing that decides: a platform that does not define it has no
+    Winsock semantics to defend against.
+    """
+    import socket
+
+    exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+    option = socket.SO_REUSEADDR if exclusive is None else exclusive
+    sock.setsockopt(socket.SOL_SOCKET, option, 1)
+
+
+@pytest.mark.parametrize("windows", [True, False], ids=["windows", "posix"])
+def test_the_port_holder_asks_for_the_exclusivity_its_platform_means(
+    windows: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The holder below has to keep a port from being bound twice, and the two
+    platforms spell that differently.
+
+    On POSIX ``SO_REUSEADDR`` plus a live listener does it. On Windows the same
+    option does the opposite: Winsock lets a second socket bind the identical
+    address and port, with indeterminate ownership, so ``_port_is_free`` -- which
+    sets ``SO_REUSEADDR`` itself -- can bind a port this holder is listening on.
+    ``pick_port`` would then return the base port and the exhaustion case below
+    would fail without anything being wrong with the code it guards.
+
+    Both branches are driven here because they cannot both be driven anywhere
+    else: the unit matrix is one cell, ubuntu, and ``SO_EXCLUSIVEADDRUSE`` does
+    not exist on it. Only the option asked for is asserted. Whether Winsock then
+    refuses the second bind is Winsock's contract, not this repository's, and is
+    not claimed to have been observed here.
+    """
+    import socket
+
+    from tests.test_cli_gateway_commands import _hold_exclusively
+
+    asked: list[tuple[int, int, int]] = []
+
+    class _Sock:
+        def setsockopt(self, level: int, option: int, value: int) -> None:
+            asked.append((level, option, value))
+
+    exclusive = 0x4321
+    if windows:
+        monkeypatch.setattr(socket, "SO_EXCLUSIVEADDRUSE", exclusive, raising=False)
+    else:
+        monkeypatch.delattr(socket, "SO_EXCLUSIVEADDRUSE", raising=False)
+
+    _hold_exclusively(_Sock())
+
+    wanted = exclusive if windows else socket.SO_REUSEADDR
+    assert asked == [(socket.SOL_SOCKET, wanted, 1)]
+
+
 async def test_pick_port_raises_the_class_the_fallback_catches() -> None:
     """The fallback catches one exception class, decided in another module.
 
@@ -1211,13 +1273,16 @@ async def test_pick_port_raises_the_class_the_fallback_catches() -> None:
 
         Occupied the way ``_port_is_free`` probes for it: that probe sets
         SO_REUSEADDR, so a socket merely bound does not keep it out and only a
-        live listener does. Holding every port here rather than counting a
-        stranger's as one of them is what stops this racing them releasing it.
+        live listener does -- on POSIX. Winsock reads that option as leave to
+        bind the same address and port a second time, so the holder asks for
+        the platform's own spelling of exclusivity; see ``_hold_exclusively``.
+        Holding every port here rather than counting a stranger's as one of
+        them is what stops this racing them releasing it.
         """
         held: list[socket.socket] = []
         for port in range(base, base + _PORT_PROBE_SPAN):
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            _hold_exclusively(sock)
             try:
                 sock.bind(("127.0.0.1", port))
                 sock.listen(1)
