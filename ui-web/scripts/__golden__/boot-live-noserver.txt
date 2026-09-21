@@ -117,7 +117,6 @@ div.app[data-rail=on]
                 svg.pico
                   path
                   path
-                  path
                 span#permName
               span#envChip.chip
                 span.led

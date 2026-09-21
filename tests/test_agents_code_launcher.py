@@ -953,14 +953,16 @@ def test_the_products_tool_face_is_the_forks_config_intent_minus_the_ledger(grou
 # --- the permission gate: only the hosting with nobody to ask opens it ------------
 
 
-def test_the_acp_render_leaves_the_ask_tier_alone(grounded):
-    """Trunk's permission gate (permissions.mode, default ``ask``) prompts a
-    person before a write or a command, and refuses outright when the turn is
-    not interactive. The ACP hosting keeps that default on purpose: raven
-    dispatching a sub-agent answers those prompts itself
-    (``raven/acp_client/permissions.py`` approves every one), and a person in
-    an editor should still be asked -- opening the tier product-wide would
-    take their prompt away for good."""
+def test_the_acp_render_pins_the_ask_tier(grounded):
+    """The ACP hosting asks, whatever tier trunk defaults to.
+
+    It used to inherit that default, which was the ask tier. The default has
+    since moved to smart, where a reviewer speaks for the ask tier and lets
+    most of it through -- a product decision about raven's own surfaces. This
+    is not one of them: the person is in an editor watching an agent work on
+    their checkout, and the prompt is how they see each write before it lands.
+    Raven dispatching a sub-agent is unaffected either way, since
+    ``raven/acp_client/permissions.py`` answers every prompt itself."""
     from raven.config.loader import load_config
 
     config = load_config(_render(grounded))
