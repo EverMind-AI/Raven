@@ -791,14 +791,23 @@ def test_upgrade_helper_refuses_to_upgrade_without_the_plugin_list(
     popen.assert_called_once()
 
 
-def test_upgrade_helper_descends_the_ladder_one_loss_at_a_time(
+LOST_CHANNELS = "some channels stay unavailable"
+LOST_ENGINES = "Raven-Design and Raven-PPT stay disabled"
+LOST_PLUGINS = "No plugin could be installed"
+
+
+def _ladder(run: Mock) -> list[tuple[list[str], str | None, str]]:
+    return [(c["mode"], c["plugins"], c["requirement"]) for c in _uv_calls(run)]
+
+
+def test_upgrade_helper_keeps_every_plugin_when_only_the_channel_extras_fail(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Engines first (native builds a platform can refuse), then the memory
-    plugin, then the channel extras -- each rung tried cheap then with
-    --force, and every loss said out loud when a lower rung lands."""
-    run = Mock(side_effect=[Mock(returncode=9)] * 7 + [Mock(returncode=0)])
+    """A channel SDK that will not build on this platform says nothing about
+    the plugins. The second rung drops the extras and keeps the whole list,
+    and the only loss reported is the one that happened."""
+    run = Mock(side_effect=[Mock(returncode=9), Mock(returncode=9), Mock(returncode=0)])
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
 
@@ -806,21 +815,68 @@ def test_upgrade_helper_descends_the_ladder_one_loss_at_a_time(
 
     assert status == 0
     channels = f"raven[channels] @ {WHEEL_URL}"
-    assert [(c["mode"], c["plugins"], c["requirement"]) for c in _uv_calls(run)] == [
+    assert _ladder(run) == [
         (REINSTALL, PLUGIN_LIST, channels),
         (FORCE, PLUGIN_LIST, channels),
+        (REINSTALL, PLUGIN_LIST, WHEEL_URL),
+    ]
+    err = capsys.readouterr().err
+    assert LOST_CHANNELS in err
+    assert LOST_ENGINES not in err and LOST_PLUGINS not in err
+
+
+def test_upgrade_helper_keeps_the_channel_extras_when_only_an_engine_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The engines carry native builds a platform can refuse. Dropping them
+    must not cost the channel extras, and the report must not blame them."""
+    run = Mock(side_effect=[Mock(returncode=9)] * 4 + [Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    channels = f"raven[channels] @ {WHEEL_URL}"
+    assert _ladder(run)[-1] == (REINSTALL, MEMORY_ONLY_LIST, channels)
+    err = capsys.readouterr().err
+    assert LOST_ENGINES in err
+    assert LOST_CHANNELS not in err and LOST_PLUGINS not in err
+
+
+def test_upgrade_helper_walks_both_axes_and_lands_on_the_largest_install(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Channels and plugins can fail independently and a failed attempt does
+    not say which, so the rungs cover both axes -- each tried cheap, then with
+    --force -- and the landing rung reports exactly what it lacks."""
+    run = Mock(side_effect=[Mock(returncode=9)] * 11 + [Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    channels = f"raven[channels] @ {WHEEL_URL}"
+    assert _ladder(run) == [
+        (REINSTALL, PLUGIN_LIST, channels),
+        (FORCE, PLUGIN_LIST, channels),
+        (REINSTALL, PLUGIN_LIST, WHEEL_URL),
+        (FORCE, PLUGIN_LIST, WHEEL_URL),
         (REINSTALL, MEMORY_ONLY_LIST, channels),
         (FORCE, MEMORY_ONLY_LIST, channels),
+        (REINSTALL, MEMORY_ONLY_LIST, WHEEL_URL),
+        (FORCE, MEMORY_ONLY_LIST, WHEEL_URL),
         (REINSTALL, None, channels),
         (FORCE, None, channels),
         (REINSTALL, None, WHEEL_URL),
         (FORCE, None, WHEEL_URL),
     ]
     captured = capsys.readouterr()
-    engines = captured.err.index("Raven-Design and Raven-PPT stay disabled")
-    memory = captured.err.index("long-term memory stays off")
-    channels_lost = captured.err.index("Some channels stay unavailable")
-    assert engines < memory < channels_lost
+    assert LOST_PLUGINS in captured.err and LOST_CHANNELS in captured.err
+    assert LOST_ENGINES not in captured.err, "the landing rung has no engines to blame separately"
     assert "Raven upgraded: 0.1.3 -> 0.1.4" in captured.out
 
 
@@ -828,7 +884,7 @@ def test_upgrade_helper_returns_final_uv_status(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    run = Mock(side_effect=[Mock(returncode=9)] * 7 + [Mock(returncode=23)])
+    run = Mock(side_effect=[Mock(returncode=9)] * 11 + [Mock(returncode=23)])
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
 

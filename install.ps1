@@ -521,24 +521,42 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
             Write-Warn "This release carries no plugin list; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
         }
         Write-Info "  installing $wheelUrl"
-        # A rung per loss, loudest first: the engines carry native builds a
-        # platform can refuse on its own, so they go before the memory plugin,
-        # and both go before the channel extras. `raven doctor` names what is
-        # missing. Each `if` reads the exit code of the rung before it.
+        # Two independent things can fail: the channel extras, and the plugins
+        # (the engines' native builds first, the memory plugin after). A failed
+        # attempt does not say which, so the rungs walk both axes and stop at
+        # the first that lands -- the largest install this machine can build --
+        # and warn about exactly what that rung lacks:
+        #   1 channels + all plugins      4 base + memory plugin
+        #   2 base + all plugins          5 channels, no plugins
+        #   3 channels + memory plugin    6 base, no plugins
+        $lostChannels = "Channel dependencies failed to install; some channels stay unavailable (see: raven channels list)."
+        $lostEngines = "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
+        $lostPlugins = "No plugin could be installed; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
+        $landed = $null
         & $UvPath tool install --force @cArgs @pArgs "raven[channels] @ $wheelUrl"
-        if ($LASTEXITCODE -ne 0 -and $mArgs.Count -gt 0) {
-            Write-Warn "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
+        if ($LASTEXITCODE -eq 0) { $landed = @() }
+        if ($null -eq $landed) {
+            & $UvPath tool install --force @cArgs @pArgs $wheelUrl
+            if ($LASTEXITCODE -eq 0) { $landed = @($lostChannels) }
+        }
+        if ($null -eq $landed -and $mArgs.Count -gt 0) {
             & $UvPath tool install --force @cArgs @mArgs "raven[channels] @ $wheelUrl"
+            if ($LASTEXITCODE -eq 0) { $landed = @($lostEngines) }
         }
-        if ($LASTEXITCODE -ne 0 -and $pArgs.Count -gt 0) {
-            Write-Warn "No plugin could be installed; long-term memory stays off (raven doctor explains)."
+        if ($null -eq $landed -and $mArgs.Count -gt 0) {
+            & $UvPath tool install --force @cArgs @mArgs $wheelUrl
+            if ($LASTEXITCODE -eq 0) { $landed = @($lostEngines, $lostChannels) }
+        }
+        if ($null -eq $landed -and $pArgs.Count -gt 0) {
             & $UvPath tool install --force @cArgs "raven[channels] @ $wheelUrl"
+            if ($LASTEXITCODE -eq 0) { $landed = @($lostPlugins) }
         }
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warn "Channel dependencies failed to install; installing base raven only. Some channels stay unavailable (see: raven channels list)."
+        if ($null -eq $landed -and $pArgs.Count -gt 0) {
             & $UvPath tool install --force @cArgs $wheelUrl
-            if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
+            if ($LASTEXITCODE -eq 0) { $landed = @($lostPlugins, $lostChannels) }
         }
+        if ($null -eq $landed) { Fail "Raven install failed." }
+        foreach ($loss in $landed) { Write-Warn $loss }
     }
     & $UvPath tool update-shell | Out-Null
     Write-Ok "Raven installed"

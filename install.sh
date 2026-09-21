@@ -456,24 +456,33 @@ install_raven() {
     install_rung() {
       uv tool install --force $c_args $1 "$2"
     }
-    # A rung per loss, loudest first: the engines carry native builds a
-    # platform can refuse on its own, so they go before the memory plugin, and
-    # both go before the channel extras. `raven doctor` names what is missing.
+    # Two independent things can fail: the channel extras, and the plugins
+    # (the engines' native builds first, the memory plugin after). A failed
+    # attempt does not say which, so the rungs walk both axes and stop at the
+    # first that lands -- the largest install this machine can build -- and
+    # warn about exactly what that rung lacks:
+    #   1 channels + all plugins      4 base + memory plugin
+    #   2 base + all plugins          5 channels, no plugins
+    #   3 channels + memory plugin    6 base, no plugins
+    lost_channels="Channel dependencies failed to install; some channels stay unavailable (see: raven channels list)."
+    lost_engines="A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
+    lost_plugins="No plugin could be installed; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
     if install_rung "$p_args" "raven[channels] @ $wheel_url"; then
       :
-    elif [ -n "$m_args" ] && {
-        warn "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
-        install_rung "$m_args" "raven[channels] @ $wheel_url"
-      }; then
-      :
-    elif [ -n "$p_args" ] && {
-        warn "No plugin could be installed; long-term memory stays off (raven doctor explains)."
-        install_rung "" "raven[channels] @ $wheel_url"
-      }; then
-      :
+    elif install_rung "$p_args" "$wheel_url"; then
+      warn "$lost_channels"
+    elif [ -n "$m_args" ] && install_rung "$m_args" "raven[channels] @ $wheel_url"; then
+      warn "$lost_engines"
+    elif [ -n "$m_args" ] && install_rung "$m_args" "$wheel_url"; then
+      warn "$lost_engines"
+      warn "$lost_channels"
+    elif [ -n "$p_args" ] && install_rung "" "raven[channels] @ $wheel_url"; then
+      warn "$lost_plugins"
+    elif [ -n "$p_args" ] && install_rung "" "$wheel_url"; then
+      warn "$lost_plugins"
+      warn "$lost_channels"
     else
-      warn "Channel dependencies failed to install; installing base raven only. Some channels stay unavailable (see: raven channels list)."
-      install_rung "" "$wheel_url"
+      die "Raven install failed."
     fi
   fi
   # Ensure ~/.local/bin (uv tool bin dir) is on PATH for future shells.

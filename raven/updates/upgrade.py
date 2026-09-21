@@ -367,39 +367,36 @@ def run(argv=None):
     plugin_lines = [authorize_line(line) for line in plugin_lines]
     memory_lines = [line for line in plugin_lines if line.partition(" @ ")[0].strip() == "everos-memory"]
 
-    # A rung per loss, loudest first, each `(plugin list, raven spec, what it
-    # gave up)`: the engines carry native builds a platform can refuse on its
-    # own, so they go before the memory plugin, and both go before the channel
-    # extras. Every rung is what the installer produces on a machine that
-    # cannot build the piece it drops, and `raven doctor` names the missing
-    # piece afterwards.
-    rungs = [(write_list(plugin_lines, "raven-plugins-") if plugin_lines else None, "raven[channels]", None)]
-    if memory_lines and memory_lines != plugin_lines:
-        rungs.append(
-            (
-                write_list(memory_lines, "raven-plugins-memory-"),
-                "raven[channels]",
-                "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains).",
-            )
-        )
-    if plugin_lines:
-        rungs.append((None, "raven[channels]", "No plugin could be installed; long-term memory stays off (raven doctor explains)."))
-    rungs.append(
-        (
-            None,
-            "raven",
-            "Channel dependencies failed to install; installed base raven only. "
-            "Some channels stay unavailable (see: raven channels list).",
-        )
+    # Two independent things can fail: the channel extras, and the plugins
+    # (the engines' native builds first, the memory plugin after). A failed
+    # attempt does not say which, so the rungs walk both axes and stop at the
+    # first that lands -- the largest install this machine can build -- and
+    # report exactly what that rung lacks:
+    #   1 channels + all plugins      4 base + memory plugin
+    #   2 base + all plugins          5 channels, no plugins
+    #   3 channels + memory plugin    6 base, no plugins
+    lost_channels = "Channel dependencies failed to install; some channels stay unavailable (see: raven channels list)."
+    lost_engines = "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
+    lost_plugins = (
+        "No plugin could be installed; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
     )
+    full = write_list(plugin_lines, "raven-plugins-") if plugin_lines else None
+    memory = write_list(memory_lines, "raven-plugins-memory-") if memory_lines and memory_lines != plugin_lines else None
+    rungs = [(full, "raven[channels]", []), (full, "raven", [lost_channels])]
+    if memory is not None:
+        rungs.append((memory, "raven[channels]", [lost_engines]))
+        rungs.append((memory, "raven", [lost_engines, lost_channels]))
+    if full is not None:
+        rungs.append((None, "raven[channels]", [lost_plugins]))
+        rungs.append((None, "raven", [lost_plugins, lost_channels]))
 
     try:
         status = 0
-        for index, (plugin_list, spec, _loss) in enumerate(rungs):
+        for plugin_list, spec, losses in rungs:
             requirement = wheel_url if spec == "raven" else f"{spec} @ {wheel_url}"
             status = install(requirement, plugin_list)
             if status == 0:
-                for _list, _spec, loss in rungs[1 : index + 1]:
+                for loss in losses:
                     print(f"Warning: {loss}", file=sys.stderr)
                 break
         else:
