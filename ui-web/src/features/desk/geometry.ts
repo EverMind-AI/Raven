@@ -86,7 +86,7 @@ export function deskReserve(desk: {
 }
 
 const CHAT_MIN_FALLBACK = 430
-const FILE_PANE_INITIAL_WIDTH = 720
+const FILE_PANE_INITIAL_WIDTH = 960
 const AGENT_PANE_INITIAL_WIDTH = 440
 const WORKSPACE_EDGE_GUTTER = 8
 const COLUMN_GAP = 6

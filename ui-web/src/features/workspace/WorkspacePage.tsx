@@ -7,7 +7,7 @@ import { show as menuAt } from '../../state/menu'
 import { show as toast } from '../../state/toast'
 import * as deliveries from './deliveries'
 import {
-  RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL,
+  RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL, framedRenderURL,
   hostPlatform, mdHtml, openInApp, renderURL, runURL, setAppFor,
 } from './store'
 import * as store from './store'
@@ -382,6 +382,34 @@ export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile |
   )
 }
 
+/* `data.detail` first: on a refused fs call `message` is the wire CODE
+   (`config_validation_error`), and the sentence the reader can act on -- the
+   host has no `xdg-open`, the path is outside the fence -- rides in the detail.
+   A dropped socket has a message and no detail, hence the fallback. */
+const whySaid = (e: unknown): string => {
+  const said = e as { data?: { detail?: string }; message?: string } | null
+  return said?.data?.detail || said?.message || String(e)
+}
+
+/* Two controls for a deck, in words: its own file, and the folder it sits
+   in. Nothing else -- no application picker, no viewer toolbar in the frame
+   below. The deck is read here and changed by talking to the agent; what a
+   reader still needs from the bar is the bytes, or the file among the others
+   in the file manager. Reveal runs where the GATEWAY runs, like every fs call,
+   so on a remote serve it shows the file on that host. */
+function DeckActions({ f, revealTip }: { f: WsFile; revealTip: string }): JSX.Element {
+  const saveAt = deliveries.byPath(f.path)?.downloadPath || fileURL(f.path)
+  const reveal = (): void => {
+    store.source().reveal?.(f.path).then(() => {}, (e: unknown) => toast(whySaid(e)))
+  }
+  return (
+    <span className="workspace-deck-acts">
+      <a className="mini" href={saveAt} download={f.path.split('/').pop() || ''}>{t('gui.ws.download')}</a>
+      <button className="mini ghost" onClick={reveal}>{revealTip}</button>
+    </span>
+  )
+}
+
 function Fbar({ f, running }: { f: WsFile | null; running: boolean }): JSX.Element {
   const platform = hostPlatform()
   /* Subscribed for the same reason BinNote is: the delivery row a save link
@@ -438,7 +466,7 @@ function Fbar({ f, running }: { f: WsFile | null; running: boolean }): JSX.Eleme
           ))}
         </div>
       ) : null}
-      {f && (f.kind === 'pdf' || f.kind === 'html' || f.kind === 'pptx') ? (
+      {f && (f.kind === 'pdf' || f.kind === 'html') ? (
         <button
           className="ghost-ic tipdn"
           data-tip={t('gui.ws.file_newtab')}
@@ -454,28 +482,14 @@ function Fbar({ f, running }: { f: WsFile | null; running: boolean }): JSX.Eleme
           <Ico d={ICO.ext} />
         </button>
       ) : null}
-      {/* The frame shows a PDF of the deck, so the deck itself is reachable
-          from here: the delivery route when this session delivered it, the
-          viewer route otherwise. */}
-      {f && f.kind === 'pptx' ? (
-        <a
-          className="ghost-ic tipdn"
-          data-tip={t('gui.ws.save_copy')}
-          aria-label={t('gui.ws.save_copy')}
-          href={deliveries.byPath(f.path)?.downloadPath || fileURL(f.path)}
-          download={f.path.split('/').pop() || ''}
-        >
-          <Ico d={ICO.save} />
-        </a>
-      ) : null}
-      {f ? (
+      {f && f.kind === 'pptx' ? <DeckActions f={f} revealTip={revealTip} /> : null}
+      {f && f.kind !== 'pptx' ? (
         <button
           className="ghost-ic tipdn"
           data-tip={revealTip}
           aria-label={revealTip}
           onClick={() => {
-            store.source().reveal?.(f.path).then(() => {}, (e: unknown) =>
-              toast(((e as Error) && (e as Error).message) || String(e)))
+            store.source().reveal?.(f.path).then(() => {}, (e: unknown) => toast(whySaid(e)))
           }}
         >
           <Ico d={ICO.reveal} />
@@ -567,7 +581,7 @@ function FileBody({ f, running, onRun }: { f: WsFile; running: boolean; onRun: (
     const parsed = f.kind === 'json' && !asSource ? parseJsonCapped(f.text) : null
     body = parsed ? <JsonView v={parsed.v} /> : <CodeLines text={f.text} kind={f.kind} />
   }
-  return <div className="fview">{body}</div>
+  return <div className={asFrame || asDeck ? 'fview workspace-fill' : 'fview'}>{body}</div>
 }
 
 /* A deck is shown as the PDF the gateway renders of it. The render is asked
@@ -580,8 +594,14 @@ function FileBody({ f, running, onRun }: { f: WsFile; running: boolean; onRun: (
 function DeckBody({ f }: { f: WsFile }): JSX.Element {
   const [stage, setStage] = useState<'convert' | 'frame' | 'shown'>('convert')
   const [failed, setFailed] = useState<string | null>(null)
-  const url = renderURL(f.path)
+  /* A deck the agent rebuilt and delivered again keeps its path; the delivery's
+     own stamp is what tells this frame the bytes behind the path moved. */
+  useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
+  const version = (deliveries.byPath(f.path) as { when?: number | null } | null)?.when ?? null
+  const url = renderURL(f.path) + (version ? '&v=' + version : '')
   useEffect(() => {
+    setStage('convert')
+    setFailed(null)
     let alive = true
     const said = (e: unknown): string => ((e as Error) && (e as Error).message) || String(e)
     fetch(url, { credentials: 'same-origin' }).then(async (r) => {
@@ -613,7 +633,7 @@ function DeckBody({ f }: { f: WsFile }): JSX.Element {
     <>
       {stage !== 'shown' ? <div className="vspin">{t('gui.ws.file_rendering')}</div> : null}
       {stage !== 'convert'
-        ? <iframe referrerPolicy="no-referrer" src={url} onLoad={() => setStage('shown')} />
+        ? <iframe key={url} referrerPolicy="no-referrer" src={framedRenderURL(f.path, version)} onLoad={() => setStage('shown')} />
         : null}
     </>
   )

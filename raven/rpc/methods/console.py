@@ -1795,6 +1795,53 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
     }
 
 
+async def deck_templates_list(params: dict, *, agent_loop_factory=None) -> dict:
+    """The bundled deck templates, with a cover each where this host has drawn one.
+
+    ``available`` is false without the deck engine, and the page hides the
+    picker on it: a button that opens an empty gallery is a broken button.
+    ``pending`` is true while a cover is still being drawn in the background,
+    and the page asks again until it is not.
+    """
+    from raven.rpc import deck_templates
+
+    rows, pending = await deck_templates.listing(with_covers=bool(params.get("covers", True)))
+    return {"templates": rows, "available": deck_templates.templates_dir() is not None, "pending": pending}
+
+
+async def deck_templates_pages(params: dict, *, agent_loop_factory=None) -> dict:
+    """Every page of one bundled template, for the reader to flip through before picking."""
+    from raven.rpc import deck_templates
+
+    name = str(params.get("name") or "").strip()
+    template = deck_templates.find(name)
+    if template is None:
+        raise ConfigValidationError(f"no bundled deck template named {name!r}")
+    pages = await deck_templates.pages_for(template)
+    return {"pages": [deck_templates.data_url(p) for p in pages]}
+
+
+async def deck_templates_pick(params: dict, *, agent_loop_factory=None) -> dict:
+    """Deposit a bundled template under ``<agent home>/uploads`` and answer as ``fs.upload`` does.
+
+    The route that reaches the deck engine opens on a ``.pptx`` the turn hands
+    over, and ``turn.send`` admits exactly the paths ``fs.upload`` mints -- so a
+    picked template is made into one of those rather than into a new kind of
+    thing the turn would have to learn.
+    """
+    from raven.rpc import deck_templates
+
+    name = str(params.get("name") or "").strip()
+    template = deck_templates.find(name)
+    if template is None:
+        raise ConfigValidationError(f"no bundled deck template named {name!r}")
+    try:
+        target = deck_templates.deposit(template, _upload_root() / _UPLOAD_DIR)
+    except OSError as e:
+        raise ConfigValidationError(f"cannot place the template under uploads: {e}") from None
+    return {"path": f"{_UPLOAD_DIR}/{target.name}", "abs_path": str(target), "size": target.stat().st_size}
+
+
 async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
     """Show one file in the host's file manager, selected.
 
@@ -2013,6 +2060,9 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("fs.list", bind(fs_list))
     dispatcher.register("fs.read", bind(fs_read))
     dispatcher.register("fs.upload", bind(fs_upload))
+    dispatcher.register("deck.templates.list", bind(deck_templates_list))
+    dispatcher.register("deck.templates.pages", bind(deck_templates_pages))
+    dispatcher.register("deck.templates.pick", bind(deck_templates_pick))
     dispatcher.register("fs.reveal", bind(fs_reveal))
     dispatcher.register("fs.open", bind(fs_open))
     dispatcher.register("deliverables.list", bind(deliverables_list))

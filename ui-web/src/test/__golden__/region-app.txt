@@ -111,6 +111,10 @@ div.app
               button#attBtn.tool-btn
                 svg
                   path
+              button#tplBtn.tool-btn
+                svg
+                  rect
+                  path
               button#permChip.chip
                 svg.pico
                   path
