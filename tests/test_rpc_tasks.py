@@ -1054,9 +1054,9 @@ async def test_a_dag_node_that_finished_mid_run_reads_the_account_the_runner_set
 
 
 async def test_a_settled_spawn_ignores_a_live_activity_under_its_key(workspace: Path) -> None:
-    """The live index is keyed by a record id that is unique per conversation
-    only: a finished spawn must not take the numbers of another run collected
-    under the same id."""
+    """A settled row's account is the record's, and an entry still in the live
+    index under this record's address belongs to a run this row is not
+    describing -- so a finished spawn keeps its on-disk nulls."""
     from raven.agent.subagent import activity as activity_mod
 
     session_dir = _session_dir(workspace)

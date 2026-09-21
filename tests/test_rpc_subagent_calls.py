@@ -854,6 +854,8 @@ async def test_two_conversations_that_named_a_spawn_alike_each_read_their_own_li
         if sum(1 for t in mgr._running_tasks.values() if not t.done()) <= 1:
             break
         await asyncio.sleep(0.01)
+    else:
+        pytest.fail("the other conversation's run never finished, so its exit was never tested")
     still_a = json.dumps(await subagent_context({"id": "step1", "session_id": SESSION}))
     assert f"{SESSION} working" in still_a, "its exit dropped only its own entry"
 

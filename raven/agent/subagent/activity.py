@@ -239,12 +239,12 @@ def forget_settled(keys: Iterable[str]) -> None:
 _live_instances: dict[tuple[str, str, str], RunActivity] = {}
 """The same activities, addressed the way a *conversation* reader has to ask.
 
-``_live`` is keyed by the record's own directory, which is what the panel
-watching one call already holds. A reader of an instance's conversation holds
-``(session_key, agent, handle)`` and nothing else -- the record name is a task id
-it never saw -- so the same run is indexed twice rather than having that reader
-guess at a directory layout. Entries live exactly as long as their ``collecting``
-block, as ``_live``'s do."""
+``_live`` is keyed by the record's address -- a node root the panel watching
+one call derives from its session, plus an id it holds. A reader of an
+instance's conversation holds ``(session_key, agent, handle)`` and nothing else
+-- the node id is one it never saw -- so the same run is indexed twice rather
+than having that reader guess at a directory layout. Entries live exactly as
+long as their ``collecting`` block, as ``_live``'s do."""
 
 
 @contextmanager
