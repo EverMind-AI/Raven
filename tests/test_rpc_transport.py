@@ -609,8 +609,38 @@ async def test_a_rebuilt_asset_is_not_served_from_a_stale_browser_cache(tmp_path
         again = await client.get("/assets/providers/acme.svg", headers={"If-None-Match": etag})
         assert again.status == 304, "an unchanged asset must still cost no bytes"
 
-        # The page itself is a different question and keeps whatever it had.
-        assert (await client.get("/")).status == 200
+        # The page beside them carries the same directive: the shape users run.
+        assert (await client.get("/")).headers["Cache-Control"] == "no-cache"
+    finally:
+        await client.close()
+
+
+async def test_a_rebuilt_page_is_not_served_from_a_stale_browser_cache(tmp_path: Path) -> None:
+    """The page has the assets' problem, and a worse case of it.
+
+    The sign-in page at ``/auth`` ends by navigating the tab to ``/``, and a
+    browser answers that navigation from a copy it still guesses fresh -- a
+    lifetime read off the last-modified date, hours long for a build that was
+    days old when the tab first loaded it. So a rebuilt page kept opening as
+    the build before it until a hard reload. Holds with no assets directory at
+    all: the directive is the page's own, not a side effect of the assets mount.
+    """
+    static = tmp_path / "dist"
+    static.mkdir()
+    (static / "index.html").write_text("<html>", encoding="utf-8")
+
+    client = TestClient(TestServer(build_app(WsGateway(), static)))
+    await client.start_server()
+    try:
+        page = await client.get("/")
+        assert page.status == 200
+        assert page.headers["Cache-Control"] == "no-cache"
+
+        etag = page.headers.get("ETag")
+        assert etag, "revalidation needs something to revalidate against"
+        again = await client.get("/", headers={"If-None-Match": etag})
+        assert again.status == 304, "an unchanged page must still cost no bytes"
+        assert again.headers["Cache-Control"] == "no-cache", "a 304 must carry the directive too"
     finally:
         await client.close()
 
