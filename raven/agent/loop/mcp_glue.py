@@ -181,21 +181,24 @@ class McpGlueMixin:
           that overtakes it, which since ``prewarm_mcp`` is the ordinary shape of
           a first turn rather than a rarity: the turn no longer waits, so it can
           be assembled while servers are still coming up.
-        * ``connected`` while the catalog is folded -- the schemas are withheld on
-          purpose, and nothing else in the prompt names an installed server, so a
-          model that does not think to search reports a capability it holds as
-          missing. ``tool_search``'s own description says a catalog exists; only
-          this says what is in it. Gated on
-          ``ToolSearchController.search_visible`` because below the fold those
-          tools are in the array and the line would be false.
+        * ``connected`` while the catalog is folded -- nothing else in the prompt
+          names an installed server, so a model that does not think to search
+          reports a capability it holds as missing. ``tool_search``'s own
+          description says a catalog exists; only this says what is in it.
 
-          Its count is derived from what the fold actually withholds, not from the
+          This line states an inventory and promises no route, which is what keeps
+          it true. This block is rendered once per turn, while the fold is decided
+          per model call against an array a ``before_iteration`` hook may narrow
+          first (``HookDecision.modified_tools``) -- so a turn-level sentence about
+          what this request folded, or about reaching it through ``tool_search`` /
+          ``tool_call``, can be falsified after it is written. "This server is
+          connected and offers N tools" cannot.
+
+          The count is the server's tools this turn's array carries, not the
           manager's ``tool_count``: that one counts every wrapper the server
-          registered, including one the operator switched off (``search`` filters
-          it out and ``tool_call`` refuses it, so promising it is the false
-          capability metadata this line exists to prevent) and one named in
-          ``toolSearch.always_visible`` (whose schema is in the array, so it is
-          not hidden at all). A server with nothing withheld gets no line.
+          registered, including one the operator switched off, which no surface
+          offers. The fold gate is only about noise -- below it every schema is in
+          the array and the line tells the model nothing it cannot see.
 
         Rendered into the runtime-context block, not the system prompt -- the
         set changes turn to turn and must never be cached with the prefix.
@@ -212,10 +215,9 @@ class McpGlueMixin:
         # capability.
         controller = getattr(self, "tool_search_controller", None)
         folded = controller is not None and controller.search_visible()
-        withheld_by_fold: set[str] = set()
+        offered: set[str] = set()
         if folded:
-            shipped = {d["function"]["name"] for d in self.tools.get_definitions()}
-            withheld_by_fold = shipped - controller.visible_names()
+            offered = {d["function"]["name"] for d in self.tools.get_definitions()}
         notices = []
         for snap in mgr.status():
             if not snap.get("enabled", True):
@@ -233,13 +235,9 @@ class McpGlueMixin:
                     f"finishes, so they are available from a later turn without anyone acting."
                 )
             elif folded and snap["connected"]:
-                hidden = [n for n in self.tools.names_from(snap["name"]) if n in withheld_by_fold]
-                if hidden:
-                    notices.append(
-                        f"MCP plugin '{snap['name']}': connected, {len(hidden)} tool(s). Their "
-                        f"schemas are not in this turn's definitions because the catalog is folded "
-                        f"-- tool_search finds them by keyword, tool_call invokes them by name."
-                    )
+                mine = [n for n in self.tools.names_from(snap["name"]) if n in offered]
+                if mine:
+                    notices.append(f"MCP plugin '{snap['name']}': connected, offering {len(mine)} tool(s).")
         return notices
 
     def prewarm_mcp(self) -> None:

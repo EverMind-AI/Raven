@@ -468,7 +468,10 @@ async def test_a_folded_catalog_names_its_connected_servers(workspace) -> None:
     notes = loop._mcp_tool_notices()
     assert len(notes) == 1, notes
     assert "svc" in notes[0] and "2 tool(s)" in notes[0]
-    assert "tool_search" in notes[0] and "tool_call" in notes[0], "the line must name both routes"
+    # No route named on purpose: this block is rendered once per turn, and what
+    # the request finally carries is decided per model call, after a hook may
+    # have narrowed the array. An inventory survives that; a promise does not.
+    assert "tool_search" not in notes[0] and "tool_call" not in notes[0]
 
     # The gate is the fold, not the connection: below the threshold those tools
     # are in the array and the sentence would be false.
@@ -482,9 +485,9 @@ async def test_a_folded_catalog_names_its_connected_servers(workspace) -> None:
     assert unfolded._mcp_tool_notices() == []
 
 
-async def test_the_count_is_what_the_fold_withholds_not_what_the_server_registered(workspace) -> None:
-    """A switched-off tool is not findable, so counting it promises a capability
-    the model cannot reach -- the false metadata this line exists to prevent."""
+async def test_the_count_is_what_the_array_carries_not_what_the_server_registered(workspace) -> None:
+    """A switched-off tool is on no surface at all, so counting it advertises a
+    capability the model cannot reach however the request is finally assembled."""
     from raven.config.schema import ToolSearchConfig
 
     one_off = _loop(
@@ -506,7 +509,7 @@ async def test_the_count_is_what_the_fold_withholds_not_what_the_server_register
     )
     with patch(_PATCH, new=_fake_connect(["search", "create"])):
         await all_off._connect_mcp()
-    assert all_off._mcp_tool_notices() == [], "a server with nothing withheld gets no line"
+    assert all_off._mcp_tool_notices() == [], "a server offering nothing gets no line"
 
 
 async def test_tool_notices_ride_the_runtime_context_block(workspace) -> None:
