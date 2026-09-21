@@ -76,9 +76,6 @@ export function PermPopover(): JSX.Element {
               aria-checked={row.ticked ? 'true' : 'false'}
               onClick={() => perm.pick(row.id)}
             >
-              <span className="pic">
-                <svg viewBox="0 0 24 24" aria-hidden="true" dangerouslySetInnerHTML={{ __html: row.ico }} />
-              </span>
               <span className="txt"><span className="nm">{row.name}</span><span className="sub">{row.sub}</span></span>
               {row.ticked ? (
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className="tick">
