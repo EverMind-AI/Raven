@@ -419,7 +419,7 @@ async def test_a_reader_status_error_names_the_vendor_and_status_only(
 # A refused key pauses the tool instead of failing every call the same way
 
 
-@pytest.mark.parametrize("status", sorted(web_mod.REFUSAL_STATUSES))
+@pytest.mark.parametrize("status", sorted(web_mod.FETCH_REFUSAL_STATUSES))
 @pytest.mark.parametrize("vendor", sorted(FETCH_PROVIDERS))
 async def test_a_reader_refusing_the_key_pauses_the_tool(
     vendor: str, status: int, monkeypatch: pytest.MonkeyPatch, _open_gate: None
@@ -495,17 +495,85 @@ async def test_a_status_that_is_not_about_the_key_does_not_pause(
     assert len(recorder.calls) == 2
 
 
+class _OneHostRefused:
+    """Stands in for ``httpx.AsyncClient``: one host answers ``status``, every other serves a page."""
+
+    def __init__(self, host: str, status: int) -> None:
+        self.host, self.status = host, status
+        self.calls: list[str] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> "_OneHostRefused":
+        return self
+
+    async def __aenter__(self) -> "_OneHostRefused":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        self.calls.append(url)
+        request = httpx.Request("GET", url)
+        if self.host in url:
+            return httpx.Response(self.status, json={"code": self.status}, request=request)
+        return httpx.Response(200, text="PAGE", request=request)
+
+
+@pytest.mark.parametrize("status", sorted(web_mod.SEARCH_REFUSAL_STATUSES))
+async def test_a_keyless_reader_is_never_paused_by_a_status(
+    status: int, monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    """The default reader is Jina without a key, and Jina answers an anonymous
+    request for a domain it has blocked with 403 for every URL under it. A
+    request that carried no key cannot have had one refused, so no status
+    pauses the tool: the blocked page is reported as before, the next URL is
+    fetched, and nobody is told to replace a key that does not exist."""
+    reader = _OneHostRefused("blocked.example", status)
+    monkeypatch.setattr(web_mod.httpx, "AsyncClient", reader)
+    tool = WebFetchTool(provider="jina")
+    assert tool.api_key == ""
+
+    blocked = json.loads(await tool.execute("https://blocked.example/page"))
+    served = [json.loads(await tool.execute(url)) for url in ("https://a.example/", "https://b.example/")]
+
+    assert blocked["error"] == f"Jina Reader answered HTTP {status}" and "paused" not in blocked
+    assert [page["text"] for page in served] == ["PAGE", "PAGE"]
+    assert len(reader.calls) == 3, "every URL reached the reader"
+
+
+@pytest.mark.parametrize("vendor", sorted(FETCH_PROVIDERS))
+async def test_a_readers_403_is_about_the_page_not_the_key(
+    vendor: str, monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    """Through a reader a 403 speaks of the URL, not the key: Jina answers 403
+    for a domain it blocks, Firecrawl for a site its policy does not scrape.
+    It is reported per URL, and the next URL is fetched."""
+    with _patched(monkeypatch, {}, status=403) as recorder:
+        tool = WebFetchTool(api_key="k", provider=vendor)
+        first = json.loads(await tool.execute("https://a.example"))
+        second = json.loads(await tool.execute("https://b.example"))
+
+    assert len(recorder.calls) == 2, "a 403 pauses nothing"
+    assert first["error"] == second["error"] == f"{FETCH_PROVIDERS[vendor].label} answered HTTP 403"
+    assert "paused" not in first and "paused" not in second
+
+
+@pytest.mark.parametrize("status", sorted(web_mod.SEARCH_REFUSAL_STATUSES))
 @pytest.mark.parametrize("vendor", sorted(SEARCH_PROVIDERS))
-async def test_a_search_vendor_refusing_the_key_pauses_the_tool(vendor: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    with _patched(monkeypatch, {}, status=401) as recorder:
+async def test_a_search_vendor_refusing_the_key_pauses_the_tool(
+    vendor: str, status: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A search vendor's API is the endpoint, so its 403 speaks of the key the
+    way 401 and 402 do: Serper answers a rejected key with 403."""
+    with _patched(monkeypatch, {}, status=status) as recorder:
         tool = WebSearchTool(api_key="SECRET-KEY-123", provider=vendor)
         first = await tool.execute("q1")
         second = await tool.execute("q2")
 
     assert len(recorder.calls) == 1
     label = SEARCH_PROVIDERS[vendor].label
-    assert first.startswith(f"Error: {label} refused the key (HTTP 401). ")
-    assert second.startswith(f"Error: {label} refused the key (HTTP 401). ")
+    assert first.startswith(f"Error: {label} refused the key (HTTP {status}). ")
+    assert second.startswith(f"Error: {label} refused the key (HTTP {status}). ")
     assert "SECRET-KEY-123" not in first + second
     assert "tools.web.search.provider" in first and "not sent" in second
 

@@ -117,11 +117,18 @@ def resolve_vendor_key(
     return None
 
 
-# The statuses that are about the key, not the page or the query: a rejected
-# key, an account out of credit, a key that may not make this request. Every
-# call after one of these meets the same answer until the key or the account
-# changes, so the tool stops asking instead of failing the same way per call.
-REFUSAL_STATUSES = frozenset({401, 402, 403})
+# The statuses that are the vendor's verdict on the key or the account rather
+# than on the page or the query: a rejected key, an account out of credit, a
+# key that may not make this request. Every call after one of these meets the
+# same answer until the key or the account changes, so the tool stops asking
+# instead of failing the same way per call. A search vendor's API is the
+# endpoint, so all three speak of the account (Serper answers a rejected key
+# with 403). A reader's 403 can be about the URL instead: Jina answers an
+# anonymous request for a domain it has blocked with 403, and Firecrawl
+# answers 403 for a site its policy does not scrape, so a reader pauses on
+# 401 and 402 only.
+SEARCH_REFUSAL_STATUSES = frozenset({401, 402, 403})
+FETCH_REFUSAL_STATUSES = frozenset({401, 402})
 _REFUSAL_MEANING = {
     401: "the key was rejected",
     402: "the account is out of credit (payment required)",
@@ -130,8 +137,7 @@ _REFUSAL_MEANING = {
 # How long a refusal keeps the tool from asking again. A topped-up account or a
 # rotated key takes effect on the vendor's side within minutes, and the tool
 # must not stay dead for the process's life once the user has fixed it. A key
-# that changes (a config reload builds the tool with the new one) lifts the
-# pause at once.
+# that changes (the tools read theirs live) lifts the pause at once.
 VENDOR_REFUSAL_PAUSE_S = 600.0
 
 
@@ -141,18 +147,22 @@ class _VendorRefusal:
     Held per tool rather than per session: the key is shared by every session
     of the process, so a refusal one session met is the answer every other
     session would get. ``note`` records a refusal status and says whether it
-    was one; ``active`` is the status a call with ``key`` would meet again, or
-    ``None`` once the key changed or the pause ran out, at which point one real
-    request goes through and re-arms the pause if it is refused again.
+    was one; a status from a request that carried no key never is, since there
+    was no key to refuse (Jina reads pages unauthenticated, and its 403 for a
+    domain it blocks names the domain, not a key). ``active`` is the status a
+    call with ``key`` would meet again, or ``None`` once the key changed or the
+    pause ran out, at which point one real request goes through and re-arms
+    the pause if it is refused again.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, statuses: frozenset[int]) -> None:
+        self.statuses = statuses
         self.status: int | None = None
         self.key: str | None = None
         self.at: float = 0.0
 
     def note(self, status: int, key: str) -> bool:
-        if status not in REFUSAL_STATUSES:
+        if status not in self.statuses or not key:
             return False
         self.status, self.key, self.at = status, key, time.monotonic()
         return True
@@ -251,7 +261,7 @@ class WebSearchTool(Tool):
         # added there serves the next call; a plain string stays a snapshot.
         self._api_key_source: "Callable[[], str] | None" = api_key if callable(api_key) else None
         self._init_api_key: str | None = None if callable(api_key) else api_key
-        self._refusal = _VendorRefusal()
+        self._refusal = _VendorRefusal(SEARCH_REFUSAL_STATUSES)
         self.max_results = max_results
         self.proxy = proxy
         # The vendor is live for the same reason the key is, and they have to
@@ -619,7 +629,7 @@ class ImageSearchTool(Tool):
         # A callable is the live form (a reader over the config file), as for web_search.
         self._api_key_source: "Callable[[], str] | None" = api_key if callable(api_key) else None
         self._init_api_key: str | None = None if callable(api_key) else api_key
-        self._refusal = _VendorRefusal()
+        self._refusal = _VendorRefusal(SEARCH_REFUSAL_STATUSES)
         self.max_results = max_results
         self.proxy = proxy
         self._provider_source: "Callable[[], str] | None" = provider if callable(provider) else None
@@ -898,7 +908,7 @@ class WebFetchTool(Tool):
         self.max_chars = max_chars
         self.proxy = proxy
         self._substitution_said = False
-        self._refusal = _VendorRefusal()
+        self._refusal = _VendorRefusal(FETCH_REFUSAL_STATUSES)
 
     @property
     def provider(self) -> str:

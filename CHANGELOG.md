@@ -93,9 +93,10 @@ All notable changes to Raven are documented here.
 ### Fixed
 
 - `web_fetch`, `web_search` and `image_search` stop asking a vendor that has
-  refused the key. A 401, 402 or 403 is about the key or the account, not the
-  page, and every later call met the same answer: on 2026-09-20 Jina answered
-  402 on every fetch of a session and the tool returned one identical error
+  refused the key. A 401 or 402 from a reader, or a 401, 402 or 403 from a
+  search vendor, is about the key or the account, not the page or the query,
+  and every later call met the same answer: on 2026-09-20 Jina answered 402
+  on every fetch of a session and the tool returned one identical error
   envelope per call. The refusal is now remembered per tool: later calls are
   answered without a request, with the same `error` (so the loop's failure
   streak reads them as one cause), what the status means, and what the user
@@ -104,7 +105,11 @@ All notable changes to Raven are documented here.
   reader now reads its key live, in both the main loop and the sub-agent
   lane, so a key set at that slot reaches the next call and lifts the
   pause without a restart; otherwise one real request is sent again after
-  ten minutes and re-arms it if refused.
+  ten minutes and re-arms it if refused. A request that carried no key is
+  never paused, and a reader's 403 pauses nothing: the default reader, Jina
+  without a key, answers a domain it has blocked with 403, and Firecrawl
+  answers 403 for a site its policy does not scrape, so through a reader
+  that status is about the page and is reported per URL as before.
 
 - The `find`, `list_dir` (recursive) and pure-Python `grep` tools can no
   longer freeze the gateway on a large tree. One `find` over a home
