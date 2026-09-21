@@ -91,6 +91,22 @@ describe('settings store', () => {
   })
 })
 
+describe('settings store, what a reopen drops', () => {
+  it('opening again clears what the pages fetched for themselves', async () => {
+    setSources({ settings: { load: async () => snapOf('m') } as unknown as SettingsSource })
+    /* Both carry an answer from an earlier open. `refresh` reloads the
+       snapshot and cannot touch these two, so without the clear a dialog
+       opened once showed its first answer for the life of the page -- a
+       session archived from the rail in between never reached the archive
+       page, and the usage totals stayed at whatever they were on first open. */
+    store.set({ usage: null, archived: [] })
+    await store.open()
+    expect(store.get().usage).toBe(undefined)
+    expect(store.get().archived).toBe(null)
+    settingsDialog.close()
+  })
+})
+
 describe('settings store, the inventory push', () => {
   it('refreshSoon reloads once per burst while the dialog is open, and not at all while it is down', async () => {
     vi.useFakeTimers()
