@@ -441,6 +441,26 @@ describe('the permission approval sheet', () => {
     }
   })
 
+  /* The gate cuts an oversized account down to what a person reads
+     (PermissionGate._clamped) and marks it. Rendering the clipped value without
+     the mark is the one thing the cap must not cause: the reader would answer
+     about a change they can only see part of, with nothing saying so. */
+  it('says so in every layout when the engine shortened the evidence', () => {
+    const cases = [
+      { kind: 'file.write', evidence: { path: '/w/big.py', created: false, diff: '-a\n+b', truncated: true } },
+      { kind: 'mcp.call', evidence: { server: 's', tool: 't', input: 'x'.repeat(40), truncated: true } },
+      { kind: 'shell.exec', evidence: { command: 'rm -rf x', cwd: '/w', truncated: true } },
+      { kind: 'unknown', evidence: { input: 'y'.repeat(40), truncated: true } },
+    ]
+    for (const c of cases) {
+      openApproval(fresh({ ...base, ...c, family: '' }), handlers())
+      expect(document.querySelector('.cp-ev-cut')?.textContent, c.kind).toBe('gui.confirm.ev.cut')
+    }
+    /* And stays quiet when nothing was cut. */
+    openApproval(fresh({ ...base, kind: 'file.write', family: '', evidence: { path: '/w/a.py', diff: '-a\n+b' } }), handlers())
+    expect(document.querySelector('.cp-ev-cut')).toBeNull()
+  })
+
   it('lays out a write as its path and diff, an MCP call as its tool and input, the rest as arguments', () => {
     const diff = '--- a\n+++ b\n@@ -1 +1 @@\n-x = 1\n+x = 2'
     openApproval(fresh({ ...base, kind: 'file.write', family: '', evidence: { path: '/w/a.py', created: false, diff } }), handlers())

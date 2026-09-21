@@ -28,6 +28,7 @@ export interface GateWords {
   readonly deny: string
   readonly created: string
   readonly nodiff: string
+  readonly cut: string
 }
 
 export interface GateProps {
@@ -50,6 +51,12 @@ const diffClass = (line: string): string =>
 function EvidenceBlock(
   { kind, evidence, command, words }: { kind: string; evidence: Evidence; command: string; words: GateWords },
 ): JSX.Element {
+  /* The gate cuts an oversized account down to what a person reads and says so
+     here. Answering about a change you can only see part of is the one thing
+     the cap must not cause, so the sheet says it was shortened wherever the
+     flag is set -- and says it below the evidence, where the reader has just
+     run out of it. */
+  const cut = evidence.truncated === true ? <div className="cp-ev-cut">{words.cut}</div> : null
   if (kind === 'file.write') {
     /* The file header names the path the line above already shows, and a
        two-line change should not spend its room on it. */
@@ -64,6 +71,7 @@ function EvidenceBlock(
             </pre>
           )
           : <div className="cp-ev-none">{words.nodiff}</div>}
+        {cut}
       </div>
     )
   }
@@ -72,11 +80,19 @@ function EvidenceBlock(
       <div className="what cp-ev">
         <div className="cp-ev-path">{str(evidence.server)}.{str(evidence.tool)}</div>
         <pre className="cp-json">{JSON.stringify(evidence.input ?? {}, null, 2)}</pre>
+        {cut}
       </div>
     )
   }
-  if (kind === 'shell.exec') return <div className="what">{str(evidence.command) || command}</div>
-  return <pre className="what cp-json">{JSON.stringify(evidence.input ?? evidence, null, 2)}</pre>
+  if (kind === 'shell.exec') {
+    return <div className="what">{str(evidence.command) || command}{cut}</div>
+  }
+  return (
+    <div className="what cp-ev">
+      <pre className="cp-json">{JSON.stringify(evidence.input ?? evidence, null, 2)}</pre>
+      {cut}
+    </div>
+  )
 }
 
 export function GateSheet({ kind, evidence, command, words, opts, onDeny }: GateProps): JSX.Element {

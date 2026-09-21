@@ -66,6 +66,9 @@
 .cp-ev { display: grid; gap: 6px; }
 .cp-ev-path { font-weight: 600; }
 .cp-ev-none { color: var(--faint); font-style: italic; }
+/* Not faint like `.cp-ev-none`: that says there was nothing to show, this says
+   there is more than is shown, and the reader is about to answer about it. */
+.cp-ev-cut { color: var(--amber); font-size: 12px; }
 .cp-diff, .cp-json { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cp-add { color: var(--moss); }
 .cp-del { color: var(--clay); }

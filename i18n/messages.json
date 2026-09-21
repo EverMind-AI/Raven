@@ -5555,6 +5555,10 @@
       "en": "No preview of the change",
       "zh": "无法预览改动"
     },
+    "gui.confirm.ev.cut": {
+      "en": "shortened to what fits -- the rest is not shown",
+      "zh": "内容过长，这里只显示了前一部分"
+    },
     "gui.confirm.land.once": {
       "en": "Allowed, just this once",
       "zh": "已允许 · 只这一次"

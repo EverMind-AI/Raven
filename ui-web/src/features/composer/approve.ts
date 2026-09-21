@@ -231,6 +231,7 @@ function wordsFor(req: ApprovalReq): GateWords {
     deny: t('gui.confirm.deny'),
     created: t('gui.confirm.ev.created'),
     nodiff: t('gui.confirm.ev.nodiff'),
+    cut: t('gui.confirm.ev.cut'),
   }
 }
 
