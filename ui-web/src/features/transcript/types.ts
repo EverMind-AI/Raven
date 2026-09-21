@@ -390,6 +390,9 @@ export interface HistoryMessage {
      back. The model reads `text`, a reader must not -- see the note on the
      delivery branch in history(). */
   delegated?: { kind?: string; label?: string; status?: string; run_id?: string; node_id?: string }
+  /* Set on a user entry the runtime merged into a turn already running. It is
+     drawn inside that turn -- see the mid-turn branch in history(). */
+  mid_turn?: boolean
 }
 
 /* What the artifact bar reads, and all it reads: the workspace record's rows

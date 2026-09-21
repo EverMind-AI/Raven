@@ -114,6 +114,7 @@ interface StoredMessage {
   role?: string
   text?: string
   delegated?: unknown
+  mid_turn?: boolean
   tool_call_id?: string | number
   diff?: string
   tool_calls?: Array<{ id?: string | number; name?: string; arguments?: string }>
@@ -139,7 +140,10 @@ export function wsOnHistory(messages: StoredMessage[] | null | undefined): void 
          turn there either. */
       WS.turn += 1; return
     }
-    if (m.role === 'user' && m.text && m.text.trim()) { WS.turn += 1; return }
+    /* A mid-turn message joined the turn that was running; it opens none of its
+       own, and a live client advances no workspace turn for it either. Same rule
+       as in features/transcript/store.ts, over the same messages. */
+    if (m.role === 'user' && !m.mid_turn && m.text && m.text.trim()) { WS.turn += 1; return }
     if (m.role !== 'assistant' || !Array.isArray(m.tool_calls)) return
     m.tool_calls.forEach((c) => {
       let args: unknown = null

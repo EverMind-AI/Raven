@@ -313,14 +313,18 @@ describe('the send queue', () => {
     expect(h.sent()).toEqual([])
   })
 
-  it('queues a send instead of starting it while a turn is running', async () => {
+  it('sends into the running turn rather than queueing behind it', async () => {
+    /* The queue is the fallback now, not the rule: a message typed mid-turn
+       goes to the turn that is running (runtime.inject.test.ts drives the
+       call and the fallback). */
     const h = await harness()
     turn.dispatch({ type: 'stream', cancellable: true })
 
-    h.runtime.send('behind the current one')
+    h.runtime.send('into the current one')
+    await h.tick()
 
-    expect(h.queue).toEqual(['behind the current one'])
-    expect(h.sent()).toEqual([])
+    expect(h.queue).toEqual([])
+    expect(h.sent()).toEqual(['into the current one'])
   })
 
   it('is thrown away when the reader leaves for a new task', async () => {

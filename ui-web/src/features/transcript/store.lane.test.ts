@@ -345,3 +345,79 @@ describe('a delegated lane draws the payload in order', () => {
     expect(folds.map((f) => f.kind === 'fold' && f.open)).toEqual([true, true])
   })
 })
+
+
+/* A message merged into a turn already running, replayed. Live it is one
+   bubble inside the turn (state/session/stages.ts); a reload has only the
+   stored entry, and an unmarked user entry is a question -- which closed the
+   fold over the work still running, spent a turn number, and promoted the
+   sentence the model had just written to the answer of a turn that had not
+   finished. Three assertions rather than one, because the three guards that
+   keep them true are three separate reads of the same mark. */
+describe('a mid-turn message on the conversation lane', () => {
+  interface StepLike { say: string; calls: Array<{ name: string }> }
+  const flow = (lane: ReturnType<typeof store.newLane>): string[] => {
+    const out: string[] = []
+    const step = (st: StepLike): void => {
+      if (st.say) out.push(`say:${st.say}`)
+      st.calls.forEach((c) => out.push(`call:${c.name}`))
+    }
+    lane.segs.forEach((s) => {
+      if (s.kind === 'ask') out.push(`ask:${s.body}`)
+      else if (s.kind === 'answer') out.push(`answer:${s.text}`)
+      else if (s.kind === 'step') step(s)
+      else if (s.kind === 'fold') s.steps.forEach(step)
+    })
+    return out
+  }
+  const TURN = [
+    { role: 'user' as const, text: 'summarise the report' },
+    { role: 'assistant' as const, text: 'let me look', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+    { role: 'tool' as const, tool_call_id: 'c1', text: 'body' },
+    { role: 'user' as const, text: 'Q4 only', mid_turn: true },
+    {
+      role: 'tool' as const,
+      name: 'deliver_files',
+      tool_call_id: 'c2',
+      text: 'ok',
+      metadata: { raven_delivery: { files: [{ path: 'q4.md', name: 'q4.md' }] } },
+    },
+    { role: 'assistant' as const, text: 'here is Q4' },
+  ]
+
+  it('draws it inside the turn, above the answer', () => {
+    const lane = store.newLane('s1', true)
+
+    store.history(lane, TURN)
+
+    expect(flow(lane)).toEqual([
+      'ask:summarise the report', 'say:let me look', 'call:read_file',
+      'ask:Q4 only', 'call:deliver_files', 'answer:here is Q4',
+    ])
+  })
+
+  it('leaves the narration above it as narration', () => {
+    /* The look-ahead that decides which assistant text is the turn's answer
+       stops at the next user message. Counting this one stopped it early, and
+       the line that introduced the tool call was promoted to the answer of a
+       turn that was still working. */
+    const lane = store.newLane('s2', true)
+
+    store.history(lane, TURN)
+
+    expect(lane.segs.filter((s) => s.kind === 'answer').map((s) => s.kind === 'answer' && s.text))
+      .toEqual(['here is Q4'])
+  })
+
+  it('spends no turn number and closes no fold', () => {
+    /* One turn, so one fold and one turn key: a file delivered after the
+       mid-turn message belongs to the turn it was delivered in. */
+    const lane = store.newLane('s3', true)
+
+    store.history(lane, TURN)
+
+    expect(lane.segs.filter((s) => s.kind === 'fold')).toHaveLength(1)
+    expect(store.deliveriesOf(lane, 1).map((r) => r.path)).toEqual(['q4.md'])
+    expect(store.deliveriesOf(lane, 2)).toEqual([])
+  })
+})

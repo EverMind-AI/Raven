@@ -201,6 +201,53 @@ describe('message.start', () => {
   })
 })
 
+describe('message.injected', () => {
+  it('draws the message inside the turn that is running', async () => {
+    const h = await harness({ busy: true, rows: [{ id: 's1' }] })
+    /* A step is open: the model was narrating when the message arrived. */
+    h.dispatch({ type: 'episode.start', payload: {} })
+    const open = h.live.st
+
+    h.dispatch({ type: 'message.injected', payload: { turn_id: 't-inject', content: 'only the last quarter' } })
+
+    expect(h.did('ask')).toEqual([['ask', 'only the last quarter']])
+    expect(h.did('touch')).toEqual([['touch', 's1', 'only the last quarter']])
+    /* The turn is not re-opened: no workspace turn, no phase change. */
+    expect(h.did('advanceTurn')).toEqual([])
+    expect(h.did('dispatch')).toEqual([])
+    /* The open step is let go of rather than sealed, so what the model says
+       next opens a step BELOW the bubble instead of writing into the one that
+       was open above it. */
+    expect(h.live.st).toBe(null)
+    expect(h.did('seal')).toEqual([])
+    h.dispatch({ type: 'token.delta', payload: { text: 'right, Q4' } })
+    expect(h.live.st).not.toBe(open)
+  })
+
+  it('keeps the bubble when the same message opens a turn of its own', async () => {
+    /* The host turn ended before its next drain, so the message fell back to a
+       turn of its own -- under the id it was announced with. The turn
+       bookkeeping is still owed; a second bubble is not. */
+    const h = await harness({ rows: [{ id: 's1' }] })
+    h.dispatch({ type: 'message.injected', payload: { turn_id: 't-inject', content: 'only the last quarter' } })
+
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't-inject', content: 'only the last quarter' } })
+
+    expect(h.did('ask')).toEqual([['ask', 'only the last quarter']])
+    expect(h.did('advanceTurn')).toHaveLength(1)
+    expect(h.did('dispatch')).toEqual([['dispatch', 'stream', true]])
+  })
+
+  it('still draws a question that was never injected', async () => {
+    const h = await harness({ rows: [{ id: 's1' }] })
+    h.dispatch({ type: 'message.injected', payload: { turn_id: 't-inject', content: 'only the last quarter' } })
+
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't-other', content: 'a new question' } })
+
+    expect(h.did('ask')).toEqual([['ask', 'only the last quarter'], ['ask', 'a new question']])
+  })
+})
+
 describe('turn.started', () => {
   it('opens a turn nobody typed, draws its delivery row and re-anchors the clock (050-turn.js:97)', async () => {
     const h = await harness({ rows: [{ id: 's1' }] })

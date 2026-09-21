@@ -71,11 +71,29 @@ const unhandled = (handles: readonly EventType[]): Stage => ({ handles, run: () 
 export const STAGES: readonly Stage[] = [
   arm('message.start', (rt, p) => {
     /* Read BEFORE the phase is set: the window that sent this turn has already
-       drawn the question; a window that is only watching has not. */
-    if (!turn.busy() && p.content) ask(p.content)
+       drawn the question; a window that is only watching has not.
+
+       A message already drawn from `message.injected` keeps its bubble: the
+       host turn ended before draining it, so it is running as a turn of its
+       own, and this frame opens that turn rather than announcing a second
+       message. The turn bookkeeping below is still owed. */
+    if (!turn.busy() && p.content && !rt.injected.has(p.turn_id)) ask(p.content)
     if (p.content) touchSession(sessionCurrent(), p.content)
     rt.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter()
     advanceTurn()
+  }),
+
+  /* A message merged into the turn already running. It joins the turn rather
+     than opening one, so none of the turn bookkeeping runs: no workspace turn,
+     no phase change, no clock re-anchored. The open step is let go of rather
+     than sealed -- the transcript appends at the tail, so the narration that
+     follows opens a step BELOW the bubble instead of writing into the step
+     that was open above it. */
+  arm('message.injected', (rt, p) => {
+    ask(p.content)
+    rt.st = null
+    rt.injected.add(p.turn_id)
+    touchSession(sessionCurrent(), p.content)
   }),
 
   arm('turn.started', (rt, p) => {
@@ -304,6 +322,7 @@ function assertNever(ev: never): undefined {
 function stageOf(ev: TurnEvent): Stage | undefined {
   switch (ev.type) {
     case 'message.start':
+    case 'message.injected':
     case 'turn.started':
     case 'episode.start':
     case 'session.titled':

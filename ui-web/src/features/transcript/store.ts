@@ -1687,7 +1687,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
     if (lastWord && worked(m)) return false
     for (let j = i + 1; j < ahead.length; j += 1) {
       const n = ahead[j] as HistoryMessage
-      if (n && n.role === 'user' && n.text && n.text.trim()) return true
+      if (n && n.role === 'user' && !n.mid_turn && n.text && n.text.trim()) return true
       if (spoken(n)) return false
       if (lastWord && worked(n)) return false
     }
@@ -1786,6 +1786,20 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
         turnAt = msOf(m.timestamp)
         askAuto(lane, String(m.origin || ''), m.text || '', stamp(m.timestamp as string))
       }
+      return
+    }
+    if (m.role === 'user' && m.mid_turn && m.text && m.text.trim()) {
+      /* Merged into the turn that was already running, so the turn it belongs
+         to is the one being drawn: nothing is sealed, nothing folded, no
+         products filed and no turn number spent. What a live client draws from
+         `message.injected`, one bubble inside the turn.
+
+         The open step is let go of rather than sealed, which is what the live
+         arm does with its own: the work that follows the message belongs below
+         it, and appending it to the step above would put the reader's
+         correction after the calls it asked for. */
+      askText(lane, m.text, stamp(m.timestamp as string))
+      toolRun = null
       return
     }
     if (m.role === 'user' && m.text && m.text.trim()) {
