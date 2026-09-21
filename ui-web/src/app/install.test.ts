@@ -107,3 +107,37 @@ describe('the session-pointer reload (installActions)', () => {
     _resetForTests()
   })
 })
+
+/* The wizard's data-sync step and the rail's own click are one verb, so the
+   store is following the run either way -- which is what decides whether its
+   finished row is drawn (features/importSync/store.ts's `stale`). */
+describe('the wizard asks for its import through the rail row (installSources)', () => {
+  it('routes startImport to the store, so the run is one this page follows', async () => {
+    const wiring = await harness()
+    const { ds, setSources } = await import('../state/sources')
+    const store = await import('../features/importSync/store')
+    const runs: Array<[string[], string]> = []
+    setSources({ composer: { slash: [] } } as unknown as Partial<Sources>)
+
+    wiring.installSources()
+    setSources({
+      importSync: {
+        status: async () => ({
+          running: false, total: 1, submitted: 1, failed: 0, by_platform: {},
+          phase: null, phases: null, tier: 'memory_files', platforms: ['hermes'],
+        }),
+        run: async (platforms: string[], tier: string) => {
+          runs.push([platforms, tier])
+          return { started: true, total: 1, detail: '' }
+        },
+        stop: async () => ({ stopped: true }),
+      },
+    } as unknown as Partial<Sources>)
+
+    await ds('onboard').startImport(['hermes'], 'memory_files')
+
+    expect(runs).toEqual([[['hermes'], 'memory_files']])
+    expect(store.get().watched).toBe(true)
+    store._resetForTests()
+  })
+})

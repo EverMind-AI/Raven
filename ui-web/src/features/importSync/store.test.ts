@@ -10,8 +10,12 @@ const status = (patch: Partial<ImportStatus> = {}): ImportStatus => ({
   running: false, total: 0, submitted: 0, failed: 0, by_platform: {}, phase: null, phases: null, tier: null, platforms: [], ...patch,
 })
 
+/* `watched` defaults on: every case below is about a run this page asked for
+   or found in flight, which is the only kind that has ever drawn a settled
+   row. The cases that turn it off are the ones about a run left in the
+   importer's file by somebody else. */
 const state = (st: ImportStatus | null, patch: Partial<store.ImportSyncState> = {}): store.ImportSyncState => ({
-  status: st, starting: false, dismissed: '', error: '', ...patch,
+  status: st, starting: false, watched: true, dismissed: '', error: '', ...patch,
 })
 
 interface Fake {
@@ -239,8 +243,10 @@ describe('following a run', () => {
 
   it('dismiss remembers the finished run across a reload', async () => {
     const finished = status({ total: 4, submitted: 4, tier: 'full', platforms: ['hermes'], phases: { status: 'done', errors: [] } })
-    const f = fake([finished])
+    /* Followed from in flight to settled, which is how a row gets there. */
+    const f = fake([status({ running: true, total: 4, submitted: 1, tier: 'full', platforms: ['hermes'] }), finished])
     setSources({ importSync: f.src })
+    await store.refresh()
     await store.refresh()
     expect(store.view(store.get()).kind).toBe('done')
 
@@ -248,5 +254,65 @@ describe('following a run', () => {
 
     expect(store.view(store.get()).kind).toBe('hidden')
     expect(localStorage.getItem('raven.importSync.dismissed')).toBe(store.signature(finished))
+  })
+
+  /* The importer's file outlives the run that wrote it, so a page that never
+     asked for a run still finds one there. */
+  it('adopts a run it finds already in flight, and keeps its finished row', async () => {
+    const f = fake([
+      status({ running: true, total: 2, submitted: 1, tier: 'full', platforms: ['hermes'] }),
+      status({ total: 2, submitted: 2, tier: 'full', platforms: ['hermes'], phases: { status: 'done', errors: [] } }),
+    ])
+    setSources({ importSync: f.src })
+    await store.refresh()
+    expect(store.view(store.get()).kind).toBe('run')
+    await store.refresh()
+    expect(store.view(store.get()).kind).toBe('done')
+  })
+
+  it('draws nothing for a settled run it never followed', async () => {
+    const f = fake([status({ total: 2, submitted: 2, tier: 'full', platforms: ['hermes'], phases: { status: 'done', errors: [] } })])
+    setSources({ importSync: f.src })
+    await store.refresh()
+    expect(store.view(store.get()).kind).toBe('hidden')
+  })
+
+  it('follows the run it asked for itself, so the finish is drawn', async () => {
+    const f = fake([status({ total: 2, submitted: 1, failed: 1 })])
+    setSources({ importSync: f.src })
+    await store.start(['hermes'], 'full')
+    expect(store.view(store.get()).kind).toBe('done')
+  })
+})
+
+/* The row is the work outstanding, never a receipt: a run nobody here watched
+   is on the rail only while its click can still do something. */
+describe('a run left in the file by somebody else', () => {
+  const unwatched = { watched: false }
+
+  it('is not drawn when it finished and nothing can be retried', () => {
+    const cli = status({ total: 2, submitted: 2, platforms: ['claude_code', 'hermes'] })
+    expect(store.view(state(cli, unwatched)).kind).toBe('hidden')
+  })
+
+  /* The row this reports: a CLI run records no request, so its failure count
+     has no retry behind it and the reader can do nothing but dismiss it. */
+  it('is not drawn when it finished with failures it cannot ask for again', () => {
+    const cli = status({ total: 2, submitted: 1, failed: 1, platforms: ['claude_code', 'hermes'] })
+    expect(store.view(state(cli, { watched: true })))
+      .toMatchObject({ kind: 'done', failed: 1, clickable: false })
+    expect(store.view(state(cli, unwatched)).kind).toBe('hidden')
+  })
+
+  it('is not drawn when it stopped short and cannot be resumed', () => {
+    expect(store.view(state(status({ total: 4, submitted: 2 }), unwatched)).kind).toBe('hidden')
+  })
+
+  it('is still drawn when the click can act on it', () => {
+    const asked = { tier: 'full' as const, platforms: ['hermes'] }
+    expect(store.view(state(status({ total: 4, submitted: 2, ...asked }), unwatched)))
+      .toMatchObject({ kind: 'paused', clickable: true })
+    expect(store.view(state(status({ total: 4, submitted: 3, failed: 1, ...asked, phases: { status: 'done', errors: [] } }), unwatched)))
+      .toMatchObject({ kind: 'done', failed: 1, clickable: true })
   })
 })
