@@ -17,6 +17,13 @@
    own: the wizard owns that. */
 .settings-setup { max-height: none; overflow: visible; }
 
+/* Dense data reads at a fixed size inside the dialog. A relative one (.85em)
+   computes off whatever it happens to sit in, and this dialog offers six
+   different sizes to sit in, so the same key rendered at six sizes. */
+.settings-panel .mono, .settings-setup .mono,
+.settings-panel code, .settings-setup code { font-size: 13px; }
+
+
 h1,h2,h3,h4 {font-family:var(--disp); margin:0; text-wrap:balance}
 code,.settings-mono {font-family:var(--mono); font-size:.85em}
 .settings-wrap {max-width:1180px; margin:0 auto; padding:34px 22px 40px}
@@ -92,10 +99,32 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-stepper button {font:inherit; border:0; background:var(--raised); color:var(--muted); width:26px; height:28px; cursor:pointer}
 .settings-stepper button:hover {color:var(--text)}
 .settings-stepper .settings-v {min-width:58px; text-align:center; font-family:var(--mono); font-size:12.5px; font-variant-numeric:tabular-nums}
-.settings-tbox {font:inherit; font-family:var(--mono); font-size:12.5px; border:1px solid var(--line); border-radius:7px;
-  background:var(--surface); color:var(--text); padding:5px 9px; min-width:170px}
-.settings-tbox:focus-visible {outline:2px solid var(--amber); outline-offset:1px}
-.settings-mini {font:inherit; font-size:12.5px; border:1px solid var(--line); border-radius:7px; background:var(--paper); color:var(--text); padding:5px 11px; cursor:pointer}
+.settings-tbox {font:inherit; font-family:var(--mono); font-size:13px; border:1px solid var(--line); border-radius:var(--ctl-r);
+  background:var(--paper); color:var(--text); padding:5px 10px; min-width:170px; height:var(--ctl-h); box-sizing:border-box}
+.settings-tbox:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
+textarea.settings-tbox {height:auto}
+/* Inside the dialog a small button is the control standard's size, the way the
+   prototype's settings document sizes it -- 32 and 8, beside a field of the
+   same height. The module pages keep the roster's 28: a row of cards is not a
+   form. The dialog's buttons are the page's own `.mini`, so this is the one
+   place the two sizes are told apart. */
+.settings-panel .mini, .settings-setup .mini {
+  height: var(--ctl-h); min-width: 64px; border-radius: var(--ctl-r);
+  font-size: 13px; padding: 0 13px;
+}
+:root[data-lang="en"] .settings-panel .mini,
+:root[data-lang="en"] .settings-setup .mini { min-width: 88px; }
+.settings-panel .mini:hover:not(:disabled),
+.settings-setup .mini:hover:not(:disabled) { border-color: var(--amber); background: var(--paper); }
+.settings-panel .mini.ghost, .settings-setup .mini.ghost { background: none; color: var(--muted); }
+.settings-panel .mini.danger, .settings-setup .mini.danger { color: var(--clay); border-color: var(--clay); }
+
+.settings-mini {font:inherit; font-size:13px; border:1px solid var(--line); border-radius:var(--ctl-r);
+  background:var(--paper); color:var(--text); padding:0 13px; cursor:pointer; height:var(--ctl-h); box-sizing:border-box;
+  display:inline-flex; align-items:center; justify-content:center; min-width:64px; white-space:nowrap}
+/* The floor is per language: two Chinese characters do not fill the English
+   frame, and one number leaves Delete and Restore half empty. */
+:root[data-lang="en"] .settings-mini {min-width:88px}
 .settings-mini:hover {border-color:var(--amber)}
 .settings-mini.settings-ghost {background:none; color:var(--muted)}
 .settings-mini.settings-danger {color:var(--clay); border-color:var(--clay)}
@@ -205,10 +234,14 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-plist .settings-pit[disabled] {opacity:.45; cursor:not-allowed}
 .settings-modal.settings-wide {max-width:520px}
 .settings-tkrow {display:flex; gap:8px; align-items:center; padding:10px 15px; background:var(--surface); border-bottom:1px solid var(--line-soft); flex-wrap:wrap}
-.settings-tkrow input {flex:1; min-width:150px; font:inherit; font-size:12.5px; font-family:var(--mono); border:1px solid var(--line);
-  border-radius:7px; background:var(--paper); color:var(--text); padding:5px 9px}
+.settings-tkrow input {flex:1; min-width:150px; font:inherit; font-size:13px; font-family:var(--mono); border:1px solid var(--line);
+  border-radius:var(--ctl-r); background:var(--paper); color:var(--text); padding:5px 10px;
+  height:var(--ctl-h); box-sizing:border-box}
+.settings-tkrow input:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
 .settings-ff {display:flex; flex-direction:column; gap:8px; padding:10px 0 2px}
-.settings-ff input,.settings-ff select {font:inherit; font-size:12.5px; border:1px solid var(--line); border-radius:7px; background:var(--paper); color:var(--text); padding:6px 9px}
+.settings-ff input,.settings-ff select {font:inherit; font-size:13px; border:1px solid var(--line); border-radius:var(--ctl-r);
+  background:var(--paper); color:var(--text); padding:5px 10px; height:var(--ctl-h); box-sizing:border-box}
+.settings-ff input:focus,.settings-ff select:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
 .settings-ff input {font-family:var(--mono)}
 .settings-ff .settings-acts2 {display:flex; gap:8px}
 .settings-mnote {color:var(--faint); font-size:12px}
@@ -227,8 +260,10 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-kvrow .settings-kvn {font-family:var(--mono); font-size:12px; font-weight:500; min-width:120px}
 .settings-kvrow .settings-kvv {font-family:var(--mono); font-size:12px; color:var(--faint); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .settings-kvform {display:flex; gap:7px; flex-wrap:wrap; align-items:center}
-.settings-kvform input,.settings-kvform select {font:inherit; font-family:var(--mono); font-size:12.5px; border:1px solid var(--line);
-  border-radius:7px; background:var(--surface); color:var(--text); padding:5px 9px; flex:1; min-width:110px}
+.settings-kvform input,.settings-kvform select {font:inherit; font-family:var(--mono); font-size:13px; border:1px solid var(--line);
+  border-radius:var(--ctl-r); background:var(--paper); color:var(--text); padding:5px 10px; flex:1; min-width:110px;
+  height:var(--ctl-h); box-sizing:border-box}
+.settings-kvform input:focus,.settings-kvform select:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
 .settings-kvform select {font-family:var(--mono)}
 .settings-padd {margin:10px 15px 6px; border-color:var(--line)}
 .settings-padd .settings-row .settings-k:empty {display:none}
@@ -296,7 +331,7 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-cfg .settings-row .settings-ctl {justify-self:start; margin:0}
 .settings-cfg .settings-row.settings-stack {grid-template-columns:132px minmax(0,1fr)}
 .settings-cfg .settings-row.settings-stack .settings-ctl {margin:0}
-.settings-cfg .settings-tbox {min-width:220px; padding:4px 9px; font-size:12px}
+.settings-cfg .settings-tbox {min-width:220px; padding:0 9px; font-size:12.5px}
 .settings-cfg .settings-mini {font-size:12px; padding:4px 10px}
 .settings-cfg .settings-stepper button {height:26px; width:24px}
 .settings-cfg .settings-stepper .settings-v {font-size:12px; min-width:52px}
@@ -321,7 +356,9 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-xrow .settings-chev svg {width:11px; height:11px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round}
 .settings-row.settings-dim .settings-k {color:var(--faint)}
 .settings-row.settings-dim .settings-chev {opacity:.5}
-.settings-srch {display:flex; align-items:center; gap:9px; border:1px solid var(--line); border-radius:9px; background:var(--paper); padding:8px 12px; margin-bottom:14px}
+.settings-srch {display:flex; align-items:center; gap:9px; border:1px solid var(--line); border-radius:var(--ctl-r);
+  background:var(--paper); padding:0 11px; height:var(--ctl-h); box-sizing:border-box; margin-bottom:14px}
+.settings-srch:focus-within {border-color:var(--amber); box-shadow:var(--ctl-focus)}
 .settings-srch svg {width:15px; height:15px; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
 .settings-srch input {flex:1; font:inherit; font-size:14px; border:0; background:none; color:var(--text); outline:none}
 .settings-skrow {display:flex; align-items:center; gap:14px; border-bottom:1px solid var(--line-soft); padding:0 15px 0 0}
@@ -421,9 +458,14 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-tp {display:grid; grid-template-columns:286px minmax(0,1fr); grid-template-rows:minmax(0,1fr); border:1px solid var(--line); border-radius:12px; overflow:hidden; height:calc(100vh - 220px); min-height:420px}
 .settings-tp-side {border-right:1px solid var(--line-soft); padding:13px; display:flex; flex-direction:column; gap:9px; min-height:0}
 .settings-tp-find {display:flex; gap:8px; align-items:center}
-.settings-tp-find input {flex:1; min-width:0; font:inherit; font-size:13px; padding:7px 11px; border:1px solid var(--line); border-radius:9px; background:var(--paper); color:var(--text); outline:none}
-.settings-tp-find input:focus-visible {border-color:var(--amber)}
-.settings-tp-find select {flex:none; font:inherit; font-size:12.5px; padding:7px 8px; border:1px solid var(--line); border-radius:9px; background:var(--paper); color:var(--muted); cursor:pointer; color-scheme:light dark}
+.settings-tp-find input {flex:1; min-width:0; font:inherit; font-size:13px; padding:0 11px; border:1px solid var(--line);
+  border-radius:var(--ctl-r); background:var(--paper); color:var(--text); outline:none;
+  height:var(--ctl-h); box-sizing:border-box}
+.settings-tp-find input:focus {border-color:var(--amber); box-shadow:var(--ctl-focus)}
+.settings-tp-find select {flex:none; font:inherit; font-size:13px; padding:0 8px; border:1px solid var(--line);
+  border-radius:var(--ctl-r); background:var(--paper); color:var(--muted); cursor:pointer; color-scheme:light dark;
+  height:var(--ctl-h); box-sizing:border-box}
+.settings-tp-find select:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
 .settings-tp-list {display:flex; flex-direction:column; gap:1px; flex:1; min-height:0; overflow-y:auto; margin:0 -5px}
 .settings-tp-row {display:flex; align-items:center; border-radius:8px}
 .settings-tp-row:hover {background:var(--surface)}
