@@ -201,6 +201,7 @@ async function refreshHarness({
   reconciled = null as { rows: Row[]; currentMissing: boolean } | null,
 }) {
   const log: unknown[][] = []
+  const replaced: Row[][] = []
   await loadPart(() => import('../../state/session/registry'), {
     fakes: {
       'src/features/rail/store': {
@@ -215,7 +216,7 @@ async function refreshHarness({
       },
       'src/state/session/rows': {
         sess: (id: string) => rows.find((r) => r.id === id),
-        replace: (next: Row[]) => log.push(['sessionReplace', next.map((r) => r.id)]),
+        replace: (next: Row[]) => { replaced.push(next); log.push(['sessionReplace', next.map((r) => r.id)]) },
         rows: () => rows,
       },
       'src/i18n/t': {
@@ -235,10 +236,11 @@ async function refreshHarness({
     },
   })
   const registry = await import('../../state/session/registry')
+  const rail = await import('./source')
   await fakeGateway(async () => answer)
   const { setSources } = await import('../../state/sources')
   setSources({ composer: {}, rail: {}, transcript: {} } as unknown as Partial<Sources>)
-  return { registry, log }
+  return { registry, rail, log, replaced }
 }
 
 describe('re-reading the session list', () => {
@@ -270,6 +272,42 @@ describe('re-reading the session list', () => {
     expect(h.log).toContainEqual(['leaveDeleted', 'a'])
     /* The leave draws for itself; this path does not. */
     expect(h.log.filter((c) => c[0] === 'sessionDraw')).toEqual([])
+  })
+
+  it('a plain re-read draws the rows it just replaced, in that order', async () => {
+    /* Replacing the rows is not showing them. The archive page's restore
+       reaches the rail only through this function, so without the draw the
+       restored conversation came back on the server and on disk and stayed off
+       the screen until the page was reloaded. Asserted as a sequence: a draw
+       before the replace paints the list the reader already had. */
+    const h = await refreshHarness({
+      rows: [{ id: 'a' }],
+      answer: { sessions: [{ id: 'a', started_at: 1 }, { id: 'b', started_at: 2 }] },
+    })
+
+    await h.rail.loadSessions()
+
+    expect(h.log.filter((c) => c[0] !== 'reconcile'))
+      .toEqual([['sessionReplace', ['b', 'a']], ['sessionDraw']])
+  })
+
+  it('a plain re-read hands the list to the reconcile and replaces with what it gets', async () => {
+    /* The answer does not carry which conversation has a turn running, nor the
+       current one while it is too new to be listed; the reconcile is what
+       carries both across. Replacing with the raw list dropped them, and the
+       draw above is what makes that visible -- a running badge wiped by
+       restoring something from the archive page. */
+    const h = await refreshHarness({
+      rows: [{ id: 'a' }],
+      cur: 'a',
+      answer: { sessions: [{ id: 'b', started_at: 2 }] },
+      reconciled: { rows: [{ id: 'a' }, { id: 'b' }], currentMissing: false },
+    })
+
+    await h.rail.loadSessions()
+
+    expect(h.log).toContainEqual(['reconcile', ['a'], ['b'], 'a'])
+    expect(h.replaced[0]!.map((r) => r.id)).toEqual(['a', 'b'])
   })
 
   it('keeps the stale list when the read fails', async () => {
