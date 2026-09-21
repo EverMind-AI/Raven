@@ -1,5 +1,5 @@
 /* The page. Every region src/page.html used to carry as markup is rendered
- * from here: the shell's two columns, the seven module pages, the dialog
+ * from here: the shell's two columns, the module page, the dialog
  * shells, the context menu's rows, the notices, the interiors of the sheets
  * that dock above the composer, and the four layers that belong to no page at
  * all.
@@ -30,7 +30,7 @@
  * props it rendered last rather than against the document.
  *
  * Flags this renders but does not own, for the same reason: `data-open` on the
- * seven pages and the veils, `hidden` on button#railShow, `data-rail` and
+ * page and the veils, `data-section` on the settings veil, `hidden` on button#railShow, `data-rail` and
  * `data-page` on div.app, `data-open` / `data-full` on #split, `data-open` on
  * #menu. Each is rendered as the value the page is served with and written
  * afterwards by the one store that owns it (state/page.ts, state/rail.ts,
@@ -158,14 +158,15 @@ function DetailPanel(): JSX.Element {
  * settings island portals its nav into the first and roots its panels in the
  * second.
  *
- * #setTitle is the island's: it writes the section's name there on every draw.
- * The literal below is what the page is served with, and is why this component
- * must not render a value of its own for it. */
+ * #setTitle is the island's: it writes the section's name there on every draw,
+ * and `data-section` on the veil is the same write -- the flag the stylesheet
+ * picks a hosted pane off. The literal below is what the page is served with,
+ * and is why this component must not render a value of its own for it. */
 function SettingsModal(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   useScrim('setVeil', settings.close)
   return (
-    <div className="veil setveil" id="setVeil" data-open="false">
+    <div className="veil setveil" id="setVeil" data-open="false" data-section="usage">
       <div className="smodal" id="setModal" role="dialog" aria-modal="true" aria-label={lang.attr('gui.page.set')}>
         <nav className="snav" id="snav">
           {/* A block row with one inline child, so the whitespace page.html had
@@ -195,6 +196,14 @@ function SettingsModal(): JSX.Element {
             </button>
           </header>
           <div className="spanels" id="spanels" />
+          {/* The three sections another domain's island fills. Beside #spanels
+              rather than inside it, because a React root in the settings
+              island's own tree would be unmounted the moment the reader picked
+              another section; the stylesheet shows whichever one `data-section`
+              above names (features/settings/store.ts's HOSTED). */}
+          <div className="spanels" id="connectionsBody" data-for="channels" />
+          <div className="spanels" id="cronBody" data-for="cron" />
+          <div className="spanels" id="memoryBody" data-for="memory" />
         </div>
       </div>
     </div>
@@ -269,8 +278,7 @@ function RailShow(): JSX.Element {
   )
 }
 
-/* One of the six module pages whose whole interior is a heading and the empty
-   box its island roots itself in. The seventh, the capabilities page, serves two
+/* A module page: a heading and the empty box its island roots itself in.
 
    The heading is drawn and then hidden (`.page > header h2{display:none}`,
    src/styles/page.css): the strip stays for breathing room and the scroll fade,
@@ -279,8 +287,7 @@ function RailShow(): JSX.Element {
    differ (the memory page is announced by its hero's phrase). */
 function ModulePage({ page }: { readonly page: ModulePageRow }): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
-  /* Only the six whose interior is a heading reach this: the seventh declares
-     `own` and is rendered by its own file, so both keys are here. */
+  /* Both keys are here: a page whose interior is a heading declares both. */
   const aria = page.aria!
   const head = page.head!
   return (
@@ -324,28 +331,23 @@ export function App(): JSX.Element {
         </div>
       </div>
       <RailShow />
-      {/* The seven module pages, in the order state/pages.ts declares -- which
-          is the order they sit among the body's children, recorded by that
-          module's BOOT_BODY_ORDER and by the region goldens. The capabilities
-          page serves two modules and has a file of its own; the other six are
-          a heading and the empty box their island roots itself in.
-
-          One of them is NOT a capability: a plugin is "what it can touch",
-          while an entrance is "where you find it" -- the same brand can be
-          both (a Slack plugin and a Slack entrance) and the two point in
-          opposite directions. */}
+      {/* The module pages, in the order state/pages.ts declares -- which is
+          the order they sit among the body's children, recorded by that
+          module's BOOT_BODY_ORDER and by the region goldens. Each is a heading
+          and the empty box its island roots itself in. */}
       {PAGES.map((page) => <ModulePage key={page.id} page={page} />)}
-      {/* The new-job sheet renders here from the cron island
-          (src/features/cron/CronPage.tsx); only the veil is this file's. */}
-      <div className="veil" id="jobVeil" data-open="false" />
       <DetailPanel />
       <SettingsModal />
+      {/* The new-job sheet renders here from the cron island
+          (src/features/cron/CronPage.tsx); only the veil is this file's.
+
+          After the settings dialog, because the schedules section raises it
+          from inside that dialog: the two veils share a `--z` step, so which
+          one covers the other is the order they sit in here and nothing else
+          (state/portals.ts). The confirm dialog below stays last, so a delete
+          asked from this sheet stands over it in turn. */}
+      <div className="veil" id="jobVeil" data-open="false" />
       <ConfirmSheet />
-      {/* One entry's credentials. Its own veil rather than the confirm dialog's:
-          disconnecting from inside it raises that one, and a dialog cannot be
-          both the thing asking and the thing asked. The sheet renders here from
-          the connections island (src/features/connections/ConnectionsPage.tsx). */}
-      <div className="veil" id="connVeil" data-open="false" />
       <div className="menu" id="menu" data-open="false" role="menu" />
       <div className="toasts" id="toasts" aria-live="polite" />
       <ContextMenu />

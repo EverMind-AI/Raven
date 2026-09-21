@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
 
-import { SetupGroup, SetupRow, Tile } from '../../components/SetupRow'
-import { Field, SheetHead, StateLine } from '../../components/SetupSheet'
+import { Tile } from '../../components/SetupRow'
+import { Field } from '../../components/SetupSheet'
+import {
+  TwoPane, TwoPaneFind, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow, TwoPaneSwitch,
+} from '../../components/TwoPane'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import * as store from './store'
@@ -10,15 +12,10 @@ import * as store from './store'
 import type { ConnChannel, ConnField } from './types'
 import type { JSX } from 'react'
 
-/* Where Raven receives messages. One row per entry of the channel catalogue;
-   the fields each row's dialog draws come from the channel's own Pydantic
-   schema, shipped on channels.status, so the form cannot drift from the model.
- *
- * Grouped by whether the entry is in service, and the addable ones ordered by
- * what it costs to get in -- a scan-login channel is one phone away, a channel
- * wanting six credentials is an afternoon. That ordering is the page's only
- * opinion, and it replaces a flat list of twelve where the cheapest way in sat
- * wherever the catalogue happened to put it.
+/* Where Raven receives messages: a section of the settings dialog, drawn as a
+   list of the channel catalogue with the picked one beside it. The fields that
+   pane draws come from the channel's own Pydantic schema, shipped on
+   channels.status, so the form cannot drift from the model.
  */
 
 /* One accessor so a renderer never has to know which of the catalogue's two
@@ -78,14 +75,6 @@ const scanLogin = (c: ConnChannel): boolean => !!c.qrLogin || (c.fields || []).f
 const costOf = (c: ConnChannel): number =>
   scanLogin(c) ? 0 : (c.fields || []).filter((f) => f.required).length
 
-/* The same cost, said as a sentence. The badge is for a row being scanned in a
-   list of twelve; the sheet has room to say it plainly. */
-function CostBadge({ c }: { c: ConnChannel }): JSX.Element {
-  if (scanLogin(c)) return <span className="kd auth">{t('gui.conn.cost_scan')}</span>
-  const n = (c.fields || []).filter((f) => f.required).length
-  return <span className="kd">{t('gui.conn.cost_n', { n: String(n) })}</span>
-}
-
 /* Where the credentials come from. A channel whose secrets are minted in a
    console gets a jump straight to it -- the alternative is the reader guessing
    which of a vendor's four portals issues the token this form wants. Entries
@@ -107,47 +96,29 @@ export function ConnectionsApp(): JSX.Element {
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). */
   useSyncExternalStore(lang.subscribe, lang.get)
-  const dialog = s.dialogId ? s.rows.find((c) => c.id === s.dialogId) : undefined
+  const [q, setQ] = useState('')
+  const picked = s.viewId ? s.rows.find((c) => c.id === s.viewId) : undefined
   return (
-    <>
-      {s.loaded || s.rows.length ? <ConnList rows={s.rows} /> : null}
-      {dialog ? <ConnDialog key={`${dialog.id}:${s.epoch}`} c={dialog} /> : null}
-    </>
+    <TwoPane side={<ConnSide rows={s.rows} loaded={s.loaded} q={q} onQ={setQ} pickedId={s.viewId} />}>
+      {picked ? (
+        <ConnDetail key={`${picked.id}:${s.epoch}`} c={picked} />
+      ) : (
+        <TwoPaneNone>{t(s.rows.length ? 'gui.conn.pick' : 'gui.conn.none')}</TwoPaneNone>
+      )}
+    </TwoPane>
   )
 }
 
-/* One green line for what is actually receiving, and nothing else.
- *
- * It counts live adapters, never the config switch: counting the switch is how
- * the page came to say "receiving on 1 entrance" over a card that said, in the
- * same breath, that the adapter had never started. The unfinished ones are not
- * named here either -- they have a group of their own now, with a count on it,
- * and saying it twice made the top of the page a place for bad news. */
-function GatewayBar({ rows }: { rows: ConnChannel[] }): JSX.Element | null {
-  const live = rows.filter((c) => connState(c) === 'live').length
-  if (!live) return null
-  return (
-    <div className="sustate">
-      <span className="led" />
-      <span>{t('gui.conn.gw_live', { n: String(live) })}</span>
-    </div>
-  )
-}
-
-/* Why an entrance that is in service is not receiving, in the row's own badge
-   slot -- the same slot an addable row uses for what it costs to get in. The
-   group heading says the entrance was handed to Raven; this says how far that
-   actually got. A live one needs no badge: the group and the green dot have
-   said it. */
+/* Why an entrance that is in service is not receiving, in the row's own second
+   line -- the same line an addable row uses for what it costs to get in. A live
+   one needs no reason: the group and the green dot have said it. */
 /* Why an entrance is not in service, when something actually went wrong.
  *
  * Only a thing gone wrong earns a reason. An adapter that is up and waiting on a
  * code is not wrong and not a state to advertise -- it is a step of signing in,
- * which happens inside the card the reader has open, and printing "waiting for a
- * scan" on the row was the third state this page is supposed not to have. An
- * entrance that started and stopped, or has nothing running it, is a different
- * matter: that is why it is not in service, and the row is where the reader
- * looks for it.
+ * which happens in the pane the reader has open. An entrance that started and
+ * stopped, or has nothing running it, is a different matter: that is why it is
+ * not in service, and the row is where the reader looks for it.
  *
  * "State unknown" is the honest answer when nobody could be asked, and the wrong
  * one when we know why nobody answered: with no host running there is no
@@ -160,184 +131,107 @@ function reasonOf(c: ConnChannel): string | null {
   return store.get().host === false ? 'tag_nohost' : 'tag_unknown'
 }
 
-/* The row's one badge. A reason where there is one, and otherwise what it costs
-   to get in -- which stays true of an entrance whose adapter is up and waiting
-   on a code, and used to leave that row's badge slot empty because the choice
-   was keyed on the config flag instead of on what is actually the matter. */
-function RowBadge({ c }: { c: ConnChannel }): JSX.Element | null {
-  if (connState(c) === 'live') return null
+/* The row's second line: a reason where there is one, then the state, and for
+   an entrance nobody has started what it costs to get in. */
+function rowSub(c: ConnChannel): { text: string; tone?: 'warn' | 'live' | 'bad' } {
+  const live = connState(c)
+  if (live === 'live') return { text: stateOf(c).text, tone: 'live' }
   const reason = reasonOf(c)
-  if (reason) return <span className={reason === 'tag_down' ? 'kd bad' : 'kd warn'}>{t('gui.conn.' + reason)}</span>
-  return <CostBadge c={c} />
+  if (reason) return { text: t('gui.conn.' + reason), tone: reason === 'tag_down' ? 'bad' : 'warn' }
+  if (live === 'unpaired') return { text: t('gui.conn.st_unpaired'), tone: 'warn' }
+  if (scanLogin(c)) return { text: t('gui.conn.cost_scan') }
+  const n = (c.fields || []).filter((f) => f.required).length
+  const missing = (c.missing || []).length
+  return { text: missing ? t('gui.conn.st_missing', { n: missing }) : t('gui.conn.cost_n', { n: String(n) }) }
 }
 
-/* Two groups, because there are two answers to "is this entrance mine yet".
+/* The left column: search, then two groups, because there are two answers to
+   "is this entrance mine yet".
  *
  * Grouping by the config switch made pressing the button the whole of joining:
  * an entrance moved to "in service" before a code had been scanned, before a
  * credential had been tried, and would have sat there just the same with a
  * made-up token in it. The switch is a decision; being in service is a fact,
- * and only the live adapter can report it.
- *
- * Two answers, not three. A "connecting" group in between was a state nobody
- * can act on: an entrance is either receiving or it is not, and everything the
- * switch touched on the way -- written, started, waiting on a code nobody
- * scanned -- is still not receiving. The reader pressing a button and being
- * shown a third heading for it was the flag being read out loud one heading
- * further along. What the middle group was for -- why this one is not in service
- * yet -- is the row's badge, which needs no group of its own. */
-function ConnList({ rows }: { rows: ConnChannel[] }): JSX.Element {
-  const s = store.get()
-  const on = rows.filter((c) => connState(c) === 'live')
-  const off = rows.filter((c) => connState(c) !== 'live').sort((a, b) => costOf(a) - costOf(b))
-  const list = (items: ConnChannel[]): JSX.Element => (
-    <div className="sulist">
-      {items.map((c) => (
-        <ConnRow key={c.id} c={c} sel={s.dialogId === c.id} />
-      ))}
-    </div>
-  )
+ * and only the live adapter can report it. The addable ones are ordered by what
+ * it costs to get in -- a scan-login channel is one phone away, a channel
+ * wanting six credentials is an afternoon. */
+function ConnSide({ rows, loaded, q, onQ, pickedId }: {
+  rows: ConnChannel[]
+  loaded: boolean
+  q: string
+  onQ(v: string): void
+  pickedId: string | null
+}): JSX.Element {
+  const term = q.trim().toLowerCase()
+  const shown = rows.filter((c) => !term || chanName(c).toLowerCase().includes(term) || c.id.includes(term))
+  const on = shown.filter((c) => connState(c) === 'live')
+  const off = shown.filter((c) => connState(c) !== 'live').sort((a, b) => costOf(a) - costOf(b))
+  const row = (c: ConnChannel): JSX.Element => {
+    const cn = chanName(c)
+    const sub = rowSub(c)
+    return (
+      <TwoPaneRow
+        key={c.id}
+        current={c.id === pickedId}
+        off={!c.on}
+        icon={<Tile name={cn} />}
+        name={cn}
+        sub={sub.text}
+        {...(sub.tone ? { tone: sub.tone } : {})}
+        onOpen={() => store.openChannel(c)}
+        trailing={
+          /* The switch only takes an entrance in or out of service. An entrance
+             whose credentials are not in yet has nothing to switch on, so the
+             way in is the pane beside this list rather than a control that can
+             only fail. */
+          <TwoPaneSwitch
+            on={c.on}
+            disabled={!isConfigured(c)}
+            label={cn}
+            onChange={() => store.toggle(c)}
+          />
+        }
+      />
+    )
+  }
   return (
     <>
-      <div className="pmhero">
-        <h3>{t('gui.page.conn')}</h3>
-      </div>
-      <GatewayBar rows={rows} />
-      {/* Nothing in service yet is the ordinary first run, and a heading over an
-          empty box saying so was the page explaining itself. The addable group
-          below is the whole answer. */}
-      {on.length ? (
-        <SetupGroup label={t('gui.conn.g_on')} count={on.length}>
-          {list(on)}
-        </SetupGroup>
-      ) : null}
-      {off.length ? (
-        <SetupGroup label={t('gui.conn.g_off')} count={off.length}>
-          {list(off)}
-        </SetupGroup>
-      ) : null}
+      <TwoPaneFind value={q} onChange={onQ} placeholder={t('gui.conn.search')} />
+      <TwoPaneList>
+        {!loaded && !rows.length ? null : shown.length === 0 ? (
+          <div className="empty-note">{t('gui.conn.none_match')}</div>
+        ) : (
+          <>
+            {on.length ? <TwoPaneGroup>{t('gui.conn.g_on')}</TwoPaneGroup> : null}
+            {on.map(row)}
+            {off.length ? <TwoPaneGroup>{t('gui.conn.g_off')}</TwoPaneGroup> : null}
+            {off.map(row)}
+          </>
+        )}
+      </TwoPaneList>
     </>
   )
 }
 
-/* One row, one verb, and the same pair the agents page offers: connect or
-   disconnect. It used to be a switch on one side and two different way-in labels
-   on the other, which named the mechanism (a flag, an enable) instead of the
-   errand.
+/* The picked entrance, in the right column. It used to be a card over the list:
+   inside the settings dialog that is a layer over a layer, and the list it
+   covered was the one thing a reader comparing entrances needed to keep.
  *
- * Connect opens the card. It briefly did the write itself, so that a press was
- * an attempt rather than a form -- but an entrance is joined by scanning a code
- * or by handing over a credential, and both of those live in the card, so a
- * press that starts them from out here can only ever be half of the errand. One
- * door, and everything that decides anything is behind it. */
-function ConnRow({ c, sel }: { c: ConnChannel; sel: boolean }): JSX.Element {
-  const cn = chanName(c)
-  const open = (): void => store.openDialog(c)
-  /* Is there something to disconnect FROM? Keyed on the adapter, like the
-     groups: offering to disconnect an entrance whose adapter never came up
-     named the config flag as a connection, in the one control that is supposed
-     to say what the row is. Clearing a flag that got nowhere is still possible,
-     from the card, where there is room to say what it does. */
-  /* Keyed on receiving, like the groups: there are two states, so there are two
-     verbs, and "disconnect" belongs to the one that is actually in service.
-     Offering it on an entrance whose adapter never came up named the config flag
-     as a connection; clearing that flag is in the card, which has room to say
-     what it does. */
-  const act =
-    connState(c) === 'live' ? (
-      /* No confirm: this only takes the entrance out of service. The credentials
-         stay in config and connect puts it back, so a dialog would be asking
-         permission for a switch. */
-      <button className="mini ghost" aria-label={cn} onClick={() => store.toggle(c)}>
-        {t('gui.conn.disconnect')}
-      </button>
-    ) : (
-      <button className="mini" aria-label={cn} onClick={open}>
-        {t('gui.conn.connect')}
-      </button>
-    )
-  return (
-    <SetupRow
-      name={cn}
-      /* Dot only: SetupRow draws the second line when there is text for it, and
-         here there is not. */
-      state={{ cls: stateOf(c).cls, text: '' }}
-      /* In service: why it is not receiving yet, or nothing. Not in service:
-         what it costs to get in. */
-      tags={<RowBadge c={c} />}
-      act={act}
-      sel={sel}
-      onOpen={open}
-    />
-  )
-}
-
-/* The configuration dialog, rendered into the static #connVeil container the
-   page markup keeps. Lifting the form out of the card is what lets the page
-   be a list; the veil's open flag, click-outside and focus behaviour are
-   all managed here. */
-function ConnDialog({ c }: { c: ConnChannel }): JSX.Element | null {
-  const veil = document.getElementById('connVeil')
-  useEffect(() => {
-    if (!veil) return
-    veil.dataset.open = 'true'
-    const body = veil.querySelector('#connDlgBody')
-    const first = body?.querySelector('input')
-    if (first) first.focus()
-    else if ((c.missing || []).length > 0) (body?.querySelector('button') as HTMLElement | null)?.focus()
-    /* Click-away. The card is modal, and modal means one thing: a press outside
-       it closes it and reaches nothing. Not the rail behind it, not another
-       row's disconnect, and not that row's own card either -- handing the card
-       over to whatever the press landed on was still the press acting on
-       something it could not see, which is the thing being ruled out.
-     *
-     * Listened for on the document rather than on the scrim, because the press
-     * that closes the card may also land on the page's own chrome above the
-     * veil's stacking context. Guarded on the card itself, so a press inside it
-     * (focusing a credential box) is not a click-away. */
-    const onDown = (e: MouseEvent): void => {
-      const t = e.target as Node | null
-      if (t && veil.firstElementChild?.contains(t)) return
-      store.closeDialog()
-    }
-    document.addEventListener('mousedown', onDown, true)
-    return () => {
-      veil.dataset.open = 'false'
-      document.removeEventListener('mousedown', onDown, true)
-    }
-  }, [veil])
-  if (!veil) return null
+ * Signing in by phone is a sequence, not a form: nothing can be scanned until
+ * the entry is running. So a scan channel gets the wizard until it is paired,
+ * and the credential form is for the channels that have one. */
+function ConnDetail({ c }: { c: ConnChannel }): JSX.Element {
   const st = stateOf(c)
-  /* Signing in by phone is a sequence, not a form: nothing can be scanned
-     until the entry is running. So a scan channel gets the wizard until it is
-     paired, and the credential form is for the channels that have one. */
   const signing = scanLogin(c) && connState(c) !== 'live'
-  /* The centred card every module's detail is, not a surface of its own: an
-     entrance and an agent are the same errand, and the reader should not have to
-     learn two shapes for it.
-
-     Three parts, and only the middle one scrolls: the head names what is being
-     edited and the foot carries the verb, so neither can be scrolled out of
-     reach. Both used to ride inside the scroller -- with mail's twenty-one
-     optional fields unfolded, the button that saves them sat a thousand pixels
-     down, and pinning it there with `sticky` left the field under it showing
-     through the gutter. A form's own state and its action belong to the card,
-     not to its scroll position. */
-  return createPortal(
-    <div className="sheet" role="dialog" aria-modal="true" aria-label={chanName(c)}>
-      <SheetHead
-        tile={<Tile name={chanName(c)} />}
+  return (
+    <>
+      <TwoPaneHead
+        icon={<Tile name={chanName(c)} />}
         name={chanName(c)}
-        /* One fact, once. Scanning is the only way in that the body does not
-           already spell out: a credential form heads its own section with the
-           count, and a channel in service has the state line. */
-        facts={signing ? t('gui.conn.cost_scan_line') : undefined}
-        onClose={() => store.closeDialog()}
-        closeLabel={t('gui.conn.close')}
+        meta={signing ? t('gui.conn.cost_scan_line') : <span className={'st ' + st.cls}>{st.text}</span>}
       />
-      {signing ? <ScanWizard c={c} /> : <ConnForm c={c} state={st} />}
-    </div>,
-    veil,
+      {signing ? <ScanWizard c={c} /> : <ConnForm c={c} />}
+    </>
   )
 }
 
@@ -347,7 +241,7 @@ function ConnDialog({ c }: { c: ConnChannel }): JSX.Element | null {
    required fields show; everything optional folds behind one line, closed,
    with its count. Inputs are uncontrolled; the store's epoch is what reseeds
    them, by keying the dialog subtree. */
-function ConnForm({ c, state }: { c: ConnChannel; state: { cls: string; text: string } }): JSX.Element {
+function ConnForm({ c }: { c: ConnChannel }): JSX.Element {
   const inputs = useRef(new Map<string, HTMLInputElement>()).current
   const [advOpen, setAdvOpen] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -371,7 +265,7 @@ function ConnForm({ c, state }: { c: ConnChannel; state: { cls: string; text: st
      a reason the reader is owed, so the card stays with the state line up. */
   const live = connState(c) === 'live'
   useEffect(() => {
-    if (sent && live) store.closeDialog()
+    if (sent && live) store.closeChannel()
   }, [sent, live])
   const fieldRow = (f: ConnField): JSX.Element => {
     /* The human sentence is the label; the config key rides on its tooltip.
@@ -430,7 +324,6 @@ function ConnForm({ c, state }: { c: ConnChannel; state: { cls: string; text: st
   return (
     <>
       <div className="subody" id="connDlgBody">
-        {c.on || sent ? <StateLine cls={state.cls} text={state.text} /> : null}
         {/* Both sections wear the same caption: a small mono line that says
             what the block below it is, and nothing else. The credential count
             rides on it, which is why the head no longer repeats it. */}
@@ -601,7 +494,7 @@ function ScanWizard({ c }: { c: ConnChannel }): JSX.Element {
             {t('gui.conn.connect')}
           </button>
         ) : paired ? (
-          <button className="mini key" onClick={() => store.closeDialog()}>
+          <button className="mini key" onClick={() => store.closeChannel()}>
             {t('gui.conn.w_done')}
           </button>
         ) : (

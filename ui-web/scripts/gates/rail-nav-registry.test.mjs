@@ -40,11 +40,8 @@ function declared() {
 describe('the rail nav registry', () => {
   it('declares every button once, in the page table', () => {
     const buttons = declared()
-    /* The seven the page has: the draft row, the two capability tabs, the three
-       module rows and the fold that stands in for the pages inside it. */
-    expect([...buttons].sort()).toEqual(
-      ['agentsBtn', 'moreBtn', 'newBtn', 'playbooksBtn'],
-    )
+    /* The two the page has: the draft row, and the one module row. */
+    expect([...buttons].sort()).toEqual(['agentsBtn', 'newBtn'])
   })
 
   it('has the mark walk that table rather than a list of its own', () => {
@@ -55,13 +52,12 @@ describe('the rail nav registry', () => {
     expect(rail.match(/\['newBtn'[^\]]*\]/g)).toBe(null)
   })
 
-  it('renders a nav row for every button but the fold and the draft', () => {
+  it('renders a nav row for every button but the draft', () => {
     const rows = [...strip.matchAll(/^\s+button: '(\w+)',$/gm)].map((m) => m[1])
-    const own = [...declared()].filter((button) => button !== 'newBtn' && button !== 'moreBtn')
+    const own = [...declared()].filter((button) => button !== 'newBtn')
     expect(rows.sort()).toEqual(own.sort())
-    /* The draft row and the fold are the strip's own markup, because neither
-       opens a page: one starts a conversation and one unfolds three rows. */
+    /* The draft row is the strip's own markup, because it opens no page: it
+       starts a conversation. */
     expect(strip).toContain('id="newBtn"')
-    expect(strip).toContain('id="moreBtn"')
   })
 })

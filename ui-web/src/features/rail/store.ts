@@ -1,6 +1,5 @@
 import { t } from '../../i18n/t'
 import { setCurrent } from '../../lib/session'
-import { mark as navMark, onMark } from '../../state/navfly'
 import { navState } from '../../state/page'
 import { NAV_BUTTONS } from '../../state/pages'
 import { ds } from '../../state/sources'
@@ -165,13 +164,7 @@ export function markNew(): void {
           return !!n && n.dataset.open === 'true'
         }) || null
       : null
-  let top: string | null | undefined = pageUp ? nav.btnOf(pageUp) : !curId() ? 'newBtn' : null
-  /* While the More group stands open its rows are rail rows, and the current
-     one wears the mark itself; the parent lights up only when the group is
-     folded and has to stand in for whichever of its pages is open. The rows
-     are the flyout module's to write -- it is asked, not reached into, and it
-     answers whether the group stood open. */
-  if (navMark() && top === 'moreBtn') top = null
+  const top: string | null | undefined = pageUp ? nav.btnOf(pageUp) : !curId() ? 'newBtn' : null
   /* Every button a page can light, plus the draft row's, from the one table
      that declares them (state/pages.ts): the capabilities page lights skillBtn
      or plugBtn depending on which tab stands open, so the mark has to be
@@ -183,11 +176,6 @@ export function markNew(): void {
   }
 }
 
-/* The flyout needs the strip decided again at its own two moments -- a row
-   picked, the group folded either way -- and it cannot call here, because
-   state/ may not import a domain. So the writer registers itself with it,
-   which leaves the mark on one writer and the import on one direction. */
-onMark(markNew)
 
 /* Every session at once, from the settings page's data section. Same guard as
    the pin: no source installed means there is nothing to delete from. */

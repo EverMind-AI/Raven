@@ -377,13 +377,65 @@ function push(lane: Lane, seg: Seg): void {
   bumpList(lane)
 }
 
-function ask(lane: Lane, body: string, atts: string[], when?: string | null): void {
+function ask(
+  lane: Lane, body: string, atts: string[], when?: string | null,
+  auto?: { origin: string; note: string },
+): void {
   push(lane, {
-    v: 0, id: nextId(), kind: 'ask', body, atts,
+    v: 0, id: nextId(), kind: 'ask', ...(auto ? { auto } : {}), body, atts,
     when: when != null ? when : stamp(Date.now()), expanded: false,
     clipped: body.length > 640 || body.split('\n').length > 12,
     clipOpen: false,
   } satisfies AskData)
+}
+
+/* The header of the reminder a cron turn carries, and the two lines inside it
+   a reader may be shown.
+
+   The entry's text as a whole is runtime prose -- the contract's `origin` says
+   so and raven/agent/loop/_shared.py says why -- but it is not prose all the
+   way down. `raven/core/cron_stack.py` writes four parts, and two of them were
+   written FOR the reader: the parenthetical, whose own docstring says it
+   describes when the reminder was set "for the user", and the instruction,
+   which is the sentence the reader wrote when they made the job (the same
+   string the schedules section edits). The two that were not are the header
+   and the closing "when you reply, mention ..." -- wording aimed at the model,
+   and a reader shown those is a reader shown the prompt. */
+const CRON_HEAD = /^\[Scheduled Task\]/
+const CRON_WHEN = /^Task '.*' \((.+)\) has been triggered\.$/
+const CRON_SAID = /^Scheduled instruction: /
+const CRON_TAIL = /^When you reply, mention/
+
+/** A cron reminder read down to its reader-facing halves, or null. */
+export function cronReminder(text: string): { note: string; said: string } | null {
+  const lines = String(text || '').split('\n')
+  if (!CRON_HEAD.test(lines[0] ?? '')) return null
+  const at = lines.findIndex((line) => CRON_SAID.test(line))
+  if (at < 0) return null
+  /* The instruction may be several lines: it runs to the closing paragraph, or
+     to the end of a reminder written without one. */
+  let end = lines.findIndex((line, i) => i > at && CRON_TAIL.test(line))
+  if (end < 0) end = lines.length
+  const said = [(lines[at] as string).replace(CRON_SAID, ''), ...lines.slice(at + 1, end)]
+  let note = ''
+  for (const line of lines) {
+    const when = CRON_WHEN.exec(line)
+    /* Without the backticks the expression is written in: they are markdown
+       for the model, and the chip that carries this is plain text. */
+    if (when) { note = (when[1] as string).replace(/`/g, ''); break }
+  }
+  return { note, said: said.join('\n').trim() }
+}
+
+/* A turn the runtime opened. It stands where a question would, because that is
+   what it is to the turn under it -- and it is drawn on the reader's own side
+   for the same reason, outlined rather than filled because nobody typed it.
+   What it says is the origin, and for a schedule the instruction that fired,
+   which is the reader's own sentence. Every other origin has a shape of its
+   own that nothing here reads, so the row is the chip alone. */
+export function askAuto(lane: Lane, origin: string, text: string, when?: string | null): void {
+  const said = origin === 'cron' ? cronReminder(text) : null
+  ask(lane, said ? said.said : '', [], when, { origin, note: said ? said.note : '' })
 }
 
 export function note(lane: Lane, label: string, detail: string, opts?: { quiet?: boolean; retry?: (() => void) | null } | null): NoteHandle {
@@ -1703,9 +1755,11 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
            from the boundary is drawn here off the same identity, so the two
            views agree.
          - `origin` alone (a cron reminder, a sentinel notice, a sub-agent
-           announce an older server wrote): no identity to draw, so the row is
-           the quiet marker that a live view showed, and no workspace turn
-           opens -- that bookkeeping belongs to the delegated shape. */
+           announce an older server wrote): no run to open, so the row is the
+           reader's own side of the turn with the origin on it -- plus, for a
+           schedule, the two lines of its reminder that were written for a
+           reader (`cronReminder`). No workspace turn opens: that bookkeeping
+           belongs to the delegated shape. */
       sealTools()
       closeTurn(msOf(m.timestamp))
       const d = m.delegated
@@ -1738,7 +1792,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
            measured from here. `turnNo` stays put: the workspace-turn
            bookkeeping belongs to the delegated shape, as the note above says. */
         turnAt = msOf(m.timestamp)
-        delivered(lane, { label: String(m.origin || ''), isDag: false, status: 'ok', open: () => {} })
+        askAuto(lane, String(m.origin || ''), m.text || '', stamp(m.timestamp as string))
       }
       return
     }

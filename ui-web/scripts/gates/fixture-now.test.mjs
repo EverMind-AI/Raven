@@ -16,7 +16,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { PARAMS, PLAYBOOKS } from '../fixture-params.mjs'
+import { PARAMS } from '../fixture-params.mjs'
 
 /* Not "now": a fixed instant with a known local wording, so a failure reads as
    a drifting field rather than as a clock that moved. */
@@ -43,9 +43,6 @@ async function answers() {
   const out = {}
   for (const method of Object.keys(transport.fixtures)) {
     out[method] = await transport.call(method, PARAMS[method] ?? {})
-  }
-  for (const name of PLAYBOOKS) {
-    out[`playbooks.get(${name})`] = await transport.call('playbooks.get', { name })
   }
   for (const id of ['a', 'b', 'g', 'k1']) {
     out[`session.resume(${id})`] = await transport.call('session.resume', { session_id: id })

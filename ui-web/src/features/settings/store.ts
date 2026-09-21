@@ -30,8 +30,33 @@ import type {
   UsageStats,
 } from './types'
 
-export type SectionId = 'general' | 'usage' | 'provider' | 'model' | 'skills' | 'tools' | 'plugins' | 'archive' | 'about'
-export const SECTIONS: SectionId[] = ['general', 'usage', 'provider', 'model', 'skills', 'tools', 'plugins', 'archive', 'about']
+export type SectionId =
+  | 'general' | 'usage' | 'provider' | 'model' | 'skills' | 'tools' | 'plugins'
+  | 'channels' | 'cron' | 'memory' | 'archive' | 'about'
+
+/* The nav's order, which is also the reading: what the dialog is about first
+   (the page itself, what it cost), then what it is made of (the accounts, the
+   models each role takes, skills, tools, plugins), then the three surfaces a
+   reader sets up once and leaves alone, then the record and the version. */
+export const SECTIONS: SectionId[] = [
+  'general', 'usage', 'provider', 'model', 'skills', 'tools', 'plugins',
+  'channels', 'cron', 'memory', 'archive', 'about',
+]
+
+/* The three sections another domain's island fills, as the box it fills.
+ *
+ * Schedules, channels and memory were module pages of their own and are
+ * sections here now. Their islands did not move with them: each still mounts
+ * into a box of its own (features/<domain>/manifest.ts's host, rendered by
+ * src/App.tsx inside the dialog), because a React root inside this island's
+ * tree would be unmounted the moment the reader picked another section. So
+ * this island draws nothing for these three -- the pane beside it is theirs --
+ * and the stylesheet shows whichever box the open section names. */
+export const HOSTED: Partial<Record<SectionId, string>> = {
+  channels: 'connectionsBody',
+  cron: 'cronBody',
+  memory: 'memoryBody',
+}
 
 /* The catalogue column's six. `direct` is the remainder: not a reseller, not an
    OAuth sign-in, not something you run yourself. */
@@ -251,13 +276,18 @@ export async function openProviderModels(slug: string): Promise<void> {
   await open()
 }
 
-/* A section pick closes every drawer of the section it leaves. */
+/* A section pick closes every drawer of the section it leaves -- this island's
+   own below, and the two a hosted section raises over the dialog through the
+   slots state/settings.ts holds for them. */
 export function setTab(id: string): void {
+  const moved = settingsTab.id !== id
+  if (moved) settingsDialog.leaveSection()
   settingsTab.id = id
   set({
     tab: curTab(), err: '', provider: null, provQ: '', provFilt: 'all', provAdd: null, sheet: null, hdrAdd: null, ovlAdd: null,
     skill: null, detail: null, toolOpen: null, plugOpen: null,
   })
+  if (moved) settingsDialog.enterSection(id)
 }
 
 /* Every write the pages make: the row's key is busy while it runs, a fresh

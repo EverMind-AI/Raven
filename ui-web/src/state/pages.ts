@@ -1,4 +1,4 @@
-/* The seven module pages, declared once.
+/* The module pages, declared once.
  *
  * A page used to be a fact spelled out in nine places: the section src/App.tsx
  * renders, the id `state/page.ts` writes the open flag on, the rail button it
@@ -38,19 +38,20 @@ export interface ModulePage {
   readonly aria?: string
 }
 
-/* The seven, in the order they sit among the body's children. `as const` so
+/* The rows, in the order they sit among the body's children. `as const` so
    that `PageId` below is the union of the ids rather than `string`: a page
    named nowhere in this table is then a compile error at every table derived
    from it. Read through `PAGES`, which is the same rows with the shape above
-   rather than seven shapes of one row each. */
+   rather than a shape per row.
+
+   One page, because a place and a setting are different things. Schedules,
+   channels and memory are set up once and then left alone, so they are
+   sections of the settings dialog now (features/settings/store.ts's SECTIONS)
+   rather than pages of their own; the agent hub is the one module a reader
+   goes TO. The table stays a table: what a page costs to declare is what kept
+   six registrations from going stale, and it is the same cost for one row. */
 const DECLARED = [
-  { id: 'extAgentsPage', bodyId: 'extAgentsBody', navButtons: ['agentsBtn'], escapeRank: 6, head: 'gui.page.agents', aria: 'gui.page.agents' },
-  { id: 'connectionsPage', bodyId: 'connectionsBody', navButtons: ['moreBtn'], escapeRank: 7, head: 'gui.page.conn', aria: 'gui.page.conn' },
-  /* The memory page is announced by its hero's phrase rather than by its
-     heading, which is why the two keys differ. */
-  { id: 'memoryPage', bodyId: 'memoryBody', navButtons: ['moreBtn'], escapeRank: 2, head: 'gui.nav.mem', aria: 'gui.mem.hero' },
-  { id: 'playbooksPage', bodyId: 'playbooksBody', navButtons: ['playbooksBtn'], escapeRank: 3, head: 'gui.nav.pb', aria: 'gui.nav.pb' },
-  { id: 'cronPage', bodyId: 'cronBody', navButtons: ['moreBtn'], escapeRank: 1, head: 'gui.page.cron', aria: 'gui.page.cron' },
+  { id: 'extAgentsPage', bodyId: 'extAgentsBody', navButtons: ['agentsBtn'], escapeRank: 1, head: 'gui.page.agents', aria: 'gui.page.agents' },
 ] as const satisfies readonly ModulePage[]
 
 /** The module pages, keyed as their `<section>` ids. */

@@ -2,19 +2,19 @@
 /* The open-page store, against what showPageBase did before it.
  *
  * Every effect below was one line of the chrome's own `showPage`, and the two
- * tabs that used to wrap that function are subscribers now -- so the
- * order is part of the contract: the seven flags, the scroll reset, the app
- * mark, the rail mark and the overlay closes all happen first, and only then
- * does each subscriber run, in the order it registered.
+ * tabs that used to wrap that function are subscribers now -- so the order is
+ * part of the contract: the flags, the scroll reset, the app mark, the rail
+ * mark and the drawer close all happen first, and only then does each
+ * subscriber run, in the order it registered.
  *
- * The five sections are src/App.tsx's markup now, and it renders each with the
- * flag the page is served with; this store is still the one that writes it, and
- * the markup below is what each case drives it against.
+ * The sections are src/App.tsx's markup now, and it renders each with the flag
+ * the page is served with; this store is still the one that writes it, and the
+ * markup below is what each case drives it against.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-/** The five module pages, as NAV_OF keys them. */
-const PAGES = ['extAgentsPage', 'connectionsPage', 'memoryPage', 'playbooksPage', 'cronPage'] as const
+/** The module pages, as NAV_OF keys them. */
+const PAGES = ['extAgentsPage'] as const
 
 interface Fresh {
   page: typeof import('./page')
@@ -23,22 +23,22 @@ interface Fresh {
 }
 
 /* Fresh module state per case: the store holds which page is open, a set of
-   subscribers and the three slots the page's wiring fills, and all three would
-   leak into the next case.
-   The slots are filled here the way src/app/install.ts fills them, which is
-   also what says an unfilled slot is a switch that asks nothing. */
+   subscribers and the slot the page's wiring fills, and all three would leak
+   into the next case.
+   The slot is filled here the way src/app/install.ts fills it, which is also
+   what says an unfilled slot is a switch that asks nothing. */
 async function fresh(): Promise<Fresh> {
   vi.resetModules()
   const page = await import('./page')
   const spent: string[] = []
-  for (const slot of ['markNav', 'closeConnDialog', 'closeCronSheet'] as const) {
+  for (const slot of ['markNav'] as const) {
     page.onShow(slot, () => { spent.push(slot) })
   }
   return { page, spent }
 }
 
-/* The page as show() reaches it: the shell mark, the five sections with their
-   own scroller, and the shared drawer the switch closes. */
+/* The page as show() reaches it: the shell mark, the sections with their own
+   scroller, and the shared drawer the switch closes. */
 beforeEach(() => {
   document.body.innerHTML =
     '<div class="app"></div>' +
@@ -57,16 +57,16 @@ const onlyOpen = (open: string | null): Record<string, string> =>
   Object.fromEntries(PAGES.map((id) => [id, String(id === open)]))
 
 describe('showing a module page', () => {
-  it('writes the open flag on all five sections', async () => {
+  it('writes the open flag on every section', async () => {
     const { page } = await fresh()
-    page.show('memoryPage')
-    expect(flags()).toEqual(onlyOpen('memoryPage'))
-    expect(page.get()).toBe('memoryPage')
+    page.show('extAgentsPage')
+    expect(flags()).toEqual(onlyOpen('extAgentsPage'))
+    expect(page.get()).toBe('extAgentsPage')
   })
 
-  it('clears all seven when nothing is open', async () => {
+  it('clears them all when nothing is open', async () => {
     const { page } = await fresh()
-    page.show('memoryPage')
+    page.show('extAgentsPage')
     page.show(null)
     expect(flags()).toEqual(onlyOpen(null))
     expect(page.get()).toBeNull()
@@ -74,16 +74,16 @@ describe('showing a module page', () => {
 
   it('scrolls the page it opens back to the top', async () => {
     const { page } = await fresh()
-    const work = document.querySelector<HTMLElement>('#playbooksPage .work')!
+    const work = document.querySelector<HTMLElement>('#extAgentsPage .work')!
     work.scrollTop = 240
-    page.show('playbooksPage')
+    page.show('extAgentsPage')
     expect(work.scrollTop).toBe(0)
   })
 
   it('marks the shell while a page is up, and unmarks it after', async () => {
     const { page } = await fresh()
     const app = document.querySelector<HTMLElement>('.app')!
-    page.show('playbooksPage')
+    page.show('extAgentsPage')
     expect(app.dataset.page).toBe('on')
     page.show(null)
     expect(app.dataset.page).toBe('off')
@@ -96,35 +96,23 @@ describe('showing a module page', () => {
     expect(spent.filter((name) => name === 'markNav')).toHaveLength(2)
   })
 
-  /* caps and memory both render into the shared drawer, so opening either of
-     them must not close what it is about to fill. */
-  it('closes the shared drawer for every page except caps and memory', async () => {
+  /* Every surface that raises the shared drawer is the settings dialog's now,
+     so a page under it is a page the reader left. */
+  it('closes the shared drawer for every page', async () => {
     for (const id of PAGES) {
       const { page } = await fresh()
       const drawer = document.getElementById('detail')!
       drawer.dataset.open = 'true'
       page.show(id)
-      expect(drawer.dataset.open, id).toBe(id === 'memoryPage' ? 'true' : 'false')
+      expect(drawer.dataset.open, id).toBe('false')
     }
   })
 
-  it('closes a page-owned overlay only when the page it belongs to is not the one opening', async () => {
-    const { page, spent } = await fresh()
-    page.show('connectionsPage')
-    expect(spent.filter((name) => name === 'closeConnDialog')).toHaveLength(0)
-    expect(spent.filter((name) => name === 'closeCronSheet')).toHaveLength(1)
-    page.show('cronPage')
-    expect(spent.filter((name) => name === 'closeConnDialog')).toHaveLength(1)
-    expect(spent.filter((name) => name === 'closeCronSheet')).toHaveLength(1)
-  })
-
-  /* The order the three slots are spent in, which is what state/page.ts spells
-     out: the rail's mark, then the drawer, then the two page-owned escapeOrder. */
-  it('spends the three registered slots in the order it declares', async () => {
+  it('spends the registered slot', async () => {
     const { page, spent } = await fresh()
     document.getElementById('detail')!.dataset.open = 'true'
-    page.show('memoryPage')
-    expect(spent).toEqual(['markNav', 'closeConnDialog', 'closeCronSheet'])
+    page.show('extAgentsPage')
+    expect(spent).toEqual(['markNav'])
   })
 })
 
@@ -133,12 +121,12 @@ describe('the subscribers', () => {
     const { page } = await fresh()
     const calls: string[] = []
     const record = (name: string) => () => {
-      calls.push(`${name}:${page.get()}:${document.getElementById('memoryPage')!.dataset.open}`)
+      calls.push(`${name}:${page.get()}:${document.getElementById('extAgentsPage')!.dataset.open}`)
     }
     page.subscribe(record('skills'))
     page.subscribe(record('plugins'))
-    page.show('memoryPage')
-    expect(calls).toEqual(['skills:memoryPage:true', 'plugins:memoryPage:true'])
+    page.show('extAgentsPage')
+    expect(calls).toEqual(['skills:extAgentsPage:true', 'plugins:extAgentsPage:true'])
   })
 
   it('stop being called once they unsubscribe', async () => {

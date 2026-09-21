@@ -1,16 +1,17 @@
 import { t } from '../../i18n/t'
-import * as page from '../../state/page'
+import * as settingsDialog from '../../state/settings'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 
 import type { ConnChannel, ConnectionsSource } from './types'
 
-/* Page state, outside React on purpose: two of the callers that drive this
- * page are not React. The Escape order closes the page and its dialog
- * (state/escapeOrder.ts) and the page's own leave slot shuts the dialog behind
- * the reader (app/install.ts fills state/page.ts's slot) -- so the state lives
- * in a plain store those two can call, and the component subscribes.
+/* Section state, outside React on purpose: two of the callers that drive this
+ * section are not React. The Escape order closes its credentials dialog
+ * (state/escapeOrder.ts) and the module page's own leave slot shuts that
+ * dialog behind the reader (app/install.ts fills state/page.ts's slot) -- so
+ * the state lives in a plain store those two can call, and the component
+ * subscribes.
  */
 
 export interface ConnState {
@@ -18,10 +19,11 @@ export interface ConnState {
   /* False until the first rows fetch answers: the list is not drawn at all
      until then, so a page still loading never reads as "no channels". */
   loaded: boolean
-  /* Which entry's credential dialog is up -- the old `connEdit`. */
-  dialogId: string | null
-  /* Remounts the dialog subtree when it is reopened, so its uncontrolled
-     inputs start from the row's current values. */
+  /* Which entry the column beside the list is showing -- the old `connEdit`,
+     and before that the id of a modal card. */
+  viewId: string | null
+  /* Remounts the pane's subtree when another entry is picked, so its
+     uncontrolled inputs start from that row's current values. */
   epoch: number
   /* Whether anything is running that could host an adapter (see
      ConnectionsSource.hostRunning). Undefined until a source that answers has been
@@ -29,7 +31,7 @@ export interface ConnState {
   host?: boolean
 }
 
-const store = makeStore<ConnState>({ rows: [], loaded: false, dialogId: null, epoch: 0 })
+const store = makeStore<ConnState>({ rows: [], loaded: false, viewId: null, epoch: 0 })
 
 export const { get, subscribe, _resetForTests } = store
 
@@ -50,17 +52,28 @@ export async function refresh(initial = false): Promise<void> {
   }
 }
 
-export function close(): void {
-  page.show(null)
+export function openChannel(c: ConnChannel): void {
+  set({ viewId: c.id, epoch: get().epoch + 1 })
 }
 
-export function openDialog(c: ConnChannel): void {
-  set({ dialogId: c.id, epoch: get().epoch + 1 })
+export function closeChannel(): void {
+  set({ viewId: null })
 }
 
-export function closeDialog(): void {
-  set({ dialogId: null })
+/* What arriving at this section of the settings dialog costs: the rows, and the
+   credentials pane a previous visit was left on. Registered at this module's
+   own evaluation rather than by the page's wiring, the same shape
+   features/desk/store.ts fills state/escapeOrder.ts's slot with: the alternative
+   is src/app/install.ts importing three island stores for three lines, which is
+   three island graphs in the page's own wiring. */
+function enter(): void {
+  closeChannel()
+  void refresh(true)
 }
+settingsDialog.onEnter('channels', enter)
+/* And what leaving it costs: a pane left open would come back over whatever
+   section the reader opens next, still showing the channel they had left. */
+settingsDialog.onLeave('clearConnChannel', closeChannel)
 
 /* Optimistic, like the accessor it replaces: both sources flip `c.on` before
    their first await, so the redraw right after already shows the new get();

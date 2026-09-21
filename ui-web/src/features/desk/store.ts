@@ -668,8 +668,8 @@ function escapePane(): DeskPane | null {
    Registered into `state/escapeOrder.ts`'s table below, at this module's own
    evaluation --
    `state/` may not reach into `features/` at runtime, so the reach runs the
-   other way, the same shape `features/rail/store.ts` fills
-   `state/navfly.ts`'s `onMark` with. */
+   other way, the same shape `src/app/install.ts` fills `state/page.ts`'s
+   `onShow` slots with. */
 function escapeOpen(): boolean {
   return get().paletteOpen || get().panes.length > 0
 }

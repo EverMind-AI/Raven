@@ -14,8 +14,6 @@ import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as extAgents from '../features/extAgents/store'
-import * as memory from '../features/memory/store'
-import * as playbooks from '../features/playbooks/store'
 import * as settings from '../features/settings/store'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
@@ -23,7 +21,7 @@ import { mountPageRoot } from '../test/pageRoot'
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-/* The six openers the rows call, kept real apart from the one verb each: the
+/* The two openers the rows call, kept real apart from the one verb each: the
    modules around them answer for names this file never touches (the Escape
    chain's closers live beside those openers). */
 const opened = { list: [] as string[] }
@@ -31,8 +29,6 @@ const note = (name: string) => async () => {
   opened.list.push(name)
 }
 vi.spyOn(extAgents, 'open').mockImplementation(note('agents'))
-vi.spyOn(playbooks, 'openPage').mockImplementation(note('playbooks'))
-vi.spyOn(memory, 'open').mockImplementation(note('memory'))
 vi.spyOn(settings, 'open').mockImplementation(note('settings'))
 
 /* Nothing: the page root renders the grid, the column and the collapse's twin,
@@ -79,7 +75,7 @@ describe('the rail', () => {
     render()
     for (const id of [
       'railBtn', 'findBtn',
-      'newBtn', 'playbooksBtn', 'agentsBtn', 'moreFly', 'moreBtn',
+      'newBtn', 'agentsBtn',
       'findBox', 'sfind', 'sclr', 'list',
       'upnote', 'importRow', 'meBtn', 'railGrip',
     ]) {
@@ -93,9 +89,6 @@ describe('the rail', () => {
     render()
     expect(el('railBtn').getAttribute('aria-expanded')).toBe('true')
     expect(el('findBtn').getAttribute('aria-expanded')).toBe('false')
-    expect(el('moreBtn').getAttribute('aria-expanded')).toBe('false')
-    expect(el('moreBtn').getAttribute('aria-controls')).toBe('moreFly')
-    expect(el('moreFly').getAttribute('role')).toBe('group')
     expect(el('railGrip').getAttribute('role')).toBe('separator')
     expect(el('railGrip').getAttribute('aria-orientation')).toBe('vertical')
     expect((el('sfind') as HTMLInputElement).placeholder).not.toBe('')
@@ -109,24 +102,20 @@ describe('the rail', () => {
   })
 
   /* Shared ground, and values nothing has answered yet: the rail island roots
-     itself in #list, so React must not own that child list; the fold's rows and
-     the two slots in the door are rendered from stores that hold nothing until
-     a boot step or a reader asks (state/navfly.ts, state/foot.ts); and the
+     itself in #list, so React must not own that child list; and the
      aria-current over the nav buttons is written from outside React
      (features/rail/store.ts), which is why none of them carries one here. */
-  it('hands the list and the fold over empty', () => {
+  it('hands the list over empty', () => {
     render()
-    for (const id of ['list', 'moreFly']) {
-      expect(el(id).childNodes, id).toHaveLength(0)
-    }
-    for (const id of ['newBtn', 'playbooksBtn', 'agentsBtn', 'moreBtn']) {
+    expect(el('list').childNodes).toHaveLength(0)
+    for (const id of ['newBtn', 'agentsBtn']) {
       expect(el(id).getAttribute('aria-current'), id).toBe(null)
     }
   })
 
   it('renders a literal in every element that carried one', () => {
     render()
-    for (const sel of ['#newBtn span', '#playbooksBtn span', '#agentsBtn span', '.l-more', '.l-less', '#upnote .t', '#upnote .rl', '.me .who .n']) {
+    for (const sel of ['#newBtn span', '#agentsBtn span', '#upnote .t', '#upnote .rl', '.me .who .n']) {
       expect(document.querySelector(sel)?.textContent, sel).not.toBe('')
     }
   })
@@ -149,12 +138,12 @@ describe('the rail', () => {
      all, is invisible to a test that clicks a single one. */
   it('opens the page each row names', () => {
     render()
-    for (const id of ['playbooksBtn', 'agentsBtn', 'meBtn']) {
+    for (const id of ['agentsBtn', 'meBtn']) {
       act(() => {
         el(id).click()
       })
     }
-    expect(opened.list).toEqual(['playbooks', 'agents', 'settings'])
+    expect(opened.list).toEqual(['agents', 'settings'])
   })
 
   /* A React onClick leaves no trace on the element -- the root delegates every
@@ -168,7 +157,7 @@ describe('the rail', () => {
        and a second handler here would run beside the imperative one rather
        than replace it. */
     expect(el('newBtn').onclick).toBe(null)
-    expect(el('playbooksBtn').onclick).not.toBe(null)
+    expect(el('agentsBtn').onclick).not.toBe(null)
     const wiring = source('app/install.ts')
     expect([...wiring.matchAll(/\$\('#newBtn'\)!?\.onclick/g)]).toHaveLength(1)
     const tag = /<button[^>]*id="newBtn"[^>]*>/.exec(source('chrome/Rail.tsx'))
@@ -185,7 +174,7 @@ describe('the rail', () => {
    is. */
 describe('the rail once a language is applied', () => {
   it('renders the applied words when the column is mounted again', () => {
-    const KEYED = ['#newBtn span', '#playbooksBtn span', '#agentsBtn span', '.l-more', '.l-less', '#upnote .t', '#upnote .rl', '.me .who .n']
+    const KEYED = ['#newBtn span', '#agentsBtn span', '#upnote .t', '#upnote .rl', '.me .who .n']
     const words = (): string[] => KEYED.map((sel) => document.querySelector(sel)?.textContent ?? '')
     const hint = (): string => (el('sfind') as HTMLInputElement).placeholder
     render()

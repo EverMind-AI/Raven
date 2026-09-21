@@ -7,12 +7,6 @@
  * than listed here, so adding a domain does not mean editing this file first.
  */
 
-/** The playbook names the offline library carries, in list order. */
-export const PLAYBOOKS = [
-  'release-notes', 'issue-triage', 'competitor-scan', 'paper-to-deck',
-  'multi-market', 'dep-bump', 'deep-research', 'repo-audit',
-]
-
 /** One call per method. Anything not named here is called with `{}`. */
 export const PARAMS = {
   'system.hello': { client_version: '0.1.0', surface: 'page' },
@@ -60,12 +54,6 @@ export const PARAMS = {
   'plug.revoke': { name: 'websearch' },
   'plug.configure': { name: 'github', form: { token: 'x' } },
   'skills.manage': { action: 'list' },
-  'playbooks.get': { name: 'release-notes' },
-  'playbooks.credentials.get': { name: 'release-notes' },
-  'playbooks.credentials.set': { name: 'release-notes', param: 'token', value: 'x' },
-  'playbooks.credentials.clear': { name: 'release-notes', param: 'token' },
-  'playbooks.oauth.authorize': { name: 'release-notes', server: 'github' },
-  'playbooks.oauth.clear': { name: 'release-notes', server: 'github' },
   'subagents.list': { probe: false },
   'subagents.add': { preset: 'codex', name: 'codex' },
   'subagents.update': { name: 'claude_code', description: 'x' },
