@@ -1,7 +1,7 @@
 # EverOS role configuration moves to raven, and takes effect when it is saved
 
-Status: draft, pending G1
-Date: 2026-09-21
+Status: built; G1, G2 and G3 passed 2026-09-21, G4 self-review 2026-09-22
+Date: 2026-09-21, amended 2026-09-22
 
 ## Terms used throughout
 
@@ -105,12 +105,12 @@ Referenced by number from the plan and the deviations log; numbers do not change
 |---|---|---|
 | C7 | raven keeps creating `everos.toml` from the template and keeps owning `[api]`; `_child_env()` keeps deleting every `EVEROS_API__*`. Where a server listens is the file's decision. | A13 |
 | C8 | raven writes none of `[llm]`, `[embedding]`, `[rerank]`, `[multimodal]` in `everos.toml`, and `set_everos_section` can no longer address them. | `WRITABLE_SECTIONS == ("api",)`; a test asserts `set_everos_section("llm", ...)` raises `KeyError`; A7 |
-| C9 | On a root raven owns, all four roles are emitted on every spawn -- held ones with values, unheld ones empty. | A9 |
+| C9 | On a root raven owns, every role raven manages is emitted on each spawn -- held ones with values, unheld ones empty. A role an operator exported for themselves is skipped whole, values and blanks alike: raven cannot edit a shell, and blanking what somebody else set would be the one thing worse than ignoring it. Amended 2026-09-22 per D2; the original wording said all four unconditionally. | A9 |
 | C10 | The runtime knobs in `everos.toml` survive a model change. | A8, and the spike in `.work_context/everos_role_config_moves_to_raven/spikes/env_merge.py` |
 | C11 | The spawn precheck runs before the running server is stopped, so a restart that cannot succeed leaves the old server up. | A5 |
 | C12 | Every restart outcome reaches the page, success included. | A4, A6 |
 | C13 | On a user-managed root raven neither writes the role config nor starts or stops the server. | A12, A14 |
-| C14 | Migration runs automatically on config load, and is the plugin's code -- `loader.py` schedules it and passes the raw config, it does not read `everos.toml` itself. | A10; C1's test also covers the loader |
+| C14 | Migration runs automatically, without a command, and is the plugin's code throughout. Scheduled from `EverosBackend.start()` rather than raven's config migrations: the host may know this plugin only through the plugin contract, and a branch in `loader.py` calling into it is the host importing the plugin, which `tests/test_plugin_boundary.py` refuses. Amended 2026-09-22 per D10. | A10; `tests/test_everos_backend.py` covers the scheduling |
 | C15 | The gate `everos_role_configured(section)` reads raven's config and answers: a model, a provider, and that provider resolving to a usable credential -- the same rule `api_key_set` reports. | A11, A18 |
 
 ### Assumptions
