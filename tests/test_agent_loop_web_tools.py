@@ -229,6 +229,98 @@ def test_a_keyed_reader_without_a_key_registers_jina_instead(workspace, monkeypa
     assert keyed.tools.get("web_fetch").api_key == "fc"
 
 
+class _RefusingThenServing:
+    """Stands in for ``httpx.AsyncClient``: refuses the boot key, serves the new one."""
+
+    def __init__(self) -> None:
+        self.keys_seen: list[str] = []
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+    async def post(self, url: str, **kwargs):
+        import httpx
+
+        key = kwargs["headers"]["Authorization"].removeprefix("Bearer ")
+        self.keys_seen.append(key)
+        request = httpx.Request("POST", url)
+        if key == "sk-boot":
+            return httpx.Response(402, json={}, request=request)
+        return httpx.Response(200, json={"results": [{"url": url, "raw_content": "PAGE"}]}, request=request)
+
+
+@pytest.mark.asyncio
+async def test_a_reader_key_set_after_a_refusal_reaches_the_next_call(workspace, tmp_path: Path, monkeypatch) -> None:
+    """The refusal tells the user to set a working key at the vendor's slot. The
+    tool used to hold the key it was built with, so following that instruction
+    did nothing until a restart; the slot is now what the next call reads."""
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"tools": {"web": {"providers": {"tavily": {"apiKey": "sk-boot"}}}}}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    monkeypatch.setattr("raven.agent.tools.web.validate_url_target", lambda url: (True, ""))
+    client = _RefusingThenServing()
+    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", client)
+    loop = _loop(workspace, web_fetch_provider="tavily", web_provider_keys={"tavily": "sk-boot"})
+    tool = loop.tools.get("web_fetch")
+    assert tool.provider == "tavily"
+
+    refused = json.loads(await tool.execute("https://a.example"))
+    paused = json.loads(await tool.execute("https://b.example"))
+    assert refused["error"] == "Tavily refused the key (HTTP 402)" and paused["paused"] is True
+    assert client.keys_seen == ["sk-boot"], "the paused call was not sent"
+
+    cfg.write_text(
+        json.dumps({"tools": {"web": {"providers": {"tavily": {"apiKey": "sk-rotated"}}}}}), encoding="utf-8"
+    )
+
+    served = json.loads(await tool.execute("https://c.example"))
+    assert served["text"] == "PAGE"
+    assert client.keys_seen == ["sk-boot", "sk-rotated"]
+    assert tool.api_key == "sk-rotated"
+
+
+@pytest.mark.asyncio
+async def test_the_subagent_lanes_reader_reads_its_key_live_too(tmp_path: Path, monkeypatch) -> None:
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.tools.registry import ToolRegistry
+
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    registered: list = []
+    real = ToolRegistry.register
+
+    def _spy(self, tool):
+        real(self, tool)
+        registered.append(tool)
+
+    monkeypatch.setattr(ToolRegistry, "register", _spy)
+    backend = RavenLoopBackend(
+        provider=_StubProvider(),
+        model="stub",
+        agent_home=tmp_path,
+        web_fetch_provider="tavily",
+        web_provider_keys={"tavily": "sk-boot"},
+    )
+    await backend.run("task", task_id="t1", workspace=tmp_path, executor=None)
+    (tool,) = [t for t in registered if t.name == "web_fetch"]
+    assert tool.provider == "tavily" and tool.api_key == "sk-boot"
+
+    cfg.write_text(
+        json.dumps({"tools": {"web": {"providers": {"tavily": {"apiKey": "sk-rotated"}}}}}), encoding="utf-8"
+    )
+
+    assert tool.api_key == "sk-rotated"
+
+
 @pytest.mark.asyncio
 async def test_the_unconfigured_error_names_the_config_actually_in_force(tmp_path: Path) -> None:
     """Reachable only if the key disappears after registration, but the message

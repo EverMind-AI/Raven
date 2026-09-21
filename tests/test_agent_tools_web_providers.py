@@ -450,13 +450,20 @@ async def test_a_reader_refusing_the_key_pauses_the_tool(
 
 
 async def test_a_new_key_lifts_the_pause_at_once(monkeypatch: pytest.MonkeyPatch, _open_gate: None) -> None:
+    """Through the key source the loops hand the tool, not a private field: the
+    refusal tells the user to set a new key, so the value that lifts the pause
+    has to be one the tool reads on the next call."""
+    keys = {"tavily": "old"}
     with _patched(monkeypatch, {}, status=402) as recorder:
-        tool = WebFetchTool(api_key="old", provider="tavily")
+        tool = WebFetchTool(api_key=lambda: keys["tavily"], provider="tavily")
         await tool.execute("https://a.example")
-        tool._init_api_key = "new"
+        await tool.execute("https://a.example")
+        assert len(recorder.calls) == 1, "same key: paused, not sent"
+        keys["tavily"] = "new"
         await tool.execute("https://a.example")
 
     assert len(recorder.calls) == 2
+    assert recorder.calls[-1][2]["headers"]["Authorization"] == "Bearer new"
 
 
 async def test_the_pause_ends_after_the_cooldown_and_one_request_goes_through(

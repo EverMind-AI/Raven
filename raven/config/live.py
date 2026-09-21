@@ -308,6 +308,29 @@ def web_provider_key(live: LiveConfig, vendor: str) -> str | None:
     return _admit(live, slot, present=True, value=live_web_provider_key(raw, vendor))
 
 
+def live_vendor_key(live: LiveConfig, vendor: str, *, boot: str | None) -> str:
+    """One web vendor's key as the file has it now, else the value the process booted with.
+
+    Resolved in the order ``WebToolsConfig.vendor_key`` uses: the canonical
+    ``tools.web.providers.<vendor>.apiKey`` slot, then the pre-vendor leaf that
+    is Serper's alone, then ``boot``. An empty-but-present slot is a revocation,
+    not a miss: the boot value serves only when the file answers nothing at all.
+    A tool that reads its key through this on every call sees a key the user
+    sets or rotates in the file without a restart -- which is what an error
+    message telling them to set one has to be able to promise.
+    """
+    slot = web_provider_key(live, vendor)
+    if slot:
+        return slot
+    if vendor == "serper":
+        leaf = web_search_key(live)
+        if leaf is not None:
+            return leaf
+    if slot == "":
+        return ""
+    return boot or ""
+
+
 def media_tool_config(live: LiveConfig, kind: str):
     """``tools.media.<kind>`` as the file has it, resolved the way
     ``Config.effective_media_config`` resolves it, or None for "no answer".

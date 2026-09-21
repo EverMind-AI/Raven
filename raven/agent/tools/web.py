@@ -187,8 +187,9 @@ def refusal_text(
     )
     detail = (
         f"{outcome}. Tell the user: {spec.label} needs attention -- set a working key at "
-        f"{spec.config_path} (or export {spec.env_var}; sign-up at {spec.signup}), or select another "
-        f"vendor under tools.web.{kind}.provider. Do not retry this tool until they have."
+        f"{spec.config_path} in the config file (read on the next call), restart with {spec.env_var} set, "
+        f"or select another vendor under tools.web.{kind}.provider; sign-up at {spec.signup}. "
+        "Do not retry this tool until they have."
     )
     return error, detail
 
@@ -880,7 +881,7 @@ class WebFetchTool(Tool):
 
     def __init__(
         self,
-        api_key: str | None = None,
+        api_key: "str | Callable[[], str] | None" = None,
         max_chars: int = 50000,
         proxy: str | None = None,
         provider: "str | Callable[[], str]" = DEFAULT_FETCH_PROVIDER,

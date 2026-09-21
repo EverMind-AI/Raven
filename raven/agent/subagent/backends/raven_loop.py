@@ -32,7 +32,7 @@ from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool
 from raven.agent.tools.registry import ToolRegistry, call_failed
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import ImageSearchTool, WebFetchTool, WebSearchTool, image_search_vendor, resolve_vendor_key
-from raven.config.live import LiveConfig, exec_extra_deny_patterns
+from raven.config.live import LiveConfig, exec_extra_deny_patterns, live_vendor_key
 from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.participant import StepView
@@ -482,8 +482,15 @@ class RavenLoopBackend:
             fetch_provider = WebFetchTool.effective_provider(
                 self.web_fetch_provider, self._web_key(self.web_fetch_provider)
             )
+            # Live for the same reason the main loop's is: a refused key pauses
+            # the tool and points the user at the config slot, so the slot has
+            # to be what the next call reads.
             tools.register(
-                WebFetchTool(api_key=self._web_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
+                WebFetchTool(
+                    api_key=lambda: live_vendor_key(_LIVE_CONFIG, fetch_provider, boot=self._web_key(fetch_provider)),
+                    proxy=self.web_proxy,
+                    provider=fetch_provider,
+                )
             )
         # The same browser the parent drives, in a tab of this run's own: the
         # tools name the run in flight as their owner, so two sub-agents
