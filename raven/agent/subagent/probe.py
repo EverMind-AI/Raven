@@ -572,16 +572,39 @@ async def record_capabilities(cfg: Any) -> Any:
     return snapshot
 
 
+def _own_row_missing_its_menu(snapshot: Any) -> bool:
+    """A ready snapshot of one of raven's own agents that measured no model menu.
+
+    Raven's own acp agents run on this raven's provider catalogue, so a menu
+    measured empty there is a handshake taken before that catalogue reached
+    them, not a fact about the agent -- and nothing invalidates it: the launch
+    config it was measured against has not moved, so the row would go on
+    offering nothing for as long as the file survives. Only raven's own: a third
+    party that really offers none would be relaunched at every boot to be told
+    so again.
+    """
+    return (
+        snapshot is not None
+        and getattr(snapshot, "agent_name", "") == "raven"
+        and getattr(snapshot, "status", "") == "ready"
+        and bool(getattr(snapshot, "model_menu_measured", False))
+        and not getattr(snapshot, "model_choices", ())
+    )
+
+
 def capabilities_wanted(cfg: Any) -> bool:
     """Does this acp entry lack a fresh, complete capability record?
 
-    The same three cases the boot backfill re-measures: no snapshot, one whose
-    launch config has changed, or one written before the model menu was
-    recorded. A row with a complete record keeps it -- a connect must not spend
-    a handshake re-measuring what is already known.
+    The same four cases the boot backfill re-measures: no snapshot, one whose
+    launch config has changed, one written before the model menu was recorded,
+    or one of raven's own whose menu came back empty. A row with a complete
+    record keeps it -- a connect must not spend a handshake re-measuring what is
+    already known.
     """
     snapshot = acp_snapshot_for(cfg)
-    return snapshot is None or snapshot.stale or not getattr(snapshot, "model_menu_measured", True)
+    if snapshot is None or snapshot.stale or not getattr(snapshot, "model_menu_measured", True):
+        return True
+    return _own_row_missing_its_menu(snapshot)
 
 
 def _test_record(snapshot: Any, previous: Any) -> Any:
@@ -754,14 +777,16 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
                 and has_model_menu is not None
                 and not has_model_menu(getattr(row, "name", "") or "")
             )
-            # Two reasons to re-measure besides staleness: a record written
-            # from before the model menu (above), and a credential refusal.
-            # Staleness asks whether the launch config moved, and signing in does
-            # not move it -- so a recorded refusal never goes stale, and the row
-            # it came from would go on saying "Unauthorized" across every restart
-            # after the sign-in that cured it.
+            # Three reasons to re-measure besides staleness: a record written
+            # from before the model menu (above), a credential refusal, and one
+            # of raven's own that came back with an empty menu. Staleness asks
+            # whether the launch config moved, and neither signing in nor
+            # configuring a provider moves it -- so a recorded refusal never goes
+            # stale, and the row it came from would go on saying "Unauthorized"
+            # across every restart after the sign-in that cured it.
             refused = getattr(snapshot, "needs_auth", False)
-            if snapshot is not None and not snapshot.stale and not outdated_menu and not refused:
+            menuless_own = _own_row_missing_its_menu(snapshot)
+            if snapshot is not None and not snapshot.stale and not outdated_menu and not refused and not menuless_own:
                 continue
             result = await verify_agent(cfg)
             # A pass, or a refusal the agent explained. Every other failure stays
