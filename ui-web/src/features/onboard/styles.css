@@ -66,9 +66,3 @@
   font-size: 11px; font-weight: 600; color: var(--faint); background: var(--raised); }
 .ob-led { width: 6px; height: 6px; border-radius: 99px; background: currentColor; }
 
-/* The tier rows under the agent switches: one radio per tier, the description
-   under the name the way an agent row carries its counts. */
-.ob-tiers { margin-top: 14px; }
-.ob-tier { cursor: pointer; }
-.ob-tier input { flex: none; width: 15px; height: 15px; margin: 0; accent-color: var(--amber); }
-.ob-tier .ob-am { display: grid; }

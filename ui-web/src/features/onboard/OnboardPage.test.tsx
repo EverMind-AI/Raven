@@ -226,7 +226,7 @@ describe('the onboarding wizard', () => {
     expect(button('gui.onb.next')).toBeDefined()
     await click(button('gui.onb.skip'))
     expect(steps()[3]).toBe('4gui.onb.step_sync:current')
-    const rows = [...document.querySelectorAll('.ob-row:not(.ob-tier)')]
+    const rows = [...document.querySelectorAll('.ob-row')]
     expect(rows.length).toBe(2)
     expect(rows[0]!.textContent).toContain('gui.onb.sync_counts:{"files":31,"convs":284}')
     expect(rows[0]!.textContent).toContain('gui.onb.sync_skills:{"n":2}')
@@ -234,35 +234,13 @@ describe('the onboarding wizard', () => {
     expect(rows[1]!.textContent).toContain('gui.onb.sync_unsupported')
     expect(rows[1]!.querySelector('[role=switch]')).toBeNull()
     expect(button('gui.onb.start_sync').disabled).toBe(true)
-    /* The tier rows follow the agents: memory files by default, and the
-       descriptions count what the switches that are on would import. */
-    const tiers = [...document.querySelectorAll<HTMLInputElement>('.ob-tier input')]
-    expect(tiers.map((r) => `${r.value}:${r.checked}`)).toEqual(['memory_files:true', 'full:false'])
-    expect(document.querySelector('.ob-tiers')!.textContent).toContain('gui.onb.tier_memory_desc:{"files":0}')
     await click(rows[0]!.querySelector('[role=switch]')!)
     expect(rows[0]!.querySelector('[role=switch]')!.getAttribute('aria-checked')).toBe('true')
-    expect(document.querySelector('.ob-tiers')!.textContent).toContain('gui.onb.tier_full_desc:{"files":31,"convs":284}')
     expect(button('gui.onb.start_sync').disabled).toBe(false)
     expect(button('gui.onb.skip').disabled).toBe(true)
     await click(button('gui.onb.start_sync'))
     expect(h.runs).toEqual([[['claude_code'], 'memory_files']])
     expect(host().dataset.off).toBe('1')
-  })
-
-  it('starts a full import when the reader picks that tier', async () => {
-    const h = install(SCAN_CLAUDE)
-    h.agents.agents = [{ id: 'claude_code', name: 'Claude Code' }]
-    mount()
-    await open()
-    await act(async () => { h.model.setDone(true) })
-    await click(button('gui.onb.next'))
-    await click(button('gui.onb.skip'))
-    await click(button('gui.onb.skip'))
-    await click(document.querySelector('.ob-row:not(.ob-tier) [role=switch]')!)
-    await click(document.querySelector<HTMLInputElement>('.ob-tier input[value=full]')!)
-    expect(document.querySelector<HTMLInputElement>('.ob-tier input[value=full]')!.checked).toBe(true)
-    await click(button('gui.onb.start_sync'))
-    expect(h.runs).toEqual([[['claude_code'], 'full']])
   })
 
   it('re-reads the importer when the primary is pressed on the agents step, and moves to the step it adds', async () => {

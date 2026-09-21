@@ -224,28 +224,11 @@ describe('the tier', () => {
     return runs
   }
 
-  it('defaults to memory files -- minutes, not hours -- and travels with the start', async () => {
+  it('asks for memory files only -- minutes, not hours; conversations stay a CLI option', async () => {
     const runs = await readyToSync()
-    expect(store.get().syncTier).toBe('memory_files')
 
     await store.finish()
 
     expect(runs).toEqual([[['hermes'], 'memory_files']])
-  })
-
-  it('is the readers to change', async () => {
-    const runs = await readyToSync()
-    store.setSyncTier('full')
-
-    await store.finish()
-
-    expect(runs).toEqual([[['hermes'], 'full']])
-  })
-
-  it('sums the picked agents for the tier rows', async () => {
-    await readyToSync()
-    expect(store.pickedCounts()).toEqual({ files: 8, convs: 52 })
-    store.toggleSync('hermes')
-    expect(store.pickedCounts()).toEqual({ files: 0, convs: 0 })
   })
 })
