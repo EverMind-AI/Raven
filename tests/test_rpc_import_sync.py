@@ -847,13 +847,14 @@ async def test_a_source_given_up_on_or_skipped_stops_being_named_too(
     assert seen == [(None, None), (None, None)]
 
 
-async def test_a_source_the_counts_already_hold_is_not_named_while_it_is_sent_again(
+async def test_a_source_being_sent_again_is_named_and_not_counted(
     cfg: Path, state: ImportState, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A source that failed is sent again by the next run while its entry still
-    says failed, so the counts hold it for the whole of that pass. Naming it as
-    well has a reader add its share on top of a count that already holds it:
-    the row overshoots, then falls back when the source lands."""
+    """A source is counted or named, never both. One that failed is sent again by
+    the next run while its entry still says failed: counting it there as well as
+    naming it has a reader add its share on top of a count that already holds it,
+    and dropping the name instead would leave the row frozen for the whole retry.
+    So the count leaves it out while it is in flight, and its own progress shows."""
     monkeypatch.setattr("raven.importer.orchestrator._STORE_RETRY_BACKOFF_S", ())
     state.set_total(2, keys=["claude_code:k1", "claude_code:k2"], tier="memory_files", platforms=["claude_code"])
     state.mark_failed("claude_code", "k1", "the memory service did not accept a batch")
@@ -880,9 +881,12 @@ async def test_a_source_the_counts_already_hold_is_not_named_while_it_is_sent_ag
     assert (await import_sync.import_run({"platforms": ["claude_code"], "tier": "memory_files"}))["started"] is True
     await import_sync._TASK
 
-    # k1 is counted by its failed entry throughout its two batches and named by
-    # neither; k2 has no entry yet, so it is named and not counted.
-    assert seen[:2] == [(0, 1, None), (0, 1, None)]
+    # k1 is named while it goes again and its failed entry is not counted, so a
+    # reader adds its share exactly once; k2 follows it with no entry at all.
+    assert seen[:2] == [
+        (0, 0, {"platform": "claude_code", "source_key": "k1", "sent": 0, "total": 12}),
+        (0, 0, {"platform": "claude_code", "source_key": "k1", "sent": 10, "total": 12}),
+    ]
     assert seen[2] == (1, 0, {"platform": "claude_code", "source_key": "k2", "sent": 0, "total": 12})
     assert (await import_sync.import_status({}))["submitted"] == 2
 

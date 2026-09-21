@@ -288,6 +288,14 @@ async def import_status(params: dict) -> dict:
     scope = list(keys) if keys is not None else list(entries)
     total = len(scope) if keys is not None else meta.get("total", len(entries))
 
+    # A source is counted or named, never both. A source that failed is sent
+    # again by the next run while its entry still says failed, and a reader
+    # adding the share of a named source to a count that already holds it draws
+    # the same source twice; leaving it out of the count instead keeps its own
+    # progress visible for the whole of the retry.
+    current = dict(_CURRENT) if running and _CURRENT is not None else None
+    in_flight = f"{current['platform']}:{current['source_key']}" if current is not None else None
+
     submitted = 0
     failed = 0
     by_platform: dict[str, dict[str, int]] = {}
@@ -295,23 +303,13 @@ async def import_status(params: dict) -> dict:
         platform = key.split(":", 1)[0]
         bucket = by_platform.setdefault(platform, {"total": 0, "submitted": 0, "failed": 0})
         bucket["total"] += 1
-        status = entries.get(key, {}).get("status")
+        status = None if key == in_flight else entries.get(key, {}).get("status")
         if status == "submitted":
             submitted += 1
             bucket["submitted"] += 1
         elif status == "failed":
             failed += 1
             bucket["failed"] += 1
-
-    # A source the counts already hold: a failed source is fed again by the next
-    # run while its entry still says failed, so a reader adding its share on top
-    # of the count that already holds it would draw the same source twice.
-    current = dict(_CURRENT) if running and _CURRENT is not None else None
-    if current is not None and entries.get(f"{current['platform']}:{current['source_key']}", {}).get("status") in (
-        "submitted",
-        "failed",
-    ):
-        current = None
 
     return {
         "running": running,
