@@ -20,7 +20,13 @@ import { cardPlan, edge } from './shape'
 import * as store from './store'
 
 import type { Dims } from '../dag/graph'
-import type { PlaybookCredentialParam, PlaybookCredentialServer, PlaybookDetail, PlaybookNode, PlaybookRow } from './types'
+import type {
+  PlaybookCredentialParam,
+  PlaybookCredentialServer,
+  PlaybookDetail,
+  PlaybookNode,
+  PlaybookRow
+} from './types'
 import type { JSX } from 'react'
 
 /* One geometry, always. The card's diagram has two metrics because a card
@@ -40,6 +46,26 @@ function Tile({ name }: { name: string }): JSX.Element {
 /* ── the card's concept diagram ─────────────────────────────────────── */
 
 function Concept({ row }: { row: PlaybookRow }): JSX.Element {
+  if (row.artifact_kind === 'harness') {
+    const workers = row.workers.slice(0, 4)
+    const width = workers.length * 48 + Math.max(0, workers.length - 1) * 16
+    return (
+      <svg
+        className="pbrib"
+        width="100%"
+        height="84"
+        viewBox="0 0 268 84"
+        preserveAspectRatio="xMidYMid meet"
+        aria-hidden="true"
+      >
+        <g transform={`translate(${(268 - width) / 2} 28)`}>
+          {workers.map((worker, index) => (
+            <rect key={worker.label} className="pbcell worker" x={index * 64} y={0} width={48} height={28} rx={8} />
+          ))}
+        </g>
+      </svg>
+    )
+  }
   if (row.mode === 'prompt') {
     /* No stored graph to draw: the shape is composed per run. Three dashed
        middle boxes say "a fan-out of some width", which is the only true thing
@@ -54,7 +80,7 @@ function Concept({ row }: { row: PlaybookRow }): JSX.Element {
         aria-hidden="true"
       >
         <g transform="translate(53 23)">
-          {[0, 1, 2].map((i) => {
+          {[0, 1, 2].map(i => {
             const y = i * 23
             return (
               <g key={i}>
@@ -71,7 +97,7 @@ function Concept({ row }: { row: PlaybookRow }): JSX.Element {
     )
   }
   const plan = cardPlan(row.nodes)
-  const at = new Map(plan.cells.map((c) => [c.id, c]))
+  const at = new Map(plan.cells.map(c => [c.id, c]))
   const { W, H } = plan.metric
   return (
     <svg
@@ -83,8 +109,8 @@ function Concept({ row }: { row: PlaybookRow }): JSX.Element {
       aria-hidden="true"
     >
       <g transform={`translate(${Math.max(0, (268 - plan.width) / 2)} ${(84 - plan.height) / 2})`}>
-        {row.nodes.map((n) =>
-          n.depends_on.map((d) => {
+        {row.nodes.map(n =>
+          n.depends_on.map(d => {
             const a = at.get(d)
             const b = at.get(n.id)
             if (!a || !b) return null
@@ -93,8 +119,8 @@ function Concept({ row }: { row: PlaybookRow }): JSX.Element {
         )}
         {plan.clipAt
           ? plan.cells
-              .filter((c) => c.x + W + plan.metric.GX >= (plan.clipAt as { x: number }).x)
-              .map((c) => (
+              .filter(c => c.x + W + plan.metric.GX >= (plan.clipAt as { x: number }).x)
+              .map(c => (
                 <path
                   key={'clip' + c.id}
                   className="pbedge cut"
@@ -102,10 +128,10 @@ function Concept({ row }: { row: PlaybookRow }): JSX.Element {
                 />
               ))
           : null}
-        {plan.cells.map((c) => (
+        {plan.cells.map(c => (
           <rect key={c.id} className="pbcell" x={c.x} y={c.y} width={W} height={H} rx={4} />
         ))}
-        {plan.rowOverflow.map((o) => (
+        {plan.rowOverflow.map(o => (
           <text key={'ro' + o.x} className="pbmore" x={o.x + 2} y={o.y + H / 2 + 3.5}>
             {'+' + o.n}
           </text>
@@ -128,7 +154,7 @@ function Card({ row }: { row: PlaybookRow }): JSX.Element {
       role="button"
       tabIndex={0}
       onClick={row.error ? undefined : open}
-      onKeyDown={(e) => {
+      onKeyDown={e => {
         if (row.error) return
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
@@ -152,7 +178,11 @@ function Card({ row }: { row: PlaybookRow }): JSX.Element {
           {/* Only where there is no graph to read: a prompt-mode playbook stores
               none, and the dashed boxes above are otherwise unexplained. A dag
               card says nothing here -- its drawing is the statement. */}
-          {row.mode === 'prompt' ? <span className="pbcap">{t('gui.pb.shape_live')}</span> : null}
+          {row.artifact_kind === 'harness' ? (
+            <span className="pbcap">{t('gui.pb.shape_harness', { n: row.workers.length })}</span>
+          ) : row.mode === 'prompt' ? (
+            <span className="pbcap">{t('gui.pb.shape_live')}</span>
+          ) : null}
         </div>
       )}
     </div>
@@ -208,7 +238,7 @@ function Library(): JSX.Element {
             value={s.query}
             placeholder={t('gui.pb.search')}
             aria-label={t('gui.pb.search')}
-            onChange={(e) => store.search(e.target.value)}
+            onChange={e => store.search(e.target.value)}
           />
         </div>
         {/* While a query is on, the count is about the query -- a total nobody
@@ -230,7 +260,7 @@ function Library(): JSX.Element {
         <div className="empty-note">{t(s.query ? 'gui.pb.none_match' : 'gui.pb.none')}</div>
       ) : (
         <div className="pbgrid">
-          {rows.map((r) => (
+          {rows.map(r => (
             <Card key={r.name} row={r} />
           ))}
         </div>
@@ -273,21 +303,13 @@ function Prompt({ text }: { text: string }): JSX.Element {
   )
 }
 
-function Canvas({
-  detail,
-  picked,
-  dims
-}: {
-  detail: PlaybookDetail
-  picked: string | null
-  dims: Dims
-}): JSX.Element {
+function Canvas({ detail, picked, dims }: { detail: PlaybookDetail; picked: string | null; dims: Dims }): JSX.Element {
   const nodes = detail.nodes
   const { at, width, height } = layout(nodes, dims)
   /* Session groups: nodes sharing (subagent, instance). The only fact the arrows
      cannot carry -- an edge says "after", not "in the same session". */
   const groups = new Map<string, PlaybookNode[]>()
-  nodes.forEach((n) => {
+  nodes.forEach(n => {
     if (!n.instance) return
     const key = n.subagent + '@' + n.instance
     const g = groups.get(key)
@@ -298,12 +320,12 @@ function Canvas({
     <div className="pbcanvas" style={{ width, height }}>
       {[...groups.entries()].map(([key, members]) => {
         if (members.length < 2) return null
-        const pts = members.map((m) => at.get(m.id)).filter(Boolean) as Array<{ x: number; y: number }>
+        const pts = members.map(m => at.get(m.id)).filter(Boolean) as Array<{ x: number; y: number }>
         if (pts.length < 2) return null
-        const x0 = Math.min(...pts.map((p) => p.x)) - 11
-        const y0 = Math.min(...pts.map((p) => p.y)) - 11
-        const x1 = Math.max(...pts.map((p) => p.x)) + dims.W + 11
-        const y1 = Math.max(...pts.map((p) => p.y)) + dims.H + 11
+        const x0 = Math.min(...pts.map(p => p.x)) - 11
+        const y0 = Math.min(...pts.map(p => p.y)) - 11
+        const x1 = Math.max(...pts.map(p => p.x)) + dims.W + 11
+        const y1 = Math.max(...pts.map(p => p.y)) + dims.H + 11
         return (
           <div className="pblane" key={key} style={{ left: x0, top: y0, width: x1 - x0, height: y1 - y0 }}>
             <b>{t('gui.pb.lane', { handle: members[0]?.instance || '' })}</b>
@@ -311,8 +333,8 @@ function Canvas({
         )
       })}
       <svg className="pbedges" width={width} height={height} aria-hidden="true">
-        {nodes.map((n) =>
-          n.depends_on.map((d) => {
+        {nodes.map(n =>
+          n.depends_on.map(d => {
             const a = at.get(d)
             const b = at.get(n.id)
             if (!a || !b) return null
@@ -329,7 +351,7 @@ function Canvas({
           })
         )}
       </svg>
-      {nodes.map((n) => {
+      {nodes.map(n => {
         const p = at.get(n.id)
         if (!p) return null
         const blank = !n.subagent || !n.prompt_template
@@ -369,8 +391,12 @@ function Listed({ of, carried }: { of: Written; carried?: string[] }): JSX.Eleme
   const shipped = new Set(carried || [])
   return (
     <span className="chips">
-      {of.items.map((x) => (
-        <span className={shipped.has(x) ? 'tag own' : 'tag'} key={x} title={shipped.has(x) ? t('gui.pb.carried') : undefined}>
+      {of.items.map(x => (
+        <span
+          className={shipped.has(x) ? 'tag own' : 'tag'}
+          key={x}
+          title={shipped.has(x) ? t('gui.pb.carried') : undefined}
+        >
           {x}
         </span>
       ))}
@@ -526,7 +552,7 @@ function Board({ detail, picked }: { detail: PlaybookDetail; picked: string | nu
         window.clearInterval(slow)
         slow = 0
       }
-      setPort((prev) => (prev.w === w && prev.h === h ? prev : { w, h }))
+      setPort(prev => (prev.w === w && prev.h === h ? prev : { w, h }))
     }
     measure()
     window.addEventListener('resize', measure)
@@ -582,7 +608,7 @@ function Board({ detail, picked }: { detail: PlaybookDetail; picked: string | nu
      zoom from the closure makes all of them compute the same result -- the
      flick lands as one step and the canvas feels stuck. */
   const zoomBy = (factor: number, about?: { x: number; y: number }): void => {
-    setView((prev) => {
+    setView(prev => {
       const cur = prev ?? { x: 0, y: 0, z: 1 }
       const z = clampZoom(cur.z * factor)
       /* Zoom about a point: the graph coordinate under it has to stay under it,
@@ -607,7 +633,7 @@ function Board({ detail, picked }: { detail: PlaybookDetail; picked: string | nu
     const dy = e.clientY - d.y
     if (!d.moved && Math.abs(dx) + Math.abs(dy) < DRAG_SLOP) return
     d.moved = true
-    setView((prev) => ({ x: d.ox + dx, y: d.oy + dy, z: prev?.z ?? 1 }))
+    setView(prev => ({ x: d.ox + dx, y: d.oy + dy, z: prev?.z ?? 1 }))
   }
   const onUp = (e: React.PointerEvent<HTMLDivElement>): void => {
     const d = drag.current
@@ -628,8 +654,7 @@ function Board({ detail, picked }: { detail: PlaybookDetail; picked: string | nu
       const r = el.getBoundingClientRect()
       /* deltaY is in lines or pages on some mice; normalise before reading it. */
       const raw = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * (port.h || 1) : e.deltaY
-      const factor =
-        Math.abs(raw) >= MOUSE_NOTCH ? (raw < 0 ? ZOOM_STEP : 1 / ZOOM_STEP) : Math.exp(-raw * WHEEL_GAIN)
+      const factor = Math.abs(raw) >= MOUSE_NOTCH ? (raw < 0 ? ZOOM_STEP : 1 / ZOOM_STEP) : Math.exp(-raw * WHEEL_GAIN)
       zoomBy(factor, { x: e.clientX - r.left, y: e.clientY - r.top })
     }
     el.addEventListener('wheel', onWheel, { passive: false })
@@ -643,10 +668,10 @@ function Board({ detail, picked }: { detail: PlaybookDetail; picked: string | nu
       '=': () => zoomBy(ZOOM_STEP),
       '-': () => zoomBy(1 / ZOOM_STEP),
       '0': () => setView(framed()),
-      ArrowUp: () => setView((prev) => ({ ...(prev ?? at), y: (prev ?? at).y + pan })),
-      ArrowDown: () => setView((prev) => ({ ...(prev ?? at), y: (prev ?? at).y - pan })),
-      ArrowLeft: () => setView((prev) => ({ ...(prev ?? at), x: (prev ?? at).x + pan })),
-      ArrowRight: () => setView((prev) => ({ ...(prev ?? at), x: (prev ?? at).x - pan }))
+      ArrowUp: () => setView(prev => ({ ...(prev ?? at), y: (prev ?? at).y + pan })),
+      ArrowDown: () => setView(prev => ({ ...(prev ?? at), y: (prev ?? at).y - pan })),
+      ArrowLeft: () => setView(prev => ({ ...(prev ?? at), x: (prev ?? at).x + pan })),
+      ArrowRight: () => setView(prev => ({ ...(prev ?? at), x: (prev ?? at).x - pan }))
     }
     /* Arrow keys walk the steps while a step is picked (see PlaybooksApp); they
        pan the canvas only when the canvas itself has focus and nothing is. */
@@ -720,7 +745,7 @@ function Params({ params }: { params: PlaybookDetail['params'] }): JSX.Element {
         </tr>
       </thead>
       <tbody>
-        {keys.map((k) => {
+        {keys.map(k => {
           const p = params[k]
           if (!p) return null
           return (
@@ -753,7 +778,7 @@ function Contract({ detail }: { detail: PlaybookDetail }): JSX.Element {
       <section className="pbsec">
         <h2>{t('gui.pb.sec_keywords')}</h2>
         <span className="chips">
-          {detail.keywords.map((k) => (
+          {detail.keywords.map(k => (
             <span className="tag" key={k}>
               {k}
             </span>
@@ -795,7 +820,7 @@ function CarriedServers({ servers }: { servers: NonNullable<PlaybookDetail['mcp_
         </tr>
       </thead>
       <tbody>
-        {names.map((name) => {
+        {names.map(name => {
           const s = servers[name]
           if (!s) return null
           const stdio = !!s.command
@@ -845,11 +870,30 @@ function CarriedServers({ servers }: { servers: NonNullable<PlaybookDetail['mcp_
   )
 }
 
+function HarnessSummary({ workers }: { workers: PlaybookDetail['workers'] }): JSX.Element | null {
+  if (!workers.length) return null
+  return (
+    <section className="pbharness">
+      <h2>{t('gui.pb.sec_harness')}</h2>
+      <div className="pbworkers">
+        {workers.map(worker => (
+          <div className="pbworker" key={worker.label}>
+            <span className="pbworkername">{worker.label}</span>
+            <span className="pbworkeragent">{worker.agent}</span>
+            {worker.brief ? <p>{worker.brief}</p> : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
   const s = store.getState()
-  const node = detail.nodes.find((n) => n.id === s.pickedNode) || null
+  const node = detail.nodes.find(n => n.id === s.pickedNode) || null
   const onGraph = s.tab === 'graph'
   const onCreds = s.tab === 'credentials'
+  const hasWorkflow = detail.artifact_kind !== 'harness'
   return (
     <>
       <div className="pbcrumb">
@@ -881,16 +925,29 @@ function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
               told from a page that did not say. */}
           <span className="pbval mono">{String(detail.confirm)}</span>
         </div>
+        <div>
+          <span className="pblab">{t('gui.pb.f_artifact')}</span>
+          <span className="pbval mono">{detail.artifact_kind}</span>
+        </div>
       </div>
+
+      <HarnessSummary workers={detail.workers} />
 
       <div className="pbtabs" role="tablist">
         <button className="pbtab" role="tab" aria-selected={onGraph} onClick={() => store.showTab('graph')}>
           {/* A prompt-mode playbook has no graph to show: what sits here is the
               guidance a model assembles one from, so the tab says that instead
               of naming a picture that is not there. */}
-          {t(detail.mode === 'dag' ? 'gui.pb.tab_graph' : 'gui.pb.tab_assembly')}
+          {hasWorkflow
+            ? t(detail.mode === 'dag' ? 'gui.pb.tab_graph' : 'gui.pb.tab_assembly')
+            : t('gui.pb.tab_harness')}
         </button>
-        <button className="pbtab" role="tab" aria-selected={s.tab === 'contract'} onClick={() => store.showTab('contract')}>
+        <button
+          className="pbtab"
+          role="tab"
+          aria-selected={s.tab === 'contract'}
+          onClick={() => store.showTab('contract')}
+        >
           {t('gui.pb.tab_contract')}
         </button>
         {/* Only where there is something to hold: a playbook with no secret
@@ -906,12 +963,17 @@ function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
 
       {/* Hidden rather than unmounted: the board holds the reader's own pan and
           zoom, and a look at the contract must not throw it away. */}
-      <div className={'pbwork' + (detail.mode === 'dag' ? '' : ' solo') + (onGraph ? '' : ' gone')}>
-        {detail.mode === 'dag' ? (
+      <div className={'pbwork' + (hasWorkflow && detail.mode === 'dag' ? '' : ' solo') + (onGraph ? '' : ' gone')}>
+        {hasWorkflow && detail.mode === 'dag' ? (
           <>
             <Board detail={detail} picked={s.pickedNode} />
             <NodePanel node={node} carried={Object.keys(detail.mcp_servers || {})} />
           </>
+        ) : !hasWorkflow ? (
+          <div className="pbstage prose">
+            <span className="cap">{t('gui.pb.sec_harness')}</span>
+            <p>{t('gui.pb.harness_only')}</p>
+          </div>
         ) : (
           /* One column, because there is no second thing: a panel beside this
              saying the graph is composed per run was a note about the absence
@@ -929,8 +991,8 @@ function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
 }
 
 function hasCredentialSlots(detail: PlaybookDetail): boolean {
-  const secret = Object.values(detail.params).some((p) => p.type === 'secret')
-  const oauth = Object.values(detail.mcp_servers || {}).some((sv) => sv.auth === 'oauth')
+  const secret = Object.values(detail.params).some(p => p.type === 'secret')
+  const oauth = Object.values(detail.mcp_servers || {}).some(sv => sv.auth === 'oauth')
   return secret || oauth
 }
 
@@ -944,7 +1006,7 @@ function Credentials({ detail, s }: { detail: PlaybookDetail; s: store.Playbooks
   /* Null both while the first read is in flight and when the engine has no
      credentials surface (loadCredentials leaves it null then). */
   if (!creds) return <p className="pbnone">{s.credsLoading ? '…' : t('gui.pb.cred_none')}</p>
-  const oauthServers = creds.servers.filter((sv) => sv.auth === 'oauth')
+  const oauthServers = creds.servers.filter(sv => sv.auth === 'oauth')
   return (
     <>
       <p className="pbsum">{t('gui.pb.cred_intro')}</p>
@@ -953,7 +1015,7 @@ function Credentials({ detail, s }: { detail: PlaybookDetail; s: store.Playbooks
           <h2>{t('gui.pb.cred_sec_params')}</h2>
           <table className="pbtbl">
             <tbody>
-              {creds.params.map((p) => (
+              {creds.params.map(p => (
                 <SecretRow key={p.name} row={p} busy={!!s.busy['p:' + p.name]} />
               ))}
             </tbody>
@@ -965,7 +1027,7 @@ function Credentials({ detail, s }: { detail: PlaybookDetail; s: store.Playbooks
           <h2>{t('gui.pb.cred_sec_servers')}</h2>
           <table className="pbtbl">
             <tbody>
-              {oauthServers.map((sv) => (
+              {oauthServers.map(sv => (
                 <OauthRow
                   key={sv.name}
                   row={sv}
@@ -1007,7 +1069,7 @@ function SecretRow({ row, busy }: { row: PlaybookCredentialParam; busy: boolean 
           autoComplete="off"
           aria-label={row.name}
           disabled={busy}
-          onKeyDown={(e) => {
+          onKeyDown={e => {
             if (e.key === 'Enter') save()
           }}
         />
@@ -1083,7 +1145,7 @@ export function PlaybooksApp(): JSX.Element {
       const target = e.target as HTMLElement | null
       if (target && /INPUT|TEXTAREA/.test(target.tagName)) return
       const nodes = (s.detail as PlaybookDetail).nodes
-      const i = nodes.findIndex((n) => n.id === s.pickedNode)
+      const i = nodes.findIndex(n => n.id === s.pickedNode)
       if (i < 0) return
       const next = nodes[e.key === 'ArrowRight' ? Math.min(i + 1, nodes.length - 1) : Math.max(i - 1, 0)]
       if (next) store.pick(next.id)

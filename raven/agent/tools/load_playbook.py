@@ -7,13 +7,13 @@ conversation history, and a hit took the turn over. The decision now sits with
 the party that has the context.
 
 **Loading is one action; what it leads to is the playbook's business.** A ``dag``
-playbook dispatches from inside this call -- the caller never gets a chance to
-"load and then not run", and never sees the graph it would otherwise be tempted to
-edit. A ``prompt`` playbook comes back as composition guidance for the caller to
-build a graph from. Which of those happens is the author's ``mode``, and it is
-deliberately absent from this tool's signature: it describes how thoroughly the
-author specified their procedure, which is not something the caller should have to
-classify correctly before it can ask.
+Workflow dispatches from inside this call -- the caller never gets a chance to
+"load and then not run", and never sees the graph it would otherwise be tempted
+to edit. A Harness-only artifact activates its reusable workers for the rest of
+the turn. A legacy ``prompt`` playbook still comes back as composition guidance.
+Which of those happens is deliberately absent from this tool's signature: it is
+the stored artifact's concern, not something the caller should classify before
+it can ask.
 
 What the caller may supply is bounded to two arguments -- ``params`` (declared
 values) and ``fills`` (fields the author left blank) -- and ``fills`` is refused
@@ -24,6 +24,7 @@ description of what ran.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from raven.contracts.tool import Tool
@@ -49,6 +50,7 @@ class LoadPlaybookTool(Tool):
         self._turn_message = ""
         self._turn_view: tuple[list[tuple[str, str]], list[str]] | None = None
         self._view_revision = -1
+        self._preselected: ContextVar[str | None] = ContextVar(f"load_playbook_preselected_{id(self)}", default=None)
 
     def bind_runtime(self, handles: "RuntimeHandles") -> None:
         """Receive the loop's assembled funnel; decline when there is none.
@@ -76,6 +78,10 @@ class LoadPlaybookTool(Tool):
         """
         self._turn_message = message or ""
         self._turn_view = None
+
+    def set_preselected(self, name: str | None) -> None:
+        """Expose the pre-turn resolver's choice to the model for this turn."""
+        self._preselected.set(name)
 
     def _library_view(self) -> tuple[list[tuple[str, str]], list[str]]:
         if self._runtime is None:
@@ -110,21 +116,29 @@ class LoadPlaybookTool(Tool):
         described = {pid for pid, _ in listing}
         rest = [n for n in names if n not in described]
         more = f"\nAlso installed (ask by name for details): {', '.join(rest)}." if rest else ""
+        preselected = self._preselected.get()
+        selected = (
+            f"\nThe pre-turn resolver selected {preselected!r} for this request. "
+            "Call load_playbook with that exact name before improvising."
+            if preselected in names
+            else ""
+        )
         return (
-            "Use one of the user's stored playbooks -- a saved multi-step procedure with its own "
-            "agents, parameters and steps. Reach for one when the request is the thing a playbook "
-            "already describes; a playbook encodes how the user wants this kind of work done, so it "
-            "beats improvising the same steps. If none fits, do not force it: use `spawn` or "
-            "`run_subagent_dag`, or just do the work.\n"
-            "Loading runs it. Most playbooks ship their whole graph, so one call is the whole "
-            "interaction; some instead come back with guidance for you to build the graph from, and "
-            "some ask for values first. Pass every parameter you can read off the conversation -- "
+            "Use one of the user's stored playbooks -- a reusable artifact that may provide a "
+            "Harness of task-specific workers, a validated Workflow, or both. Reach for one when "
+            "the request is the thing a playbook already describes; it encodes how the user wants "
+            "this kind of work done, so it beats improvising the same setup or steps. If none fits, "
+            "do not force it: use `spawn` or `run_subagent_dag`, or just do the work.\n"
+            "Loading activates its Harness and runs its Workflow when it has one. A Harness-only "
+            "artifact returns with those workers ready for this turn. Legacy prompt-mode playbooks "
+            "instead return guidance for you to build a graph. Some artifacts ask for values first. "
+            "Pass every parameter you can read off the conversation -- "
             "invent nothing -- and `fills` for any field listed below as left for you. A secret "
             "param marked as stored on this machine is filled in at load: call without it, and never "
             "ask the user to type a secret into the conversation. One marked as not set does not stop "
             "the run either -- load it anyway; the servers that param fills run without it and the "
             "reply says where the user sets it.\n"
-            f"Installed playbooks:\n{lines}{more}"
+            f"Installed playbooks:\n{lines}{more}{selected}"
         )
 
     @property

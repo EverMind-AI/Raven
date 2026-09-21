@@ -209,6 +209,30 @@ def test_a_judgement_about_one_call_compiles_and_runs() -> None:
     assert run_judge(fn, "grep", {}, []) == []
 
 
+def test_safe_numeric_signs_compile_and_run() -> None:
+    fn = compile_judge(
+        "def judge(name, params, prior):\n"
+        '    delta = -1 if params.get("late") else +1\n'
+        '    return ["late"] if delta < 0 else []'
+    )
+
+    assert run_judge(fn, "remind", {"late": True}, []) == ["late"]
+    assert run_judge(fn, "remind", {"late": False}, []) == []
+
+
+def test_safe_type_checks_compile_and_run() -> None:
+    fn = compile_judge(
+        "def judge(name, params, prior):\n"
+        '    amount = params.get("amount")\n'
+        "    if not isinstance(amount, (int, float)):\n"
+        '        return ["amount must be numeric"]\n'
+        "    return []"
+    )
+
+    assert run_judge(fn, "book", {"amount": "2800"}, []) == ["amount must be numeric"]
+    assert run_judge(fn, "book", {"amount": 2800.0}, []) == []
+
+
 @pytest.mark.parametrize(
     ("label", "source"),
     [

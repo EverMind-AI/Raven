@@ -2189,10 +2189,10 @@ class PlaybookConfig(Base):
     """Whether each turn writes itself a worker table before it starts.
 
     ``default`` is the flow this repo has always run: nothing is generated and
-    no new code is on the request path. ``generate`` spends one model call per
-    turn deciding which sub-agents the question needs and what each one's brief
-    is, then offers those workers -- rather than the bare roster -- to the
-    dispatching model.
+    no new code is on the request path. ``generate`` enables the pre-turn mode
+    chosen by ``defaultGenerationMode`` or the request override: Task selects
+    existing workers with minimal prompts, while Persona may build the full
+    enabled Harness surface.
 
     What it does not do is configure the main agent: it keeps every tool it had
     and decides for itself who to hand work to. The brief travels as a preamble
@@ -2200,6 +2200,13 @@ class PlaybookConfig(Base):
     it is permitted -- narrowing what a model is shown was never a permission
     in Raven, and the enforcement point is ``ToolRegistry.execute``.
     """
+
+    default_generation_mode: Literal["off", "task", "persona"] = "task"
+    """Default pre-turn Playbook generation mode when a request does not
+    override it. The off value preserves the ordinary turn path, task selects
+    and configures existing workers for a reusable task, and persona generates
+    a full durable Harness. The request-level value is a UI/session choice;
+    this field is the deployment fallback."""
 
 
 class SubagentsConfig(Base):

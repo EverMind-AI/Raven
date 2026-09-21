@@ -57,6 +57,22 @@ def _shape(spec: PlaybookSpec) -> list[dict[str, Any]]:
     return [{"id": node.id, "depends_on": list(node.depends_on)} for node in (spec.nodes or [])]
 
 
+def _artifact_fields(spec: Any, *, detail: bool = False) -> dict[str, Any]:
+    """Unified-only fields beside the legacy graph projection."""
+    from raven.playbook.unified import UnifiedPlaybookSpec
+
+    if not isinstance(spec, UnifiedPlaybookSpec):
+        return {"schema_version": 1, "artifact_kind": "legacy", "workers": []}
+    kind = "composite" if spec.harness and spec.workflow else "harness" if spec.harness else "workflow"
+    workers = []
+    for entry in spec.harness.delegate if spec.harness else []:
+        worker = {"label": entry.label, "agent": entry.name}
+        if detail:
+            worker["brief"] = entry.brief
+        workers.append(worker)
+    return {"schema_version": spec.schema_version, "artifact_kind": kind, "workers": workers}
+
+
 def _row(store: PlaybookStore, name: str, disabled: set[str]) -> dict[str, Any]:
     origin = store.origin_of(name) or "user"
     row: dict[str, Any] = {
@@ -68,6 +84,9 @@ def _row(store: PlaybookStore, name: str, disabled: set[str]) -> dict[str, Any]:
         "mode": "dag",
         "confirm": True,
         "nodes": [],
+        "schema_version": 1,
+        "artifact_kind": "legacy",
+        "workers": [],
         "error": "",
     }
     try:
@@ -80,6 +99,7 @@ def _row(store: PlaybookStore, name: str, disabled: set[str]) -> dict[str, Any]:
     row["mode"] = spec.mode
     row["confirm"] = spec.confirm
     row["nodes"] = _shape(spec)
+    row.update(_artifact_fields(spec))
     return row
 
 
@@ -133,6 +153,7 @@ async def playbooks_get(params: dict) -> dict:
     return {
         "playbook": {
             "name": spec.name,
+            **_artifact_fields(spec, detail=True),
             "description": spec.description,
             "task_summary": spec.task_summary,
             "version": spec.version,
@@ -471,7 +492,7 @@ async def playbooks_validate(
     import yaml
     from pydantic import ValidationError
 
-    from raven.playbook.validate import validate_structure
+    from raven.playbook.runtime import validation_errors
 
     name = _known_name(params.get("name"))
     store = _store()
@@ -488,7 +509,7 @@ async def playbooks_validate(
     except (ValidationError, ValueError, yaml.YAMLError) as exc:
         errors.append(str(exc))
     if spec is not None:
-        errors.extend(validate_structure(spec, known_agents=_known_agent_names(agent_loop_factory)))
+        errors.extend(validation_errors(spec, _known_agent_names(agent_loop_factory)))
     return {"name": name, "ok": not errors, "errors": errors, "path": str(store.path_for(name))}
 
 
@@ -712,7 +733,7 @@ async def playbooks_create(
 
     budget = _generation_budget_s()
     try:
-        generated = await asyncio.wait_for(runtime.generator.generate(workflow, skills), budget)
+        generated = await asyncio.wait_for(runtime.generator.generate(workflow, skills, dag_only=True), budget)
     except PlaybookGenerationError as exc:
         return {
             "name": name,
@@ -732,7 +753,9 @@ async def playbooks_create(
             "adopted": False,
         }
 
-    spec = generated.spec.model_copy(update={"name": name})
+    from raven.playbook.unified import unified_from_legacy
+
+    spec = unified_from_legacy(generated.spec, name=name)
     try:
         path = store.save(spec, notes=generated.notes)
     except PlaybookExistsError as exc:

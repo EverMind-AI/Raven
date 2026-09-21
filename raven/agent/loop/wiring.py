@@ -680,64 +680,161 @@ class WiringMixin:
         """
         return self._session_charters.pop(session_key, None)
 
-    async def _write_worker_table(self, req: Any, session_key: str, binding: Any) -> "DelegateTable | None":
-        """This turn's worker table, or ``None`` to run it unconfigured.
+    async def _resolve_playbook_turn(self, req: Any, session_key: str, binding: Any):
+        """Generate, persist and bind the Harness selected by this turn's mode."""
+        from raven.playbook.agent_generator import HarnessResolution
 
-        ``None`` on every path that is not a deliberate, successful generation:
-        the feature off, a sub-agent process (a worker writing its own workers
-        would be the third level the two-level rule forbids), a direct chat with
-        one sub-agent, an empty roster, or a generation that failed. A turn that
-        dies because its setup step failed is strictly worse than one that runs
-        without it.
-
-        The binding is handed in rather than resolved here. It has to be the
-        turn's own pair, because this runs *before* ``use_binding`` opens and
-        ``self.provider`` still answers with the loop's default; and it has to
-        be resolved once for both, because this call awaits a model and a
-        session that switched while it was in flight would otherwise split the
-        turn across two pairs.
-
-        The tool names handed over are the registry's current view, taken
-        outside the turn's freeze for the same reason. They are a vocabulary for
-        the brief, not the array the turn will run on, so a session-overlay tool
-        missing from them costs a word the generator could have used and
-        nothing else.
-        """
         cfg = self._playbook_config
         if cfg is None or not cfg.enabled or getattr(cfg, "agent_harness", "default") != "generate":
-            return None
-        if is_subagent_process():
-            return None
-        # A direct chat with one sub-agent returns through ``subagents.chat``
-        # without ever rendering or executing ``spawn``, so a table written for
-        # it is never read. Guarded before the call rather than after: the cost
-        # of generating one is a model round trip (two, when the table needs a
-        # repair round), paid on every direct turn for nothing.
-        if getattr(req, "direct_target", None) is not None:
-            return None
+            return HarnessResolution()
+        mode = getattr(req, "playbook_mode", None) or getattr(cfg, "default_generation_mode", "task")
+        if mode == "off":
+            return HarnessResolution()
+        if is_subagent_process() or getattr(req, "direct_target", None) is not None:
+            return HarnessResolution()
         try:
-            from raven.playbook.agent_generator import WorkerTableGenerator, roster_note
+            from raven.playbook.agent_generator import (
+                PersonaPlaybookGenerator,
+                TaskPlaybookGenerator,
+                persona_roster_profile,
+                task_roster_profile,
+            )
 
             metas = list(self.subagents.list_agents())
             agents = [a.name for a in metas]
             if not agents:
-                return None
-            # What each agent is for, in the registry's own words and its own
-            # advertised capabilities. Without them the generating model is
-            # handed a list of bare names and, on a roster that is not the
-            # shipped one, cannot tell which agent the task wants -- not even
-            # when only one of them can read the local files it is about.
-            notes = {a.name: roster_note(a) for a in metas}
-            tools = sorted((d.get("function", d) or {}).get("name", "") for d in self.tools.get_definitions())
-            table = await WorkerTableGenerator(binding.provider, binding.model).generate(
-                getattr(req, "text", "") or "", agents, [t for t in tools if t], notes
-            )
+                return HarnessResolution()
+            tool_catalog = self.tools.get_definitions()
+            query = getattr(req, "text", "") or ""
+            if mode == "persona":
+                profiles = {meta.name: persona_roster_profile(meta) for meta in metas}
+                names = self._playbooks.names() if self._playbooks is not None else []
+                resolution = await PersonaPlaybookGenerator(binding.provider, binding.model).resolve(
+                    query,
+                    agents,
+                    tool_catalog,
+                    profiles,
+                    names,
+                )
+            else:
+                profiles = {meta.name: task_roster_profile(meta) for meta in metas}
+                resolution = await TaskPlaybookGenerator(binding.provider, binding.model).resolve(
+                    query,
+                    agents,
+                    tool_catalog,
+                    profiles,
+                )
+            if resolution.active:
+                resolution = self._persist_generated_harness(resolution, query)
         except Exception:  # noqa: BLE001 - setup must not cost the turn
-            logger.opt(exception=True).warning("agent playbook: worker table failed; running unconfigured")
-            return None
+            logger.opt(exception=True).warning("agent playbook: resolution failed; running unconfigured")
+            return HarnessResolution()
+        table = resolution.table
         if table:
             logger.info("agent playbook: {} worker(s) for this turn: {}", len(table.workers), table.labels())
-        return table
+        return resolution
+
+    def _persist_generated_harness(self, resolution: Any, query: str):
+        """Save a validated Harness now; persistence failure never blocks binding."""
+        if self._playbooks is None or resolution.spec is None:
+            return resolution
+        import re
+        from dataclasses import replace
+
+        from raven.playbook.unified import PlaybookMatch, UnifiedPlaybookSpec
+
+        description = (resolution.description or query.strip().splitlines()[0])[:200]
+        keywords = [word.lower() for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", query)[:8]]
+        artifact = UnifiedPlaybookSpec(
+            name=resolution.artifact_name or resolution.spec.name,
+            description=description,
+            match=PlaybookMatch(summary=description, keywords=keywords or [description[:80]]),
+            harness=resolution.spec,
+        )
+        try:
+            artifact, path = self._save_generated_artifact(artifact)
+            self._playbooks.adopt(artifact.name)
+            harness = artifact.harness
+            logger.info("playbook: saved generated Harness {!r} at {}", artifact.name, path)
+            return replace(
+                resolution,
+                spec=harness,
+                artifact_name=artifact.name,
+                persisted=True,
+            )
+        except Exception:  # noqa: BLE001 - persistence must not cost the turn
+            logger.opt(exception=True).warning("playbook: generated Harness could not be saved; using it in memory")
+            return resolution
+
+    def _save_generated_artifact(self, artifact: Any):
+        """Atomically save under the requested name or the first numeric suffix."""
+        if self._playbooks is None:
+            raise RuntimeError("Playbook runtime is unavailable")
+        from raven.playbook.store import PlaybookExistsError
+
+        base = artifact.name
+        attempt = 1
+        while True:
+            name = base if attempt == 1 else f"{base}-{attempt}"
+            harness = artifact.harness
+            if harness is not None:
+                harness = harness.model_copy(update={"name": name})
+            candidate = artifact.model_copy(update={"name": name, "harness": harness})
+            try:
+                return candidate, self._playbooks.store.save(candidate)
+            except PlaybookExistsError:
+                attempt += 1
+
+    async def _write_worker_table(self, req: Any, session_key: str, binding: Any) -> "DelegateTable | None":
+        """Backward-compatible table-only face used by focused tests."""
+        return (await self._resolve_playbook_turn(req, session_key, binding)).table
+
+    async def _finish_playbook_turn(self, resolution: Any, capture: Any, binding: Any) -> None:
+        """Update a Task artifact with proven Workflow evidence and save the run."""
+        if self._playbooks is None:
+            return
+        from raven.playbook.run_record import RunRecordStore
+
+        try:
+            harness = resolution.spec
+            capture.saved_playbook = resolution.artifact_name if resolution.persisted else None
+            if resolution.capture_workflow and capture.dags and not resolution.selected_playbook:
+                from raven.playbook.workflow_compiler import WorkflowCompiler
+
+                artifact = await WorkflowCompiler(binding.provider, binding.model).compile(
+                    query=capture.query,
+                    dag=capture.dags[-1].spec,
+                    run_id=capture.run_id,
+                    harness=harness,
+                    name_hint=resolution.artifact_name,
+                    description_hint=resolution.description,
+                )
+                store = self._playbooks.store
+                if resolution.persisted:
+                    # The compiler parameterizes a proven graph; it does not own
+                    # artifact identity. Keep the numeric suffix chosen by the
+                    # atomic Harness save even when the model ignores nameHint.
+                    artifact = artifact.model_copy(update={"name": resolution.artifact_name, "harness": harness})
+                    path = store.save(artifact, overwrite=True)
+                else:
+                    artifact, path = self._save_generated_artifact(artifact)
+                self._playbooks.adopt(artifact.name)
+                capture.saved_playbook = artifact.name
+                logger.info("playbook: updated Task artifact {!r} with Workflow at {}", artifact.name, path)
+            capture.finish()
+        except Exception as exc:  # noqa: BLE001 - persistence must not replace the user's answer
+            logger.opt(exception=True).warning("playbook: turn finalization failed")
+            capture.finish(status="completed", error=str(exc))
+        finally:
+            try:
+                path = RunRecordStore(self._playbooks.store.root).save(capture)
+                logger.info("playbook: saved run record {}", path)
+            except Exception:  # noqa: BLE001 - record failure must not cost the turn
+                logger.opt(exception=True).warning("playbook: run record could not be saved")
+            loader = self.tools.get("load_playbook")
+            setter = getattr(loader, "set_preselected", None)
+            if callable(setter):
+                setter(None)
 
     def set_default_binding(self, binding: ModelBinding) -> None:
         """Change what new sessions start on.
@@ -1327,10 +1424,10 @@ class WiringMixin:
             # terms once judgement is wired in.
             provider_for=self._verdict_provider,
             binding_for=self._turn_binding,
-            # Stored Playbook nodes already name roster agents and carry their
-            # own prompts. A turn-scoped generated worker with the same label
-            # must not rewrite that persisted graph.
-            worker_table_for=lambda: None,
+            # PlaybookRuntime opens an explicit delegate scope for every stored
+            # graph: its durable Harness table for a v2 composite, or None for a
+            # legacy/workflow-only graph. Reading the scope here lets composites
+            # resolve aliases without exposing them to unrelated stored DAGs.
             control_reachable=self.dag_control_reachable,
             control_advert=self.dag_control_advert,
             verdict_config=self.subagent_dag_config,

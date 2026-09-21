@@ -80,6 +80,9 @@ class TurnRequest:
     # transcript -- a direct chat exists to keep those exchanges out of the main
     # agent's context. See AgentLoop.run_turn.
     direct_target: tuple[str, str] | None = None
+    # Per-turn UI choice for Playbook generation. None inherits the configured
+    # default; off/task/persona are resolved before the setup model call.
+    playbook_mode: str | None = None
 
 
 # A lane is a serial domain, so an instance that is to answer while the main

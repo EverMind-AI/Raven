@@ -41,7 +41,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -123,6 +123,29 @@ def _with_notices(result: "str | ToolResult", notices: list[str]) -> "str | Tool
     if isinstance(result, ToolResult):
         return ToolResult(model_text=f"{head}\n\n{result.model_text}", display_text=result.display_text)
     return f"{head}\n\n{result}"
+
+
+def _with_capture_notice(result: str | ToolResult) -> str | ToolResult:
+    notice = (
+        "Playbook capture is automatic for this turn. The platform will compile and save this "
+        "graph only after a clean success. Do not write, reconstruct, or separately save "
+        "Playbook, Harness, Workflow, or run-record files."
+    )
+    if isinstance(result, ToolResult):
+        return replace(result, model_text=f"{result.model_text}\n\n{notice}")
+    return f"{result}\n\n{notice}"
+
+
+def _successful_final(event: Any) -> bool:
+    """Whether a foreground graph reached a clean terminal result."""
+    if not isinstance(event, Final) or event.stopped or not isinstance(event.result, DagRunResult):
+        return False
+    summary = event.result.summary or {}
+    return (
+        bool(summary.get("total"))
+        and summary.get("completed") == summary.get("total")
+        and not any(summary.get(key, 0) for key in ("failed", "cancelled", "skipped"))
+    )
 
 
 @dataclass(frozen=True)
@@ -927,6 +950,16 @@ class SubAgentDagTool(Tool):
                 "when a single `spawn` is the better choice. Do not design the graph from this "
                 "description and the node schema alone. "
             )
+        capture_note = ""
+        from raven.playbook.run_record import workflow_capture_requested
+
+        if workflow_capture_requested():
+            capture_note = (
+                " Playbook capture is active for this turn: put the complete reusable process in "
+                "one graph. After a clean success the platform automatically compiles and saves "
+                "the Harness, Workflow, and run record. Do not inspect the run to reconstruct it, "
+                "and do not write or separately save Playbook files."
+            )
         # When to reach for a DAG at all is the always-injected guide's job, not
         # this description's: the model reads the digest before it picks a tool,
         # and two resident surfaces stating the trigger differently is how they
@@ -937,7 +970,7 @@ class SubAgentDagTool(Tool):
             "dependents through files (large outputs never enter your context). One call carries the "
             "whole graph -- do not issue a separate call per node. The graph runs in the background and "
             "its result is announced to you when it finishes, so do not poll it and do not re-submit it. "
-            f"{guide}"
+            f"{guide}{capture_note}"
             f"Available sub-agents for the `subagent` field: {names}."
         )
 
@@ -1137,13 +1170,26 @@ class SubAgentDagTool(Tool):
                 "Error: run_subagent_dag is not available inside a sub-agent run — "
                 "only the main agent orchestrates DAGs. Complete the assigned task directly."
             )
+        from raven.playbook.run_record import current_capture
+
+        playbook_capture = current_capture()
+        capture_workflow = bool(playbook_capture is not None and playbook_capture.capture_workflow)
+        if capture_workflow:
+            background = False
         # Wraps the whole call, not just the grant loop: a backgrounded run keeps
         # the context this task held when ``create_task`` copied it, so an
         # in-process node re-resolving its grant mid-run still finds the run's own
         # definitions. Reset on the way out, so the turn that dispatched a
         # background run does not carry them into whatever it does next.
         with run_mcp_scope(mcp_servers, scope=mcp_scope, credential_gaps=mcp_credential_gaps):
-            return await self._execute(nodes, background, confirm=confirm, task_summary=task_summary)
+            return await self._execute(
+                nodes,
+                background,
+                confirm=confirm,
+                task_summary=task_summary,
+                capture_workflow=capture_workflow,
+                playbook_capture=playbook_capture,
+            )
 
     async def _execute(
         self,
@@ -1151,6 +1197,8 @@ class SubAgentDagTool(Tool):
         background: bool,
         confirm: bool = False,
         task_summary: str = "",
+        capture_workflow: bool = False,
+        playbook_capture: Any = None,
     ) -> str | ToolResult:
         # Refused whole rather than per node, and ahead of validation, for the
         # same reason validation runs early: a refused graph must cost zero
@@ -1166,7 +1214,8 @@ class SubAgentDagTool(Tool):
         # enough for the model to just fix and re-submit. Backgrounding must not
         # turn a malformed graph into an announcement that arrives a turn later.
         try:
-            spec = parse_dag_spec({"task_summary": task_summary, "nodes": nodes, "confirm": confirm})
+            submitted = parse_dag_spec({"task_summary": task_summary, "nodes": nodes, "confirm": confirm})
+            spec = submitted
             validate_and_order(spec, self._reference_roots(), await self._session_nodes())
             pre = await self._preflight(spec)
             spec, dispatch_backends, notices, capabilities = pre.spec, pre.backends, pre.notices, pre.capabilities
@@ -1198,10 +1247,19 @@ class SubAgentDagTool(Tool):
         # After validation so a rejected graph mints nothing, and before either
         # mode starts so the foreground and background paths share one site.
         spec, auto_instances = self._mint_missing_instances(spec, capabilities)
-        return _with_notices(
-            await self._dispatch(spec, run_id, dirs, dispatch_backends, auto_instances, origin, call_id, background),
-            notices,
+        result = await self._dispatch(
+            spec,
+            run_id,
+            dirs,
+            dispatch_backends,
+            auto_instances,
+            origin,
+            call_id,
+            background,
+            capture=(playbook_capture, submitted) if capture_workflow else None,
         )
+        result = _with_notices(result, notices)
+        return _with_capture_notice(result) if capture_workflow else result
 
     async def _dispatch(
         self,
@@ -1213,6 +1271,7 @@ class SubAgentDagTool(Tool):
         origin: _DagOrigin,
         call_id: str | None,
         background: bool,
+        capture: tuple[Any, SubAgentDagSpec] | None = None,
     ) -> str | ToolResult:
         """Start a validated, minted spec running and return its first result.
 
@@ -1235,7 +1294,7 @@ class SubAgentDagTool(Tool):
             self._outboxes[run_id] = outbox
 
         task = asyncio.create_task(
-            self._run_detached(spec, run_id, cancel, origin, dirs, call_id, auto_instances, backends, outbox)
+            self._run_detached(spec, run_id, cancel, origin, dirs, call_id, auto_instances, backends, outbox, capture)
         )
         self._runs[run_id] = task
 
@@ -1657,6 +1716,7 @@ class SubAgentDagTool(Tool):
         auto_instances: frozenset[str],
         dispatch_backends: dict[str, Any],
         outbox: Outbox | None,
+        capture: tuple[Any, SubAgentDagSpec] | None = None,
     ) -> None:
         """Run a graph as its own task, then hand the result on.
 
@@ -1666,7 +1726,16 @@ class SubAgentDagTool(Tool):
         """
         try:
             result = await self._run(
-                spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends, outbox=outbox
+                spec,
+                run_id,
+                cancel,
+                origin,
+                dirs,
+                call_id,
+                auto_instances,
+                dispatch_backends,
+                outbox=outbox,
+                capture=capture,
             )
         except asyncio.CancelledError:
             if outbox is not None:
@@ -1824,6 +1893,7 @@ class SubAgentDagTool(Tool):
         auto_instances: frozenset[str],
         dispatch_backends: dict[str, Any],
         outbox: Outbox | None = None,
+        capture: tuple[Any, SubAgentDagSpec] | None = None,
     ) -> str | ToolResult | DagRunResult:
         """Execute one validated graph and render its outcome.
 
@@ -1918,6 +1988,11 @@ class SubAgentDagTool(Tool):
             self._desks.pop(run_id, None)
 
         # A terminal event carrying the authoritative manifest, so the web UI can
+        if capture is not None and _successful_final(Final(result, stopped=cancel.is_set())):
+            from raven.playbook.run_record import record_completed_dag
+
+            record_completed_dag(capture[1], run_id, capture[0])
+
         # rebuild / finalize the graph (and survive a reload).
         await emit(
             "dag_run_completed",

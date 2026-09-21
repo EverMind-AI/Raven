@@ -441,6 +441,7 @@ async def turn_send(
             surface=declared_surface(),
         ),
         text=parsed.content,
+        playbook_mode=parsed.playbook_mode,
         media=_resolve_media(parsed.media),
         # conversation == the lane. For the main agent that is the session key,
         # which is also the front-end subscription key; for a direct chat it is

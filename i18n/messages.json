@@ -6139,6 +6139,10 @@
       "en": "composed per run",
       "zh": "流程每次现搭"
     },
+    "gui.pb.shape_harness": {
+      "en": "Harness · {n}",
+      "zh": "Harness · {n}"
+    },
     "gui.pb.more_steps": {
       "en": "+{n}",
       "zh": "+{n}"
@@ -6203,6 +6207,10 @@
       "en": "Graph",
       "zh": "图"
     },
+    "gui.pb.tab_harness": {
+      "en": "Harness",
+      "zh": "Harness"
+    },
     "gui.pb.tab_assembly": {
       "en": "Assembly guide",
       "zh": "编排指引"
@@ -6222,6 +6230,18 @@
     "gui.pb.f_confirm": {
       "en": "before dispatch",
       "zh": "派发前确认"
+    },
+    "gui.pb.f_artifact": {
+      "en": "artifact",
+      "zh": "产物"
+    },
+    "gui.pb.sec_harness": {
+      "en": "Harness",
+      "zh": "Harness"
+    },
+    "gui.pb.harness_only": {
+      "en": "This artifact provides reusable workers and has no stored Workflow.",
+      "zh": "这个产物提供可复用的 workers，不包含已保存的 Workflow。"
     },
     "gui.pb.sec_keywords": {
       "en": "Trigger keywords",
