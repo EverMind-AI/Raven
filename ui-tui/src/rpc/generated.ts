@@ -5040,9 +5040,9 @@ export interface ApprovalRespondResult {
  */
 export interface ApprovalRevokeParams {
   /**
-   * The exec prefix rule to remove, exactly as it was saved.
+   * The answered request whose grant to take back.
    */
-  pattern: string;
+  approval_id: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5050,7 +5050,7 @@ export interface ApprovalRevokeParams {
  */
 export interface ApprovalRevokeResult {
   /**
-   * False when no such allow rule was on disk or the file could not be written.
+   * False when that answer wrote no rule of its own, the undo came twice, or the file could not be written.
    */
   ok: boolean;
 }

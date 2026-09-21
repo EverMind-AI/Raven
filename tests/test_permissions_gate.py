@@ -1354,3 +1354,64 @@ async def test_a_view_that_fails_or_is_missing_falls_back_to_the_arguments():
         ("unknown", {"input": {"title": "weekly"}}),
         ("unknown", {"input": {"title": "weekly"}}),
     ]
+
+
+class ReportingResponder(Responder):
+    """A transport that offers an undo, so the gate owes it a word on the write."""
+
+    def __init__(self, outcome: ApprovalOutcome):
+        super().__init__(outcome)
+        self.grants: list[tuple[str, str, bool]] = []
+
+    def record_grant(self, approval_id: str, pattern: str, written: bool) -> None:
+        self.grants.append((approval_id, pattern, written))
+
+
+@pytest.mark.asyncio
+async def test_the_gate_tells_the_transport_whether_its_write_added_the_rule(no_grants, monkeypatch):
+    """An undo can only be about the rule THIS answer put on disk, and the gate
+    is the only one that knows: `allow_exec_pattern` reports `added`, and a rule
+    the reader already had comes back False."""
+    from raven.permissions import gate as gate_module
+
+    config = PermissionsConfig()
+    _already: set[str] = set()
+
+    def write(pattern: str) -> bool:
+        first = pattern not in _already
+        _already.add(pattern)
+        config.tools.setdefault("exec", {})[pattern] = "allow"
+        return first
+
+    monkeypatch.setattr(gate_module, "allow_exec_pattern", write)
+    gate = gate_for(config)
+    responder = ReportingResponder(
+        ApprovalOutcome(ApprovalChoice.ALLOW_ALWAYS, pattern=" git push * ", approval_id="ap-1")
+    )
+    bind(responder)
+
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert responder.grants == [("ap-1", "git push *", True)], "the pattern as written, and that this call wrote it"
+
+    del config.tools["exec"]["git push *"]
+    responder.calls.clear()
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert responder.grants[-1] == ("ap-1", "git push *", False), "already there, so not this prompt's to take away"
+
+
+@pytest.mark.asyncio
+async def test_a_transport_with_no_undo_is_not_asked_for_one(no_grants, monkeypatch):
+    """The ACP wire has no undo surface and no such method; the gate must not
+    assume one, and a plain allow is never a grant to report either."""
+    from raven.permissions import gate as gate_module
+
+    monkeypatch.setattr(gate_module, "allow_exec_pattern", lambda pattern: True)
+    gate = gate_for(PermissionsConfig())
+    plain = Responder(ApprovalOutcome(ApprovalChoice.ALLOW_ALWAYS, pattern="git push *", approval_id="ap-1"))
+    bind(plain)
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+
+    reporting = ReportingResponder(ApprovalOutcome(ApprovalChoice.ALLOW, approval_id="ap-2"))
+    bind(reporting)
+    assert await gate.enforce("exec", {"command": "git fetch origin && git rebase origin/main"}) is None
+    assert reporting.grants == [], "allow once writes nothing, so there is nothing to undo"

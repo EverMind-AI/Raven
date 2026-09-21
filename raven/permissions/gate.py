@@ -231,11 +231,18 @@ class PermissionGate:
             # call on its own: a pattern that could not be written, or one the
             # user's own stricter rule outranks (``git *: ask`` over the
             # ``git push *`` just saved -- the strictest matching rule wins).
-            covered = (
-                outcome.choice is ApprovalChoice.ALLOW_ALWAYS
-                and self._persist(tool_name, outcome.pattern)
-                and user_tier(tool_name, params, self._config_source().tools) is Tier.ALLOW
-            )
+            on_disk = added = False
+            if outcome.choice is ApprovalChoice.ALLOW_ALWAYS:
+                on_disk, added = self._persist(tool_name, outcome.pattern)
+                # What the write actually did, back to whoever asked, so a later
+                # undo is about this rule rather than about any rule wearing the
+                # same text. The answer reached the client before this line ran,
+                # so the transport is holding an undo open on it; a transport
+                # with no undo (the ACP wire) has no such method and is skipped.
+                report = getattr(turn.responder, "record_grant", None)
+                if callable(report) and outcome.approval_id:
+                    report(outcome.approval_id, outcome.pattern.strip(), added)
+            covered = on_disk and user_tier(tool_name, params, self._config_source().tools) is Tier.ALLOW
             if outcome.choice is ApprovalChoice.ALLOW_SESSION or (
                 outcome.choice is ApprovalChoice.ALLOW_ALWAYS and not covered
             ):
@@ -266,29 +273,35 @@ class PermissionGate:
             )
         return self._refusal("Error: User denied this action." + feedback)
 
-    def _persist(self, tool_name: str, pattern: str) -> bool:
+    def _persist(self, tool_name: str, pattern: str) -> tuple[bool, bool]:
         """Write the confirmed prefix as an allow rule; the grant already stands.
 
-        True when the rule is on disk, whether this call wrote it or found it."""
+        Two answers, and they are not the same question: whether the rule is on
+        disk (which decides if a session grant is still needed), and whether
+        THIS call is the reason it is there (which decides whether an undo may
+        take it away -- a rule the person already had is not this prompt's).
+        """
         pattern = pattern.strip()
         why = "only exec patterns can be persisted" if tool_name != "exec" else validate_exec_pattern(pattern)
         if why is not None:
             logger.warning("permissions: not persisting {!r}: {}", pattern, why)
             self._annotate({"permission.persisted": False, "permission.persist.refused": why})
-            return False
+            return False, False
         try:
             added = allow_exec_pattern(pattern)
         except ValueError as exc:
             logger.warning("permissions: not persisting {!r}: {}", pattern, exc)
             self._annotate({"permission.persisted": False, "permission.persist.refused": str(exc)})
-            return False
+            return False, False
         except Exception:  # noqa: BLE001 - the config file is the user's; a failed write is theirs to hear about
             logger.exception("permissions: could not write allow rule {!r}", pattern)
             self._annotate({"permission.persisted": False})
-            return False
+            return False, False
         logger.info("permissions: {} exec allow rule {!r}", "added" if added else "kept", pattern)
-        self._annotate({"permission.persisted": True, "permission.persist.pattern": pattern})
-        return True
+        self._annotate(
+            {"permission.persisted": True, "permission.persist.added": added, "permission.persist.pattern": pattern}
+        )
+        return True, added
 
     @staticmethod
     def _prompt_view(tool: Tool | None, params: dict[str, Any]) -> tuple[str, dict[str, Any]]:

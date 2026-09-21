@@ -155,8 +155,11 @@ export interface ApprovalHandlers {
       false means the engine did not take it -- the request had gone, or the
       connection dropped -- and the landed line says so. */
   onChoice: (choice: string, feedback: string, pattern?: string) => void | Promise<boolean>
-  /** Takes back the rule `allow_always` saved; resolves to whether it was there. */
-  onRevoke?: (pattern: string) => Promise<boolean>
+  /* Takes back the rule THIS answer wrote. It names the answer, not the rule:
+     the engine decides what that answer put on disk, so an undo cannot reach a
+     rule the reader wrote themselves, and cannot race the write. Resolves false
+     when this answer wrote nothing of its own. */
+  onRevoke?: () => Promise<boolean>
   /** A sentence typed after a refusal, sent on as the reader's next message. */
   onNote?: (text: string) => void
 }
@@ -334,7 +337,7 @@ function land(
   if (choice === 'allow_always' && pattern) {
     const onUndo = handlers.onRevoke
       ? (): void => {
-        void handlers.onRevoke!(pattern).then((ok) => {
+        void handlers.onRevoke!().then((ok) => {
           show({ text: t(ok ? 'gui.confirm.land.revoked' : 'gui.confirm.land.revoke_failed') })
           stay(LANDED_MS)
         })

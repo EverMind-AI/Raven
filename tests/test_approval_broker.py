@@ -585,3 +585,62 @@ def test_the_default_ceiling_is_a_floor_nobody_present_reaches() -> None:
 
     assert DEFAULT_HARD_TIMEOUT_S == 24 * 3600
     assert ApprovalBroker(send)._hard_timeout_s == DEFAULT_HARD_TIMEOUT_S
+
+
+async def test_only_a_persisted_grant_leaves_a_receipt_to_undo() -> None:
+    """A receipt is minted for the one answer that writes a rule. Anything else
+    has nothing on disk of its own, so an undo naming it finds nothing rather
+    than reaching for a rule wearing the same text."""
+    frames: list[dict] = []
+
+    async def send(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = ApprovalBroker(send)
+    for choice in ("allow", "allow_session", "deny"):
+        frames.clear()
+        waiting = asyncio.create_task(
+            broker.await_approval(
+                conversation_id="session-a",
+                turn_id="turn-a",
+                tool_call_id="call-a",
+                command="git push origin HEAD",
+                description="Push",
+                suggested_pattern="git push *",
+            )
+        )
+        params = (await _wait_for_frame(frames))["params"]
+        broker.resolve(params["approval_id"], choice, conversation_id="session-a", pattern="git push *")
+        outcome = await waiting
+        assert outcome.approval_id == params["approval_id"], "every answer names its request"
+        # No slot, so no wait either: an undo answers at once with nothing.
+        assert await broker.written_pattern(params["approval_id"], timeout_s=5) is None, choice
+
+
+async def test_a_receipt_is_read_once() -> None:
+    frames: list[dict] = []
+
+    async def send(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = ApprovalBroker(send)
+    waiting = asyncio.create_task(
+        broker.await_approval(
+            conversation_id="session-a",
+            turn_id="turn-a",
+            tool_call_id="call-a",
+            command="git push origin HEAD",
+            description="Push",
+            suggested_pattern="git push *",
+        )
+    )
+    params = (await _wait_for_frame(frames))["params"]
+    broker.resolve(params["approval_id"], "allow_always", conversation_id="session-a", pattern="git push *")
+    await waiting
+
+    broker.record_grant(params["approval_id"], "git push *", True)
+    assert await broker.written_pattern(params["approval_id"]) == "git push *"
+    assert await broker.written_pattern(params["approval_id"], timeout_s=0.02) is None
+    # A report for a grant nobody is holding is dropped rather than kept.
+    broker.record_grant(params["approval_id"], "git push *", True)
+    assert await broker.written_pattern(params["approval_id"], timeout_s=0.02) is None

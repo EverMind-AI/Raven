@@ -6,12 +6,18 @@ confirmed pattern, or a refusal -- to the broker that owns the pending
 request. The opaque approval ID and conversation binding keep stale or
 cross-session UI responses from resolving a different request.
 
-``approval.revoke`` is the one step back: it removes the allow rule a prompt
-just wrote, and nothing else -- the call that was allowed has run.
+``approval.revoke`` is the one step back: it removes the allow rule THIS
+answer wrote, and nothing else -- the call that was allowed has run, and a rule
+the person wrote themselves is not a prompt's to take away. It asks the broker
+what the grant did rather than matching on the rule's text, and waits for that
+word, because the gate persists after the answer has already reached the client.
 
 ``approval.pending`` is for a page that lost its sheets -- a reload, a fresh
 socket: the requests still waiting, as they were first sent, so it can draw
-them again and answer them.
+them again and answer them. Scoped the way the original notification was
+(``connection.conversation_scoped``): a request belongs to the surface the
+conversation speaks through, and handing its id to another socket would let
+that socket authorize a command it was never asked about.
 """
 
 from __future__ import annotations
@@ -19,6 +25,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+from raven.rpc.connection import owns_conversation
 
 if TYPE_CHECKING:
     from raven.rpc.approval_broker import ApprovalBroker
@@ -52,11 +60,25 @@ async def approval_respond(
     }
 
 
-async def approval_revoke(params: dict[str, Any]) -> dict[str, bool]:
-    """Remove the exec allow rule a reader saved from a prompt; False when it was not there."""
+async def approval_revoke(
+    params: dict[str, Any],
+    *,
+    approval_broker: "ApprovalBroker",
+) -> dict[str, bool]:
+    """Take back the rule one answer wrote; False when that answer wrote none.
+
+    False covers every way there is nothing of this answer's to remove: it was
+    not a persisted grant, the rule was already in the config and was merely
+    kept, the undo came twice, or the gate never reported (see the broker's
+    receipt timeout). None of those is an error the reader caused, and none of
+    them may reach for a rule this prompt did not create.
+    """
     from raven.config.update import remove_exec_pattern
 
-    pattern = str(params.get("pattern") or "").strip()
+    approval_id = str(params.get("approval_id") or "").strip()
+    if not approval_id:
+        return {"ok": False}
+    pattern = await approval_broker.written_pattern(approval_id)
     if not pattern:
         return {"ok": False}
     try:
@@ -73,7 +95,8 @@ async def approval_pending(
 ) -> dict[str, list[dict[str, Any]]]:
     """The requests still open -- one conversation's, or all of them."""
     conversation_id = str(params.get("session_id") or params.get("conversation_id") or "")
-    return {"requests": approval_broker.pending(conversation_id or None)}
+    asked = approval_broker.pending(conversation_id or None)
+    return {"requests": [r for r in asked if owns_conversation(r.get("conversation_id"))]}
 
 
 def register_approval_methods(
@@ -89,8 +112,11 @@ def register_approval_methods(
     async def _pending(params: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         return await approval_pending(params, approval_broker=approval_broker)
 
+    async def _revoke(params: dict[str, Any]) -> dict[str, bool]:
+        return await approval_revoke(params, approval_broker=approval_broker)
+
     dispatcher.register("approval.respond", _respond)
-    dispatcher.register("approval.revoke", approval_revoke)
+    dispatcher.register("approval.revoke", _revoke)
     dispatcher.register("approval.pending", _pending)
 
 

@@ -6346,14 +6346,14 @@
     },
     {
       "name": "approval.revoke",
-      "summary": "Take back the exec allow rule a reader saved from an approval prompt.",
+      "summary": "Take back the exec allow rule one approval answer wrote.",
       "params": [
         {
-          "name": "pattern",
+          "name": "approval_id",
           "required": true,
           "schema": {
             "type": "string",
-            "description": "The exec prefix rule to remove, exactly as it was saved."
+            "description": "The answered request whose grant to take back."
           }
         }
       ],
@@ -6363,7 +6363,7 @@
           "additionalProperties": false,
           "properties": {
             "ok": {
-              "description": "False when no such allow rule was on disk or the file could not be written.",
+              "description": "False when that answer wrote no rule of its own, the undo came twice, or the file could not be written.",
               "type": "boolean"
             }
           },

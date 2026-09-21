@@ -3747,13 +3747,16 @@ class ApprovalRespondResult(_Strict):
 
 
 class ApprovalRevokeParams(_Strict):
-    """Take back the exec allow rule a reader saved from an approval prompt."""
+    """Take back the exec allow rule one approval answer wrote."""
 
-    pattern: str = Field(..., description="The exec prefix rule to remove, exactly as it was saved.")
+    approval_id: str = Field(..., description="The answered request whose grant to take back.")
 
 
 class ApprovalRevokeResult(_Strict):
-    ok: bool = Field(..., description="False when no such allow rule was on disk or the file could not be written.")
+    ok: bool = Field(
+        ...,
+        description="False when that answer wrote no rule of its own, the undo came twice, or the file could not be written.",
+    )
 
 
 class ApprovalPendingParams(_Strict):

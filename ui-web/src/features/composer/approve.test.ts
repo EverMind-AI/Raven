@@ -450,21 +450,23 @@ describe('the permission approval sheet', () => {
   })
 
   it('sends the suggested rule with a saved grant, and the landed sheet can take it back', async () => {
-    const revoked: string[] = []
-    openApproval(suggested, handlers({ onRevoke: async (p: string) => { revoked.push(p); return true } }))
+    /* The undo says only "take back what this answer wrote" -- it carries no
+       pattern, because what the answer put on disk is the engine's to know. */
+    let undone = 0
+    openApproval(suggested, handlers({ onRevoke: async () => { undone += 1; return true } }))
     opts()[1]!.click()
     expect(said).toEqual([['allow_always', '', 'git push *']])
     expect(landed()!.querySelector('.cp-land-text')!.textContent).toBe('gui.confirm.land.always')
 
     landed()!.querySelector<HTMLButtonElement>('.cp-undo')!.click()
     await tick()
-    expect(revoked).toEqual(['git push *'])
+    expect(undone).toBe(1)
     expect(landed()!.textContent).toBe('gui.confirm.land.revoked')
     expect(landed()!.querySelector('.cp-undo')).toBeNull()
   })
 
   it('says so when the rule could not be taken back', async () => {
-    openApproval(suggested, handlers({ onRevoke: async () => false }))
+    openApproval(fresh(suggested), handlers({ onRevoke: async () => false }))
     opts()[1]!.click()
     landed()!.querySelector<HTMLButtonElement>('.cp-undo')!.click()
     await tick()

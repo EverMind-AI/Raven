@@ -23,7 +23,18 @@ an overlay whatever ended the request; the client matches the id before
 clearing, so a delayed close cannot dismiss a newer request.
 
 ``pending`` lists the requests still open, as they were sent: a page that
-reloaded lost its sheets, and this is how it draws them again.
+reloaded lost its sheets, and this is how it draws them again. WHICH of them a
+caller may see is the transport's to decide, not this broker's -- the requests
+are kept whole here and the RPC boundary filters by who owns the conversation
+(``rpc/methods/approval.py``).
+
+A grant that writes a rule leaves a receipt. The gate persists AFTER this
+broker's answer has already reached the client (measured: the respond call
+returns first), so a client asking to undo cannot ask about "the rule matching
+this text" -- at that moment there may be no rule yet, or there may be one the
+person wrote themselves long ago. ``record_grant`` is how the gate says what its
+write actually did, and ``written_pattern`` is how an undo waits for that word
+and learns whether this answer is the reason a rule is on disk.
 
 One question per conversation at a time. Both surfaces draw one prompt per
 conversation and replace it when another lands, so a second request sent while
@@ -53,6 +64,24 @@ SendFrame = Callable[[dict[str, Any]], Awaitable[None]]
 DEFAULT_HARD_TIMEOUT_S = 24 * 3600.0
 
 
+#: How long an undo waits for the gate to report what its write did. The gate
+#: persists microseconds after the answer, so this is a ceiling on a race rather
+#: than a poll interval; past it the undo answers "nothing of mine is on disk".
+GRANT_RECEIPT_TIMEOUT_S = 5.0
+
+
+@dataclass
+class _Grant:
+    """What one answer's rule-writing did, once the gate has said so."""
+
+    #: Set when the gate reports; until then an undo waits on it.
+    reported: asyncio.Event
+    pattern: str = ""
+    #: True only when this grant is the reason the rule is on disk. A rule the
+    #: person already had is not this prompt's to take away.
+    written: bool = False
+
+
 @dataclass
 class _PendingApproval:
     conversation_id: str
@@ -76,9 +105,15 @@ class ApprovalBroker:
         self._send_frame = send_frame
         self._hard_timeout_s = hard_timeout_s
         self._pending: dict[str, _PendingApproval] = {}
-        # The queue behind each conversation's one prompt; an entry per
-        # conversation ever asked, which is a lock object each.
+        # The queue behind each conversation's one prompt.
+        # ponytail: one lock per conversation ever asked, never reclaimed. A
+        # gateway serving thousands of conversations holds thousands of empty
+        # locks; drop one when its queue drains if that ever shows up in a heap.
         self._lanes: dict[str, asyncio.Lock] = {}
+        # What each answered grant's write did, for the undo. An entry appears
+        # when the answer is a persisted grant and is dropped once an undo has
+        # read it, so a second undo of the same grant finds nothing.
+        self._grants: dict[str, _Grant] = {}
 
     async def await_approval(
         self,
@@ -163,13 +198,18 @@ class ApprovalBroker:
             choice, feedback, pattern = await asyncio.wait_for(future, self._hard_timeout_s)
             close_reason = choice
             try:
-                return ApprovalOutcome(choice=ApprovalChoice(choice), feedback=feedback, pattern=pattern)
+                answer = ApprovalChoice(choice)
             except ValueError:
                 # Not a wire choice, so not a person's answer: `cancel_all` puts
                 # the synthetic "cancelled" here during teardown, and a client
                 # sending something outside the enum said nothing this side can
                 # read. Both fail closed, and neither is a refusal.
                 return ApprovalOutcome(choice=ApprovalChoice.DENY, answered=False)
+            if answer is ApprovalChoice.ALLOW_ALWAYS:
+                # The slot exists before the gate writes, so an undo that
+                # arrives first has something to wait on rather than a miss.
+                self._grants[approval_id] = _Grant(reported=asyncio.Event())
+            return ApprovalOutcome(choice=answer, feedback=feedback, pattern=pattern, approval_id=approval_id)
         except TimeoutError:
             close_reason = "timeout"
             # Still a deny -- failing closed is the point -- but nobody said so.
@@ -226,6 +266,38 @@ class ApprovalBroker:
         pending.future.set_result((choice, feedback[:2000], pattern.strip()[:500]))
         return True
 
+    def record_grant(self, approval_id: str, pattern: str, written: bool) -> None:
+        """The gate's word on what its write did, for an undo to wait on.
+
+        Ignored for an approval holding no receipt slot: a grant that was not
+        ``allow_always``, or one whose undo has already read it.
+        """
+        grant = self._grants.get(approval_id)
+        if grant is None:
+            return
+        grant.pattern, grant.written = pattern, written
+        grant.reported.set()
+
+    async def written_pattern(self, approval_id: str, *, timeout_s: float = GRANT_RECEIPT_TIMEOUT_S) -> str | None:
+        """The rule this answer put on disk, or None when it put none there.
+
+        Waits for the gate's word, because the answer reaches the client first.
+        Reads the receipt once: a second undo of the same grant finds nothing,
+        which is also what stops an undo from reaching a rule some later prompt
+        wrote under the same text.
+        """
+        grant = self._grants.get(approval_id)
+        if grant is None:
+            return None
+        try:
+            await asyncio.wait_for(grant.reported.wait(), timeout_s)
+        except TimeoutError:
+            logger.warning("approval_broker: no grant receipt for {} after {}s", approval_id, timeout_s)
+            return None
+        finally:
+            self._grants.pop(approval_id, None)
+        return grant.pattern if grant.written else None
+
     def pending(self, conversation_id: str | None = None) -> list[dict[str, Any]]:
         """The requests still waiting, as their ``approval.request`` params were sent.
 
@@ -249,4 +321,4 @@ class ApprovalBroker:
                 pending.future.set_result(("cancelled", "", ""))
 
 
-__all__ = ["DEFAULT_HARD_TIMEOUT_S", "ApprovalBroker", "SendFrame"]
+__all__ = ["DEFAULT_HARD_TIMEOUT_S", "GRANT_RECEIPT_TIMEOUT_S", "ApprovalBroker", "SendFrame"]
