@@ -129,8 +129,12 @@ def _gated(found: Sequence[SkillLike]) -> tuple[list[SkillLike], list[tuple[str,
     already reported when the catalog lacks it, and a name dropped here without
     a word would read as a skill that silently did nothing.
     """
-    kept = filter_by_required_tools(list(found), None, denied=WITHHELD_FROM_SUBAGENT)
-    keep = {id(entry) for entry in kept}
+    # The gate is annotated for the catalog's own `SkillMeta` and reads its
+    # argument through `getattr`, so it answers for anything shaped like one;
+    # the identities it hands back are the ones passed in, which is what makes
+    # them safe to keep as the `SkillLike` this module speaks in.
+    keep = {id(entry) for entry in filter_by_required_tools(list(found), None, denied=WITHHELD_FROM_SUBAGENT)}  # type: ignore[arg-type]
+    kept = [entry for entry in found if id(entry) in keep]
     withheld = [
         (entry.name, ", ".join(t for t in _wanted_tools(entry) if t in WITHHELD_FROM_SUBAGENT))
         for entry in found
@@ -290,7 +294,8 @@ def skills_section(
     problems = [f"skill '{name}' is not on this machine's catalog" for name in missing]
     found, withheld = _gated(found)
     problems.extend(
-        f"skill '{name}' needs a tool no sub-agent is given ({tools}) and was left out of this step" for name, tools in withheld
+        f"skill '{name}' needs a tool no sub-agent is given ({tools}) and was left out of this step"
+        for name, tools in withheld
     )
     if not found:
         return "", problems

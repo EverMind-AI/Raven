@@ -446,6 +446,7 @@ class RoundContext:
         about the two before it: a Verifier handed back three times for the same
         append read, on the record, as a Verifier that stayed inside its paths.
         """
+
         def apply(record: StintRecord) -> None:
             existing = record.round(self.index)
             entry = record.open_round(self.index, existing.run_id if existing is not None else "")

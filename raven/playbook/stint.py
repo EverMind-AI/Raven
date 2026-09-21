@@ -590,8 +590,7 @@ class StintDriver:
         # `entry.run_id in live` is the real question, and it is already about
         # this process alone.
         return any(
-            (entry := record.round(record.round_index)) is not None and entry.run_id in live
-            for record in store.list()
+            (entry := record.round(record.round_index)) is not None and entry.run_id in live for record in store.list()
         )
 
     async def _advance(self, ref: StintRef, run_id: str, result: Any, stopped: bool) -> Any | None:

@@ -1032,9 +1032,9 @@ class TestBoundaries:
         await context.judge(node=dev)
 
         assert (context.workdir / "reports" / "brief.md").read_text(encoding="utf-8") == "the plan\n"
-        assert not any("brief.md" in note for note in context.record.round(1).violations), (
-            context.record.round(1).violations
-        )
+        assert not any("brief.md" in note for note in context.record.round(1).violations), context.record.round(
+            1
+        ).violations
 
     async def test_a_stop_that_lands_mid_round_is_still_there_when_the_round_ends(self, tmp_path: Path) -> None:
         """The record a round was opened with is a snapshot, and a person writes
@@ -1072,7 +1072,13 @@ class TestBoundaries:
         spec = _spec(
             roles=[
                 {"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0},
-                {"as": "verifier", "name": "echo", "promptTemplate": "check", "owns": ["reports/**"], "maxHandbacks": 0},
+                {
+                    "as": "verifier",
+                    "name": "echo",
+                    "promptTemplate": "check",
+                    "owns": ["reports/**"],
+                    "maxHandbacks": 0,
+                },
             ]
         )
         context = self._context(tmp_path, spec)

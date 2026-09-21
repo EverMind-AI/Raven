@@ -1150,6 +1150,7 @@ def register_playbooks_methods(
     dispatcher.register("playbooks.create", _create)
     dispatcher.register("playbooks.stints.list", playbooks_stints_list)
     dispatcher.register("playbooks.stints.get", playbooks_stints_get)
+
     async def _stop(p: dict) -> dict:
         return await playbooks_stints_stop(p, agent_loop_factory=agent_loop_factory)
 

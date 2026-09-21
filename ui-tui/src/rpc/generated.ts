@@ -2178,6 +2178,10 @@ export interface StintRow {
   max_rounds: number;
   status: string;
   live: boolean;
+  /**
+   * Not over: running, interrupted or paused. What `stop` acts on.
+   */
+  unfinished: boolean;
   stop_reason: string;
   workdir: string;
   branch: string;
@@ -4724,6 +4728,10 @@ export interface PlaybooksStintsGetParams {
  */
 export interface PlaybooksStintsStopParams {
   stint_id: string;
+  /**
+   * Cut the round in flight short instead of letting it finish. Reaches only a round this process is running.
+   */
+  now?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
