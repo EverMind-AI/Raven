@@ -9,7 +9,7 @@
  * flatter rendering of the same steps to fall out of step with the graph.
  */
 
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { Glyph, SendGlyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
@@ -340,19 +340,29 @@ interface RecordLoad {
   retry: () => void
 }
 
+/* The beat a running spawn's record is re-read on: the one the transcript's
+   own spawn card reads `subagent.context` on (TranscriptPage.tsx), so the
+   two views of one run move together. */
+const SPAWN_READ_BEAT_MS = 1000
+
 /* Fetched once per (row, node) and shared by both tabs: the order tab's
    "instruction" is the same rendered prompt the context tab's dispatch is,
    and asking for it twice would be asking the gateway the same question
    twice for one screen. Never fetched for a step that has not been
    dispatched -- there is nothing yet to read.
 
-   Refetched on every live event that names this node (`store.nodeVersion`),
-   on top of the (row, node) identity: `dag.node_updated` fires once per tool
-   call while a node runs, not only on a status transition, so a node opened
-   mid-run keeps reading its own steps and its answer as they arrive rather
-   than freezing at the first read. A stale record is kept on screen through
-   a refetch rather than cleared back to `null` -- the reader is watching a
-   node run, not watching it flicker blank once a second. */
+   Refetched on every live event that names this node (`store.nodeVersion`)
+   and on every status transition, on top of the (row, node) identity.
+   `dag.node_updated` fires once per tool call while a dag node runs, so a
+   dag node opened mid-run keeps reading its own steps and its answer as they
+   arrive rather than freezing at the first read. A spawn has no per-step
+   event -- `subagent.status` moves on pending, running and the terminal word
+   only -- so while one runs its record is re-read on a beat instead, skipping
+   a beat while a read is still out; the status key then covers the terminal
+   frame, so the answer lands without the reader closing and reopening the
+   node. A stale record is kept on screen through a refetch rather than
+   cleared back to `null` -- the reader is watching a node run, not watching
+   it flicker blank once a second. */
 function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
   const dispatched = node.status !== 'pending' && node.status !== 'skipped'
   const version = useSyncExternalStore(store.subscribe, () => store.nodeVersion(row.kind, row.id, node.node_id))
@@ -360,25 +370,42 @@ function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
   const [state, setState] = useState<{ loading: boolean; record: NodeRecord | null; failed: boolean }>(
     { loading: dispatched, record: null, failed: false },
   )
+  const reading = useRef(false)
+  const reconciling = useRef(false)
   useEffect(() => {
     if (!dispatched) { setState({ loading: false, record: null, failed: false }); return }
     setState((prev) => ({ loading: true, record: prev.record, failed: false }))
     let alive = true
     const src = store.source()
     if (!src) { setState((prev) => ({ loading: false, record: prev.record, failed: true })); return }
+    reading.current = true
+    /* The row too, while the node runs: its usage and tool counts grow on the
+       server as the lane reports them (`tasks.list` reads the live activity),
+       and no frame carries them -- so the subtitle's token total moves with
+       the record. One row read out at a time: a dag node's frames arrive once
+       per tool call, and stacking a read per frame would multiply requests
+       the way the record's own `reading` guard exists to prevent. Once the
+       node settles, the terminal frame's own reconcile brings the final copy. */
+    if (node.status === 'running' && !reconciling.current) {
+      reconciling.current = true
+      void store.reconcile(row.kind, row.id).finally(() => { reconciling.current = false })
+    }
     src.node(row, node)
       .then((r) => { if (alive) setState({ loading: false, record: r, failed: false }) })
       .catch(() => { if (alive) setState((prev) => ({ loading: false, record: prev.record, failed: true })) })
-    return () => { alive = false }
+      .finally(() => { if (alive) reading.current = false })
+    return () => { alive = false; reading.current = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [row.kind, row.id, node.node_id, dispatched, version, nonce])
+  }, [row.kind, row.id, node.node_id, node.status, version, nonce])
+  /* No source, no beat: with nothing to read from, a beat would only re-run
+     the effect into its failed branch once a second. */
+  const beating = row.kind === 'spawn' && node.status === 'running' && !!store.source()
+  useEffect(() => {
+    if (!beating) return
+    const beat = setInterval(() => { if (!reading.current) setNonce((n) => n + 1) }, SPAWN_READ_BEAT_MS)
+    return () => clearInterval(beat)
+  }, [beating])
   return { ...state, retry: () => setNonce((n) => n + 1) }
-}
-
-function tokensText(node: TaskNode): string {
-  if (node.status === 'pending' || node.status === 'skipped') return ''
-  if (node.tokens_in == null && node.tokens_out == null) return t('gui.tasks.tokens_none')
-  return t('gui.tasks.tokens_n', { n: fmtN((node.tokens_in || 0) + (node.tokens_out || 0)) })
 }
 
 /* Grouped by thousands, the way the prototype's own `fmtN` reads a token
@@ -386,32 +413,29 @@ function tokensText(node: TaskNode): string {
 const fmtN = (n: number): string => n.toLocaleString('en-US')
 
 /* The rest of the subtitle, after the agent (which the caller sets apart in
-   its own `<b>`): status word, duration, tokens, tool count -- pushed only
-   when the fact is there to push. No dash for a missing tool count: a fact
-   this node's lane never reported is a fact this line says nothing about,
-   not a line that says "—". */
+   its own `<b>`): status word, duration, tokens -- each pushed only when the
+   fact is there to push. A lane that never reported usage is a fact this
+   line says nothing about, not a line that says "not reported"; the tool
+   count is the board card's, and the calls themselves are the process
+   fold's, so neither is this line's. */
 function nodeSubtitleRest(node: TaskNode): string[] {
   const parts = [nodeStatusWord(node.status)]
   const dur = node.started_at ? formatDuration((node.ended_at ?? Date.now()) - node.started_at) : ''
   if (dur) parts.push(dur)
-  const tk = tokensText(node)
-  if (tk) parts.push(tk)
-  if (node.tool_call_count != null) {
-    parts.push(node.tool_failure_count
-      ? t('gui.tasks.tools_n', { n: node.tool_call_count }) + ' · ' + t('gui.tasks.tools_failed_n', { n: node.tool_failure_count })
-      : t('gui.tasks.tools_n', { n: node.tool_call_count }))
+  if (node.tokens_in != null || node.tokens_out != null) {
+    parts.push(t('gui.tasks.tokens_n', { n: fmtN((node.tokens_in || 0) + (node.tokens_out || 0)) }))
   }
   if (node.status === 'completed' && node.has_output === false) parts.push(t('gui.tasks.no_output'))
   return parts
 }
 
-/* The node panel head's subtitle line: the agent (+@instance) in its own
-   `<b>`, the rest of the sentence plain after it -- the prototype sets the
-   agent apart the same way. */
+/* The node panel head's subtitle line: the agent in its own `<b>`, the rest
+   of the sentence plain after it. The agent alone, without its handle: a
+   spawn's handle is a minted id (`TaskRow.handle`), and the work-order tab
+   already names the instance for the reader who wants it. */
 function NodeSubtitle({ node }: { node: TaskNode }): JSX.Element {
-  const agent = node.agent + (node.instance ? ' @' + node.instance : '')
   const rest = nodeSubtitleRest(node)
-  return <span className="tksub"><b>{agent}</b>{rest.length ? ' · ' + rest.join(' · ') : ''}</span>
+  return <span className="tksub"><b>{node.agent}</b>{rest.length ? ' · ' + rest.join(' · ') : ''}</span>
 }
 
 /* Why a step nobody dispatched has nothing to read: skipped names the

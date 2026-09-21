@@ -87,7 +87,7 @@ describe('applyNodeUpdated', () => {
   }]
 
   it('moves the named node and recomputes the row status', () => {
-    const rows = applyNodeUpdated(base, { run_id: 'r1', node: 'a', status: 'completed', ended_at: 2000 })
+    const { rows } = applyNodeUpdated(base, { run_id: 'r1', node: 'a', status: 'completed', ended_at: 2000 })
     const row = rows[0]!
     expect(row.nodes[0]).toMatchObject({ status: 'completed', ended_at: 2000 })
     /* b is still pending, so the row as a whole is still running. */
@@ -95,18 +95,31 @@ describe('applyNodeUpdated', () => {
   })
 
   it('leaves the timestamps alone when the frame carries none, as a skip does', () => {
-    const rows = applyNodeUpdated(base, { run_id: 'r1', node: 'b', status: 'skipped' })
+    const { rows } = applyNodeUpdated(base, { run_id: 'r1', node: 'b', status: 'skipped' })
     expect(rows[0]!.nodes[1]).toMatchObject({ status: 'skipped', started_at: null, ended_at: null })
   })
 
   it('replaying the same frame lands on the same rows', () => {
     const once = applyNodeUpdated(base, { run_id: 'r1', node: 'a', status: 'completed', ended_at: 2000 })
-    const twice = applyNodeUpdated(once, { run_id: 'r1', node: 'a', status: 'completed', ended_at: 2000 })
-    expect(twice).toEqual(once)
+    const twice = applyNodeUpdated(once.rows, { run_id: 'r1', node: 'a', status: 'completed', ended_at: 2000 })
+    expect(twice.rows).toEqual(once.rows)
   })
 
   it('does nothing for a run this page holds no row for', () => {
-    expect(applyNodeUpdated(base, { run_id: 'other', node: 'a', status: 'completed' })).toEqual(base)
+    const { rows, refetch } = applyNodeUpdated(base, { run_id: 'other', node: 'a', status: 'completed' })
+    expect(rows).toEqual(base)
+    expect(refetch).toBeUndefined()
+  })
+
+  /* The frame carries no usage; the runner sets the node's account aside as
+     the node settles, and only a read brings it. */
+  it("asks for a reconcile on a node's own terminal frame, and not before", () => {
+    expect(applyNodeUpdated(base, { run_id: 'r1', node: 'a', status: 'running', tool_call_id: 'c1' }).refetch).toBeUndefined()
+    /* `interrupted` is the reader's own word for a run the gateway lost, never
+       a frame's, so the wire type does not carry it. */
+    for (const status of ['completed', 'failed', 'skipped', 'cancelled', 'exception'] as const) {
+      expect(applyNodeUpdated(base, { run_id: 'r1', node: 'a', status }).refetch).toEqual({ kind: 'dag', id: 'r1' })
+    }
   })
 })
 

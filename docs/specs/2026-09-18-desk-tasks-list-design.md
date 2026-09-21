@@ -80,7 +80,14 @@ stores it uncapped; a spawn's is the head of `.error.md`, or of `.out.md` when `
 `tokens_in` / `tokens_out` (null = the lane cannot report; never zero), `tool_call_count`
 (null = zero or unreported, an acknowledged ambiguity of `as_meta`), `tool_failure_count`,
 `has_output`, `prompt_template`, `inputs`, `skills`, `mcps`, `files[]`
-(`{path, op: write|edit, add, del, size}`).
+(`{path, op: write|edit, add, del, size}`). While a node runs, the usage, the tool counts and
+the files are read off the activity being collected for it in this process (the same
+in-memory account `subagent.context` and `dag.node` serve a transcript from), since the record
+on disk carries them only once the run finishes; what the lane has not reported yet stays null,
+and a node that is not running takes nothing from that index (its key is a record id unique per
+conversation only). A dag node that has finished while its run has not keeps the account the
+runner set aside for it at its end (`activity.record_settled`) until the manifest is written,
+so its usage does not vanish between the two.
 
 ### 2. Status derivation
 
@@ -116,13 +123,20 @@ dispatch leaves no record and is withdrawn by the `subagent.status{cancelled}` f
 
 `dag.node(run_id, node, session_key)` and `subagent.context(id, session_id)` return
 `messages[]` in the `session.resume` shape; the tab draws them with the transcript's own
-renderer, including the synthetic `role=console` row an in-flight `cli` lane emits.
+renderer, including the synthetic `role=console` row an in-flight `cli` lane emits. The
+record is re-read on every status transition and, for a dag node, on each `dag.node_updated`
+frame; a spawn gets no per-step frame, so its record is re-read on a one-second beat while it
+runs (a beat is skipped while a read is still out), the cadence the transcript's spawn card
+already reads on. Each such read of a running node also re-reads its row through
+`tasks.list(kind, id)`, which is how the panel's token total moves during the run.
 
 ### 5. Live updates
 
 `dag.run_started` builds a row (`status=running`; `nodes[].subagent` becomes `agent`; no
 timestamps, so `started_at` starts from the run id's prefix); `dag.node_updated` moves a
-node (timestamps only on `running` / `completed` / `failed` / `exception`);
+node (timestamps only on `running` / `completed` / `failed` / `exception`) and, on a node's
+own terminal frame, re-reads the row so the account the runner set aside for the node reaches
+the page before the run's own end;
 `dag.run_completed` ends a row (a hard stop sends `{stopped: true}` and no `files`);
 `dag.run_replanned` marks the old row `cancelled` with `replan`; `subagent.status` builds
 a spawn row at `pending` with `handle = instance ?? task_id`, and `call_id` from `running`
@@ -147,9 +161,10 @@ truth after a reconnect or a terminal event.
 `features/tasks/` derives its types from `generated.ts`, reads through `tasks.list`, and
 draws the mock: the list row, the strip (three chips and an overflow), the running count on
 the tab, the pane (status bar with `interrupted` and `cancelled`, a stop action, the why
-banner naming the failed node, file and diff chips, the board with tool and failure counts
-and a lane per shared `(agent, instance)`), the node panel (header with tokens or "not
-reported", context and order tabs, a chat dock for a stateful agent's instance). The desk's
+banner naming the failed node, file and diff chips, the board with tool counts and a lane
+per shared `(agent, instance)`), the node panel (header with the agent, its status word, the
+duration and the token total when the lane reported one, context and order tabs, a chat dock
+for a stateful agent's instance). The desk's
 deliverables and diff tabs gain a task-derived group beside the session-level rows; a
 task file's diff is built on click from the node's messages with the page's existing hunk
 builders. The offline page answers `tasks.list` from `src/rpc/fixtures/tasks.ts`.
