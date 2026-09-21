@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.activity import merge_file_change
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME, RUNNING, UNRECORDED, node_live_key
-from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
+from raven.agent.subagent.history import dag_root, nodes_root, session_history_root, spawn_live_key
 from raven.agent.subagent.instances import get_registry
 from raven.rpc.methods.instances import _graph_of
 from raven.rpc.methods.session import _safe_invoke_factory
@@ -288,7 +288,7 @@ def _spawn_row(files: "_NodeFiles", agent_loop_factory: "AgentLoopFactory | None
         "prompt_template": None,
         "files": _files_of(meta),
     }
-    _overlay_live(node, run_activity.live(files.node_id))
+    _overlay_live(node, run_activity.live(spawn_live_key(files.root, files.node_id)))
     task_summary = meta.get("task_summary") or meta.get("label") or _label_from_prompt(files) or None
     return {
         "id": files.node_id,

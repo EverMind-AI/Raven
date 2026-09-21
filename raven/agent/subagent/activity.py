@@ -196,13 +196,17 @@ class RunActivity:
 _current: ContextVar[RunActivity | None] = ContextVar("raven_subagent_activity", default=None)
 
 _live: dict[str, RunActivity] = {}
-"""Runs being collected right now, keyed by their record's call id.
+"""Runs being collected right now, keyed by their record's address.
 
 The disk record is written when the run finishes, so while it is in flight the
 only account of it lives in the ``RunActivity`` being collected. This index is
-what lets ``subagent.context`` serve that account to a panel watching the run,
-instead of a prompt and nothing until the end. Entries live exactly as long as
-their ``collecting`` block."""
+what lets ``subagent.context`` and ``tasks.list`` serve that account to a panel
+watching the run, instead of a prompt and nothing until the end. Entries live
+exactly as long as their ``collecting`` block. The key names the record, not
+the run's own id alone: a spawn's id is unique for one conversation only
+(``history.spawn_live_key``), and a dag node's carries its run
+(``dag_store.node_live_key``) -- the index is one per process, and two
+conversations must not share an entry."""
 
 
 _settled: dict[str, dict[str, Any]] = {}

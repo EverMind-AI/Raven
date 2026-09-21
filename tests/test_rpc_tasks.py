@@ -24,7 +24,7 @@ import pytest
 
 import raven.home as raven_home_module
 from raven.agent.subagent.dag_store import DagRunStore, index_guard
-from raven.agent.subagent.history import SpawnRecord, dag_root, nodes_root, session_history_root
+from raven.agent.subagent.history import SpawnRecord, dag_root, nodes_root, session_history_root, spawn_live_key
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.rpc.methods import tasks as tasks_mod
 from raven.rpc.methods.tasks import tasks_list
@@ -947,7 +947,7 @@ async def test_a_running_spawn_reads_usage_and_counts_off_the_live_activity(work
     )
     loop = _loop_stub(live_spawn_handles=frozenset({("Raven", "counting")}))
 
-    with activity_mod.collecting(live_key="counting"):
+    with activity_mod.collecting(live_key=spawn_live_key(nodes_root(session_dir), "counting")):
         activity_mod.note_usage({"prompt_tokens": 40, "completion_tokens": 2})
         activity_mod.note_usage({"prompt_tokens": 10, "completion_tokens": 3})
         activity_mod.note_tool_call("exec")
@@ -981,7 +981,7 @@ async def test_a_lane_that_has_not_spoken_keeps_its_nulls_while_live(workspace: 
     )
     loop = _loop_stub(live_spawn_handles=frozenset({("Raven", "quiet")}))
 
-    with activity_mod.collecting(live_key="quiet"):
+    with activity_mod.collecting(live_key=spawn_live_key(nodes_root(session_dir), "quiet")):
         node = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]["nodes"][0]
 
     assert node["tokens_in"] is None and node["tokens_out"] is None
@@ -1070,10 +1070,47 @@ async def test_a_settled_spawn_ignores_a_live_activity_under_its_key(workspace: 
     )
     record.finish(status="completed", output="done")
 
-    with activity_mod.collecting(live_key="shared"):
+    with activity_mod.collecting(live_key=spawn_live_key(nodes_root(session_dir), "shared")):
         activity_mod.note_usage({"prompt_tokens": 40, "completion_tokens": 2})
         activity_mod.note_tool_call("exec")
         node = (await tasks_list({"session_key": SESSION}))["tasks"][0]["nodes"][0]
 
     assert node["status"] == "completed"
     assert node["tokens_in"] is None and node["tool_call_count"] is None and node["files"] == []
+
+
+async def test_two_conversations_that_named_a_spawn_alike_each_read_their_own_live_run(workspace: Path) -> None:
+    """A node id is unique for one conversation only and the live index is one
+    per process: keyed by the record's address, two conversations running a
+    spawn under the same id read their own account, and the first to finish
+    takes nothing of the other's with it."""
+    from raven.agent.subagent import activity as activity_mod
+    from raven.session.manager import SessionManager
+
+    other = "tui:other"
+    dir_a = _session_dir(workspace)
+    dir_b = SessionManager(workspace).session_dir(other)
+    for session_dir in (dir_a, dir_b):
+        await _claim_spawn_node(session_dir, "step1")
+        SpawnRecord.open(
+            session_dir,
+            task_id="step1",
+            task="the same first step",
+            meta=_spawn_meta(agent="Raven", handle="step1", task_summary="Step one"),
+            node_id="step1",
+        )
+    loop = _loop_stub(live_spawn_handles=frozenset({("Raven", "step1")}))
+
+    with activity_mod.collecting(live_key=spawn_live_key(nodes_root(dir_a), "step1")):
+        activity_mod.note_usage({"prompt_tokens": 10, "completion_tokens": 1})
+        with activity_mod.collecting(live_key=spawn_live_key(nodes_root(dir_b), "step1")):
+            activity_mod.note_usage({"prompt_tokens": 200, "completion_tokens": 2})
+            a = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]["nodes"][0]
+            b = (await tasks_list({"session_key": other}, agent_loop_factory=_factory(loop)))["tasks"][0]["nodes"][0]
+            assert (a["tokens_in"], a["tokens_out"]) == (10, 1)
+            assert (b["tokens_in"], b["tokens_out"]) == (200, 2)
+        # B finished first: A's entry is still its own.
+        a_after = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]["nodes"][
+            0
+        ]
+        assert (a_after["tokens_in"], a_after["tokens_out"]) == (10, 1)

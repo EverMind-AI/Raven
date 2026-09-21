@@ -811,3 +811,51 @@ async def test_a_graph_node_s_own_order_is_pinned_not_incidental(workspace: Path
     items = (await subagent_list({"session_id": SESSION}))["items"]
 
     assert [i["node"] for i in items] == ["write", "survey"], "the id is the tie-break, descending like the stamp"
+
+
+async def test_two_conversations_that_named_a_spawn_alike_each_read_their_own_live_transcript(workspace: Path) -> None:
+    """A node id is unique for one conversation only and the live index is one
+    per process. Keyed by the record's address, two conversations running a
+    spawn under the same id each watch their own run, and the first to finish
+    takes nothing of the other's with it."""
+    from raven.agent.subagent import activity
+
+    other = "tui:other"
+
+    class _Holds:
+        """Says which conversation it works for, then waits to be released."""
+
+        def __init__(self) -> None:
+            self.started = {key: asyncio.Event() for key in (SESSION, other)}
+            self.release = {key: asyncio.Event() for key in (SESSION, other)}
+
+        async def run(self, task: str, **kw: Any) -> str:
+            key = str(kw.get("session_key") or "")
+            activity.note_transcript([{"role": "assistant", "content": f"{key} working"}])
+            self.started[key].set()
+            await self.release[key].wait()
+            return f"{key} done"
+
+    hold = _Holds()
+    mgr = _manager(workspace)
+    mgr.registry.set_builtin_builder(lambda _row, _build: hold)
+    await mgr.spawn("the same first step", task_summary="step", session_key=SESSION, node_id="step1")
+    await mgr.spawn("the same first step", task_summary="step", session_key=other, node_id="step1")
+    await asyncio.wait_for(asyncio.gather(hold.started[SESSION].wait(), hold.started[other].wait()), 5)
+
+    said_a = json.dumps(await subagent_context({"id": "step1", "session_id": SESSION}))
+    said_b = json.dumps(await subagent_context({"id": "step1", "session_id": other}))
+    assert f"{SESSION} working" in said_a and f"{other} working" not in said_a
+    assert f"{other} working" in said_b and f"{SESSION} working" not in said_b
+
+    # The other conversation's run finishes first.
+    hold.release[other].set()
+    for _ in range(200):
+        if sum(1 for t in mgr._running_tasks.values() if not t.done()) <= 1:
+            break
+        await asyncio.sleep(0.01)
+    still_a = json.dumps(await subagent_context({"id": "step1", "session_id": SESSION}))
+    assert f"{SESSION} working" in still_a, "its exit dropped only its own entry"
+
+    hold.release[SESSION].set()
+    await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
