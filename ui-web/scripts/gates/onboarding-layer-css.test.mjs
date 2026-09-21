@@ -40,12 +40,13 @@ describe('the model picker while the wizard is open', () => {
     expect(rule('.mpick')).toMatch(/z-index:\s*var\(--z-picker\)/)
   })
 
-  it('is lifted one above the wizard only while the host is shown', () => {
+  it('is lifted one above the wizard only while the host is shown, and stays under the toast', () => {
     /* The roles card's pill opens the composer's picker, a body-level
        surface; the wizard's model step is the one place that pill sits inside
        #onb, and the picker opened behind it there. */
     const lifted = rule('body:has(#onb:not([hidden])) .mpick')
     expect(lifted).toBeTruthy()
     expect(lifted).toMatch(/z-index:\s*calc\(var\(--z-onboarding\)\s*\+\s*1\)/)
+    expect(token('--z-onboarding') + 1).toBeLessThan(token('--z-toast'))
   })
 })

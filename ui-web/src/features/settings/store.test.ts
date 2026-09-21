@@ -82,10 +82,7 @@ describe('settings store', () => {
   })
 
   it('a device flow that lands closes the add form it started from', async () => {
-    /* The wizard's add block is open on the OAuth vendor while the code is
-       out; once the provider turns connected the form has nothing left to do,
-       and pointing at a connected slug it silently redrew for the next
-       unconnected vendor. */
+    /* The add form is open on the vendor while the code is out. */
     vi.useFakeTimers()
     let on = false
     const data = (): SettingsSnapshot => ({

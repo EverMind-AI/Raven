@@ -7,6 +7,7 @@ import { t } from '../../../i18n/t'
 import { Card, Chip, KeyLink, Row, Rov, Tag } from '../Fields'
 import * as store from '../store'
 
+import type { ProvFilter } from '../store'
 import type { ProviderRow } from '../types'
 import type { JSX } from 'react'
 
@@ -20,20 +21,19 @@ const KINDS: Array<[string, string]> = [
 ]
 export const kindOf = (p: ProviderRow): string => (p.kind === 'oauth' ? 'oauth' : p.kind === 'local' || p.kind === 'endpoint' ? 'local' : 'key')
 export const kindLabel = (p: ProviderRow): string => t((KINDS.find(([k]) => k === kindOf(p)) || KINDS[0]!)[1])
-/* The add block's vendor groups: the prototype's four, which split the keyed
-   shape into the vendors themselves and the aggregators that resell them --
-   the split the catalogue page filters on too (`p.gateway`, a wire fact no
-   client can derive). Labels are the catalogue's, so the two read alike. */
-const GROUPS: Array<[string, string]> = [
+/* The add block's vendor groups are the catalogue page's four filter buckets,
+   answered by one function so the two cannot drift: an aggregator first, since
+   it resells whatever shape it takes, then the sign-in and self-hosted shapes,
+   and everything else is a vendor held directly -- an endpoint credential too. */
+export type ProvGroup = Exclude<ProvFilter, 'all' | 'on'>
+const GROUPS: Array<[ProvGroup, string]> = [
   ['direct', 'gui.settings.providers.filter_direct'],
   ['gateway', 'gui.settings.providers.filter_gateway'],
   ['oauth', 'gui.settings.providers.filter_oauth'],
-  ['local', 'gui.settings.providers.kind_local'],
+  ['local', 'gui.model.kind.local'],
 ]
-const groupOf = (p: ProviderRow): string => {
-  const kind = kindOf(p)
-  return kind === 'key' ? (p.gateway ? 'gateway' : 'direct') : kind
-}
+export const groupOf = (p: ProviderRow): ProvGroup =>
+  p.gateway ? 'gateway' : p.kind === 'oauth' ? 'oauth' : p.kind === 'local' ? 'local' : 'direct'
 /* Whether the pane draws a key field and an address field for this vendor,
    and whether the key is what connects it: a local server may sit behind a
    token but is reached by its address, so its key is optional. */
@@ -113,8 +113,6 @@ function AddBlock({ slug, hideCancel }: { slug: string; hideCancel?: boolean }):
                 onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') connect() }} />
             </Row>
           )}
-          {/* An aggregator takes an address too, the way the catalogue's
-              connection card and the prototype both give it one. */}
           {(takesBase(p) || p.gateway || p.kind === 'endpoint') && (
             <Row label={t('gui.settings.providers.base')}>
               <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')}
