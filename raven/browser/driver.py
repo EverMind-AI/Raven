@@ -393,7 +393,7 @@ class Browser:
         the handler filters to the main frame.
         """
         page.set_default_timeout(ACT_TIMEOUT_MS)
-        page._raven_console: list[dict[str, Any]] = []
+        page._raven_console = []
         page.on("console", lambda msg, p=page: self._on_console(p, msg))
         page._raven_loading = False
 
