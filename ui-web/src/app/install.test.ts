@@ -42,6 +42,19 @@ describe('the tasks seam installSources grows', () => {
     expect(typeof tasks.onSubagentStatus).toBe('function')
   })
 
+  /* The card's task cell and the delivered row both read this verb off the
+     seam, so a page that forgot to put it there would draw two doors that open
+     nothing -- and neither renderer test can see the wiring. */
+  it('puts the run opener on the transcript seam', async () => {
+    const wiring = await harness()
+    const { setSources, sources } = await import('../state/sources')
+    setSources({ composer: { slash: [] } } as unknown as Partial<Sources>)
+
+    wiring.installSources()
+
+    expect(typeof sources.transcript!.openDagRun).toBe('function')
+  })
+
   it('opens the desk task a spawn node id resolves to, and answers false otherwise', async () => {
     const opened: TaskRow[] = []
     const wiring = await harness({

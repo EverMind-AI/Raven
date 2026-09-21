@@ -38,7 +38,7 @@ import {
   refresh as refreshTasks, reset as resetTasks,
 } from '../features/tasks/store'
 import {
-  actLabel, branch, cleanPreview, dagRun, okOf, openDagNode, openDagRun, openSpawn, spawnList, spawnRecord,
+  actLabel, branch, cleanPreview, dagRun, okOf, openDagRun, openSpawn, spawnList, spawnRecord,
 } from '../features/transcript/source'
 import {
   proseSource, setHostPlatformReader, setShortener, workspaceSource,
@@ -103,8 +103,8 @@ export function installComposerPalette(): void {
  * Every domain's own `source.ts`, onto `state/sources.ts`.
  *
  * Two of the objects here are grown rather than replaced, and both orders
- * matter: the transcript's source is created by the first line and added to by
- * the last four, and the composer's palette half is the dock's (installed with
+ * matter: the transcript's source is created by the first line and added to
+ * below it, and the composer's palette half is the dock's (installed with
  * the chrome) so the two verbs no transport answers are put onto it.
  */
 export function installSources(): void {
@@ -120,15 +120,11 @@ export function installSources(): void {
   // ticking row above the composer, so the strip under the field stays empty.
   composer.meter = () => ''
 
-  /* Opening a delegated graph: the last node if this page already holds the
-     run's own record, the agents panel otherwise. A source verb rather than a
-     line inside the delivered handler, because the row a RELOAD draws has to
-     open the same thing the live row does. */
+  /* The trail's dag card and the delivered row both open the run's task pane
+     on the desk through this one verb, so a RELOAD's row opens the same thing
+     the live row does. */
   transcript.openDagRun = openDagRun
   transcript.branch = branch
-  /* The trail's dag card opens a node through the same reader as the sheet, and
-     the island asks its source for all five. */
-  transcript.openDagNode = openDagNode
   transcript.dagRun = dagRun
   transcript.spawnRecord = spawnRecord
   transcript.spawnList = spawnList

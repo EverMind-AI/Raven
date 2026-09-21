@@ -15,13 +15,10 @@ import { has } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 import { unpitch } from '../../state/session/conversation'
 import { open as sessionOpen, rows as sessionRows } from '../../state/session/rows'
-import { session as sheetSession } from '../../state/sheetRack'
 import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
-import { run as dagRunOf } from '../dag/mount'
-import { dagOpenNode } from '../dag/open'
-import { openDeskTab } from '../desk/store'
+import { openDeskTab, openDeskTask } from '../desk/store'
 import { draw as sessionDraw } from '../rail/store'
 import { plainTitle } from '../rail/title'
 import * as subagents from '../subagents/store'
@@ -72,30 +69,25 @@ export function renderHistory(messages: HistoryMessage[]): void {
   drawHistory(messages)
 }
 
-/* Opening a delegated graph: the last node if this page already holds the run's
-   own record, the agents panel otherwise. A source verb rather than a line
-   inside the delivered handler, because the row a RELOAD draws has to open the
-   same thing the live row does. */
+/* Opening the run's task pane on the desk. The tasks store rarely misses: a
+   live run is inserted the moment `dag.run_started` announces it, and a
+   session change re-reads `tasks.list` whole, so `openRun` below answers most
+   of the time. The one-shot `one()` read covers a page that never opened the
+   tasks tab at all; the tab itself is where a run this conversation does not
+   own lands -- a branched conversation replays its parent's delivered row,
+   and the run that row names belongs to a session whose `tasks.list` this
+   one never reads. */
 export function openDagRun(runId: string): void {
   const id = String(runId || '')
+  if (id && ds('tasks').openRun?.(id)) return
   if (id) {
-    const d = dagRunOf(sheetSession())
-    const last = d && d.run_id === id ? d.order[d.order.length - 1] : null
-    if (last) {
-      /* With what the node is FOR, not only its id. The run holds every node's
-       summary and this row handed over the slug alone, so a pane opened from
-       the trail was headed by a name for the machine while the same node opened
-       from the sheet was headed by what it did. */
-      const n = d && d.nodes && d.nodes.get ? d.nodes.get(last) : null
-      dagOpenNode(id, { id: last, summary: (n && n.node_summary) || null })
-      return
-    }
+    ds('tasks').one('dag', id)
+      .then((row) => { if (row) openDeskTask(row); else openDeskTab('tasks') })
+      .catch(() => openDeskTab('tasks'))
+    return
   }
-  pane().setOpen(true, 'agents')
+  openDeskTab('tasks')
 }
-
-export const openDagNode = (runId: string, nodeId: string, summary?: string | null): void =>
-  dagOpenNode(runId, { id: nodeId, summary })
 
 /* Per-node status for a card whose events are long gone: `dag.get` reads the
    run back off disk, reconciled against the registry, so a graph reopened from
@@ -136,9 +128,9 @@ export function openSpawn(agent: string, label: string, nodeId?: string): void {
      is exact, where the label match below is a guess. The seam answers
      whether it opened, so there is nothing to fall back to once it does. */
   if (nodeId && ds('tasks').openByNode?.(nodeId)) return
-  /* Same rule as dagOpenNode: `openRow` below raises the window, and in desk
-   mode that is the whole answer. The panel's agents view is only needed where
-   there are no windows. */
+  /* Same rule as `openDagRun` above: `openRow` below raises the window, and in
+   desk mode that is the whole answer. The panel's agents view is only needed
+   where there are no windows. */
   if (!document.documentElement.classList.contains('desk-ready')) pane().setOpen(true, 'agents')
   const match = () => subagents.rows().find((x) => x.kind !== 'dag'
     && (!label || plainTitle(x.label) === plainTitle(label))

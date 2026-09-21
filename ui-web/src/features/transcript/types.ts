@@ -142,16 +142,6 @@ export interface CallData {
      fresh run instead. Only that event sets it: a reload's `dag.get` carries
      no such field, so a card restored from history never has one. */
   replannedInto?: string
-  /* The node whose detail is open inside the card. View state, like `open`, and
-     the only thing that decides what the panel shows -- deriving a fallback from
-     it gave `null` two meanings, "nobody picked one" and "the reader closed it",
-     and the unasked open on a failure then could not be closed at all. */
-  sel: string | null
-  /* Whether the unasked open on a failure has already happened. Once, like the
-     step's own fold: a second failure does not reopen a panel the reader shut. */
-  selAuto: boolean
-  /* Whether that detail shows the whole prompt template or a clamp of it. */
-  selFull: boolean
   /* Set once a `dag.get` has been asked for, so a card whose arguments carried no
      graph asks once rather than on every re-render. */
   asked: boolean
@@ -434,17 +424,13 @@ export interface TranscriptSource {
      Read to turn a restored card's task id into the record id its stream is
      read by -- once per conversation, not once per card. */
   spawnList?: () => Promise<SpawnListRow[]>
-  /* The node's own summary rides with its id: the pane that opens is headed by
-     it, and the id is a slug from the plan. Optional, so a caller that has only
-     an id still opens the node. */
-  openDagNode?: (runId: string, nodeId: string, summary?: string | null) => void
   /* `nodeId` is the tasks store's own id for the spawn (present on the wire's
      `delegated` payload once the run is live). When it names a row there,
      the caller opens that task directly rather than guessing by label. */
   openSpawn?: (agent: string, label: string, nodeId?: string) => void
-  /* Open the delegated GRAPH a delivery came from. One verb rather than the
-     live event handler doing it inline, because the replayed row has to open
-     the same thing the live row does. */
+  /* Open the run's task pane on the desk. Both the delivered row and the
+     card's own task cell go through this one verb, so the replayed row opens
+     the same place the live one does. */
   openDagRun?: (runId: string) => void
   /* One-line label for a tool call, derived from its arguments -- the same
      table a call's own row in this island reads, so a sibling that draws its

@@ -264,6 +264,9 @@ describe('a task pane', () => {
 
     await act(async () => { (document.querySelector('.tkwhyat') as HTMLElement).click() })
     expect(document.querySelector('.tktt b')?.textContent).toBe('Fetch the futures quote')
+    /* The id is a hover away once the summary has the text: a dependency and
+       the run dir key on it, and nothing else on the pane spells it out. */
+    expect(document.querySelector('.tktt b')?.getAttribute('title')).toBe('fetch_comex')
   })
 
   it('gives the fixed sentence for an interrupted run, not a node error', () => {
@@ -383,7 +386,7 @@ describe('a task pane', () => {
 })
 
 describe('the board', () => {
-  it('draws the prototype\'s own runtime card, not the shared SVG box', () => {
+  it('draws the prototype\'s own runtime card inside each node', () => {
     const withNode = task({
       id: 'a', kind: 'dag', status: 'running',
       nodes: [node({
@@ -395,10 +398,6 @@ describe('the board', () => {
     expect(document.querySelector('.daggraph .nd .tkrunl1')?.textContent).toBe('scan the feed')
     expect(document.querySelector('.daggraph .nd .tkrunag')?.textContent).toBe('raven')
     expect(document.querySelector('.daggraph .nd .tkrunchip')?.textContent).toBe('gui.tasks.tools_n {"n":3}')
-    /* Only this board's own card is drawn -- never the shared SVG box it
-       replaces (DagGraph.tsx's `renderNode` branch). */
-    expect(document.querySelector('.daggraph .nd rect')).toBeNull()
-    expect(document.querySelector('.daggraph .nd title')).toBeNull()
   })
 
   /* happy-dom reports every element as zero-width, so the viewport size has to

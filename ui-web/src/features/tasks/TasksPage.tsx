@@ -298,7 +298,6 @@ function Fork({ row, paneId }: { row: TaskRow; paneId: string }): JSX.Element {
           dims={COLUMN}
           nodes={nodes}
           now={Date.now()}
-          surface="sheet"
           flow="down"
           selectedId={s.nodes[paneId] ?? null}
           onPick={(n) => store.pickNode(paneId, n.id)}
@@ -770,7 +769,10 @@ function NodePanel({ row, node, paneId, onClose, roster }: {
           </svg>
         </button>
         <div className="tktt">
-          <b>{node.node_summary || node.node_id}</b>
+          {/* The id rides on the title: it is what a dependency and the run dir
+              key on, and the summary, where the planner wrote one, takes its
+              place in the text. */}
+          <b title={node.node_id}>{node.node_summary || node.node_id}</b>
           <NodeSubtitle node={node} />
         </div>
         <div className="tktabs" role="tablist">

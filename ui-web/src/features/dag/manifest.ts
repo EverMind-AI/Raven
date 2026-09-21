@@ -8,9 +8,10 @@
 import type { DomainManifest } from '../manifests'
 
 /* The delegated graph: a card inside the transcript, and the run's own state
-   (features/dag/mount.ts) that the desk's task pane and session resume read.
-   It renders nothing of its own and answers no seam -- what the card draws
-   arrives on the turn's own events. */
+   (features/dag/mount.ts) that session resume puts back on reload -- a pane's
+   graph comes from the desk's own `tasks.list` read instead. It renders
+   nothing of its own and answers no seam -- what the card draws arrives on
+   the turn's own events. */
 export const manifest: DomainManifest = {
   domain: 'dag',
   sources: [],

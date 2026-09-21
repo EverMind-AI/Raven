@@ -11,9 +11,10 @@
  *
  * What is kept is the run itself. The trail's delegation card is built from
  * the same frames (`features/transcript/store.ts`'s `dagFeed`) and is the
- * conversation's durable record of the graph; this store is what
- * `openDagRun` reads to turn a receipt in that card into the node a pane
- * should open on, and what `state/session/resume.ts` puts back on reload.
+ * conversation's durable record of the graph; this store keeps it for
+ * `state/session/resume.ts` to put back on reload, and has no other reader
+ * today -- a pane's graph comes from the desk's own `tasks.list` read
+ * instead.
  */
 
 import { fromSnapshot } from './nodes'

@@ -1175,162 +1175,33 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .dlg .dot.ok { background: var(--moss); }
 .dlg .dot.bad { background: var(--clay); }
 .dlg .dot.skip { background: var(--faint); }
-/* ── the dag card's own graph and node detail ─────────────────────────
-   The strip of chips this replaces held four fields per node and had nowhere to
-   put the rest: not the dependencies that make it a graph, and not the template
-   and inputs that say what each step was asked. The card and sheet now use the
-   same renderer with surface-sized geometry -- one alphabet for this domain,
-   whichever place is showing it. */
-.dtl.dlg.dagc .bd { max-height: none; overflow: visible; }
-.dagc .canvas { margin-top: 11px; overflow: visible; max-height: none; }
-/* Its own size, centred -- never stretched. The renderer sizes a node so its id
-   and agent fit at a fixed type size, and `width: 100%` threw that away: a
-   three-node graph in a 744px column was blown up to 1.7x, so the card's boxes
-   came out half again as big as the SAME graph in the composer sheet. Shrinking
-   is still allowed, because a wide graph in a narrow column has to fit. */
-.dagc .canvas > svg { display: block; width: auto; max-width: 100%; height: auto; margin: 0 auto; }
-.daggraph { --dag-id-size: 13px; --dag-meta-size: 11px; }
-.dagc .daggraph { --dag-id-size: 11px; --dag-meta-size: 9px; }
-.daggraph .dagcap {
-  color: var(--faint); font: 10.5px var(--mono); text-align: right; margin-bottom: 5px;
-}
+/* ── the dag graph ───────────────────────────────────────────────────────
+   What `DagGraph` draws wherever it is mounted -- today the desk's task board,
+   which hands it its own node box and reads these rules for the edges and the
+   node group around that box. */
 .daggraph .nd { cursor: pointer; outline: none; }
-.daggraph .nd rect {
-  fill: var(--paper); stroke: var(--line); stroke-width: 1;
-  transition: fill .13s ease, stroke .13s ease;
-}
-.daggraph .nd:hover rect { fill: var(--paper); stroke: var(--muted); }
-/* Selected is the node whose detail is open below. The keyboard focus wears the
-   same hairline: there is one way to say "this one", not a UA ring pretending to
-   be a second. */
-.daggraph .nd:focus-visible rect,
-.daggraph .nd[data-sel="1"] rect { stroke: var(--amber); stroke-width: 1.2; }
-.daggraph .nd[data-sel="1"] rect { fill: color-mix(in oklab, var(--amber) 6%, var(--paper)); }
-/* The node's two lines, laid out inside the box instead of drawn beside it.
-   That is what binds the text to the node: the label is given the box's own
-   width, and where it ends is `text-overflow` reading the real width in the
-   real font, not a number something measured once. Clicks and hover belong to
-   the node, so they pass straight through to the group under this. */
-.daggraph .nd .lbl {
-  height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 2px;
-  min-width: 0; overflow: hidden; pointer-events: none;
-}
-.daggraph .nd .ln { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.daggraph .nd .id {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font: 600 var(--dag-id-size)/1.3 var(--mono); color: var(--text);
-  white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-}
-/* A node titled by its summary is titled by a sentence, and a sentence set in
-   the key face reads as a key. The mono stays for the id, which is one. */
-.daggraph .nd .id.prose { font-family: var(--sans); font-weight: 500; }
-.daggraph .nd .ag {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font: var(--dag-meta-size)/1.3 var(--sans); color: var(--faint);
-}
-.daggraph .nd .tm {
-  flex: none; font: var(--dag-meta-size)/1.3 var(--mono); color: var(--faint);
-  font-variant-numeric: tabular-nums;
-}
-.daggraph .nd .workv { color: var(--amber); }
-.daggraph .nd[data-st="pending"] .id { color: var(--muted); }
-.daggraph .nd[data-st="running"] rect { stroke: var(--amber); stroke-width: 1.5; }
-.daggraph .nd[data-st="exception"] rect { stroke: var(--gold); stroke-width: 1.5; }
-.daggraph .nd[data-st="completed"] rect { stroke: color-mix(in oklab, var(--moss) 45%, var(--line)); }
-.daggraph .nd[data-st="failed"] rect { stroke: var(--clay); stroke-width: 1.5; }
-/* Stopped, not failed and not skipped: the failure colour says it did not
-   succeed, the dash says nobody let it finish. Drawn at all is the point -- with
-   no rule the box was identical to an untouched one, so a stopped graph read as
-   a graph still waiting. */
-.daggraph .nd[data-st="cancelled"] rect { stroke: var(--clay); stroke-dasharray: 3 3; }
-.daggraph .nd[data-st="cancelled"] { opacity: .7; }
-.daggraph .nd[data-st="skipped"] rect,
-.daggraph .nd[data-st="interrupted"] rect { stroke-dasharray: 3 3; }
-.daggraph .nd[data-st="skipped"], .daggraph .nd[data-st="interrupted"] { opacity: .55; }
-.daggraph .mk { fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.daggraph .mk.wait { stroke: var(--faint); stroke-width: 1.3; }
-.daggraph .mk.ok { stroke: var(--moss); }
-.daggraph .mk.bad { stroke: var(--clay); }
-/* Stopped: the failure colour says it did not succeed, and unlike `.bad` the
-   glyph is a square rather than a cross -- stopped is not gone wrong. */
-.daggraph .mk.stop { stroke: var(--clay); }
-.daggraph .mk.skip { stroke: var(--faint); }
-.daggraph .mk.warn { stroke: var(--gold); }
-/* An edge out of a node that has not finished is drawn faint: what has actually
-   flowed through the graph is what a reader is looking for. */
+/* The edge and its arrowhead, in the soft line: the board sets their tone and
+   weight for itself (features/tasks/styles.css), so these are the base. */
 .daggraph .edge { stroke: var(--line-soft); stroke-width: 1.2; fill: none; }
 .daggraph .tip {
   stroke: var(--line-soft); stroke-width: 1.2; fill: none;
   stroke-linecap: round; stroke-linejoin: round;
 }
-.daggraph .edge.flowed, .daggraph .tip.flowed { stroke: var(--line); }
 
-/* One node's request. Below the graph rather than beside it: the card lives in a
-   744px reading column, and a two-pane layout inside it leaves neither pane wide
-   enough for a prompt. */
-.dagc .npanel { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; min-width: 0; }
-.dagc .nhd { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; min-width: 0; }
-/* The name gives way, and only the name. A node id is unbounded -- a playbook
-   names one `daily-ai-digest-36e275-scan-news` -- and with nothing here to let
-   it shrink, the flex row grew past the panel and pushed the run link off the
-   right edge, where it read as the card having been cut in half. */
-.dagc .nhd .nm {
-  font-size: 12px; font-weight: 600; color: var(--text);
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.dagc .nhd .st { font-size: 10.5px; color: var(--faint); flex: none; }
-/* The door to what actually happened. Explicit, because selecting a node and
-   opening its transcript are different intentions: the panel takes half the
-   window, and comparing two nodes' configuration is the commoner one.
-   Not `.go`: that is the composer's send button, a 30px circle, and this link
-   inherited its width and its grid centring from it -- so the label was clipped
-   to a couple of characters however much room the row had. */
-.dagc .nhd .orun {
-  margin-left: auto; flex: none; font: inherit; font-size: 11px; background: none;
-  border: 0; color: var(--muted); cursor: pointer; padding: 0; white-space: nowrap;
-}
-.dagc .nhd .orun:hover { color: var(--amber); text-decoration: underline; }
-.dagc .rows { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; }
-.dagc .rows > .k { color: var(--faint); }
-.dagc .rows > .v { color: var(--text); min-width: 0; }
-/* The node id, which is a name the graph keys on rather than prose. */
-.dagc .rows > .v .nid { font: 11px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
-.dagc .hold { color: var(--faint); font-size: 10.5px; }
-/* A dependency is a way back up the graph, so it is a control rather than text. */
-.dagc .dep {
-  font: inherit; font-size: 11px; background: none; cursor: pointer;
-  border: 1px solid var(--line); border-radius: 5px; padding: 0 6px;
-  color: var(--muted); margin-right: 4px;
-}
-.dagc .dep:hover { border-color: var(--amber); color: var(--amber); }
-.dagc .none { color: var(--faint); }
-.dagc .ins { display: grid; grid-template-columns: max-content max-content 1fr; gap: 2px 9px; align-items: baseline; }
-.dagc .ins .key { color: var(--text); }
-/* Where an input came from, as a mark rather than as a sentence: the three read
-   differently and the difference is the whole point of showing them. */
-.dagc .ins .src {
-  font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase;
-  border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--faint);
-}
-.dagc .ins .src[data-k="node"] { color: var(--sky); border-color: color-mix(in oklab, var(--sky) 40%, var(--line)); }
-.dagc .ins .src[data-k="file"] { color: var(--gold); border-color: color-mix(in oklab, var(--gold) 40%, var(--line)); }
-.dagc .ins .val { color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
-.dagc .tpl {
-  margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted);
-  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 7px;
-  padding: 7px 9px; font-size: 11px; line-height: 1.65;
-}
-/* The placeholders are what ties this step to the ones before it. */
-.dagc .tpl .ph { color: var(--amber); }
-.dagc .tpl.clip { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-.dagc .more { font: inherit; font-size: 10.5px; background: none; border: 0; padding: 2px 0 0; color: var(--faint); cursor: pointer; }
-.dagc .more:hover { color: var(--amber); }
-
-/* The task line doubles as the door to the run's transcript: underlined on
-   hover, like the link it behaves as, and never before -- a grid whose every
-   value looked like a link would say nothing about which one goes somewhere. */
+/* A door in a grid: underlined on hover, like the link it behaves as, and never
+   before -- a grid whose every value looked like a link would say nothing about
+   which one goes somewhere. The orchestration card's task cell wears a standing
+   mark on top of that: its grid is all facts about the run, and the one cell
+   that leads to the run's own pane on the desk has to say so before the hover.
+   A spawn card's task cell and the desk's own `.tkgov` doors keep the hover cue
+   alone. */
 .dlg .dgr .v.gov { cursor: pointer; }
 .dlg .dgr .v.gov:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* The text gives way and the mark does not: the cell is a nowrap flex row that
+   clips, and a summary longer than the column would otherwise carry the mark
+   out past the clip with it. */
+.dagc .dgr .v.gov > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dagc .dgr .v.gov::after { content: '\2197'; flex: none; color: var(--faint); font-size: 10.5px; }
 /* The delivery seam: where a delegated run's result re-entered the flow. Two
    things on the row and no more: which task, and how it went. The name is the
    reading size rather than a mono label -- it is a sentence somebody wrote, not
@@ -2245,15 +2116,13 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* ── the work indicator ───────────────────────────────────────────────────
    One glyph for "this is happening now", in every place that used to say it in
    its own words: the turn's own row (which switched between starting / writing
-   / working), a sub-agent's row and its open transcript, a dag node, a command
-   still running. Four vocabularies for one fact made them read as four
-   different kinds of event; they are the same fact, and the clock beside the
-   glyph is what says how long it has been true.
+   / working), a sub-agent's row and its open transcript, a command still
+   running. Several vocabularies for one fact made them read as different kinds
+   of event; they are the same fact, and the clock beside the glyph is what
+   says how long it has been true.
 
-   `currentColor`, not a fixed amber: the same three bars have to sit in an amber
-   turn row, a muted panel row and inside an svg node without a variant each. The
-   svg twin exists because a <g> cannot hold <span>s -- same keyframes, same
-   delays, so the two can never drift out of step.
+   `currentColor`, not a fixed amber: the same three dots have to sit in an
+   amber turn row and a muted panel row without a variant each.
 
    Named `wkg`, not `work`: the module pages already use `work` for their
    scroll region, and the glyph's inline-flex quietly turned every one of them
@@ -2268,12 +2137,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 @keyframes work { 0%, 100% { transform: scale(.72); opacity: .32; } 45% { transform: scale(1); opacity: 1; } }
 .wkg { display: inline-flex; align-items: center; gap: 3px; height: 9px; flex: none; }
 .wkg i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
-.wkg i, .workv circle { transform-origin: center; animation: work 1.4s cubic-bezier(.4, 0, .2, 1) infinite; }
-.workv circle { fill: currentColor; transform-box: fill-box; }
-.wkg i:nth-child(2), .workv circle:nth-child(2) { animation-delay: .18s; }
-.wkg i:nth-child(3), .workv circle:nth-child(3) { animation-delay: .36s; }
+.wkg i { transform-origin: center; animation: work 1.4s cubic-bezier(.4, 0, .2, 1) infinite; }
+.wkg i:nth-child(2) { animation-delay: .18s; }
+.wkg i:nth-child(3) { animation-delay: .36s; }
 @media (prefers-reduced-motion: reduce) {
-  .wkg i, .workv circle { animation: none; opacity: .62; }
+  .wkg i { animation: none; opacity: .62; }
 }
 
 /* One appearance for the whole turn: the glyph and the clock never change. The
