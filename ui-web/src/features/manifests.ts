@@ -39,7 +39,6 @@ import { manifest as installed } from './installed/manifest'
 import { manifest as memory } from './memory/manifest'
 import { manifest as model } from './model/manifest'
 import { manifest as onboard } from './onboard/manifest'
-import { manifest as playbooks } from './playbooks/manifest'
 import { manifest as rail } from './rail/manifest'
 import { manifest as settings } from './settings/manifest'
 import { manifest as subagents } from './subagents/manifest'
@@ -88,7 +87,6 @@ export const MANIFESTS: readonly DomainManifest[] = [
   memory,
   model,
   onboard,
-  playbooks,
   rail,
   settings,
   subagents,

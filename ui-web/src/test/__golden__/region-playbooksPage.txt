@@ -1,5 +1,0 @@
-section#playbooksPage.page[data-open=false]
-  header
-    h2
-  div.work
-    div#playbooksBody.wrap

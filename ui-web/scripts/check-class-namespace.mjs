@@ -171,14 +171,10 @@ const SHARED = new Set([
 // shared is gone with them. The page's total debt is unchanged; where it is
 // counted is not.
 const LEGACY_SHARED = {
-  a: 4, ag: 2, body: 2, btn: 3, cap: 3, cfind: 2, chev: 2, chgs: 2,
-  cmd: 2, ct: 2, d: 4, empty: 2, foot: 2, gap: 3,
-  'ghost-ic': 3, h: 3, hd: 3, ic: 3, k: 3, kd: 2, key: 4, l1: 2, l2: 2, lb: 3,
-  mk: 2, n: 5, ph: 2,
-  pmhero: 5,
-  rm: 2, row: 2, sheet: 2, shot: 3, sk: 3, skel: 3,
-  step: 2, sulist: 3, sustate: 2, sz: 2, t: 2,
-  tipdn: 2, tm: 2, v: 3, val: 2, w: 3, wkg: 3, wsnote: 2,
+  a: 4, body: 2, btn: 3, cap: 2, chev: 2, chgs: 2, cmd: 2, ct: 2, d: 4, foot: 2,
+  gap: 2, 'ghost-ic': 3, h: 2, hd: 2, k: 3, key: 4, lb: 3, n: 3, rm: 2, row: 2,
+  shot: 3, sk: 2, skel: 2, step: 2, sz: 2, tipdn: 2, tm: 2, v: 3, w: 3, wkg: 3,
+  wsnote: 2,
 }
 
 // How many of a domain's own classes -- the ones no other domain names -- still
@@ -203,42 +199,43 @@ const LEGACY_LOCAL = {
      and moves off the shared tally onto its own. The page's total debt is
      unchanged; where it is counted is not. */
   browser: 25,
-  /* Up from 9, and none of the two is new code: this branch deletes the old
-     settings page, which also named `.icb`, `.other`, `.srow` and `.what`, so
-     what the check read as two domains' it now reads as composer's own. The
-     settings rows below fall to zero by the same deletion. */
-  composer: 11,
-  connections: 6,
-  /* Up from 15 for `.ff` and `.swi`, which the skills page and the plugins
-     page were the other reader of. */
-  cron: 17,
+  /* Up from 9, and none of the three is new code: an earlier branch deleted
+     the old settings page, which also named `.icb`, `.other`, `.srow` and
+     `.what`, so what the check read as two domains' it now reads as
+     composer's own. Up one more with the playbooks page, which was the other
+     reader of `.ic`. */
+  composer: 12,
+  connections: 4,
+  /* Down from 17 with the schedules section: the page's hero, its filter
+     chips and its own list and row classes went with the two-pane frame
+     (src/components/TwoPane.tsx owns those names now), and `.swi` went with
+     the switch that moved into it. */
+  cron: 10,
   /* Up from 7, and every one of the six is a class that MOVED here rather than
      a new one: the pan-and-zoom viewport the playbook page carried became
      features/dag/Board.tsx so the task board could read it too, and its
-     `.g*` classes came with it. The playbooks row below falls by the same six,
-     so the page's total debt is unchanged -- and the prefix pass that retires
-     them is one rename over one file now instead of two.
+     `.g*` classes came with it.
 
      Down one from 13 with the graph sheet: `.dsheet` was this domain's, and
-     the sheet is the only thing that wrote it. */
-  dag: 12,
+     the sheet is the only thing that wrote it. Up two with the playbooks page
+     gone: `.ag` and `.mk` were shared with it and are this domain's alone. */
+  dag: 14,
   desk: 5,
-  /* Down to none with the agent hub: every class the page writes carries its
-     prefix now, and its rules live in features/extAgents/styles.css. */
-  extAgents: 0,
+  /* Was none with the agent hub: every class the page writes carries its
+     prefix, and its rules live in features/extAgents/styles.css. Up to three
+     with the playbooks page gone -- `.kd`, `.pmhero` and `.sulist` were shared
+     with it, so they are this domain's alone now and are counted here rather
+     than on the shared tally. Nothing was added. */
+  extAgents: 3,
   importSync: 0,
   installed: 0,
-  /* Up from 6 by the same move: `.faint`, `.hubpage`, `.pmcnt`, `.pmsign` and
-     `.pnote` were the memory hub's names, shared with the two hubs that are
-     gone. */
-  /* Up from 11 with the agent hub: `.pmdhead`, `.pmdmeta` and `.pmsec` were
-     shared with the agents page, which draws its own sheet now. */
-  memory: 14,
-  model: 6,
+  /* Down from 14 with the memory section: the page's hero, its own list and
+     row classes and the shared drawer's head went with the two-pane frame
+     (src/components/TwoPane.tsx owns those names now). */
+  memory: 8,
+  /* Up from 6 with the playbooks page gone: `.empty` was shared with it. */
+  model: 7,
   onboard: 0,
-  /* Up from 13 for `.tag`, the skills page's other reader. */
-  /* Up from 14 with the agent hub: `.warn` was shared with the agents page. */
-  playbooks: 15,
   rail: 11,
   settings: 0,
   subagents: 38,
@@ -250,10 +247,12 @@ const LEGACY_LOCAL = {
      counted. */
   tasks: 7,
   /* Up from 74 for `.act`, `.dact` and `.pmdesc`, which the plugins page drew
-     the same way the transcript does. */
-  /* Up from 77 with the agent hub: `.none` was shared with the agents page. */
-  transcript: 78,
-  workspace: 37,
+     the same way the transcript does, and from 77 with the agent hub, where
+     `.none` was shared with the agents page. Up three more with the playbooks
+     page gone: `.ph`, `.sheet` and `.val` were shared with it. */
+  transcript: 81,
+  /* Up from 37 with the playbooks page gone: `.t` was shared with it. */
+  workspace: 38,
 }
 
 // The same count for the classes a domain names from inside a `className={...}`
@@ -265,7 +264,7 @@ const LEGACY_LOCAL = {
 const LEGACY_EXPR = {
   browser: 2,
   composer: 3,
-  connections: 4,
+  connections: 2,
   cron: 0,
   dag: 3,
   desk: 2,
@@ -275,12 +274,11 @@ const LEGACY_EXPR = {
   memory: 1,
   model: 2,
   onboard: 0,
-  playbooks: 7,
   rail: 2,
   settings: 0,
   tasks: 5,
   subagents: 6,
-  transcript: 25,
+  transcript: 24,
   workspace: 7,
 }
 
@@ -298,7 +296,7 @@ const LEGACY_CHROME = {
      Nothing new is written -- the four move off the borrowed list and on to
      this one. */
   chrome: 92,
-  components: 33,
+  components: 36,
 }
 
 const LEGACY_CHROME_EXPR = {
@@ -362,10 +360,9 @@ const UNSTYLED = {
 // tell from a class, and it is counted on LEGACY_CHROME_EXPR above.
 const LEGACY_BORROWED = {
   chrome: [
-    'body', 'btn', 'chev', 'cmd', 'foot', 'ghost-ic', 'hd', 'ic',
-    'lb', 'mk', 'n', 'sheet', 't', 'tipdn',
+    'body', 'btn', 'cmd', 'foot', 'ghost-ic', 'hd', 'lb', 'n', 'tipdn',
   ],
-  components: ['a', 'cap', 'hd', 'key', 'l1', 'l2', 'n', 'skel', 'sustate'],
+  components: ['a', 'cap', 'hd', 'key', 'n', 'skel'],
 }
 
 const domains = readdirSync(join(src, 'features'))

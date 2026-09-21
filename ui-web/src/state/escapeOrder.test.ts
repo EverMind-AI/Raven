@@ -13,7 +13,7 @@
  * C11 (features/desk/store.ts's registered `desk.escapeOpen()`, for its own
  * fullscreen -> node -> pane -> collapse retreat). What is asserted against
  * it is now the table, every entry's own predicate and action against a
- * fixture page, and all seventy-eight pairs of layers. The three
+ * fixture page, and all twenty-eight pairs of layers. The three
  * capture-phase handlers
  * each open sheet registers run *before* the table and two of them act on
  * Escape without stopping propagation, so one Escape can both deny an approval
@@ -25,12 +25,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { openApproval } from '../features/composer/approve'
 import * as turn from '../features/composer/turn'
-import * as connections from '../features/connections/store'
-import * as cron from '../features/cron/store'
 import * as desk from '../features/desk/store'
 import * as extAgents from '../features/extAgents/store'
-import * as memory from '../features/memory/store'
-import * as playbooks from '../features/playbooks/store'
 import { resetTranslator, setTranslator } from '../i18n/t'
 import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import * as escapeOrder from './escapeOrder'
@@ -42,21 +38,16 @@ import { resetSources, sources } from './sources'
 
 import type { ComposerSource } from '../features/composer/types'
 
-/* The thirteen, in the order Escape reaches them. Each item is the text the
-   chain tests to decide whether that layer is on screen -- a selector for the
-   ten elements, the predicate's own name for the last three, which have no
-   element of their own to look at. */
+/* The eight, in the order Escape reaches them. Each item is the text the chain
+   tests to decide whether that layer is on screen -- a selector for the five
+   elements, the predicate's own name for the last three, which have no element
+   of their own to look at. */
 const LAYER_IDS = [
   '.lightbox',
   '#veil',
-  '#connVeil',
   '#detail',
   '#jobVeil',
-  '#cronPage',
-  '#memoryPage',
-  '#playbooksPage',
   '#extAgentsPage',
-  '#connectionsPage',
   'setIsOpen()',
   'desk.escapeOpen()',
   'turn.busy()',
@@ -65,9 +56,9 @@ const LAYER_IDS = [
 const source = (path: string): string => readFileSync(path, 'utf8') as string
 
 /* Every element the table reads or clicks, in a page shaped like the real one:
-   the twelve carriers of data-open, the two cancel buttons the two sheets are
-   answered through, the new-task button Cmd+N clicks, and the rail's three
-   pieces the two rail shortcuts write. */
+   the carriers of data-open, the two cancel buttons the two sheets are answered
+   through, the new-task button Cmd+N clicks, and the rail's three pieces the
+   two rail shortcuts write. */
 const PAGE = [
   '<div class="app" data-rail="on">',
   '<button id="newBtn"></button>',
@@ -75,15 +66,10 @@ const PAGE = [
   '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>',
   '<div class="dock-in"><textarea id="ta"></textarea></div></div></div>',
   '<section class="page" id="extAgentsPage" data-open="false"></section>',
-  '<section class="page" id="connectionsPage" data-open="false"></section>',
-  '<section class="page" id="memoryPage" data-open="false"></section>',
-  '<section class="page" id="playbooksPage" data-open="false"></section>',
-  '<section class="page" id="cronPage" data-open="false"></section>',
   '<div class="veil" id="jobVeil" data-open="false"><button id="jobNo"></button></div>',
   '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>',
   '<div class="veil setveil" id="setVeil" data-open="false"><div id="setModal"></div></div>',
   '<div class="veil" id="veil" data-open="false"><button id="cfNo"></button></div>',
-  '<div class="veil" id="connVeil" data-open="false"></div>',
   '</div>',
   '<button id="railShow"></button>',
 ].join('')
@@ -93,11 +79,6 @@ const PAGE = [
    store answers as it really does, and a close that reaches past its own verb
    is visible. */
 const spies = {
-  connDialog: vi.fn(),
-  connClose: vi.fn(),
-  cronClose: vi.fn(),
-  memClose: vi.fn(),
-  pbClose: vi.fn(),
   extAgentsClose: vi.fn(),
   stop: vi.fn(),
 }
@@ -123,14 +104,9 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
     taken: () => !document.querySelector('.lightbox'),
   },
   '#veil': { up: flag('veil'), taken: () => cancelled.includes('cfNo') },
-  '#connVeil': { up: flag('connVeil'), taken: called(spies.connDialog) },
   '#detail': { up: flag('detail'), taken: lowered('detail') },
   '#jobVeil': { up: flag('jobVeil'), taken: () => cancelled.includes('jobNo') },
-  '#cronPage': { up: flag('cronPage'), taken: called(spies.cronClose) },
-  '#memoryPage': { up: flag('memoryPage'), taken: called(spies.memClose) },
-  '#playbooksPage': { up: flag('playbooksPage'), taken: called(spies.pbClose) },
   '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
-  '#connectionsPage': { up: flag('connectionsPage'), taken: called(spies.connClose) },
   'setIsOpen()': { up: () => settingsDialog.open(), taken: () => !settingsDialog.isOpen() },
   /* Its four-rung retreat (fullscreen -> node -> pane -> collapse) is
      store.test.ts's to prove; this fixture only needs one rung on screen and
@@ -159,11 +135,6 @@ beforeEach(() => {
   for (const spy of Object.values(spies)) spy.mockClear()
   /* Each layer's own close, stood in for one export at a time: what is under
      test is which one the key reaches, not what any of them does. */
-  vi.spyOn(connections, 'closeDialog').mockImplementation(spies.connDialog)
-  vi.spyOn(connections, 'close').mockImplementation(spies.connClose)
-  vi.spyOn(cron, 'close').mockImplementation(spies.cronClose)
-  vi.spyOn(memory, 'close').mockImplementation(spies.memClose)
-  vi.spyOn(playbooks, 'closePage').mockImplementation(spies.pbClose)
   vi.spyOn(extAgents, 'close').mockImplementation(spies.extAgentsClose)
   sources.composer = { stop: spies.stop } as unknown as ComposerSource
   settingsDialog.close()
@@ -224,8 +195,8 @@ describe('the Escape priority order', () => {
   const pairs = LAYER_IDS.flatMap((first, i) =>
     LAYER_IDS.slice(i + 1).map((second) => ({ first, second })))
 
-  it('has seventy-eight pairs to answer for', () => {
-    expect(pairs).toHaveLength(78)
+  it('has twenty-eight pairs to answer for', () => {
+    expect(pairs).toHaveLength(28)
   })
 
   it.each(pairs)('takes back $first and leaves $second alone', ({ first, second }) => {
@@ -239,21 +210,21 @@ describe('the Escape priority order', () => {
 
 describe('the one listener that reads the order', () => {
   it('takes back the first open layer on Escape', () => {
-    LAYERS['#memoryPage']!.up()
+    LAYERS['#extAgentsPage']!.up()
     key('Escape')
-    expect(spies.memClose).toHaveBeenCalledTimes(1)
+    expect(spies.extAgentsClose).toHaveBeenCalledTimes(1)
   })
 
   /* Escape ends a composition; it must not also close a panel behind the
      reader's back. Both spellings, because older input methods send the
      keyCode instead of the flag. */
   it('leaves an input method alone mid-composition', () => {
-    LAYERS['#memoryPage']!.up()
+    LAYERS['#extAgentsPage']!.up()
     key('Escape', { isComposing: true })
     key('Escape', { keyCode: 229 })
-    expect(spies.memClose).not.toHaveBeenCalled()
+    expect(spies.extAgentsClose).not.toHaveBeenCalled()
     key('Escape')
-    expect(spies.memClose).toHaveBeenCalledTimes(1)
+    expect(spies.extAgentsClose).toHaveBeenCalledTimes(1)
   })
 
   it('does nothing visible when nothing is open', () => {
@@ -315,11 +286,11 @@ describe('the one listener that reads the order', () => {
   it('does not see a key an element stopped', () => {
     find.install()
     find.toggle(true)
-    LAYERS['#memoryPage']!.up()
+    LAYERS['#extAgentsPage']!.up()
     document.getElementById('sfind')!
       .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     expect(find.get().open).toBe(false)
-    expect(spies.memClose).not.toHaveBeenCalled()
+    expect(spies.extAgentsClose).not.toHaveBeenCalled()
   })
 
   /* The approval sheet's capture handler denies and does not stop the event,

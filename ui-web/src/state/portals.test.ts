@@ -82,7 +82,7 @@ describe('the standing layers', () => {
      whose shape drifted from its row would pass every assertion above. */
   it('makes the four layers the boot order names, in that order', () => {
     const boot = PORTALS.filter((p) => p.kind === 'append' && p.at !== 'last')
-    expect(boot.map((p) => p.at)).toEqual([16, 17, 18, 19])
+    expect(boot.map((p) => p.at)).toEqual([11, 12, 13, 14])
     expect(LAYERS).toHaveLength(boot.length)
     for (const name of LAYERS) host(name)
     const keys = [...document.body.children].map(keyOf)

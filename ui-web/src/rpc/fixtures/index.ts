@@ -33,7 +33,6 @@ import { createImport } from './import'
 import { createKnowledge } from './knowledge'
 import { createMemory } from './memory'
 import { createModel } from './model'
-import { createPlaybooks } from './playbooks'
 import { createPlughub } from './plughub'
 import { createSessions } from './sessions'
 import { createSettings } from './settings'
@@ -73,7 +72,6 @@ export function demoFixtures(env: FixtureEnv): Fixtures {
     ...ext.fixtures,
     ...createSkillhub(env, ext).fixtures,
     ...createPlughub(env, ext).fixtures,
-    ...createPlaybooks(env).fixtures,
     ...createSubagents(env).fixtures,
     ...createTasks(env).fixtures,
     ...createMemory(env).fixtures,

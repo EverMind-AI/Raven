@@ -64,7 +64,9 @@ describe('toTranscriptMessages', () => {
     const out = toTranscriptMessages(rows)
 
     expect(out.map(msg => msg.role)).toEqual(['user', 'system', 'assistant'])
-    expect(out[1]?.text).toContain('subagent')
+    // What opened the turn, worded: the raw origin is a wire value, and the
+    // line is read by a person.
+    expect(out[1]?.text).toBe('Sub-agent report')
     expect(out[1]?.text).not.toContain('UNTRUSTED')
     expect(out[1]?.text).not.toContain('raven-1')
   })
@@ -210,7 +212,7 @@ describe('toTranscriptMessages: resumed tool calls', () => {
       }
     ])
 
-    expect(msgs[0]!.text).toBe('↩ raven-code — finished; its result just joined this conversation')
+    expect(msgs[0]!.text).toBe('↩ raven-code — finished')
   })
 
   it('draws the failed variant of the delivered-arrow line for an error status', () => {
@@ -223,7 +225,7 @@ describe('toTranscriptMessages: resumed tool calls', () => {
       }
     ])
 
-    expect(msgs[0]!.text).toBe('↩ raven-research — failed; the error just joined this conversation')
+    expect(msgs[0]!.text).toBe('↩ raven-research — failed')
   })
 
   it('draws the waiting variant of the delivered-arrow line for a suspended node, not the finished one', () => {
@@ -239,9 +241,7 @@ describe('toTranscriptMessages: resumed tool calls', () => {
       }
     ])
 
-    expect(msgs[0]!.text).toBe(
-      '↩ stuck-node — hit an exception and is waiting on a decision; its report just joined this conversation'
-    )
+    expect(msgs[0]!.text).toBe('↩ stuck-node — waiting on a decision')
   })
 
   it('restores delivered and changed files after a restart', () => {
