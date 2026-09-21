@@ -227,6 +227,27 @@ describe('provider detail', () => {
     expect(calls[calls.length - 1]).toEqual(['addModels', { slug: 'anthropic', models: ['a', 'b'] }])
   })
 
+  it('heads each vendor group and trails the bare rows with none', async () => {
+    const calls = await catalogue([
+      { id: 'zeta/one', label: 'Zeta One', kind: 'text', added: false },
+      { id: 'alpha/two', label: 'Alpha Two', kind: 'text', added: false },
+      { id: 'alpha/three', label: 'Alpha Three', kind: 'text', added: true },
+    ])
+    const heads = [...document.querySelectorAll('.settings-mgroup')]
+    expect(heads.map((g) => g.querySelector('.settings-gn')!.textContent)).toEqual(['alpha', 'zeta'])
+    expect(heads.map((g) => g.querySelector('.settings-gc')!.textContent)).toEqual(['2', '1'])
+    /* The harness's anthropic carries two bare configured ids. They trail the
+       labelled groups and are drawn without a head of their own: a bare row
+       between two vendor heads reads as the previous vendor's tail, and an
+       "add this whole vendor" control over rows with no vendor means nothing. */
+    expect(popRows().map((r) => r.querySelector('.settings-apnm')!.textContent))
+      .toEqual(['Alpha Two', 'Alpha Three', 'Zeta One', 'claude-opus-4-5', 'claude-sonnet-4-5'])
+    /* The group's control offers the group, not the page: `alpha/three` is
+       already on the provider and stays out of the frame. */
+    await act(async () => { fireEvent.click(heads[0]!.querySelector('.settings-ga')!) })
+    expect(calls[calls.length - 1]).toEqual(['addModels', { slug: 'anthropic', models: ['alpha/two'] }])
+  })
+
   it('an OAuth provider authorizes in the browser and shows the code until it lands or expires', async () => {
     vi.useFakeTimers()
     const { calls } = install(undefined, { oauthLogin: async (slug) => { calls.push(['oauthLogin', slug]); return { verification_uri: 'https://v.example/device', user_code: 'ABCD', expires_in: 1 } } })
