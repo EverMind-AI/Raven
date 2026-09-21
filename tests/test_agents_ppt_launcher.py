@@ -148,6 +148,14 @@ def test_the_roster_row_is_the_vendored_twins_modulo_the_ledgered_deltas():
 #: fork's face: its meta-pair registers only under tools.toolSearch.enabled,
 #: default False and never set by this config (the threshold only folds).
 TRUNK_HELD_OUT = {
+    "browser_click",
+    "browser_navigate",
+    "browser_press",
+    "browser_screenshot",
+    "browser_scroll",
+    "browser_snapshot",
+    "browser_tabs",
+    "browser_type",
     "create_playbook",
     "cron",
     "deliver_files",

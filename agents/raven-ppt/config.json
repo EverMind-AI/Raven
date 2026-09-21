@@ -97,7 +97,15 @@
       "text_to_speech",
       "tool_call",
       "tool_search",
-      "video_generate"
+      "video_generate",
+      "browser_click",
+      "browser_navigate",
+      "browser_press",
+      "browser_screenshot",
+      "browser_scroll",
+      "browser_snapshot",
+      "browser_tabs",
+      "browser_type"
     ]
   },
   "context": {

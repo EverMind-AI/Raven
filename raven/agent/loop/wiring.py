@@ -845,6 +845,14 @@ class WiringMixin:
         self.tools.register(
             WebFetchTool(api_key=self._web_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
         )
+        # The shared browser's tools. Registered always and withheld through
+        # ``configured()`` while the browser extra is not installed, so the
+        # schema carries no verbs that can only answer with an install hint;
+        # the panel is where a reader learns the extra exists.
+        from raven.agent.tools.browser import browser_tools
+
+        for tool in browser_tools():
+            self.tools.register(tool)
         # Media tools (image/speech/video) are opt-in: a tool is registered only
         # when the user configured it (a model or apiKey under tools.media.<tool>),
         # which Config.effective_media_config() surfaces as a resolved key/model.

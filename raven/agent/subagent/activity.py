@@ -32,6 +32,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 from loguru import logger
 
@@ -58,6 +59,13 @@ class RunActivity:
     agent rather than a gap in the record.
     """
 
+    # This run's name for anything that must outlive it by mistake. A caller
+    # keying on ``id(activity)`` names a memory address, which CPython hands to
+    # the next object the moment this one is collected -- the shared browser
+    # binds a tab per owner and keeps it for ten minutes, so a later run
+    # inherited a finished run's tab and read another conversation's page.
+    # Not in ``as_meta``: it identifies the object, not the work.
+    uid: str = field(default_factory=lambda: uuid4().hex)
     tool_calls: list[str] = field(default_factory=list)
     # The subset of those that reported failure, in order. Recorded because the
     # tally was the one fact about a run that nothing kept: a run whose calls all
