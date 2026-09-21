@@ -117,9 +117,24 @@ export function roleProviders(r: Role, snap: SettingsSnapshot): ProviderRow[] {
   if (r.media) return on.filter((p) => p.id === MEDIA_PROVIDER)
   if (r.everos) {
     const role = r.everos
-    return on.filter((p) => (snap.everos?.supports?.[p.id] || []).includes(role))
+    const offered = on.filter((p) => (snap.everos?.supports?.[p.id] || []).includes(role))
+    if (role !== 'rerank') return offered
+    /* Reranking against somebody's own box needs a request shape the vendor
+       table cannot name, and this page has nowhere to ask for one -- a first
+       save of such a provider is refused, so offering it here would be a picker
+       entry whose only outcome is an error. The wizard asks, so one already
+       configured stays pickable and its model stays editable. */
+    const pinned = snap.everos?.sections?.rerank?.provider
+    return offered.filter((p) => !isSelfHost(snap, p.id) || p.id === pinned)
   }
   return on
+}
+
+/* A vendor whose rerank request shape nothing but its operator knows: raven
+   carries no table entry naming it, which is exactly the self-hosted case. */
+function isSelfHost(snap: SettingsSnapshot, id: string): boolean {
+  const p = snap.providers.find((x) => x.id === id)
+  return !!p && (p.kind === 'local' || p.id === 'custom')
 }
 
 /* Whether this role's slot can be edited at all. A root the user manages is
@@ -243,7 +258,12 @@ export function RolePill({ role }: { role: Role }): JSX.Element {
     )
   }
   const dim = !val
-  const clearable = !!val && role.id !== 'chat'
+  /* Asked of the server, not remembered here. Clearing `llm` turns long-term
+     memory off outright and `embedding` is what every stored vector was written
+     under, so the write refuses both -- and this page drew the button anyway
+     until the contract came down the wire. */
+  const required = s.snap.everos?.required || []
+  const clearable = !!val && role.id !== 'chat' && !(role.everos && required.includes(role.everos))
   const cls = ['settings-mpill', dim ? 'settings-dim' : '', clearable ? 'settings-clearable' : ''].filter(Boolean).join(' ')
   const offer: Offer = {
     kind: ROLE_KIND[role.id],

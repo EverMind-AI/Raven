@@ -3412,6 +3412,14 @@ class SettingsEverosResult(_Strict):
             "cannot do the job. Keyed by provider name."
         ),
     )
+    required: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Roles that cannot be cleared, so the page knows which slots get a clear "
+            "control. Sent rather than mirrored: a mirrored copy drew one on a slot whose "
+            "clear the write refuses."
+        ),
+    )
     available: bool = Field(
         description="Whether this install has an EverOS to configure at all. False leaves sections empty and note set.",
     )

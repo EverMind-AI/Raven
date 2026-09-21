@@ -129,7 +129,48 @@ describe('model roles', () => {
        role pinned to a vendor is the only way one can be recorded at all. */
     const data = snap()
     data.providers = data.providers.map((p) => (p.id === 'ollama' ? { ...p, on: true } : p))
-    expect(roleProviders(role('rerank'), data).map((p) => p.id)).toEqual(['openrouter', 'ollama'])
+    expect(roleProviders(role('memllm'), data).map((p) => p.id)).toEqual(['anthropic', 'openrouter', 'ollama'])
+  })
+
+  it('the rerank slot offers a self-hosted box only once something knows its shape', async () => {
+    /* Reranking against somebody's own server needs a request shape no table
+       can name, and this page has nowhere to ask for one -- the write refuses a
+       first save of exactly those providers. Offering it anyway is a picker
+       entry whose only outcome is an error toast. The wizard asks, so a
+       configured one stays pickable and its model stays editable. */
+    const fresh = snap()
+    fresh.providers = fresh.providers.map((p) => (p.id === 'ollama' ? { ...p, on: true } : p))
+    expect(roleProviders(role('rerank'), fresh).map((p) => p.id)).toEqual(['openrouter'])
+
+    const configured = snap()
+    configured.providers = configured.providers.map((p) => (p.id === 'ollama' ? { ...p, on: true } : p))
+    configured.everos = {
+      ...configured.everos,
+      sections: { rerank: { model: 'bge-reranker', provider: 'ollama', api_key_set: true } },
+    }
+    expect(roleProviders(role('rerank'), configured).map((p) => p.id)).toEqual(['openrouter', 'ollama'])
+  })
+
+  it('a required role has no clear control', async () => {
+    /* The server refuses to clear llm and embedding -- one turns long-term
+       memory off outright, the other is what every stored vector was written
+       under. The button was drawn anyway, and its only result was an error. */
+    const data = snap()
+    data.everos = {
+      ...data.everos,
+      sections: {
+        llm: { model: 'openai/gpt-4o', provider: 'openrouter', api_key_set: true },
+        embedding: { model: 'text-embedding-3-small', provider: 'openrouter', api_key_set: true },
+        rerank: { model: 'r', provider: 'openrouter', api_key_set: true },
+      },
+    }
+    install(data)
+    await mount('model')
+
+    const clearLabel = (id: string) => `gui.settings.roles.clear {"role":"gui.settings.roles.${id}"}`
+    expect(screen.queryByLabelText(clearLabel('memllm'))).toBe(null)
+    expect(screen.queryByLabelText(clearLabel('embedding'))).toBe(null)
+    expect(screen.queryByLabelText(clearLabel('rerank'))).not.toBe(null)
   })
 
   it('the slot shows the vendor as stored, with no address to match', async () => {

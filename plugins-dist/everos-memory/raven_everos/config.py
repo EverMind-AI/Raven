@@ -1104,6 +1104,10 @@ def describe_roles() -> dict[str, Any]:
     EverOS's rerank protocol is deliberately absent: it is derived from the
     vendor table now, not chosen by anyone, and returning it under the name
     ``provider`` is what made one wire field mean two different things.
+
+    ``required`` names the roles that cannot be cleared, because the page has to
+    know which slots get a clear control and guessing put one on a slot whose
+    clear the write refuses.
     """
     sections: dict[str, Any] = {}
     for section in ROLES:
@@ -1125,4 +1129,8 @@ def describe_roles() -> dict[str, Any]:
         "config_path": str(get_everos_config_path()),
         "sections": sections,
         "supports": supports,
+        # Sent rather than mirrored, because the page was mirroring it and had
+        # drifted: it drew a clear button on embedding, which the write refuses.
+        # A contract the caller has to remember is a contract that goes stale.
+        "required": list(REQUIRED_ROLES),
     }

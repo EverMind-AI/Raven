@@ -4842,6 +4842,14 @@
                 }
               },
               "description": "Which roles each vendor can serve, so a slot does not offer a provider that cannot do the job. Keyed by provider name."
+            },
+            "required": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "description": "Roles that cannot be cleared, so the page knows which slots get a clear control. Sent rather than mirrored: a mirrored copy drew one on a slot whose clear the write refuses."
             }
           },
           "required": [

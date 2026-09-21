@@ -3241,6 +3241,10 @@ export interface SettingsEverosResult {
   supports?: {
     [k: string]: string[];
   };
+  /**
+   * Roles that cannot be cleared, so the page knows which slots get a clear control. Sent rather than mirrored: a mirrored copy drew one on a slot whose clear the write refuses.
+   */
+  required?: string[];
 }
 export interface SettingsEverosSetParams {
   /**

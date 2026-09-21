@@ -84,6 +84,10 @@ export interface EverosInfo {
   /* Which roles each vendor can serve, by provider id. The rerank slot used to
      offer OpenAI because it asked only whether a provider had a key. */
   supports?: Record<string, string[]>
+  /* Roles the server refuses to clear. Read rather than mirrored: this page
+     mirrored it, drifted, and drew a clear button on a slot whose clear the
+     write rejects. */
+  required?: string[]
 }
 
 export type UsageModelRow = ApiUsageModel

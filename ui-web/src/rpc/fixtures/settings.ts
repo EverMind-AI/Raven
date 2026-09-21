@@ -204,6 +204,7 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
       },
       'settings.everos': () => ({
         sections: {}, config_path: '~/.raven/config.json', available: false, owned: true, supports: {},
+        required: ['llm', 'embedding'],
       }),
       'settings.everosSet': () => ({ applied: true, warning: null }),
       'session.set_mode': (p) => {

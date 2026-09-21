@@ -87,6 +87,7 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     everos: {
       available: true,
       owned: true,
+      required: ['llm', 'embedding'],
       sections: { llm: { model: 'openai/gpt-4o', provider: 'openrouter', api_key_set: true } },
       supports: {
         openrouter: ['embedding', 'llm', 'multimodal', 'rerank'],
