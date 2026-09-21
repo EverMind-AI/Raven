@@ -184,6 +184,11 @@ class Session:
     # as (size, mtime_ns). save() compares it to decide whether anybody else
     # has written since, and only then re-reads the record to merge under.
     _file_stamp: tuple[int, int] | None = field(default=None, repr=False)
+    # The metadata as this copy last read it from the file or wrote it there.
+    # What ``metadata`` says that this does not is what this copy changed, and
+    # only that may outrank a record written since -- the snapshot itself is
+    # every key the file held at load, most of which this copy never meant.
+    _persisted_metadata: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
@@ -668,6 +673,7 @@ class SessionManager:
             )
             session._persisted_count = len(messages)
             session._file_stamp = _stamp(path)
+            session._persisted_metadata = dict(metadata)
             return session
         except Exception as e:
             logger.warning("Failed to load session {}: {}", key, e)
@@ -762,24 +768,32 @@ class SessionManager:
                 lines += [json.dumps(m, ensure_ascii=False) for m in new_messages]
                 locked_append(path, lines)
             session._file_stamp = _stamp(path)
+            session._persisted_metadata = dict(session.metadata)
 
         session._persisted_count = len(session.messages)
         self._cache[session.key] = session
 
     def _metadata_to_write(self, session: "Session", path: Path) -> dict[str, Any]:
-        """This copy's metadata over whatever else the record on disk carries.
+        """What this copy changed, over the record on disk, over what it loaded.
 
         A save rewrites the whole metadata record, so on its own it speaks for
         every key its own copy happens to hold: a flag another client wrote
         after this copy was loaded -- archived, most visibly -- was gone the
-        next time anything here saved, and the conversation came back. Only the
-        keys this copy carries win; the rest of the record is kept.
+        next time anything here saved, and the conversation came back.
 
-        **Removal is written, never left unsaid.** This merge cannot tell a key
+        Which is why only what this copy *changed* may outrank the record. A
+        session's ``metadata`` is the whole snapshot it loaded, not the keys it
+        meant, so overlaying it whole trades one stale-write bug for a narrower
+        one: restore persists ``archived: False``, a second client loads that,
+        the first archives again, and the second's next ordinary turn writes
+        its stale False back over the newer True. Comparing against what this
+        copy last read or wrote is what tells the two apart.
+
+        **Removal is written, never left unsaid.** Nothing here can tell a key
         this copy dropped from one it never had, so every remover states a
         false value instead (``session.pin``, :meth:`Session.set_title`, the
         output-limit stamp). A new remover that omits a key instead will find
-        it resurrected here.
+        it resurrected.
 
         The re-read is skipped while the file is byte for byte what this copy
         last read or wrote, which is every save in the ordinary case of one
@@ -792,7 +806,11 @@ class SessionManager:
         last, *_rest = self._scan_file(path)
         if last is None:
             return session.metadata
-        return {**(last.get("metadata") or {}), **session.metadata}
+        base = session._persisted_metadata
+        changed = {k: v for k, v in session.metadata.items() if k not in base or base[k] != v}
+        # Base under the record: a key this copy read and did not touch still
+        # belongs in what it writes, and the record on disk has the say on it.
+        return {**base, **(last.get("metadata") or {}), **changed}
 
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""

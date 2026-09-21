@@ -82,6 +82,36 @@ def test_a_save_keeps_a_key_another_writer_added(tmp_path: Path):
     assert SessionManager(tmp_path).peek(key).metadata.get("archived") is True
 
 
+def test_a_save_does_not_write_back_a_value_it_only_read(tmp_path: Path):
+    """A copy speaks for what it changed, not for every key it happens to hold.
+
+    ``metadata`` is the whole snapshot this copy loaded, so overlaying it whole
+    keeps a key it never touched at the value it read: restore persists
+    archived False, a second client loads that, the first archives again, and
+    the second's next ordinary turn writes its stale False back over the newer
+    True -- the conversation comes back after having been restored once, which
+    is the shape a reader meets it in.
+    """
+    key = "tui:20260610_100000_stale"
+    first = SessionManager(tmp_path)
+    session = first.get_or_create(key)
+    session.add_message("user", "hello")
+    session.metadata["archived"] = False
+    first.save(session)
+
+    # A second client loads the conversation, archived False and all.
+    second = SessionManager(tmp_path)
+    held = second.get_or_create(key)
+    assert held.metadata["archived"] is False
+
+    first.append_metadata_patch(key, {"archived": True})
+
+    held.add_message("user", "an ordinary turn over here")
+    second.save(held)
+
+    assert _last_metadata(second.session_path(key)).get("archived") is True
+
+
 def test_a_save_does_not_resurrect_a_key_this_copy_cleared(tmp_path: Path):
     """The merge keeps what it did not write, which makes clearing explicit.
 
