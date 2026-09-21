@@ -733,3 +733,16 @@ async def test_with_the_switch_off_nothing_pops_out(monkeypatch: pytest.MonkeyPa
 
     assert out.ok
     assert [name for name, _ in calls] == ["goto", "snapshot"]
+
+
+def test_site_keyed_permission_set_matches_the_acting_tool_hierarchy() -> None:
+    """Two places name the site-keyed verbs: BROWSER_SITE_KEYED_TOOLS decides
+    which calls carry a per-site permission key, and the _ActingTool hierarchy
+    decides which tools inject and require that key. A verb added to one side
+    only would either ask per call or key on a site nothing checks -- so the
+    two sets are held equal here, the way the param NAME is pinned in
+    permissions.builtin."""
+    from raven.permissions.builtin import BROWSER_SITE_KEYED_TOOLS
+
+    acting = {cls().name for cls in tools_mod._ActingTool.__subclasses__()}
+    assert acting == set(BROWSER_SITE_KEYED_TOOLS)

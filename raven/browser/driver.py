@@ -191,6 +191,12 @@ class _State:
     refused: str = ""
     owners: dict[str, _Owner] = field(default_factory=dict)
     adopting: set[asyncio.Task] = field(default_factory=set)
+    # Pages the driver itself is creating right now (``_page_for`` / ``tab_new``).
+    # The context's "page" event cannot tell them from popups, and adopting one
+    # would move the panel on a READ; the creating call decides what the panel
+    # shows (act -> ``_focus``, read -> nothing). Popups keep an opener, so
+    # ``_adopt`` skips only opener-less pages while this is non-zero.
+    spawning: int = 0
     # When the reader last acted on any page, so a tool can tell its model that
     # the page it is about to read was changed by a hand other than its own.
     touched: float = 0.0
@@ -444,11 +450,21 @@ class Browser:
         """
         if page is self._s.page or self._s.context is None:
             return
-        self._wire(page)
         try:
             opener = await page.opener()
         except Exception:
             opener = None
+        if opener is None and (self._s.spawning or getattr(page, "_raven_spawned", False)):
+            # Not a popup: a page the driver is creating in _page_for/tab_new,
+            # which also wires it and decides the panel itself. Adopting it
+            # here made a READ move what the panel shows (the documented
+            # never-happens), because the read path assigns no _s.page for the
+            # guard above to catch. Two checks because this task can run on
+            # either side of new_page() resolving: while it is in flight the
+            # counter is up; once it returned, the creator has already marked
+            # the page -- synchronously, so there is no window between them.
+            return
+        self._wire(page)
         if opener is not None:
             for rec in self._s.owners.values():
                 if rec.page is opener:
@@ -514,7 +530,12 @@ class Browser:
             elif len(self._pages()) >= MAX_TABS:
                 raise BrowserBusyError(f"tab limit reached ({MAX_TABS}); close one before opening another")
             else:
-                page = await self._s.context.new_page()
+                self._s.spawning += 1
+                try:
+                    page = await self._s.context.new_page()
+                finally:
+                    self._s.spawning -= 1
+                page._raven_spawned = True
                 self._wire(page)
             self._s.owners[owner] = _Owner(page, now)
         if act:
@@ -580,7 +601,12 @@ class Browser:
         await self._ensure()
         if len(self._pages()) >= MAX_TABS:
             return await self._state(error=f"tab limit reached ({MAX_TABS}); close one first")
-        page = await self._s.context.new_page()
+        self._s.spawning += 1
+        try:
+            page = await self._s.context.new_page()
+        finally:
+            self._s.spawning -= 1
+        page._raven_spawned = True
         self._wire(page)
         if owner is not None:
             self._s.owners[owner] = _Owner(page, time.monotonic())
@@ -615,8 +641,14 @@ class Browser:
     async def tab_close(self, index: int, *, owner: str | None = None) -> dict[str, Any]:
         """Close one tab; closing the last one closes the browser (native).
 
-        The same refusal as ``tab_activate`` for an owner closing another
-        owner's tab; the owner's own binding lapses with the tab.
+        An owner may close only the tab it holds. A tab held by another owner
+        is refused as in ``tab_activate`` -- and a tab with NO owner is the
+        reader's, not idle: the panel's tab may hold a login the user was just
+        asked to complete (``HANDOFF_NOTE``), and closing the last tab closes
+        the whole browser, so an auto-approved call must never take it out
+        silently. An owner that wants an unheld tab gone claims it first with
+        ``tab_activate`` -- a front-most switch the reader can see -- and then
+        closes what it holds. The owner's own binding lapses with the tab.
         """
         pages = self._pages()
         if not (0 <= index < len(pages)):
@@ -624,7 +656,12 @@ class Browser:
         victim = pages[index]
         if owner is not None:
             holder = self.owner_of(victim)
-            if holder is not None and holder != owner:
+            if holder is None:
+                return await self._state(
+                    error=f"tab {index} is the user's tab; activate it first if it must close",
+                    page=victim,
+                )
+            if holder != owner:
                 return await self._state(error=f"tab {index} is being used by another agent", page=victim)
         else:
             self._s.touched = time.monotonic()

@@ -51,11 +51,16 @@ _STRICTNESS = {Tier.DENY: 2, Tier.ASK: 1, Tier.ALLOW: 0}
 # hands over a path instead, which reaches nobody. Everything absent from this
 # set defaults to asking, unknown (MCP) tools included.
 #
-# The browser's reading and moving verbs are here on the web_fetch reasoning:
-# opening a page is a GET the agent could make anyway, and the navigation
-# policy in raven.browser.policy refuses what a GET must not reach. Its acting
-# verbs (click, type, press) are absent on purpose -- they submit forms -- and
-# ask once per site rather than per call; see ``builtin.session_keys``.
+# The browser's reading and moving verbs are here because their worst case is
+# reading a page. Note this is NOT the web_fetch equivalence it may look like:
+# raven.browser.policy deliberately reaches wider than the egress guard --
+# web_fetch refuses loopback/private targets, the browser keeps them (a reader
+# pointing the panel at their own dev server is a feature; link-local and
+# non-http schemes are still refused, and RAVEN_BROWSER_BLOCK_PRIVATE is the
+# deployment switch that closes the rest). That wider reach is a decided repo
+# policy (policy.py), accepted here with the prompt skipped. The acting verbs
+# (click, type, press) are absent on purpose -- they submit forms -- and ask
+# once per site rather than per call; see ``builtin.session_keys``.
 DEFAULT_ALLOW_TOOLS: frozenset[str] = frozenset(
     {
         "read_file",

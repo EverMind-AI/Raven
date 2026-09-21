@@ -1663,7 +1663,7 @@ and the model's `browser_*` tools (`agent/tools/browser.py`). A tool call names 
 **owner** -- the sub-agent run in flight, else the conversation -- and the driver binds
 each owner to a tab, so concurrent agents work in separate tabs and an owner's act
 brings its tab to the front of the panel. Calls with no owner are the reader's and are
-stamped as a **touch**, which the tools report to the model once.
+stamped as a **touch**, which the owner's readbacks report until the owner acts again.
 _Avoid_: calling the owner a session -- a sub-agent run inside one conversation is a
 second owner, and that distinction is what keeps it off its parent's tab.
 

@@ -862,3 +862,88 @@ async def test_stopping_a_stream_that_is_already_gone_is_not_an_error() -> None:
     await b.stop_stream()
 
     assert b._s.cdp is None and b._s.on_frame is None
+
+
+async def test_an_owner_cannot_close_the_users_unheld_tab() -> None:
+    """An unowned tab is the reader's, not idle: the panel's tab may hold a
+    login the user was asked to complete, and closing the last tab closes the
+    whole browser -- an auto-approved call must never take it out silently."""
+    b = get_browser()
+    users, own = _ActingPage("https://login.test", "L"), _ActingPage("https://b.test", "B")
+    _driving(b, [users, own], active=0)
+    b._s.owners["run:a"] = _Owner(own, time.monotonic())
+
+    refused = await b.tab_close(0, owner="run:a")
+
+    assert "user's tab" in refused["error"]
+    assert not users.is_closed()
+
+    allowed = await b.tab_close(1, owner="run:a")
+    assert own.is_closed() and "error" not in allowed
+
+    by_reader = await b.tab_close(0)
+    assert users.is_closed() and "error" not in by_reader
+
+
+async def test_a_read_that_must_open_a_tab_leaves_the_panel_alone() -> None:
+    """The delegation case: the active tab is held by another owner, so the
+    reader-owner's first snapshot has to open its own tab -- and the panel must
+    not follow it. The context's "page" event fires for that tab exactly as it
+    does for a popup, so this drives the un-stubbed adoption path."""
+    b = get_browser()
+    held = _ActingPage("https://parent.test", "P")
+    _driving(b, [held])
+    b._s.owners["run:parent"] = _Owner(held, time.monotonic())
+    streams: list[str] = []
+
+    async def restream() -> None:
+        streams.append("restream")
+
+    b._restream = restream  # type: ignore[method-assign]
+
+    class _SpawningContext(_FakeContext):
+        async def new_page(self) -> Any:
+            page = _ActingPage("about:blank", "")
+            self.pages.append(page)
+            b._on_new_page(page)
+            return page
+
+    b._s.context = _SpawningContext([held])
+
+    out = await b.snapshot(owner="run:child")
+    for task in list(b._s.adopting):
+        await task
+
+    assert not out.get("error")
+    assert b._s.page is held, "a read must not move what the panel shows"
+    assert streams == [], "a read must not restream the panel"
+    assert b._s.owners["run:child"].page is not held, "the read got its own tab"
+
+
+async def test_an_acting_owner_that_opens_a_tab_still_fronts_it() -> None:
+    b = get_browser()
+    held = _ActingPage("https://parent.test", "P")
+    _driving(b, [held])
+    b._s.owners["run:parent"] = _Owner(held, time.monotonic())
+    streams: list[str] = []
+
+    async def restream() -> None:
+        streams.append("restream")
+
+    b._restream = restream  # type: ignore[method-assign]
+
+    class _SpawningContext(_FakeContext):
+        async def new_page(self) -> Any:
+            page = _ActingPage("about:blank", "")
+            self.pages.append(page)
+            b._on_new_page(page)
+            return page
+
+    b._s.context = _SpawningContext([held])
+
+    page = await b._page_for("run:child", act=True)
+    for task in list(b._s.adopting):
+        await task
+
+    assert b._s.page is page and page is not held
+    assert streams == ["restream"], "an act fronts the new tab exactly once"
