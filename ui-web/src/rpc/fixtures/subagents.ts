@@ -34,31 +34,45 @@ const ROSTER: Row[] = [
   { name: 'Raven-Research', kind: 'cli', configured: false, builtin: false, vendored: true,
     enabled: true, group: 'uninstalled', probe_status: 'ready', probe_detail: '', has_api_key: false,
     mcps: [], allow_mcp_secrets: false, test_running: false, last_test_detail: '',
+    own: true, model_source: 'fixed', model_choices: [],
     description: 'A product row, discovered under agents/ rather than written into config.' },
   { name: 'Raven-PPT', kind: 'cli', configured: false, builtin: false, vendored: true,
     enabled: false, group: 'uninstalled', probe_status: 'missing',
     probe_detail: 'the ppt-engine engine wheel is not installed', has_api_key: false,
     mcps: [], allow_mcp_secrets: false, test_running: false, last_test_detail: '',
+    own: true, model_source: 'fixed', model_choices: [],
     description: 'A product row whose engine wheel is missing, so it is listed and disabled.' },
   { name: 'raven', kind: 'builtin', configured: false, builtin: true, enabled: true,
     group: 'builtin', probe_status: 'ready', probe_detail: '', has_api_key: false,
     mcps: [], allow_mcp_secrets: false, test_running: false, last_test_detail: '',
+    own: true, model_source: 'raven', model_choices: [],
     description: 'General-purpose sub-agent with no capability bias.' },
-  { name: 'claude_code', preset: 'claude_code', kind: 'cli', configured: true, enabled: true,
+  /* An acp row with a menu, so the offline page has a picker to open: the
+     choices are the shape the adapter advertises, not a claim about its list. */
+  { name: 'claude_code', preset: 'claude_code', kind: 'acp', configured: true, enabled: true,
     group: 'installed', probe_status: 'ready', probe_detail: '', has_api_key: false,
     mcps: [], allow_mcp_secrets: false, test_running: false, last_test_ok: true, last_test_detail: '',
+    own: false, model_source: 'agent',
+    model_choices: [
+      { value: 'claude-opus-5', name: 'Opus 5', group: 'Anthropic' },
+      { value: 'claude-sonnet-5', name: 'Sonnet 5', group: 'Anthropic' },
+      { value: 'claude-haiku-4-5', name: 'Haiku 4.5', group: 'Anthropic' },
+    ],
     description: 'Claude Code CLI - strong general coding / agent tasks.' },
   { name: 'codex', preset: 'codex', kind: 'cli', configured: false, enabled: false,
     group: 'uninstalled', probe_status: 'missing', probe_detail: 'codex: command not found',
     has_api_key: false, mcps: [], allow_mcp_secrets: false, test_running: false,
+    own: false, model_source: 'fixed', model_choices: [],
     last_test_detail: '', description: 'OpenAI Codex CLI - coding tasks.' },
   { name: 'hermes', preset: 'hermes', kind: 'cli', configured: false, enabled: false,
     group: 'uninstalled', probe_status: 'ready', probe_detail: '', has_api_key: false,
     mcps: [], allow_mcp_secrets: false, test_running: false, last_test_detail: '',
+    own: false, model_source: 'fixed', model_choices: [],
     description: 'Hermes Agent CLI - general assistant with tool calling.' },
   { name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: false, enabled: false,
     group: 'uninstalled', probe_status: 'unknown', probe_detail: '', has_api_key: false,
     mcps: [], allow_mcp_secrets: false, test_running: false, last_test_detail: '',
+    own: false, model: 'mirothinker-1-7-deepresearch', model_source: 'fixed', model_choices: [],
     description: 'MiroMind deep-research (OpenAI-compatible HTTP).' },
 ]
 
@@ -88,6 +102,13 @@ export function createSubagents(env: FixtureEnv): SubagentsFixture {
       'subagents.update': (p) => {
         const row = find(p.name)
         if (row && p.api_key) { row.has_api_key = true; row.enabled = true }
+        if (row && typeof p.description === 'string') row.description = p.description
+        /* The row's own model, kept the way the server keeps it: a clear wins
+           over a pick sent beside it, and the built-in row's pick is stored
+           naming its provider (the server spells it in; here it is prefixed
+           unless the id already carries it). */
+        if (row && p.clear_model) row.model = null
+        else if (row && p.model) row.model = p.provider && !p.model.startsWith(`${p.provider}/`) ? `${p.provider}/${p.model}` : p.model
         return { updated: true, name: p.name }
       },
       /* One switch for every kind of row, including the discovered ones: the

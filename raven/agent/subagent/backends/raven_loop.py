@@ -11,7 +11,7 @@ import difflib
 import json
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -44,6 +44,9 @@ from raven.providers.tool_calls import openai_tool_call
 from raven.security.trust import wrap_untrusted
 from raven.spine.message import Media
 from raven.utils.messages import build_assistant_message
+
+if TYPE_CHECKING:
+    from raven.providers.binding import ModelBinding
 
 _LIVE_CONFIG = LiveConfig()
 #: The ladder a spawn waits out when its caller passed none. Only a rig that
@@ -238,9 +241,14 @@ class RavenLoopBackend:
         mcp_allow: Collection[str] | None = None,
         retry_delays: "Sequence[float] | None" = None,
         retry_after_output: bool = False,
+        pin: Callable[[], ModelBinding | None] | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
+        # The row's own model paired with its own credential, resolved per run
+        # (`SubagentManager.build_builtin_backend`); None means this agent runs
+        # on whatever pair the dispatch brings.
+        self._pin = pin
         # Global, unlike the per-run ``workspace``: memory and skills are the
         # agent's identity and stay in one place whatever directory a session
         # works in.
@@ -364,6 +372,14 @@ class RavenLoopBackend:
         # for callers that drive a backend directly.
         provider = provider or self.provider
         model = model or self.model
+        # The row's own model, when it has one, over the pair the dispatch
+        # brought: a per-agent model is a fact about this agent, and the turn's
+        # binding is the fallback it was always meant to be. Read per run
+        # because this backend is cached across bindings; a pin that resolves
+        # to nothing usable leaves the pair alone (see `live_pin_resolver`).
+        pinned = self._pin() if self._pin is not None else None
+        if pinned is not None:
+            provider, model = pinned.provider, pinned.model
         # Build subagent tools (no message tool, no spawn tool). The gate is
         # unattended by construction: a spawned task inherits the parent turn's
         # context -- responder included -- and a sub-agent must never pop an

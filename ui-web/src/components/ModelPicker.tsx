@@ -31,6 +31,10 @@ export interface ModelPickerProps {
   /* `typed` is a model the provider does not list yet: the caller decides
      whether to add it there first. */
   onPick(model: string, provider: string, typed: boolean): void
+  /* Off, the panel offers listed ids only: no typed row, and Enter on an id
+     nothing lists does nothing. For a caller whose write takes exact values
+     and could not add a typed one to anything. */
+  allowTyped?: boolean
   onClose(): void
   /* What the right column says when there is no provider to pick from. */
   emptyNote: string
@@ -39,7 +43,7 @@ export interface ModelPickerProps {
   anchor?: HTMLElement | null
 }
 
-export function ModelPicker({ title, providers, current, onPick, onClose, emptyNote, anchor }: ModelPickerProps): JSX.Element {
+export function ModelPicker({ title, providers, current, onPick, onClose, emptyNote, anchor, allowTyped = true }: ModelPickerProps): JSX.Element {
   const box = useRef<HTMLDivElement>(null)
   const [q, setQ] = useState('')
   const want = current ? current.provider : ''
@@ -52,7 +56,7 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
   const sel = shown.find((p) => p.id === selId)
   const exact = !!sel && sel.models.some((m) => m.toLowerCase() === ql)
   const rows = sel ? hits(sel) : []
-  const first = rows[0] ?? (q.trim() && !exact ? q.trim() : null)
+  const first = rows[0] ?? (allowTyped && q.trim() && !exact ? q.trim() : null)
   /* Placed once per opening, off the size the first paint gives it: the list
      below is filtered, not resized, so a search term never moves the panel. */
   useLayoutEffect(() => {
@@ -147,7 +151,7 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
               </button>
             )
           })}
-          {sel && q.trim() && !exact && (
+          {allowTyped && sel && q.trim() && !exact && (
             <>
               {rows.length > 0 && <div className="model-picker-hr" />}
               <button type="button" className="model-picker-model model-picker-add" onClick={() => onPick(q.trim(), sel.id, true)}>
@@ -156,7 +160,7 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
               </button>
             </>
           )}
-          {sel && !rows.length && !q.trim() && <div className="model-picker-empty">{t('gui.model.pick_none')}</div>}
+          {sel && !rows.length && (!q.trim() || !allowTyped) && <div className="model-picker-empty">{t('gui.model.pick_none')}</div>}
         </div>
       </div>
     </div>

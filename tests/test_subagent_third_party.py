@@ -2533,9 +2533,10 @@ def test_every_install_hint_names_a_row_that_defers_to_a_local_install() -> None
 
     Two ways that goes wrong silently, so both are pinned: a key that is not in
     the table at all, and a key belonging to a shim-launched row, whose command
-    is an ``npx`` one that always resolves -- the absent-executable branch these
-    hints serve is unreachable there, so a hint on such a row is dead weight
-    advertising itself as coverage.
+    is an ``npx`` one that always resolves -- the ``argv[0]`` branch these hints
+    serve never fires there. The executable such a row needs is declared beside
+    its own install in ``SHIM_REQUIRED_EXECUTABLES``, so a hint here would be a
+    second spelling of it that nothing reads.
     """
     from raven.agent.subagent.acp_registry_presets import ACP_REGISTRY_INSTALL_HINTS
     from raven.agent.subagent.presets import SHIM_LAUNCHED_PRESETS
@@ -2543,9 +2544,37 @@ def test_every_install_hint_names_a_row_that_defers_to_a_local_install() -> None
     unknown = set(ACP_REGISTRY_INSTALL_HINTS) - set(THIRD_PARTY_SUBAGENT_PRESETS)
     assert not unknown, f"install hints for presets that do not exist: {sorted(unknown)}"
     fetched = set(ACP_REGISTRY_INSTALL_HINTS) & SHIM_LAUNCHED_PRESETS
-    assert not fetched, f"these rows fetch their own command, so the hint is unreachable: {sorted(fetched)}"
+    assert not fetched, f"shim-launched rows declare their install in SHIM_REQUIRED_EXECUTABLES: {sorted(fetched)}"
     for key, hint in ACP_REGISTRY_INSTALL_HINTS.items():
         assert hint.strip() == hint and hint, key
+
+
+def test_every_shim_requirement_names_a_shim_launched_row() -> None:
+    """The executable a fetched command needs is only a question for a fetched command.
+
+    A local-executable row is probed by ``argv[0]`` and carries its install in
+    ``ACP_REGISTRY_INSTALL_HINTS``; a key here for one would make the probe ask
+    after a second executable that row never needed. The two tables split the
+    acp presets by launch shape, and this holds the split.
+    """
+    from raven.agent.subagent.presets import SHIM_LAUNCHED_PRESETS, SHIM_REQUIRED_EXECUTABLES
+
+    misplaced = set(SHIM_REQUIRED_EXECUTABLES) - SHIM_LAUNCHED_PRESETS
+    assert not misplaced, f"a local-executable row cannot need a second executable: {sorted(misplaced)}"
+    for key, (executable, install) in SHIM_REQUIRED_EXECUTABLES.items():
+        assert executable and " " not in executable, key
+        assert install.strip() == install and install, key
+
+
+def test_a_shim_that_brings_its_own_agent_is_not_held_to_a_local_install() -> None:
+    """``codex-acp`` ships the agent as its own binary, and ``claude-agent-acp``
+    runs the CLI its SDK pin carries as a per-platform optional dependency, so
+    a ``claude`` on PATH is neither needed nor the one that answers. A
+    requirement for either would report a working adapter as missing on a
+    machine that never installed the CLI globally."""
+    from raven.agent.subagent.presets import SHIM_REQUIRED_EXECUTABLES
+
+    assert {"claude_code", "codex"}.isdisjoint(SHIM_REQUIRED_EXECUTABLES)
 
 
 def test_presets_declare_their_own_provenance() -> None:

@@ -2013,6 +2013,8 @@ class ThirdPartyAcpSubagentConfig(Base):
     agent whose whole capability is raven's own. Round-trip retention only:
     readiness keeps probing the manifest's own declaration, and the merge
     reads nothing from this field."""
+    model: str | None = None
+    """The ``model`` sent with every ``session/new``, or ``None`` to let the agent pick its own default."""
 
     @model_validator(mode="before")
     @classmethod

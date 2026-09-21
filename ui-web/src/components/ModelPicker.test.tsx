@@ -88,6 +88,20 @@ describe('model picker', () => {
     expect(closes).toEqual([1])
   })
 
+  it('offers listed ids only when the caller cannot take a typed one', () => {
+    setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+    const { picks } = draw({ allowTyped: false })
+    const box = screen.getByPlaceholderText('gui.model.pick_search')
+    fireEvent.change(box, { target: { value: 'brand-new-model' } })
+    expect(screen.queryByText('gui.model.pick_use {"id":"brand-new-model"}')).toBeNull()
+    expect(screen.getByText('gui.model.pick_none')).toBeTruthy()
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(picks).toEqual([])
+    fireEvent.change(box, { target: { value: 'sonnet' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(picks).toEqual([['claude-sonnet-4-5', 'anthropic', false]])
+  })
+
   it('says why the list is empty when no provider can serve the role', () => {
     draw({ providers: [], current: null })
     expect(screen.getByText('none')).toBeTruthy()

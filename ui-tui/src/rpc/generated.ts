@@ -923,6 +923,10 @@ export interface SubagentRow {
    */
   builtin?: boolean;
   /**
+   * One of raven's own agents, whichever way this install registered it: the built-in row, a product discovered under `agents/`, or a config row whose acp handshake named raven (the shipped installer writes a product as a plain config row). The row a client draws with raven's own mark, and whose unset model reads as following the main Raven. Absent from a server that predates it, which reads as 'not raven's'.
+   */
+  own?: boolean;
+  /**
    * The transport this entry's preset has since moved to, or null when it is current. A configured entry is never rewritten underneath the user, so the mismatch is shown instead.
    */
   upgrade_to?: string;
@@ -940,6 +944,31 @@ export interface SubagentRow {
   last_test_detail?: string;
   last_test_at_ms?: number;
   test_running: boolean;
+  /**
+   * The model this row sends, or null to use the agent's own default.
+   */
+  model?: string | null;
+  /**
+   * The models this row's agent advertised, empty when it advertised none.
+   */
+  model_choices?: {
+    /**
+     * The id the agent takes back.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually far shorter than the value.
+     */
+    name?: string;
+    /**
+     * The agent's own bucketing, a provider typically. Empty when it offered none.
+     */
+    group?: string;
+  }[];
+  /**
+   * What subagents.update accepts for model on this row, by kind -- not ownership, which is own: raven for the built-in row, picking from raven's own provider catalogue; agent for an acp row, raven's own or not, picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all.
+   */
+  model_source?: 'raven' | 'agent' | 'fixed';
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3136,6 +3165,15 @@ export interface SubagentsUpdateParams {
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
+  model?: string;
+  /**
+   * The provider whose credential serves model, for the built-in row: the id is stored naming it, the way config.set model stores the host's. Ignored for an acp row, whose values are the agent's own.
+   */
+  provider?: string;
+  /**
+   * Drop the row's own model, reverting to the agent's default. Wins over model when both are sent.
+   */
+  clear_model?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3214,7 +3252,7 @@ export interface SubagentsProbeResult {
  */
 export interface SubagentsTestParams {
   name: string;
-  source?: 'config' | 'preset';
+  source?: 'config' | 'preset' | 'vendored';
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

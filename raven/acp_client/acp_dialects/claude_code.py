@@ -13,8 +13,9 @@ Three things this adapter does that the spec does not describe:
   state goes to a ``sessionUpdate: "plan"`` frame instead, so the plan row is
   the only place they appear, and it is named for the tool that produced it.
 
-``Bash`` and ``Read`` are the two names measured on the wire (v0.66.0), and any
-other name is reported exactly as sent rather than checked against a list: the
+``Bash`` and ``Read`` are the two names measured on the wire (v0.66.0; ``Bash``
+again with the same meta, ``rawOutput`` and fence on v0.79.0, 2026-09-21), and
+any other name is reported exactly as sent rather than checked against a list: the
 record keeps the transport's own vocabulary, so a tool this adapter adds or
 renames upstream is recorded for what it is without an entry anywhere.
 Those names now reach a client unchanged: the read boundary renames only the
