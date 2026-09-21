@@ -139,7 +139,7 @@ build-tui:
 build-ui:
 	npm ci --prefix ui-web
 	npm run --prefix ui-web build
-	python3 ui-web/build.py
+	uv run --frozen --python $(PYTHON_VERSION) python ui-web/build.py
 
 build-bridge:
 	npm run build --prefix bridge
