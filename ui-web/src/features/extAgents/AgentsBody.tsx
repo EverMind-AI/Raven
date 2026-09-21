@@ -1,96 +1,21 @@
-/* The onboarding wizard's agents step: a read-only slice of the extAgents
- * roster, reduced to the two buckets a first-run reader needs -- what this
- * machine already found, and what is already connected. The settings page's
- * own four-group triage (`ExtAgentsPage.tsx`) stays there; a wizard step is a
- * decision, not a roster to manage, so this pane has no folding "you would
- * have to install this" group and no detail sheet -- a row's action is the
- * whole of what it offers.
+/* The onboarding wizard's agents step: the Agent Hub's rows (Rows.tsx),
+ * reduced to the two sections a first-run reader decides on -- what this
+ * machine has that could be connected, then what already is. The hub's third section
+ * (not installed on this machine) and its sheet stay on the hub: a wizard step
+ * is a decision, not a roster to manage, so a row here has no sheet to open and
+ * its one control is the whole of what it offers. Which rows count towards the
+ * step being done is `isFound` (source.ts).
  */
 
 import { useSyncExternalStore } from 'react'
 
-import { AgentMark, isOwnAgent } from '../../components/AgentMark'
-import { SetupGroup, SetupRow } from '../../components/SetupRow'
 import { t } from '../../i18n/t'
-import { ask as confirmAsk } from '../../state/confirm'
 import * as lang from '../../state/lang'
-import { isAvailable, isConnected, stageOf } from './source'
+import { SectionBlock, Spin, ordered } from './Rows'
+import { wizardSection } from './source'
 import * as store from './store'
 
-import type { ExtAgentRow } from './types'
 import type { JSX } from 'react'
-
-/* The same kind labels the settings page prints. */
-const kindText = (kind: string): string =>
-  t(
-    kind === 'builtin'
-      ? 'gui.agent.kind_builtin'
-      : kind === 'openai'
-        ? 'gui.agent.kind_openai'
-        : kind === 'acp'
-          ? 'gui.agent.kind_acp'
-          : 'gui.agent.kind_cli',
-  )
-
-function AvailableRow({ row, joining }: { row: ExtAgentRow; joining: boolean }): JSX.Element {
-  /* A stale row -- its preset moved to another transport -- connects by a
-     remove plus an add, which drops the handles of runs already in flight;
-     the settings page asks first and so does this. The tag beside the kind
-     says which transport it moves to, the same words the page uses. */
-  const connect = (): void => {
-    if (stageOf(row) === 'stale') {
-      confirmAsk(
-        t('gui.agent.migrate_do'),
-        t('gui.agent.migrate_body', { name: row.name, to: kindText(row.upgrade_to || '') }),
-        t('gui.agent.migrate_do'),
-        () => void store.connect(row),
-      )
-    } else void store.connect(row)
-  }
-  return (
-    <SetupRow
-      act={
-        <button className="mini" disabled={joining} onClick={connect}>
-          {joining ? (
-            <>
-              <span className="extAgents-spin" />
-              {t('gui.agent.setup_connecting')}
-            </>
-          ) : (
-            t('gui.agent.connect')
-          )}
-        </button>
-      }
-      name={row.name}
-      onOpen={() => {}}
-      state={{ cls: 'off', text: '' }}
-      tags={
-        <>
-          <span className="kd">{kindText(row.kind)}</span>
-          {row.upgrade_to ? <span className="kd">{t('gui.agent.stale_to', { to: kindText(row.upgrade_to) })}</span> : null}
-        </>
-      }
-      tile={<AgentMark preset={row.preset} own={isOwnAgent(row)} />}
-    />
-  )
-}
-
-function ConnectedRow({ row }: { row: ExtAgentRow }): JSX.Element {
-  return (
-    <SetupRow
-      act={
-        <button className="mini ghost" onClick={() => void store.disconnect(row)}>
-          {t('gui.agent.disconnect')}
-        </button>
-      }
-      name={row.name}
-      onOpen={() => {}}
-      state={{ cls: 'ok', text: '' }}
-      tags={<span className="kd">{kindText(row.kind)}</span>}
-      tile={<AgentMark preset={row.preset} own={isOwnAgent(row)} />}
-    />
-  )
-}
 
 export function AgentsStepBody(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
@@ -102,39 +27,25 @@ export function AgentsStepBody(): JSX.Element {
      keeps showing those rows rather than replacing them with the scan
      placeholder. */
   const scanning = s.loading && s.rows.length === 0
-  const available = s.rows.filter(isAvailable)
-  const connected = s.rows.filter(isConnected)
+  const avail = ordered(s.rows.filter((row) => wizardSection(row) === 'avail'))
+  const on = ordered(s.rows.filter((row) => wizardSection(row) === 'on'))
 
   return (
     <>
       {scanning ? (
-        <SetupGroup count={0} label={t('gui.agent.setup_available')}>
-          <div className="sulist">
-            <div className="extAgents-scan">
-              <span className="extAgents-spin" />
-              <span className="hint">{t('gui.agent.setup_scanning')}</span>
-            </div>
+        <section className="extAgents-sec">
+          <div className="extAgents-hd">
+            <b>{t('gui.agent.g_avail')}</b>
+            <span className="extAgents-n">0</span>
           </div>
-        </SetupGroup>
-      ) : null}
-      {!scanning && available.length ? (
-        <SetupGroup count={available.length} label={t('gui.agent.setup_available')}>
-          <div className="sulist">
-            {available.map((row) => (
-              <AvailableRow joining={s.joining.includes(row.name)} key={row.name} row={row} />
-            ))}
+          <div className="extAgents-scan">
+            <Spin />
+            <span className="hint">{t('gui.agent.setup_scanning')}</span>
           </div>
-        </SetupGroup>
+        </section>
       ) : null}
-      {connected.length ? (
-        <SetupGroup count={connected.length} label={t('gui.agent.setup_connected')}>
-          <div className="sulist">
-            {connected.map((row) => (
-              <ConnectedRow key={row.name} row={row} />
-            ))}
-          </div>
-        </SetupGroup>
-      ) : null}
+      {!scanning && avail.length ? <SectionBlock label={t('gui.agent.g_avail')} rows={avail} s={s} /> : null}
+      {on.length ? <SectionBlock label={t('gui.agent.g_on')} rows={on} s={s} /> : null}
     </>
   )
 }
