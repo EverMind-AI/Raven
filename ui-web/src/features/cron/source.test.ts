@@ -36,11 +36,40 @@ beforeEach(() => {
 })
 
 describe('one job, contract shape to page shape', () => {
-  it('words a cron job from its expression', () => {
+  /* Every schedule but an interval and a one-shot is stored as a cron job, so
+     a row read back as `cron` was a weekly job reopening as a raw expression
+     in a box nobody asked for -- and saving from there rewrote it as custom.
+     The three shapes the editor writes are the three read back. */
+  it('reads a daily expression back as a daily job', () => {
     const row = cronToRow(job({ kind: 'cron', expr: '0 9 * * *' }))
-    expect(row.freq).toBe('cron')
-    expect(row.at).toBe('0 9 * * *')
+    expect(row.freq).toBe('day')
+    expect(row.at).toBe('09:00')
     expect(row.when).not.toBe('')
+  })
+
+  it('reads a weekly expression back as a weekly job, with its weekday', () => {
+    const row = cronToRow(job({ kind: 'cron', expr: '30 9 * * 3' }))
+    expect(row.freq).toBe('week')
+    expect(row.at).toBe('09:30')
+    expect(row.wd).toBe(3)
+  })
+
+  it('reads a monthly expression back as a monthly job, with its day', () => {
+    const row = cronToRow(job({ kind: 'cron', expr: '5 8 15 * *' }))
+    expect(row.freq).toBe('month')
+    expect(row.at).toBe('08:05')
+    expect(row.dom).toBe(15)
+    /* And words it, which is the row's own second line: the reader of a list
+       should never be shown five fields. */
+    expect(row.when).toBe('gui.cron.h.monthly(d=15,hm=08:05)')
+  })
+
+  /* And anything the editor cannot write stays custom, with the expression
+     itself in the box. */
+  it('leaves an expression the editor cannot write as a custom one', () => {
+    const row = cronToRow(job({ kind: 'cron', expr: '*/10 * * * 1-5' }))
+    expect(row.freq).toBe('cron')
+    expect(row.at).toBe('*/10 * * * 1-5')
   })
 
   it('words an interval job in the largest whole unit', () => {
@@ -112,6 +141,11 @@ describe('one draft, page shape back to contract shape', () => {
     expect(jobToSave(draft({ freq: 'week', at: '7:05', wd: 3 }))).toMatchObject({ kind: 'cron', expr: '5 7 * * 3' })
   })
 
+  it('turns a monthly draft into a cron expression with its day', () => {
+    expect(jobToSave(draft({ freq: 'month', at: '8:05', dom: 15 })))
+      .toMatchObject({ kind: 'cron', expr: '5 8 15 * *' })
+  })
+
   it('sends an interval in whole seconds, and an hour when there is none', () => {
     expect(jobToSave(draft({ freq: 'hour', every_ms: 90000 }))).toMatchObject({ kind: 'every', every_seconds: 90 })
     expect(jobToSave(draft({ freq: 'hour' }))).toMatchObject({ kind: 'every', every_seconds: 3600 })
@@ -130,5 +164,7 @@ describe('one draft, page shape back to contract shape', () => {
     expect(() => jobToSave(draft({ freq: 'day', at: '25:00' }))).toThrow('bad time')
     expect(() => jobToSave(draft({ freq: 'day', at: '09:61' }))).toThrow('bad time')
     expect(() => jobToSave(draft({ freq: 'week', at: '09:30', wd: 9 }))).toThrow('bad weekday')
+    expect(() => jobToSave(draft({ freq: 'month', at: '09:30', dom: 0 }))).toThrow('bad dom')
+    expect(() => jobToSave(draft({ freq: 'month', at: '09:30', dom: 32 }))).toThrow('bad dom')
   })
 })

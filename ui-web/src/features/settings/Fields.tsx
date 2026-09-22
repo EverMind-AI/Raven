@@ -27,6 +27,53 @@ export function Card({ title, act, raw, children }: {
   )
 }
 
+/* A labelled block with no card around it, which is the prototype's own shape
+   for a detail pane: the label IS the separation. A border per block turns a
+   pane of three facts into three boxes, and the boxes then need their own
+   inner padding, their own heading size and their own gap -- three decisions
+   the label had already made. `act` is the one control a heading carries (add
+   a model), `tight` the spacing a run of one-box labels takes. */
+export function Sec({ label, sub, act, tight, children }: {
+  label?: ReactNode
+  sub?: string
+  act?: ReactNode
+  tight?: boolean
+  children?: ReactNode
+}): JSX.Element {
+  return (
+    <div className={tight ? 'settings-sec settings-sec-tight' : 'settings-sec'}>
+      {(label || act) && (
+        <div className="settings-lab">
+          {label}
+          {sub && <span className="settings-sub2">{sub}</span>}
+          {act && <><span className="settings-sp" />{act}</>}
+        </div>
+      )}
+      {children}
+    </div>
+  )
+}
+
+/* A fold over the half of a pane few people touch. Closed is the point: the
+   heading says what is behind it and costs one line, where an always-open
+   card of overrides is the largest thing on a page about one key. */
+export function Fold({ open, label, onToggle, children }: {
+  open: boolean
+  label: string
+  onToggle(): void
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <div className="settings-sec">
+      <button type="button" className="foldcap" aria-expanded={open} onClick={onToggle}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+        {label}
+      </button>
+      {open ? children : null}
+    </div>
+  )
+}
+
 export function Row({ label, sub, stack, k, children }: {
   label?: ReactNode
   sub?: string

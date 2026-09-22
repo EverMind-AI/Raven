@@ -25,9 +25,15 @@ afterEach(() => {
   resetSources()
 })
 
-/* The models card's add button: the first card that offers one. */
-const modelsAdd = (): HTMLElement => document.querySelectorAll('.settings-card')[1]!.querySelector('button.mini.ghost') as HTMLElement
+/* The models section's own add button, by the attribute it carries. */
+const modelsAdd = (): HTMLElement => document.querySelector('[data-addmodel]') as HTMLElement
 const formSave = (): HTMLElement => document.querySelector('.settings-kvform button.mini:not(.ghost)') as HTMLElement
+
+/* Advanced is a fold now, closed on arrival: an address override, the request
+   headers and the display names are not what a reader opened the page for. */
+async function openAdv(): Promise<void> {
+  await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.advanced')) })
+}
 
 /* The detail pane is the Model providers page's right column since the split;
    the Model settings page holds the roles card alone. */
@@ -44,6 +50,17 @@ describe('provider detail', () => {
     expect(calls).toEqual([])
     expect(screen.getByRole('alert').textContent)
       .toBe('gui.settings.providers.in_use {"roles":"gui.settings.roles.chat, gui.settings.roles.title, gui.settings.roles.gate"}')
+  })
+
+  /* And it stands at the foot, not among the fields: the box a reader is
+     typing a key into should not have "disconnect and clear the key" under it. */
+  it('keeps disconnect at the foot of the pane, away from the key box', async () => {
+    install()
+    await open('openrouter')
+    expect(document.querySelector('.settings-tp-foot')!.textContent)
+      .toBe('gui.settings.providers.disconnect_key')
+    const secs = [...document.querySelectorAll('.settings-sec')]
+    expect(secs.some((sec) => sec.textContent?.includes('gui.settings.providers.disconnect_key'))).toBe(false)
   })
 
   it('disconnects a provider no role uses', async () => {
@@ -107,6 +124,7 @@ describe('provider detail', () => {
   it('a header is added as a one-name patch and removed as a one-name null', async () => {
     const { calls } = install()
     await open('openrouter')
+    await openAdv()
     expect(screen.getByText('X-Title')).toBeTruthy()
     await act(async () => { fireEvent.click(screen.getByLabelText('gui.settings.providers.remove_header {"name":"X-Title"}')) })
     expect(calls).toEqual([['setFields', { slug: 'openrouter', fields: { extra_headers: { 'X-Title': null } } }]])
@@ -123,6 +141,7 @@ describe('provider detail', () => {
   it('a display name is written through add_model with label and description, and cleared with empty ones', async () => {
     const { calls } = install()
     await open('anthropic')
+    await openAdv()
     expect(screen.getByText('Opus · the big one')).toBeTruthy()
     await act(async () => { fireEvent.click(screen.getByLabelText('gui.settings.providers.remove_label {"model":"claude-opus-4-5"}')) })
     expect(calls).toEqual([['provider', { op: 'add_model', slug: 'anthropic', model: 'claude-opus-4-5', label: '', description: '' }]])
@@ -262,9 +281,13 @@ describe('provider detail', () => {
 })
 
 describe('provider detail, the address of a direct vendor', () => {
-  it('lives in the advanced card and is written on its own through set_fields', async () => {
+  it('lives behind the advanced fold and is written on its own through set_fields', async () => {
     const { calls } = install()
     await open('anthropic')
+    /* And nowhere else: an override of the registry's own address is not a
+       field the page shows until it is asked for. */
+    expect(screen.queryAllByLabelText('gui.settings.providers.base')).toHaveLength(0)
+    await openAdv()
     const boxes = screen.getAllByLabelText('gui.settings.providers.base') as HTMLInputElement[]
     expect(boxes).toHaveLength(1)
     await act(async () => { fireEvent.change(boxes[0]!, { target: { value: 'https://proxy.example/v1' } }); fireEvent.keyDown(boxes[0]!, { key: 'Enter' }) })
@@ -276,6 +299,7 @@ describe('provider detail, the address of a direct vendor', () => {
     data.providers = data.providers.map((p) => (p.id === 'openrouter' ? { ...p, labels: { 'openai/gpt-4o': { label: 'GPT-4o' } } } : p))
     install(data)
     await open('openrouter')
+    await openAdv()
     expect(screen.queryByText('GPT-4o')).toBeNull()
   })
 })

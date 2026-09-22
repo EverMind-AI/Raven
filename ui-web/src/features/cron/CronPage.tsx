@@ -1,39 +1,40 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { SheetFoot } from '../../components/SetupSheet'
 import {
-  TwoPane, TwoPaneFind, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow, TwoPaneSection,
-  TwoPaneSwitch,
+  TwoPane, TwoPaneFind, TwoPaneFoot, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow,
+  TwoPaneSection, TwoPaneSwitch,
 } from '../../components/TwoPane'
 import { t } from '../../i18n/t'
 import { ask as confirmAsk } from '../../state/confirm'
 import * as lang from '../../state/lang'
-import { show as menuAt } from '../../state/menu'
-import * as settingsDialog from '../../state/settings'
 import { show as toast } from '../../state/toast'
 import { cronExprHuman, cronWhen } from './humanize'
 import * as store from './store'
+import './styles.css'
 
 import type { CronDraft, CronJob, CronRun } from './types'
 import type { JSX } from 'react'
 
 /* The frequencies and the delivery routes the editor offers. Page data, not
    wire data: a job's own kind and expression come from `cron.list`, and these
-   are the choices the form can express them as. */
-const FREQ: Array<{ id: CronJob['freq']; label: string }> = [
-  { id: 'hour', label: 'gui.freq.hour' },
+   are the choices the form can express them as.
+
+   "Every N hours" is folded into this list rather than standing as a number box
+   beside it. The box was a control a reader had to notice to use, so in
+   practice every hourly job in the product ran exactly once an hour. */
+const FREQ: Array<{ id: string; label: string; vars?: Record<string, unknown> }> = [
+  { id: 'hour:1', label: 'gui.freq.hour' },
+  { id: 'hour:2', label: 'gui.cron.h.every_h', vars: { n: 2 } },
+  { id: 'hour:3', label: 'gui.cron.h.every_h', vars: { n: 3 } },
+  { id: 'hour:4', label: 'gui.cron.h.every_h', vars: { n: 4 } },
+  { id: 'hour:6', label: 'gui.cron.h.every_h', vars: { n: 6 } },
+  { id: 'hour:12', label: 'gui.cron.h.every_h', vars: { n: 12 } },
   { id: 'day', label: 'gui.freq.day' },
   { id: 'week', label: 'gui.freq.week' },
+  { id: 'month', label: 'gui.freq.month' },
   { id: 'once', label: 'gui.freq.once' },
   { id: 'cron', label: 'gui.freq.cron' },
 ]
-const DELIVER: Record<string, string> = {
-  app: 'gui.deliver.app',
-  feishu: 'gui.deliver.feishu',
-  email: 'gui.deliver.email',
-}
-
 /* Which message a refusal shows, keyed by what a source could not read. The
    redraw lands the note under the control the reader has to fix; a toast
    would not, because live mode sends those to the console. */
@@ -89,19 +90,83 @@ export function CronApp(): JSX.Element {
   }, [s.viewId, job])
   const draft = job && s.draft && s.draft.id === job.id ? s.draft : null
   return (
+    <TwoPane side={<CronSide rows={s.rows} loaded={s.loaded} q={q} onQ={setQ} viewId={s.viewId} />}>
+      {/* A job being created stands in the right column, where a job being
+          edited stands. It used to be a modal over this dialog, which is a
+          layer over a layer -- and it covered the list a reader was about to
+          name the new job against. */}
+      {s.sheet && !s.parked ? (
+        <CronNew key={`new:${s.epoch}`} draft={s.sheet} />
+      ) : job && draft ? (
+        <CronDetail key={`${job.id}:${s.epoch}`} job={job} draft={draft} rev={s.rev} lang={pageLang} />
+      ) : (
+        /* "Nothing here yet" is the list's line, not this one: said in both
+           columns it reads as two separate emptinesses. */
+        <TwoPaneNone>{t('gui.cron.pick')}</TwoPaneNone>
+      )}
+    </TwoPane>
+  )
+}
+
+/* A job that does not exist yet: the same four blocks, with no switch to throw
+   and no history to show, and its own two verbs at the foot. Nothing is
+   written until "create" -- leaving a box commits an existing job, and there
+   is nothing here to commit to. */
+function CronNew({ draft }: { draft: CronDraft }): JSX.Element {
+  const create = (): void => {
+    if (!draft.name.trim() || !draft.what.trim()) {
+      draft.blank = true
+      store.redraw()
+      return
+    }
+    store
+      .source()
+      .save(draft)
+      .then((saved) => {
+        store.closeSheet()
+        store.viewSaved(saved)
+        toast(t('gui.job.saved_x', { name: saved.name }), {
+          label: t('gui.job.run_once'),
+          fn: () => void store.source().runNow(saved).then(() => store.refresh()),
+        })
+      })
+      .catch((e: unknown) => jobRefuse(draft, e))
+  }
+  return (
     <>
-      <TwoPane side={<CronSide rows={s.rows} loaded={s.loaded} q={q} onQ={setQ} viewId={s.viewId} />}>
-        {job && draft ? (
-          <CronDetail key={`${job.id}:${s.epoch}`} job={job} draft={draft} rev={s.rev} lang={pageLang} />
-        ) : (
-          /* "Nothing here yet" is the list's line, not this one: said in both
-             columns it reads as two separate emptinesses. */
-          <TwoPaneNone>{t('gui.cron.pick')}</TwoPaneNone>
-        )}
-      </TwoPane>
-      {s.sheet && !s.parked ? <JobSheet key={`sheet:${s.epoch}`} draft={s.sheet} /> : null}
+      <TwoPaneHead
+        name={draft.name.trim() || t('gui.cron_new')}
+        meta={<span className="st">{draftWords(draft)}</span>}
+      />
+      <JobForm draft={draft} />
+      <TwoPaneFoot>
+        <button className="mini go" onClick={create}>{t('gui.cron.create')}</button>
+        <button className="mini ghost" onClick={() => store.closeSheet()}>{t('gui.cancel')}</button>
+      </TwoPaneFoot>
     </>
   )
+}
+
+/* A draft's schedule in words, for the head of a job that has none yet: a
+   saved row carries the sentence the source worded, and this is the same
+   sentence read off the controls instead. No claim about a first run -- what
+   instant a schedule next falls on is the server's answer, and guessing it
+   here would be a second clock to disagree with. */
+function draftWords(draft: CronDraft): string {
+  const hm = draft.at || '09:00'
+  if (draft.freq === 'once') {
+    return draft.at_local ? draft.at_local.replace('T', ' ') : t('gui.cron.no_time')
+  }
+  if (draft.freq === 'cron') return cronExprHuman(draft.at)
+  if (draft.freq === 'week') return `${t('gui.cron.h.dow' + String(draft.wd ?? 1))} ${hm}`
+  if (draft.freq === 'month') return t('gui.cron.h.monthly', { d: draft.dom ?? 1, hm })
+  if (draft.freq === 'day') return `${t('gui.cron.h.daily')} ${hm}`
+  return freqWords(draft)
+}
+
+function freqWords(draft: CronDraft): string {
+  const hit = FREQ.find((f) => f.id === freqValue(draft))
+  return hit ? t(hit.label, hit.vars ?? null) : ''
 }
 
 const failing = (j: CronJob): boolean => j.on && !!j.runs[0] && !j.runs[0].ok
@@ -133,7 +198,11 @@ function CronSide({ rows, loaded, q, onQ, viewId }: {
         current={j.id === viewId}
         off={!j.on}
         name={j.name}
-        sub={broke && last ? `${t('gui.cron.failed')} · ${last.at}` : cronWhen(j)}
+        sub={
+          broke && last
+            ? `${t('gui.cron.failed')} · ${last.at}`
+            : j.on ? cronWhen(j) : `${cronWhen(j)} · ${t('gui.cron.paused')}`
+        }
         {...(broke ? { tone: 'bad' as const } : {})}
         onOpen={() => store.openDetail(j)}
         trailing={
@@ -171,10 +240,20 @@ function CronSide({ rows, loaded, q, onQ, viewId }: {
   )
 }
 
-/* The job itself, in the right column: what it is set to do, and what it has
-   done. One scroll rather than two tabs -- beside its own list the form is
-   half the width it used to be and the history fits under it, and the delete
-   that used to sit between them is in the header's menu. */
+/* The job itself, in the right column: name, how often, what to say, and what
+   it has done -- four labelled blocks in one scroll, the way every other
+   section of this panel reads.
+ *
+ * It saves as you leave a box rather than on a button. A schedule is a setting,
+ * not a document: there is nothing to draft here, and a "save changes" button
+ * on a four-field form is one more press between the reader and a job that
+ * already says what they meant. The native `change` moment is what commits --
+ * a select the moment it is picked, a box when the reader leaves it -- so a
+ * half-typed expression is never written, and a refusal stands under the
+ * control that has to be fixed.
+ *
+ * What acts on the whole job -- run it now, open its conversation, delete it --
+ * is at the foot, under a hairline, away from the boxes. */
 function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft; rev: number; lang: string }): JSX.Element {
   const [runs, setRuns] = useState<CronRun[] | null>(null)
   const [running, setRunning] = useState(false)
@@ -198,21 +277,6 @@ function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft;
       stale = true
     }
   }, [job.id, rev, lang])
-  const save = (): void => {
-    if (!draft.name.trim() || !draft.what.trim()) {
-      draft.blank = true
-      store.redraw()
-      return
-    }
-    store
-      .source()
-      .save(draft)
-      .then((saved) => {
-        store.viewSaved(saved)
-        toast(t('gui.cron.saved'))
-      })
-      .catch((e: unknown) => jobRefuse(draft, e))
-  }
   const runNow = (): void => {
     setRunning(true)
     void store
@@ -234,84 +298,116 @@ function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft;
           </>
         }
         aside={
-          <>
-            <TwoPaneSwitch
-              on={job.on}
-              label={t('gui.caps.toggle_aria', { name: job.name })}
-              onChange={() => void store.source().toggle(job).then(() => store.refresh())}
-            />
-            <button
-              className="mini ghost"
-              aria-label={t('gui.cron.menu_aria', { name: job.name })}
-              onClick={(e) => {
-                const b = e.currentTarget.getBoundingClientRect()
-                menuAt(b.right - 150, b.bottom + 6, [
-                  { label: t('gui.cron.duplicate'), fn: () => store.openSheet(job) },
-                  { label: t('gui.cron.delete'), bad: true, fn: () => removeThenList(job) },
-                ])
-              }}
-            >
-              &#8943;
-            </button>
-          </>
+          <TwoPaneSwitch
+            on={job.on}
+            label={t('gui.caps.toggle_aria', { name: job.name })}
+            onChange={() => void store.source().toggle(job).then(() => store.refresh())}
+          />
         }
       />
-      <JobForm draft={draft} />
-      <SheetFoot label={t('gui.cron.save')} onSave={save} />
+      <JobForm draft={draft} onCommit={commitDraft} />
       <TwoPaneSection
-        label={t('gui.cron.tab_runs')}
-        act={
-          <button className="mini" disabled={running} onClick={runNow}>
-            {t(running ? 'gui.cron.running_now' : 'gui.cron.run_now')}
-          </button>
+        label={
+          <>
+            {t('gui.cron.tab_runs')}
+            {runs && runs.length > 5 ? (
+              <span className="two-pane-sub">{t('gui.cron.runs_n', { n: runs.length })}</span>
+            ) : null}
+          </>
         }
       >
-        <div className="cdruns">
+        <div className="cronruns">
           {runs === null ? null : runs.length === 0 ? (
-            <div className="empty-note">{t('gui.cron.hist_none')}</div>
+            <div className="dnote">{t('gui.cron.hist_none')}</div>
           ) : (
             runs.map((run, i) => (
-              <button key={i} className="cdrun" onClick={() => void store.source().openRun(job, run)}>
-                <span className={'st' + (run.ok ? ' ok' : ' bad')} />
-                <span className="at">{run.at}</span>
-                <span className="note">{run.note || ''}</span>
-                <span className="chev">&rsaquo;</span>
+              <button
+                key={i}
+                className={run.ok ? 'cronrun' : 'cronrun cronbad'}
+                onClick={() => void store.source().openRun(job, run)}
+              >
+                <i />
+                <span className="cronat">{run.at}</span>
+                <span className="cronnote">{run.note || t(run.ok ? 'gui.cron.ok' : 'gui.cron.failed')}</span>
               </button>
             ))
           )}
         </div>
       </TwoPaneSection>
+      <TwoPaneFoot>
+        <button className="mini" disabled={running} onClick={runNow}>
+          {t(running ? 'gui.cron.running_now' : 'gui.cron.run_now')}
+        </button>
+        <button className="mini ghost" onClick={() => void store.source().openRun(job)}>
+          {t('gui.cron.open_sess')}
+        </button>
+        <span className="two-pane-sp" />
+        <button className="mini ghost danger" onClick={() => removeThenList(job)}>
+          {t('gui.cron.delete')}
+        </button>
+      </TwoPaneFoot>
     </>
   )
 }
 
+/* Writing a draft the reader has finished with. The validation is the same one
+   the create sheet runs, so a name or an instruction left empty is refused
+   here too rather than written as a blank job. */
+function commitDraft(draft: CronDraft): void {
+  if (!draft.name.trim() || !draft.what.trim()) {
+    draft.blank = true
+    store.redraw()
+    return
+  }
+  store
+    .source()
+    .save(draft)
+    .then((saved) => {
+      store.viewSaved(saved)
+      toast(t('gui.cron.saved'))
+    })
+    .catch((e: unknown) => jobRefuse(draft, e))
+}
+
 /* create / edit -- one form, two hosts: the new-job sheet and the detail
-   page's config card both edit the same draft shape.
+   page's own blocks both edit the same draft shape.
 
    Inputs are uncontrolled on purpose: a keystroke mutates the draft object and
    re-renders nothing, so focus and IME composition survive; only a frequency
-   change or a refusal redraws. The
-   store's epoch key remounts this subtree whenever a draft is replaced. */
-function JobForm({ draft }: { draft: CronDraft }): JSX.Element {
+   change or a refusal redraws. The store's epoch key remounts this subtree
+   whenever a draft is replaced.
+
+   `onCommit` is what the detail hands in to write on the way out of a box. The
+   sheet hands in nothing: a job that does not exist yet is created by its own
+   button, not by leaving a field. */
+function JobForm({ draft, onCommit }: { draft: CronDraft; onCommit?(d: CronDraft): void }): JSX.Element {
   if (draft.freq === 'week' && draft.wd == null) draft.wd = 1
+  if (draft.freq === 'month' && draft.dom == null) draft.dom = 1
   const blankName = Boolean(draft.blank) && !draft.name.trim()
   const blankWhat = Boolean(draft.blank) && !draft.what.trim()
-  const whatStyle = {
-    background: 'var(--ink)',
-    border: '1px solid var(--line)',
-    borderRadius: 7,
-    padding: '9px 11px',
-    outline: 0,
-    resize: 'vertical' as const,
-    fontSize: 13,
-    lineHeight: 1.6,
+  /* What the boxes held when this form mounted. The draft itself is mutated by
+     every keystroke, so it cannot answer "did this change"; the snapshot can,
+     and the store's epoch remounts this subtree whenever a draft is replaced. */
+  const seen = useRef({ name: draft.name, what: draft.what, at: draft.at, at_local: draft.at_local ?? '' })
+  /* Committing on the way out of a box, and only where something changed: a
+     reader who tabs through a form they did not touch has written nothing, and
+     a toast saying "saved" on every blur is a lie four times over. */
+  const commit = (field: keyof typeof seen.current, now: string): void => {
+    if (!onCommit || seen.current[field] === now) return
+    seen.current[field] = now
+    onCommit(draft)
+  }
+  const pick = (v: string): void => {
+    setFreq(draft, v)
+    store.redraw()
+    if (onCommit) onCommit(draft)
   }
   return (
     <>
-      <div className="ff">
-        <label>{t('gui.job.name')}</label>
+      <TwoPaneSection label={t('gui.job.name')}>
         <input
           type="text"
+          className="cronname"
           defaultValue={draft.name}
           placeholder={t('gui.job.name_ph')}
           data-bad={blankName ? 'true' : undefined}
@@ -319,134 +415,122 @@ function JobForm({ draft }: { draft: CronDraft }): JSX.Element {
             draft.name = e.currentTarget.value
             draft.blank = null
           }}
+          onBlur={(e) => commit('name', e.currentTarget.value)}
         />
-        {blankName && <span className="e">{t('gui.job.need_name')}</span>}
-      </div>
-      <div className="ff">
-        <label>{t('gui.job.what')}</label>
-        <textarea
-          rows={3}
-          defaultValue={draft.what}
-          placeholder={t('gui.job.what_ph')}
-          data-bad={blankWhat ? 'true' : undefined}
-          style={blankWhat ? { ...whatStyle, borderColor: 'var(--amber)' } : whatStyle}
-          onInput={(e) => {
-            draft.what = e.currentTarget.value
-            draft.blank = null
-          }}
-        />
-        {blankWhat && <span className="e">{t('gui.job.need_what')}</span>}
-      </div>
-      <div className="ff">
-        <label>{t('gui.job.freq')}</label>
-        <div
-          style={{ display: 'flex', gap: 9, alignItems: 'center', flexWrap: 'wrap' }}
-          data-bad={draft.bad ? 'true' : undefined}
-        >
-          <div className="seg">
-            {FREQ.map((f) => (
-              <button
-                key={f.id}
-                aria-pressed={f.id === draft.freq}
-                onClick={() => {
-                  draft.freq = f.id
-                  store.redraw()
-                }}
-              >
-                {t(f.label)}
-              </button>
-            ))}
-          </div>
-          {draft.freq === 'week' && (
-            <select
-              defaultValue={String(draft.wd ?? 1)}
-              onChange={(e) => {
-                draft.wd = Number(e.currentTarget.value)
-                draft.bad = null
-              }}
-            >
-              {[0, 1, 2, 3, 4, 5, 6].map((d) => (
-                <option key={d} value={String(d)}>
-                  {t('gui.cron.h.dow' + d)}
-                </option>
+        {blankName && <span className="cronerr">{t('gui.job.need_name')}</span>}
+      </TwoPaneSection>
+      <TwoPaneSection label={t('gui.job.freq')}>
+        <div className="cronwhen" data-bad={draft.bad ? 'true' : undefined}>
+          <span className="selw">
+            <select className="sel" style={{ minWidth: 0, width: 128 }} value={freqValue(draft)}
+              aria-label={t('gui.job.freq')} onChange={(e) => pick(e.currentTarget.value)}>
+              {freqOptions(draft).map((o) => (
+                <option key={o.id} value={o.id}>{o.label}</option>
               ))}
             </select>
+          </span>
+          {draft.freq === 'week' && (
+            <NumSel width={92} label={t('gui.freq.week')} value={String(draft.wd ?? 1)}
+              opts={[0, 1, 2, 3, 4, 5, 6].map((d) => [String(d), t('gui.cron.h.dow' + d)])}
+              onPick={(v) => { draft.wd = Number(v); draft.bad = null; if (onCommit) onCommit(draft) }} />
+          )}
+          {draft.freq === 'month' && (
+            <NumSel width={82} label={t('gui.freq.month')} value={String(draft.dom ?? 1)}
+              opts={Array.from({ length: 31 }, (_, i) => [String(i + 1), t('gui.cron.u_dom', { n: i + 1 })])}
+              onPick={(v) => { draft.dom = Number(v); draft.bad = null; if (onCommit) onCommit(draft) }} />
+          )}
+          {/* The clock, as two dropdowns rather than a native time input: that
+              control is 12-hour with an AM/PM and a clock glyph in an English
+              locale, which is not the same control as the ones beside it -- and
+              a free-text "08:00" box refused half of what a reader typed. */}
+          {(draft.freq === 'day' || draft.freq === 'week' || draft.freq === 'month') && (
+            <HmSel draft={draft} onPick={() => { if (onCommit) onCommit(draft) }} />
           )}
           {draft.freq === 'once' && (
             <input
               type="datetime-local"
               style={{ width: 190 }}
               defaultValue={draft.at_local || ''}
+              aria-label={t('gui.freq.once')}
               onInput={(e) => {
                 draft.at_local = e.currentTarget.value
                 draft.bad = null
               }}
+              onBlur={(e) => commit('at_local', e.currentTarget.value)}
             />
           )}
-          {/* The backend has taken an interval for "hourly" all along
-              (`every_seconds`); the form only ever sent the default, so every
-              hourly job in the product runs exactly once an hour. */}
-          {draft.freq === 'hour' && (
-            <label className="everyn">
-              {t('gui.job.every_n_pre')}
-              <input
-                type="number"
-                min={1}
-                max={24}
-                defaultValue={String(Math.max(1, Math.round((draft.every_ms || 3600000) / 3600000)))}
-                onInput={(e) => {
-                  const n = Math.max(1, Math.min(24, Number(e.currentTarget.value) || 1))
-                  draft.every_ms = n * 3600000
-                  draft.bad = null
-                }}
-              />
-              {t('gui.job.every_n_post')}
-            </label>
-          )}
-          {draft.freq !== 'hour' && draft.freq !== 'once' && draft.freq !== 'week' && (
-            <AtInput draft={draft} />
-          )}
-          {draft.freq === 'week' && (
-            <input
-              type="text"
-              style={{ width: 90 }}
-              defaultValue={draft.at}
-              placeholder="09:30"
-              onInput={(e) => {
-                draft.at = e.currentTarget.value
-                draft.bad = null
-              }}
-            />
-          )}
+          {draft.freq === 'cron' && <ExprInput draft={draft} onCommit={onCommit} seen={seen.current} />}
         </div>
-        {draft.bad && <span className="e">{t(draft.bad)}</span>}
-      </div>
-      {/* Where results go is a setting, not a property of one job: the save
-          payload has never carried a per-job destination (`jobToSave` does not
-          read it, and every row comes back as `app`), so the selector that
-          stood here promised a choice the write threw away. It states the
-          effective setting and points at the one place that can change it --
-          the channels section, because what a result can be delivered TO is
-          whichever channel is in service. */}
-      <div className="ff">
-        <label>{t('gui.job.deliver')}</label>
-        <div className="sustate" style={{ marginTop: 0 }}>
-          <span>{t(DELIVER[draft.deliver] || DELIVER.app!)}</span>
-          <span className="x">{t('gui.job.deliver_global')}</span>
-          <span className="a">
-            <button className="mini ghost" onClick={() => settingsDialog.openSection('channels')}>
-              {t('gui.job.deliver_open')}
-            </button>
-          </span>
-        </div>
-      </div>
+        {draft.bad && <span className="cronerr">{t(draft.bad)}</span>}
+      </TwoPaneSection>
+      <TwoPaneSection label={t('gui.job.what')}>
+        <textarea
+          className="cronsay"
+          rows={sayRows(draft.what)}
+          defaultValue={draft.what}
+          placeholder={t('gui.job.what_ph')}
+          data-bad={blankWhat ? 'true' : undefined}
+          onInput={(e) => {
+            draft.what = e.currentTarget.value
+            draft.blank = null
+          }}
+          onBlur={(e) => commit('what', e.currentTarget.value)}
+        />
+        {blankWhat && <span className="cronerr">{t('gui.job.need_what')}</span>}
+      </TwoPaneSection>
     </>
   )
 }
 
-/* The daily/cron time field; for a raw expression the hint translates it
-   live as the reader types, so nobody has to read five-field cron. */
-function AtInput({ draft }: { draft: CronDraft }): JSX.Element {
+/* One dropdown, drawn the way every dropdown on this page is. */
+function NumSel({ width, label, value, opts, onPick }: {
+  width: number
+  label: string
+  value: string
+  opts: Array<[string, string]>
+  onPick(v: string): void
+}): JSX.Element {
+  return (
+    <span className="selw">
+      <select className="sel" style={{ minWidth: 0, width }} value={value} aria-label={label}
+        onChange={(e) => { onPick(e.currentTarget.value); store.redraw() }}>
+        {opts.map(([v, lab]) => <option key={v} value={v}>{lab}</option>)}
+      </select>
+    </span>
+  )
+}
+
+const MINS = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
+
+/* The hour and the minute. A minute the schedule is already set to that is not
+   on the five-minute grid stays on the list rather than being rounded away by
+   the reader opening the page. */
+function HmSel({ draft, onPick }: { draft: CronDraft; onPick(): void }): JSX.Element {
+  const [h, m] = splitHm(draft.at)
+  const mins = MINS.includes(m) ? MINS : [...MINS, m].sort((a, b) => a - b)
+  const set = (hh: number, mm: number): void => {
+    draft.at = `${pad2(hh)}:${pad2(mm)}`
+    draft.bad = null
+    onPick()
+  }
+  return (
+    <>
+      <NumSel width={82} label={t('gui.cron.u_hour', { n: h })} value={String(h)}
+        opts={Array.from({ length: 24 }, (_, i) => [String(i), t('gui.cron.u_hour', { n: pad2(i) })])}
+        onPick={(v) => set(Number(v), m)} />
+      <NumSel width={82} label={t('gui.cron.u_min', { n: m })} value={String(m)}
+        opts={mins.map((v) => [String(v), t('gui.cron.u_min', { n: pad2(v) })])}
+        onPick={(v) => set(h, Number(v))} />
+    </>
+  )
+}
+
+/* A raw expression, with the words it means under it as the reader types. */
+function ExprInput({ draft, onCommit, seen }: {
+  draft: CronDraft
+  onCommit?(d: CronDraft): void
+  seen: { at: string }
+}): JSX.Element {
   const [expr, setExpr] = useState(draft.at)
   return (
     <>
@@ -454,82 +538,61 @@ function AtInput({ draft }: { draft: CronDraft }): JSX.Element {
         type="text"
         style={{ width: 140 }}
         defaultValue={draft.at}
-        placeholder={draft.freq === 'cron' ? '0 8 * * *' : '08:00'}
+        placeholder="0 8 * * *"
+        aria-label={t('gui.cron.expr_lab')}
         onInput={(e) => {
           draft.at = e.currentTarget.value
           draft.bad = null
           setExpr(e.currentTarget.value)
         }}
+        onBlur={(e) => {
+          if (!onCommit || seen.at === e.currentTarget.value) return
+          seen.at = e.currentTarget.value
+          onCommit(draft)
+        }}
       />
-      {/* Not a standing hint -- the class those went out with. This is the
-          expression read back in words as the reader types, which is the only
-          way five cron fields are checkable without running them. */}
-      {draft.freq === 'cron' && <span className="cronecho">{cronExprHuman(expr)}</span>}
+      <span className="cronecho">{cronExprHuman(expr)}</span>
     </>
   )
 }
 
-/* The new-job sheet, rendered into the static #jobVeil container the page
-   markup keeps; the veil's own open flag and click-outside behaviour are
-   all managed here. */
-function JobSheet({ draft }: { draft: CronDraft }): JSX.Element | null {
-  const veil = document.getElementById('jobVeil')
-  const cancel = (): void => store.closeSheet()
-  useEffect(() => {
-    if (!veil) return
-    veil.dataset.open = 'true'
-    /* React's autoFocus does not reach a portal reliably; focus by hand. */
-    veil.querySelector('input')?.focus()
-    const onClick = (e: MouseEvent): void => {
-      if (e.target === veil) cancel()
-    }
-    veil.addEventListener('click', onClick)
-    return () => {
-      veil.dataset.open = 'false'
-      veil.removeEventListener('click', onClick)
-    }
-  }, [veil])
-  if (!veil) return null
-  const save = (): void => {
-    if (!draft.name.trim() || !draft.what.trim()) {
-      draft.blank = true
-      store.redraw()
-      return
-    }
-    store
-      .source()
-      .save(draft)
-      .then((saved) => {
-        store.closeSheet()
-        toast(t('gui.job.saved_x', { name: saved.name }), {
-          label: t('gui.job.run_once'),
-          fn: () => void store.source().runNow(saved).then(() => store.refresh()),
-        })
-        void store.refresh()
-      })
-      .catch((e: unknown) => jobRefuse(draft, e))
-  }
-  return createPortal(
-    <div
-      className="sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="jobTitle"
-      style={{ width: 'min(560px,92vw)' }}
-    >
-      <header id="jobTitle">{t(draft.fresh ? 'gui.cron_new' : 'gui.job.edit_title')}</header>
-      <div className="body" id="jobBody">
-        <JobForm draft={draft} />
-      </div>
-      <footer>
-        <button className="btn" id="jobNo" onClick={cancel}>
-          {t('gui.cancel')}
-        </button>
-        <button className="btn key" id="jobYes" onClick={save}>
-          {t('gui.save')}
-        </button>
-      </footer>
-    </div>,
-    veil,
-  )
+const pad2 = (n: number): string => String(n).padStart(2, '0')
+
+function splitHm(at: string): [number, number] {
+  const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(at || '')
+  if (!m) return [9, 0]
+  return [Math.min(23, Number(m[1])), Math.min(59, Number(m[2]))]
+}
+
+/* A one-sentence instruction should not stand in a five-line box, and a long
+   one should not be read through a four-line window. */
+function sayRows(what: string): number {
+  const rows = (what.match(/\n/g) || []).length + Math.ceil(what.length / 72) + 1
+  return Math.max(4, Math.min(14, rows))
+}
+
+/* Which of the dropdown's entries a draft is on. */
+function freqValue(draft: CronDraft): string {
+  if (draft.freq !== 'hour') return draft.freq
+  return 'hour:' + String(Math.max(1, Math.round((draft.every_ms || 3600000) / 3600000)))
+}
+
+/* The entries, plus the one a draft is on when it is not among them: a job set
+   up in a conversation can run every 30 minutes, which none of the ten says,
+   and dropping it would rewrite the schedule the moment the page opened. */
+function freqOptions(draft: CronDraft): Array<{ id: string; label: string }> {
+  const out = FREQ.map((f) => ({ id: f.id, label: t(f.label, f.vars ?? null) }))
+  const cur = freqValue(draft)
+  if (!out.some((o) => o.id === cur)) out.unshift({ id: cur, label: cronWhen(draft) })
+  return out
+}
+
+/* A pick, written into the draft. An hourly interval rides on the entry rather
+   than on a number box beside it. */
+function setFreq(draft: CronDraft, v: string): void {
+  const [kind, n] = v.split(':')
+  draft.freq = kind as CronJob['freq']
+  draft.bad = null
+  if (kind === 'hour') draft.every_ms = (Number(n) || 1) * 3600000
+  if (!draft.at) draft.at = '09:00'
 }

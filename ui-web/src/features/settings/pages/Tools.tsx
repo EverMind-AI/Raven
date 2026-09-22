@@ -85,8 +85,8 @@ export function KeyRow({ label, keyName, legacy, url, raw }: {
 
 export function VendorSelect({ keyName, value, opts }: { keyName: string; value: string; opts: Array<[string, string]> }): JSX.Element {
   return (
-    <span className="settings-selw">
-      <select className="settings-sel" value={value} aria-label={t('gui.settings.tools.vendor')} onChange={(e) => void store.write(keyName, e.currentTarget.value)}>
+    <span className="selw">
+      <select className="sel" value={value} aria-label={t('gui.settings.tools.vendor')} onChange={(e) => void store.write(keyName, e.currentTarget.value)}>
         {opts.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
       </select>
     </span>

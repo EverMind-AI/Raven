@@ -10,10 +10,12 @@ export interface CronJob {
   id: string
   name: string
   what: string
-  freq: 'hour' | 'day' | 'week' | 'once' | 'cron'
+  freq: 'hour' | 'day' | 'week' | 'month' | 'once' | 'cron'
   at: string
   at_local?: string
   wd?: number
+  /* Day of the month, for a monthly job. */
+  dom?: number
   on: boolean
   deliver: string
   when: string

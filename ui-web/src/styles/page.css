@@ -3356,7 +3356,7 @@ details[open] summary { margin-bottom: 8px; }
 .pmsec { border-top: 1px solid var(--line-soft); padding: 14px 0; margin-top: 12px; }
 /* section eyebrow: the mono display face doing its label job */
 .pmsec > .cap {
-  display: block; margin-bottom: 9px; font-family: var(--mono); font-size: 10.5px;
+  display: block; margin-bottom: 9px; font-family: var(--mono); font-size: 11px;
   color: var(--faint); text-transform: uppercase; letter-spacing: .12em;
 }
 .pmsec > .cap:empty { display: none; }
@@ -3524,16 +3524,7 @@ details[open] summary { margin-bottom: 8px; }
 .seg.cronfilter { margin: 0 0 14px; }
 .seg.cronfilter .n { margin-left: 7px; font-family: var(--mono); font-size: 10.5px; color: var(--faint);
   font-variant-numeric: tabular-nums; }
-.cdruns .runhead { display: flex; justify-content: flex-end; padding: 12px 0 4px; }
-.everyn { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
-.everyn input { width: 58px; background: var(--surface); border: 1px solid var(--line); border-radius: 7px;
-  padding: 6px 8px; font: inherit; font-size: 12.5px; color: var(--text); outline: 0;
-  font-variant-numeric: tabular-nums; }
-.everyn input:focus { border-color: var(--amber); background: var(--ink); }
 .sustate .x { color: var(--faint); font-size: 11.5px; }
-/* A refused field says so under itself; nothing else ever stands there. */
-.ff > .e { display: block; font-size: 11.5px; color: var(--gold); margin-top: 4px; }
-.cronecho { font-size: 12px; color: var(--muted); font-family: var(--mono); }
 
 /* The sheet's four parts. */
 .suhead { display: flex; align-items: flex-start; gap: 10px; }
@@ -3800,6 +3791,32 @@ details[open] summary { margin-bottom: 8px; }
   display: grid; grid-template-rows: auto 1fr auto; min-height: 0;
   background: var(--surface);
 }
+/* Inside the settings dialog a small button is the control standard's size,
+   the way the prototype's settings document sizes it -- 32 and 8, beside a
+   field of the same height. The module pages keep the roster's 28: a row of
+   cards is not a form.
+
+   Keyed on the dialog rather than on the settings island's own root, because
+   channels, schedules and memory are three other domains' islands, rooted in
+   boxes of their own beside #spanels: a rule hung on .settings-panel never
+   reached them, and their buttons stayed 28px next to 32px fields. The setup
+   step bodies, which render in the onboarding wizard instead, take the same
+   sizes from features/settings/styles.css. */
+.smodal .mini {
+  height: var(--ctl-h); min-width: 64px; border-radius: var(--ctl-r);
+  font-size: 13px; padding: 0 13px;
+}
+:root[data-lang="en"] .smodal .mini { min-width: 88px; }
+.smodal .mini:hover:not(:disabled) { border-color: var(--amber); background: var(--paper); }
+.smodal .mini.ghost { background: none; color: var(--muted); }
+.smodal .mini.danger { color: var(--clay); border-color: var(--clay); }
+/* The primary verb, filled: creating a schedule is the one the dialog has. */
+.smodal .mini.go {
+  background: var(--text); border-color: var(--text); color: var(--paper); font-weight: 500;
+}
+.smodal .mini.go:hover:not(:disabled) {
+  filter: brightness(1.18); border-color: var(--text); background: var(--text);
+}
 .snav .brandrow { padding: 14px 16px 6px; }
 .snav .wm {
   font-family: var(--mono); font-size: 13px; font-weight: 600; letter-spacing: -.01em;
@@ -3865,24 +3882,27 @@ details[open] summary { margin-bottom: 8px; }
   display: grid; grid-template-rows: minmax(0, 1fr); overflow: hidden;
 }
 .two-pane {
-  display: grid; grid-template-columns: 276px minmax(0, 1fr);
+  display: grid; grid-template-columns: 286px minmax(0, 1fr);
   border: 1px solid var(--line); border-radius: 10px; background: var(--paper);
   overflow: hidden; min-height: 0;
 }
 .two-pane-side {
-  border-right: 1px solid var(--line-soft); padding: 12px;
+  border-right: 1px solid var(--line-soft); padding: 13px;
   display: flex; flex-direction: column; gap: 9px; min-width: 0; min-height: 0; overflow: hidden;
 }
 .two-pane-find { display: flex; gap: 8px; align-items: center; }
 .two-pane-search {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
-  border: 1px solid var(--line); border-radius: 9px; background: var(--paper); padding: 7px 11px;
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
+  border: 1px solid var(--line); border-radius: var(--ctl-r); background: var(--paper);
+  padding: 0 11px; height: var(--ctl-h); box-sizing: border-box;
 }
-.two-pane-search svg { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--faint); stroke-width: 1.7; stroke-linecap: round; }
+.two-pane-search:focus-within { border-color: var(--amber); box-shadow: var(--ctl-focus); }
+.two-pane-search svg { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--faint); stroke-width: 1.7; stroke-linecap: round; }
 .two-pane-search input { flex: 1; min-width: 0; font: inherit; font-size: 13px; border: 0; background: none; color: var(--text); outline: none; }
 .two-pane-add {
-  flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
-  border: 1px solid var(--line); background: var(--paper); color: var(--muted);
+  flex: none; width: var(--ctl-h); height: var(--ctl-h); border-radius: var(--ctl-r);
+  display: grid; place-items: center;
+  border: 1px solid var(--line); background: var(--paper); color: var(--muted); cursor: pointer;
 }
 .two-pane-add:hover { background: var(--raised); color: var(--text); }
 .two-pane-add svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
@@ -3894,6 +3914,9 @@ details[open] summary { margin-bottom: 8px; }
   font-size: 11px; font-weight: 500; color: var(--faint); padding: 14px 9px 5px; letter-spacing: .04em;
 }
 .two-pane-list > .two-pane-grp:first-child { padding-top: 4px; }
+/* The side's own "nothing here": the prototype states it where the first row
+   would have been, not centred in the column's whole height. */
+.two-pane-list > .empty-note { padding: 12px 9px; text-align: left; font-size: 13px; line-height: 1.6; }
 .two-pane-row { display: flex; align-items: center; gap: 4px; min-width: 0; border-radius: 8px; }
 .two-pane-row:hover { background: var(--surface); }
 .two-pane-row[aria-current="true"] { background: var(--raised); }
@@ -3915,12 +3938,12 @@ details[open] summary { margin-bottom: 8px; }
 }
 .two-pane-off .two-pane-txt .nm { color: var(--muted); }
 .two-pane-row > .two-pane-swi { margin-right: 8px; transform: scale(.88); }
-.two-pane-main { padding: 16px 20px 20px; min-width: 0; min-height: 0; overflow-y: auto; }
-.two-pane-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 15px; }
+.two-pane-main { padding: 17px 20px 20px; min-width: 0; min-height: 0; overflow-y: auto; }
+.two-pane-head { display: flex; align-items: flex-start; gap: 10px; }
 .two-pane-head .ttl { flex: 1; min-width: 0; }
 .two-pane-head .ttl .nm { font-size: 16px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .two-pane-meta {
-  font-size: 12.5px; color: var(--muted); margin-top: 5px;
+  font-size: 13px; color: var(--muted); margin-top: 5px;
   display: flex; flex-wrap: wrap; gap: 4px 9px; align-items: center;
 }
 /* The one fact under the name: a dot and a word. What the row's own second
@@ -3930,9 +3953,21 @@ details[open] summary { margin-bottom: 8px; }
 .two-pane-meta .st.ok { color: var(--moss); }
 .two-pane-meta .st.bad { color: var(--clay); }
 .two-pane-meta .st.warn { color: var(--gold); }
-.two-pane-sec { margin-top: 18px; }
-.two-pane-head + .two-pane-sec { margin-top: 3px; }
-.two-pane-lab { display: flex; align-items: center; gap: 10px; font-size: 13.5px; font-weight: 600; margin-bottom: 8px; }
+.two-pane-sec { margin-top: 19px; }
+.two-pane-lab { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.two-pane-foot { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
+.two-pane-in { display: flex; align-items: center; gap: 9px; }
+.two-pane-foot .two-pane-in { flex-wrap: wrap; gap: 12px; }
+/* A label that names one box rather than a section, and the box it names. */
+.two-pane-tight { margin-top: 14px; }
+.two-pane-lab .two-pane-sub { font-family: var(--mono); font-size: 11px; color: var(--faint); font-weight: 400; }
+.two-pane-lab .two-pane-tag {
+  font-family: var(--mono); font-size: 11px; font-weight: 400; padding: 0 5px; border-radius: 4px;
+  color: var(--moss); border: 1px solid color-mix(in srgb, var(--moss) 38%, transparent);
+}
+.two-pane-box { position: relative; flex: 1; min-width: 0; max-width: 480px; display: flex; }
+.two-pane-box > input, .two-pane-box > textarea { flex: 1; min-width: 0; }
+.two-pane-box > input::placeholder { font-family: var(--sans); }
 .two-pane-sp { flex: 1; }
 /* A credential form in the right column. The sheet it used to be drawn in gave
    it its rhythm (`.sheet > .subody`); here the column does. */
@@ -4024,38 +4059,6 @@ details[open] summary { margin-bottom: 8px; }
    explains both. */
 .mrole .ff .mlend { width: 100%; }
 .mrole .ff .mnote { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
-
-/* cron detail: the job's own page. Cards speak the same language as the
-   list cards (ink ground, 13px radius, soft elevation); the header status
-   line owns the schedule-in-words so the form does not repeat it. */
-.cdstat { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
-.cdstat .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); flex: none; }
-.cdstat .dot.on { background: var(--moss); }
-.cdcard {
-  border: 1px solid var(--line); border-radius: 13px; padding: 18px 20px;
-  background: var(--ink); box-shadow: var(--elev); display: grid; gap: 14px;
-}
-.cdcard + .cdcard { margin-top: 16px; }
-.cdcard > .t { font-size: 13.5px; font-weight: 650; display: flex; align-items: baseline; gap: 8px; }
-.cdcard > .t .n { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--faint); }
-.cdcard > .d { font-size: 11.5px; color: var(--faint); }
-.cdfoot { display: flex; justify-content: flex-end; border-top: 1px solid var(--line-soft); padding-top: 13px; }
-.cdruns { display: grid; min-width: 0; }
-.cdrun {
-  display: flex; align-items: center; gap: 11px; padding: 10px 6px; cursor: pointer;
-  border-top: 1px solid var(--line-soft); font-size: 12.5px; text-align: left;
-  border-radius: 7px; width: 100%; min-width: 0; max-width: 100%;
-  transition: background .12s;
-}
-.cdrun:first-child { border-top: 0; }
-.cdrun:hover { background: var(--surface); }
-.cdrun .st { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-.cdrun .st.ok { background: var(--moss); }
-.cdrun .st.bad { background: var(--clay); }
-.cdrun .at { font-family: var(--mono); font-size: 11.5px; color: var(--text); flex: none; }
-.cdrun .note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); }
-.cdrun .chev { flex: none; color: var(--faint); font-size: 14px; }
-.cdrun:hover .chev { color: var(--text); }
 
 /* theme picker: the option shows the thing it does, in miniature */
 .thpick .pk { padding: 0; overflow: hidden; gap: 0; }
@@ -4192,6 +4195,62 @@ input[type="text"], input[type="password"], select {
 input[type="text"]:focus, input[type="password"]:focus, select:focus {
   border-color: var(--amber); box-shadow: var(--ctl-focus);
 }
+/* The dropdown, page vocabulary rather than any one section's: the native
+   arrow is replaced by one caret so a select reads as the same control as the
+   boxes beside it, at the same height and radius. Two sections styling it for
+   themselves is how it drifted to 12.5px and a 7px radius in the first place. */
+.selw { position: relative; display: inline-block; }
+.sel {
+  font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: var(--ctl-r);
+  background: var(--paper); color: var(--text); padding: 4px 26px 4px 10px;
+  appearance: none; -webkit-appearance: none; cursor: pointer; min-width: 140px;
+  height: var(--ctl-h); box-sizing: border-box;
+}
+.sel:focus { outline: none; border-color: var(--amber); box-shadow: var(--ctl-focus); }
+.selw::after {
+  content: "\2304"; position: absolute; right: 9px; top: 50%; transform: translateY(-60%);
+  color: var(--faint); font-size: 11px; pointer-events: none;
+}
+
+/* The small text vocabulary a settings page reads with, one rule each rather
+   than a copy per section: the mono caption over a block of fields, the grey
+   footnote under one, the fold that keeps a section's optional half closed, the
+   external link, and the amber-ruled how-to that tells a reader what to go and
+   do elsewhere before this form can be filled. */
+.cap2 {
+  font-family: var(--mono); font-size: 11px; color: var(--faint);
+  text-transform: uppercase; letter-spacing: .12em; margin: 18px 0 7px;
+}
+.cap2:first-child { margin-top: 4px; }
+.dnote { color: var(--faint); font-size: 12px; line-height: 1.75; margin: 14px 0 0; max-width: 64ch; }
+.howto {
+  margin: 0 0 20px; padding: 1px 0 1px 15px; border-left: 2px solid var(--amber); max-width: 78ch;
+}
+.howto .cap2 { margin: 0 0 5px; }
+.howto p { margin: 0; font-size: 14px; line-height: 1.75; color: var(--muted); }
+.exlink {
+  display: inline-flex; align-items: center; gap: 5px; margin-top: 9px;
+  font-size: 13px; color: var(--link); text-decoration: none; border-radius: 5px;
+}
+.exlink:hover { text-decoration: underline; }
+.exlink:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+.exlink svg {
+  width: 13px; height: 13px; fill: none; stroke: currentColor;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
+.foldcap {
+  font: inherit; font-size: 13px; color: var(--muted); background: none; border: 0;
+  padding: 3px 0; margin: 0 0 10px; display: inline-flex; align-items: center; gap: 7px;
+  cursor: pointer; border-radius: 6px;
+}
+.foldcap:hover { color: var(--text); }
+.foldcap:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+.foldcap svg {
+  width: 11px; height: 11px; fill: none; stroke: currentColor;
+  stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s ease;
+}
+.foldcap[aria-expanded="true"] svg { transform: rotate(90deg); }
+
 input[type="range"] { accent-color: var(--amber); width: 190px; }
 .val { font-family: var(--mono); font-size: 12px; color: var(--amber); margin-left: 9px;
   font-variant-numeric: tabular-nums; }
@@ -4259,7 +4318,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .two-pane-side > .memnote { margin: -3px 2px 0; }
 .two-pane-side > .hubpage { margin: 4px 0 0; }
 .two-pane-side .errline-lite { margin: 4px 0; }
-.mmeter { width: 76px; height: 4px; border-radius: 999px; background: var(--raised); overflow: hidden; flex: none; }
+.mmeter { display: inline-block; width: 76px; height: 4px; border-radius: 999px; background: var(--raised); overflow: hidden; flex: none; }
 .mmeter i { display: block; height: 100%; background: var(--amber); border-radius: 999px; }
 .memkv {
   border: 1px solid var(--line); border-radius: 12px; background: var(--ink);
@@ -4273,7 +4332,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 }
 .memkv .v { font-size: 13px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
 .memnote { font-size: 11.5px; color: var(--faint); margin-top: 8px; line-height: 1.7; }
-.mempre { font-size: 12.5px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mempre { font-size: 14px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* minmax(0, 1fr), not 1fr: a grid track's automatic minimum is min-content, so
    one long unbroken string in column 1 -- a probe that reported 2000 characters
@@ -4745,15 +4804,14 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   color: var(--muted); font-size: 13.5px;
 }
 .sheet > .subody > * { margin-top: 0; }
-.sheet > .sufoot {
-  flex: none; margin-top: 0; padding: 11px 18px 12px;
-  border-top-color: var(--line-soft); background: var(--surface);
-}
 /* One credential group: its own line, then the boxes under it. */
 .sugroup { display: grid; gap: 9px; }
 .sufields { display: grid; gap: 12px; }
 .sufields > .sufield { margin-top: 0; }
-
+.sheet > .sufoot {
+  flex: none; margin-top: 0; padding: 11px 18px 12px;
+  border-top-color: var(--line-soft); background: var(--surface);
+}
 /* The close control on a set-up card. The card covers the page, so unlike a
    page it has to hand back what it covers. */
 .suclose { flex: none; padding: 2px 8px; line-height: 1.1; }
@@ -4809,21 +4867,6 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .qrshot img { width: 152px; height: 152px; image-rendering: pixelated; }
 .qrsay { font-size: 12.5px; color: var(--muted); text-align: center; max-width: 30ch; }
 .qrsay.ok { color: var(--moss); }
-/* job-sheet form fields */
-.ff { display: grid; gap: 6px; }
-.ff + .ff { margin-top: 16px; }
-.ff > label { font-size: 12.5px; font-weight: 600; color: var(--text); }
-.ff .hint { font-size: 11.5px; color: var(--muted); }
-/* A refused save: the reason is the hint, in the palette's own warning colour
-   rather than a new one -- the theme already carries it for both schemes. */
-.ff:has([data-bad]) .hint { color: var(--amber); }
-/* Both shapes the mark takes: on a wrapper, where the schedule row puts it
-   because the complaint is about the row as a whole, and on the control itself,
-   where a per-field complaint puts it. A descendant combinator alone matched
-   only the first, so the marked field was the one that did not look marked. */
-.ff [data-bad] input, .ff [data-bad] select, .ff [data-bad] textarea,
-.ff input[data-bad], .ff select[data-bad], .ff textarea[data-bad] { border-color: var(--amber); }
-.ff input[type="text"] { width: 100%; }
 .btn { border: 1px solid var(--line); border-radius: 7px; padding: 7px 15px; font-size: 13px; }
 .btn:hover { border-color: var(--faint); }
 .btn.key { background: var(--text); border-color: var(--text); font-weight: 600; color: var(--ink); }
@@ -4872,6 +4915,12 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   border-radius: 8px; font-size: 13px; color: var(--text); gap: 8px; }
 .menu button:hover { background: color-mix(in oklab, var(--text) 7%, transparent); }
 .menu button.bad { color: var(--clay); }
+/* A menu of choices rather than actions: the one in force is ticked, in the
+   gutter the other rows leave empty, so the rows still line up. */
+.menu button[role="menuitemradio"] { padding-left: 26px; position: relative; }
+.menu button[aria-checked="true"]::before {
+  content: "\2713"; position: absolute; left: 10px; color: var(--amber); font-size: 11px;
+}
 .menu hr { border: 0; border-top: 1px solid color-mix(in oklab, var(--line) 70%, transparent);
   margin: 5px 8px; }
 
@@ -5173,10 +5222,21 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-tabs button .lb { display: none; font-weight: 600; }
 .desk-tabs button[aria-selected="true"] .lb { display: inline; }
 .desk-body { flex: 1; min-height: 0; overflow: auto; padding: 5px 0; }
-.desk-resize { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px;
-  cursor: nwse-resize; touch-action: none; }
-.desk-resize::after { content: ''; position: absolute; right: 4px; bottom: 4px; width: 9px; height: 9px;
+/* The size handle sits on whichever edge is FREE, which anchored is the left
+   one: the right edge is pinned under the launcher and hard against the
+   window's own gutter, so a corner there is both the hardest place on screen
+   to grab and backwards to pull -- the hand goes left to make the panel
+   bigger. Detached pins the left edge instead, and the handle goes back to the
+   right. The drag reads the same either way (DeskPalette.tsx's `resize`
+   already takes the pinned edge into account). */
+.desk-resize { position: absolute; left: 0; bottom: 0; width: 18px; height: 18px;
+  cursor: nesw-resize; touch-action: none; }
+.desk-resize::after { content: ''; position: absolute; left: 4px; bottom: 4px; width: 9px; height: 9px;
   opacity: .55; pointer-events: none;
+  background: linear-gradient(45deg, transparent 48%, var(--faint) 50%, var(--faint) 57%, transparent 59%, transparent 70%, var(--faint) 72%, var(--faint) 79%, transparent 81%); }
+.desk-palette:not([data-anchored="true"]) .desk-resize { left: auto; right: 0; cursor: nwse-resize; }
+.desk-palette:not([data-anchored="true"]) .desk-resize::after {
+  left: auto; right: 4px;
   background: linear-gradient(135deg, transparent 48%, var(--faint) 50%, var(--faint) 57%, transparent 59%, transparent 70%, var(--faint) 72%, var(--faint) 79%, transparent 81%); }
 .desk-list { display: flex; flex-direction: column; gap: 1px; }
 .desk-row { min-width: 0; width: 100%; height: 30px; display: flex; align-items: center; gap: 8px;
@@ -5196,22 +5256,12 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-diff-row .desk-name { font: 11px/1.4 var(--mono); }
 .desk-diff-row .chgs { font-size: 10.5px; }
 /* One empty state, whichever tab is showing: the tab's icon, what is not here,
-   and where it would come from. Centred in the body rather than sitting at the
-   top of it -- an empty tab is a state, not a first row. */
+   and nothing else. Centred in the body rather than sitting at the top of it --
+   an empty tab is a state, not a first row. */
 .desk-empty { display: grid; align-content: center; justify-items: center; gap: 5px; height: 100%;
   padding: 12px 22px; text-align: center; color: var(--faint); font-size: 12px; }
 .desk-empty svg { width: 30px; height: 30px; color: var(--line); stroke-linecap: round; }
 .desk-empty b { color: var(--text); font: 600 12px var(--sans); }
-.desk-empty span { font-size: 11px; }
-/* The way out of an empty tab, when the thing the reader is looking for is on
-   another one. A link rather than a button face: it is a change of view, not an
-   action on anything, and a filled control in the middle of a "nothing here"
-   panel reads as the more important half of the screen. Margin above so it is
-   not mistaken for a third line of the sentence it follows. */
-.desk-empty-to { margin-top: 5px; padding: 3px 7px; border: 0; border-radius: 6px;
-  background: transparent; color: var(--text); font: 600 11px var(--sans); cursor: pointer;
-  text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--line); }
-.desk-empty-to:hover { background: var(--surface); text-decoration-color: currentColor; }
 
 /* The deliverables shelf. Two lines per row, because one product out of a turn
    reads as a human title and the file it landed as, and at this width they do

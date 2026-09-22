@@ -44,6 +44,34 @@ export function fmtEvery(ms: number): string {
   return t('gui.dur.s', { n: Math.round(ms / 1000) })
 }
 
+/* A five-field expression read back as the frequency that wrote it.
+ *
+ * Every schedule but "every N hours" and "once" is stored as a cron job, so
+ * the editor sent `30 9 * * 3` for "every Wednesday 09:30" and got a row back
+ * saying `cron`: reopening the job showed a raw expression in a box nobody had
+ * asked to see, and saving from there rewrote a weekly job as a custom one.
+ * The three shapes the editor can write are the three read back here, and
+ * anything else is genuinely custom. */
+type ExprShape = { freq: CronJob['freq']; at: string; wd?: number; dom?: number }
+
+export function exprShape(expr: string): ExprShape {
+  const text = String(expr || '')
+  const p = text.trim().split(/\s+/)
+  const raw: ExprShape = { freq: 'cron', at: text }
+  if (p.length !== 5) return raw
+  const [m, h, dom, mon, dow] = p as [string, string, string, string, string]
+  if (mon !== '*' || !/^\d{1,2}$/.test(m) || !/^\d{1,2}$/.test(h)) return raw
+  const min = Number(m), hr = Number(h)
+  if (min > 59 || hr > 23) return raw
+  const at = `${fmt2(hr)}:${fmt2(min)}`
+  if (dom === '*' && dow === '*') return { freq: 'day', at }
+  if (dom === '*' && /^[0-6]$/.test(dow)) return { freq: 'week', at, wd: Number(dow) }
+  if (dow === '*' && /^\d{1,2}$/.test(dom) && Number(dom) >= 1 && Number(dom) <= 31) {
+    return { freq: 'month', at, dom: Number(dom) }
+  }
+  return raw
+}
+
 export function cronToRow(j: CronJobWire): CronJob {
   const when = j.kind === 'cron' ? cronExprHuman(j.expr as string)
     : j.kind === 'every' ? t('gui.cron.every', { every: fmtEvery(j.every_ms as number) })
@@ -62,9 +90,12 @@ export function cronToRow(j: CronJobWire): CronJob {
      instant it is converting. */
   const local = j.kind === 'at' && j.at_ms
     ? new Date(j.at_ms - new Date(j.at_ms).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''
+  const shape = j.kind === 'cron' ? exprShape(j.expr as string) : null
   return { id: j.id, name: j.name, on: j.enabled, what: j.message,
-    freq: j.kind === 'cron' ? 'cron' : j.kind === 'every' ? 'hour' : 'once',
-    at: j.kind === 'cron' ? (j.expr as string) : '', at_local: local,
+    freq: shape ? shape.freq : j.kind === 'every' ? 'hour' : 'once',
+    at: shape ? shape.at : '', at_local: local,
+    ...(shape && shape.wd !== undefined ? { wd: shape.wd } : {}),
+    ...(shape && shape.dom !== undefined ? { dom: shape.dom } : {}),
     when, next: j.enabled ? fmtStamp(j.next_run_at_ms) : t('gui.cron.paused'),
     deliver: 'app', runs, kind: j.kind, every_ms: j.every_ms, at_ms: j.at_ms, tzv: j.tz }
 }
@@ -90,6 +121,11 @@ export function jobToSave(j: CronDraft): CronSaveParams {
     const wd = Number(j.wd)
     if (!Number.isInteger(wd) || wd < 0 || wd > 6) throw new Error('bad weekday')
     return { ...base, kind: 'cron', expr: `${m} ${h} * * ${wd}` }
+  }
+  if (j.freq === 'month') {
+    const dom = Number(j.dom)
+    if (!Number.isInteger(dom) || dom < 1 || dom > 31) throw new Error('bad dom')
+    return { ...base, kind: 'cron', expr: `${m} ${h} ${dom} * *` }
   }
   return { ...base, kind: 'cron', expr: `${m} ${h} * * *` }
 }

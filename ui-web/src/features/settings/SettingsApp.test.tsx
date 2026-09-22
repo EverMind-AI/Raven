@@ -77,7 +77,12 @@ describe('settings root', () => {
     await mount('general')
     for (const id of ['usage', 'provider', 'model', 'skills', 'tools', 'plugins', 'archive', 'about'] as const) {
       await act(async () => { store.setTab(id) })
-      expect(document.querySelector(`.settings-panel[data-section="${id}"] .settings-card`), id).toBeTruthy()
+      /* A card or a flat labelled block: the provider pane is the prototype's
+         own flat sections, and every other section is still cards. */
+      expect(
+        document.querySelector(`.settings-panel[data-section="${id}"] .settings-card, .settings-panel[data-section="${id}"] .settings-sec`),
+        id,
+      ).toBeTruthy()
     }
   })
 

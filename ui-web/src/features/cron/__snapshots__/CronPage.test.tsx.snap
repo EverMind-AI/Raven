@@ -28,39 +28,82 @@ exports[`cron island > keeps its rendered shape, job page 1`] = `
           span
           span.st.ok
       button.two-pane-swi
-      button.mini.ghost
-    div.ff
-      label
-      input
-    div.ff
-      label
-      textarea
-    div.ff
-      label
-      div
-        div.seg
-          button
-          button
-          button
-          button
-          button
-        input
-    div.ff
-      label
-      div.sustate
-        span
-        span.x
-        span.a
-          button.mini.ghost
-    div.sufoot
-      span.n
-      button.mini.key
     div.two-pane-sec
       div.two-pane-lab
         span.two-pane-sp
+      input.cronname
+    div.two-pane-sec
+      div.two-pane-lab
+        span.two-pane-sp
+      div.cronwhen
+        span.selw
+          select.sel
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+        span.selw
+          select.sel
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+        span.selw
+          select.sel
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+            option
+    div.two-pane-sec
+      div.two-pane-lab
+        span.two-pane-sp
+      textarea.cronsay
+    div.two-pane-sec
+      div.two-pane-lab
+        span.two-pane-sp
+      div.cronruns
+        div.dnote
+    div.two-pane-foot
+      div.two-pane-in
         button.mini
-      div.cdruns
-        div.empty-note"
+        button.mini.ghost
+        span.two-pane-sp
+        button.mini.ghost.danger"
 `;
 
 exports[`cron island > keeps its rendered shape, list 1`] = `

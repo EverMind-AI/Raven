@@ -226,7 +226,6 @@ div#setVeil.veil.setveil[data-open=false][data-section=usage]
             div.two-pane-none
       div#cronBody.spanels[data-for=cron]
       div#memoryBody.spanels[data-for=memory]
-div#jobVeil.veil[data-open=false]
 div#veil.veil[data-open=false]
   div.sheet
     header#cfTitle

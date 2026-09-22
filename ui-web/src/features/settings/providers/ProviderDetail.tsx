@@ -6,16 +6,28 @@ import { useState } from 'react'
 import { KeyInput } from '../../../components/KeyInput'
 import { ProviderIcon } from '../../../components/ProviderMark'
 import { t } from '../../../i18n/t'
-import { Card, IconBtn, KeyLink, Row, Rov, Tag } from '../Fields'
+import { Fold, IconBtn, Rov, Sec } from '../Fields'
 import * as store from '../store'
 import { AddModelPop } from './AddModelPop'
-import { AZURE, OauthNote, kindLabel, kindOf, needsKey, takesBase, takesKey } from './Providers'
+import { AZURE, OauthNote, kindOf, needsKey, takesBase, takesKey } from './Providers'
 import { roleName, rolesUsing } from './Roles'
 
 import type { ProviderRow } from '../types'
 import type { JSX } from 'react'
 
 const busy = (slug: string): string => `prov:${slug}`
+
+/* Where the key comes from, named. A bare arrow beside "API key" does not say
+   that what it opens is the page that issues one. */
+function KeyGet({ url }: { url?: string | null }): JSX.Element | null {
+  if (!url) return null
+  return (
+    <a className="exlink" href={url} target="_blank" rel="noopener">
+      {t('gui.settings.get_key')}
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8" /></svg>
+    </a>
+  )
+}
 
 /* The address a provider is reached at, wherever it is drawn.
  *
@@ -26,7 +38,14 @@ const busy = (slug: string): string => `prov:${slug}`
  * Both need the same control, and the same way back: a reset appears once the
  * value differs from what the registry ships, because an address typed by hand
  * is not one you can retype from memory. */
-function AddressRow({ p, sub, placeholder }: { p: ProviderRow; sub?: string; placeholder: string }): JSX.Element {
+function AddressRow({ p, label, sub, placeholder }: {
+  p: ProviderRow
+  /* An aggregator's is the API address; an override of a direct vendor's own is
+     its service address. Same control, two things to call it. */
+  label?: string
+  sub?: string
+  placeholder: string
+}): JSX.Element {
   const [base, setBase] = useState(p.apiBase || '')
   const write = (value: string): void => {
     void store.run(busy(p.id), () => store.source().setFields(p.id, { api_base: value }))
@@ -39,7 +58,7 @@ function AddressRow({ p, sub, placeholder }: { p: ProviderRow; sub?: string; pla
   const shipped = p.defaultApiBase || ''
   const resettable = !!shipped && (p.apiBase || '') !== '' && (p.apiBase || '') !== shipped
   return (
-    <Row label={t('gui.settings.providers.base')} sub={sub}>
+    <Sec label={label ?? t('gui.settings.providers.base')} sub={sub} tight>
       <span className="settings-taglist">
         <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder={placeholder}
           onChange={(e) => setBase(e.currentTarget.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') commit() }} />
@@ -50,7 +69,7 @@ function AddressRow({ p, sub, placeholder }: { p: ProviderRow; sub?: string; pla
           </button>
         )}
       </span>
-    </Row>
+    </Sec>
   )
 }
 
@@ -58,11 +77,6 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
   const [key, setKey] = useState('')
   const [base, setBase] = useState(p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || '')
   const kind = kindOf(p)
-  const disconnect = (): void => {
-    const used = rolesUsing(store.get().snap, p.id)
-    if (used.length) { store.refuse(t('gui.settings.providers.in_use', { roles: used.map(roleName).join(', ') })); return }
-    void store.run(busy(p.id), () => store.source().provider('disconnect', { slug: p.id }))
-  }
   const save = (): void => {
     const k = key.trim()
     const b = base.trim()
@@ -74,67 +88,57 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
     void store.run(busy(p.id), () => store.source().provider('save_key', params)).then((ok) => { if (ok) setKey('') })
   }
   const btn = p.on ? t('gui.settings.update') : t('gui.settings.providers.connect')
-  const off = p.on && (
-    <button type="button" className="mini ghost" onClick={disconnect}>
-      {t(kind === 'oauth' ? 'gui.settings.providers.disconnect_auth'
-        : kind === 'local' ? 'gui.settings.providers.disconnect_local'
-        : 'gui.settings.providers.disconnect_key')}
-    </button>
-  )
   return (
-    <Card title={t('gui.settings.providers.connection')}>
+    <>
       {kind === 'oauth' && (
         <>
-          <Row label={t('gui.settings.providers.account')}>
+          <Sec label={t('gui.settings.providers.account')}>
             <span className="settings-taglist">
               {p.on && <Rov>{t('gui.settings.providers.authorized')}</Rov>}
               <button type="button" className={p.on ? 'mini ghost' : 'mini'} onClick={() => void store.oauthStart(p.id)}>
                 {p.on ? t('gui.settings.providers.reauth') : t('gui.settings.providers.auth_browser')}
               </button>
-              {off}
-              <OauthNote slug={p.id} />
+                <OauthNote slug={p.id} />
             </span>
-          </Row>
-          <Row label={t('gui.settings.providers.billing')}><Rov>{t('gui.settings.providers.subscription')}</Rov></Row>
+          </Sec>
+          <Sec label={t('gui.settings.providers.billing')}><Rov>{t('gui.settings.providers.subscription')}</Rov></Sec>
         </>
       )}
       {kind !== 'oauth' && !needsKey(p) && takesBase(p) && (
-        <Row stack label={t('gui.settings.providers.base')}>
+        <Sec label={t('gui.settings.providers.base')}>
           <span className="settings-taglist">
             <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder="http://localhost:11434"
               onChange={(e) => setBase(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
             <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>
-            {off}
           </span>
-        </Row>
+        </Sec>
       )}
       {kind !== 'oauth' && takesKey(p) && (
-        <Row stack label={<>{t(needsKey(p) ? 'gui.settings.providers.api_key' : 'gui.settings.providers.api_key_optional')}<KeyLink url={p.keyUrl} /></>}>
+        <Sec label={<>{t(needsKey(p) ? 'gui.settings.providers.api_key' : 'gui.settings.providers.api_key_optional')}<KeyGet url={p.keyUrl} /></>}>
           <span className="settings-taglist">
             <KeyInput className="settings-tbox" value={key} aria-label={t('gui.settings.providers.api_key')}
               placeholder={p.on ? t('gui.settings.key_set_ph') : t('gui.settings.providers.paste_key')}
               onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
             {needsKey(p) && <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>}
             {!needsKey(p) && <button type="button" className="mini ghost" disabled={store.isBusy(busy(p.id))} onClick={save}>{t('gui.settings.update')}</button>}
-            {needsKey(p) && off}
           </span>
-        </Row>
+        </Sec>
       )}
       {kind !== 'oauth' && !takesKey(p) && (
-        <Row stack label={t('gui.settings.providers.base')}>
+        <Sec label={t('gui.settings.providers.base')}>
           <span className="settings-taglist">
             <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder="http://localhost:11434"
               onChange={(e) => setBase(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
             <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>
-            {off}
           </span>
-        </Row>
+        </Sec>
       )}
       {kind !== 'oauth' && needsKey(p) && (takesBase(p) || p.gateway || p.kind === 'endpoint') && (
-        <AddressRow p={p} placeholder={p.needsBase ? 'https://' : (p.defaultApiBase || t('gui.settings.providers.base_default'))} />
+        <AddressRow p={p} label={t('gui.settings.providers.api_base')}
+          placeholder={p.needsBase ? 'https://' : (p.defaultApiBase || t('gui.settings.providers.base_default'))} />
       )}
       {p.id === AZURE && <AzureFields p={p} />}
-    </Card>
+    </>
   )
 }
 
@@ -156,14 +160,14 @@ function AzureFields({ p }: { p: ProviderRow }): JSX.Element {
   const write = (fields: Record<string, string>): void => { void store.run(busy(p.id), () => store.source().setFields(p.id, fields)) }
   return (
     <>
-      <Row label={t('gui.settings.providers.deployment')}>
+      <Sec label={t('gui.settings.providers.deployment')} tight>
         <input className="settings-tbox" value={deploy} aria-label={t('gui.settings.providers.deployment')} placeholder={t('gui.settings.providers.deployment_ph')}
           onChange={(e) => setDeploy(e.currentTarget.value)} onBlur={() => { if (deploy.trim() && deploy.trim() !== rawStr(store.get().snap.raw, p.id, 'deployment')) write({ deployment: deploy.trim() }) }} />
-      </Row>
-      <Row label={t('gui.settings.providers.api_version')}>
+      </Sec>
+      <Sec label={t('gui.settings.providers.api_version')} tight>
         <input className="settings-tbox" value={ver} aria-label={t('gui.settings.providers.api_version')} placeholder="2024-10-21"
           onChange={(e) => setVer(e.currentTarget.value)} onBlur={() => { if (ver.trim() && ver.trim() !== rawStr(store.get().snap.raw, p.id, 'apiVersion')) write({ api_version: ver.trim() }) }} />
-      </Row>
+      </Sec>
     </>
   )
 }
@@ -178,25 +182,24 @@ function Models({ p }: { p: ProviderRow }): JSX.Element {
     void store.run(busy(p.id), () => store.source().provider('remove_model', { slug: p.id, model: m }))
   }
   return (
-    <Card title={t('gui.settings.providers.models')} raw
+    <Sec
+      label={t('gui.settings.providers.models')}
       act={
         <button type="button" className="mini ghost" data-addmodel={p.id} aria-expanded={open}
           onClick={() => { if (open) store.set({ sheet: null }); else void store.sheetOpen(p.id) }}>
           {t('gui.settings.providers.add_model')}
         </button>
       }>
-      <div className="settings-rows">
-        <Row stack label={t('gui.settings.providers.models_listed')}>
-          <span className="settings-taglist">
-            {listed.map((m) => (
-              <span key={m} className="settings-tag2">{m}<span className="settings-x" role="button" aria-label={t('gui.settings.providers.remove_model', { model: m })} onClick={() => remove(m)}>{'\u00d7'}</span></span>
-            ))}
-            {!listed.length && <span className="settings-rov" style={{ fontSize: 12 }}>{t('gui.settings.providers.no_models_yet')}</span>}
-          </span>
-        </Row>
-      </div>
+      {/* The chips are the list -- a second heading over them ("models
+          available") said what the section's own label already says. */}
+      <span className="settings-taglist">
+        {listed.map((m) => (
+          <span key={m} className="settings-tag2">{m}<span className="settings-x" role="button" aria-label={t('gui.settings.providers.remove_model', { model: m })} onClick={() => remove(m)}>{'\u00d7'}</span></span>
+        ))}
+        {!listed.length && <span className="settings-tp-empty">{t('gui.settings.providers.no_models_yet')}</span>}
+      </span>
       {open && <AddModelPop p={p} />}
-    </Card>
+    </Sec>
   )
 }
 
@@ -262,12 +265,13 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
     void store.run(busy(p.id), () => store.source().provider('add_model', { slug: p.id, model, label: '', description: '' }))
   }
   return (
-    <Card title={t('gui.settings.providers.advanced')}>
+    <Fold open={s.adv === p.id} label={t('gui.settings.providers.advanced')}
+      onToggle={() => store.set({ adv: s.adv === p.id ? null : p.id })}>
       {showBase && (
         <AddressRow p={p} sub={t('gui.settings.providers.base_override')}
           placeholder={p.defaultApiBase || t('gui.settings.providers.base_default')} />
       )}
-      <Row stack label={t('gui.settings.providers.headers')}>
+      <Sec label={t('gui.settings.providers.headers')} tight>
         <div style={{ width: '100%' }}>
           {headers.length > 0 && (
             <div className="settings-kvlist">
@@ -290,8 +294,8 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
             </button>
           )}
         </div>
-      </Row>
-      <Row stack label={t('gui.settings.providers.display_names')}>
+      </Sec>
+      <Sec label={t('gui.settings.providers.display_names')} tight>
         <div style={{ width: '100%' }}>
           {overlays.length > 0 && (
             <div className="settings-kvlist">
@@ -319,8 +323,8 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
             </button>
           )}
         </div>
-      </Row>
-    </Card>
+      </Sec>
+    </Fold>
   )
 }
 
@@ -338,11 +342,28 @@ function Head({ p }: { p: ProviderRow }): JSX.Element {
       <div className="settings-tp-ttl">
         <div className="settings-tp-name">
           {p.name}
-          {link ? <a className="settings-exlink" href={link} target="_blank" rel="noopener" aria-label={p.name}>{'\u2197'}</a> : null}
-          <Tag>{kindLabel(p)}</Tag>
+          {link ? <a className="exlink" href={link} target="_blank" rel="noopener" aria-label={p.name}>{'\u2197'}</a> : null}
         </div>
         <div className={p.on ? 'settings-tp-state settings-tp-live' : 'settings-tp-state'}>{state}</div>
       </div>
+    </div>
+  )
+}
+
+function Foot({ p }: { p: ProviderRow }): JSX.Element {
+  const kind = kindOf(p)
+  const disconnect = (): void => {
+    const used = rolesUsing(store.get().snap, p.id)
+    if (used.length) { store.refuse(t('gui.settings.providers.in_use', { roles: used.map(roleName).join(', ') })); return }
+    void store.run(busy(p.id), () => store.source().provider('disconnect', { slug: p.id }))
+  }
+  return (
+    <div className="settings-tp-foot">
+      <button type="button" className="mini ghost danger" onClick={disconnect}>
+        {t(kind === 'oauth' ? 'gui.settings.providers.disconnect_auth'
+          : kind === 'local' ? 'gui.settings.providers.disconnect_local'
+          : 'gui.settings.providers.disconnect_key')}
+      </button>
     </div>
   )
 }
@@ -359,6 +380,10 @@ export function ProviderDetail({ slug }: { slug: string }): JSX.Element | null {
       <Connection p={p} />
       <Models p={p} />
       {kindOf(p) !== 'oauth' && <Advanced p={p} />}
+      {/* Taking an account back out is not one of the fields: it stands at the
+          foot under a hairline, the way every other pane in this dialog puts
+          its one destructive verb. */}
+      {p.on && <Foot p={p} />}
     </div>
   )
 }

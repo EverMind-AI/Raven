@@ -83,8 +83,8 @@ function AddBlock({ slug, hideCancel }: { slug: string; hideCancel?: boolean }):
   return (
     <div className="settings-cfg settings-padd">
       <Row label={t('gui.settings.providers.vendor')}>
-        <span className="settings-selw">
-          <select className="settings-sel" value={p.id} aria-label={t('gui.settings.providers.vendor')}
+        <span className="selw">
+          <select className="sel" value={p.id} aria-label={t('gui.settings.providers.vendor')}
             onChange={(e) => { store.set({ provAdd: e.currentTarget.value }); setKey(''); const n = rows.find((x) => x.id === e.currentTarget.value); setBase(n ? (n.apiBase || n.defaultApiBase || '') : '') }}>
             {GROUPS.map(([kind, label]) => {
               const group = rows.filter((x) => groupOf(x) === kind)

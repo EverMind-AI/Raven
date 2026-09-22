@@ -25,6 +25,10 @@ export interface MenuItem {
   label: string
   fn: () => void
   bad?: boolean
+  /* A menu of exclusive choices, one of which is in force: the rows carry
+     `aria-checked` and the one in force is ticked. Absent on an ordinary row,
+     which is an action rather than a choice. */
+  on?: boolean
 }
 
 export interface MenuState {

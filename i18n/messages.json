@@ -1576,16 +1576,16 @@
       "zh": "搜索任务…"
     },
     "gui.cron.f_none": {
-      "en": "Nothing under this filter.",
-      "zh": "这个筛选下没有任务。"
+      "en": "No schedule matches.",
+      "zh": "没有匹配的任务"
     },
     "gui.cron.tab_cfg": {
       "en": "Configuration",
       "zh": "配置"
     },
     "gui.cron.tab_runs": {
-      "en": "Runs",
-      "zh": "运行记录"
+      "en": "Recent runs",
+      "zh": "最近运行"
     },
     "gui.cron.duplicate": {
       "en": "Duplicate as a new job",
@@ -1660,12 +1660,12 @@
       "zh": "下次 {next}"
     },
     "gui.cron.none": {
-      "en": "No schedules yet. Say \"every morning at 8...\" in a conversation, or add one here.",
-      "zh": "还没有定时任务。在对话里说「每天早上八点……」，或在这里新建。"
+      "en": "No schedules yet. Say \"every morning at 8...\" in a conversation and one is made, or add one here.",
+      "zh": "还没有定时任务。在对话里说「每天早上八点……」就会建一条，也可以在这里新建。"
     },
     "gui.cron.ok": {
-      "en": "ok",
-      "zh": "成功"
+      "en": "Done",
+      "zh": "完成"
     },
     "gui.cron.once": {
       "en": "once at {at}",
@@ -1676,8 +1676,8 @@
       "zh": "打开它的会话"
     },
     "gui.cron.paused": {
-      "en": "Paused",
-      "zh": "已暂停"
+      "en": "Off",
+      "zh": "已停用"
     },
     "gui.cron.paused_meta": {
       "en": "{when} - paused",
@@ -1696,8 +1696,12 @@
       "zh": "已恢复「{name}」"
     },
     "gui.cron.run_now": {
-      "en": "Run once now",
-      "zh": "立即运行一次"
+      "en": "Run now",
+      "zh": "立即运行"
+    },
+    "gui.cron.runs_n": {
+      "en": "{n} in all",
+      "zh": "共 {n} 次"
     },
     "gui.cron.running_x": {
       "en": "running \"{name}\" now",
@@ -1717,7 +1721,7 @@
     },
     "gui.cron_new": {
       "en": "New schedule",
-      "zh": "新建定时任务"
+      "zh": "新建任务"
     },
     "gui.ctx.label": {
       "en": "context {pct}%",
@@ -2018,6 +2022,54 @@
     "gui.freq.week": {
       "en": "Weekly",
       "zh": "每周"
+    },
+    "gui.freq.month": {
+      "en": "Monthly",
+      "zh": "每月"
+    },
+    "gui.cron.h.monthly": {
+      "en": "Day {d} of each month, {hm}",
+      "zh": "每月 {d} 日 {hm}"
+    },
+    "gui.cron.create": {
+      "en": "Create",
+      "zh": "创建"
+    },
+    "gui.cron.no_time": {
+      "en": "no time picked yet",
+      "zh": "还没选时间"
+    },
+    "gui.cron.u_hour": {
+      "en": "{n}h",
+      "zh": "{n} 时"
+    },
+    "gui.cron.u_min": {
+      "en": "{n}m",
+      "zh": "{n} 分"
+    },
+    "gui.cron.u_dom": {
+      "en": "{n}",
+      "zh": "{n} 日"
+    },
+    "gui.cron.src_chat": {
+      "en": "created in a conversation",
+      "zh": "对话创建"
+    },
+    "gui.cron.src_hand": {
+      "en": "created here",
+      "zh": "手动创建"
+    },
+    "gui.cron.open_sess": {
+      "en": "Open its conversation",
+      "zh": "打开会话"
+    },
+    "gui.cron.expr_lab": {
+      "en": "Expression",
+      "zh": "表达式"
+    },
+    "gui.job.bad_dom": {
+      "en": "Pick a day of the month.",
+      "zh": "选一个日期。"
     },
     "gui.grp.hide": {
       "en": "Hide",
@@ -2428,32 +2480,32 @@
       "zh": "编辑定时任务"
     },
     "gui.job.freq": {
-      "en": "How often",
-      "zh": "多久跑一次"
+      "en": "Frequency",
+      "zh": "频率"
     },
     "gui.job.name": {
       "en": "Name",
       "zh": "名称"
     },
     "gui.job.name_ph": {
-      "en": "e.g. Yesterday's error digest",
-      "zh": "例如 昨日错误日志汇总"
+      "en": "Give this schedule a name",
+      "zh": "给这条任务起个名字"
     },
     "gui.job.need_fields": {
       "en": "Name and what-to-do are both required.",
       "zh": "名称和要做什么都得填"
     },
     "gui.job.need_instant": {
-      "en": "Pick the date and time it should run",
-      "zh": "选一个运行的日期和时间"
+      "en": "A one-off has to be set in the future",
+      "zh": "一次性任务的时间得在将来"
     },
     "gui.job.need_name": {
-      "en": "Give it a name",
-      "zh": "起个名称"
+      "en": "Give it a name first",
+      "zh": "先给任务起个名"
     },
     "gui.job.need_what": {
-      "en": "Say what it should do",
-      "zh": "写清楚要做什么"
+      "en": "The instruction cannot be empty",
+      "zh": "指令不能为空"
     },
     "gui.job.run_once": {
       "en": "Run it now",
@@ -2464,12 +2516,12 @@
       "zh": "已保存「{name}」"
     },
     "gui.job.what": {
-      "en": "What to do",
-      "zh": "要做什么"
+      "en": "Instruction",
+      "zh": "指令"
     },
     "gui.job.what_ph": {
-      "en": "Write it the way you would brief a colleague: what to do, and what shape the result should take.",
-      "zh": "像交代给同事一样写清楚要做什么，以及你想要什么形式的结果。"
+      "en": "What to send Raven when it fires - write it the way you would say it",
+      "zh": "到点发给 Raven 的话，像平时对话一样写"
     },
     "gui.live.busy": {
       "en": "working · {t}",
@@ -4572,24 +4624,8 @@
       "zh": "产物"
     },
     "gui.ws.dlv_none": {
-      "en": "Nothing delivered yet",
-      "zh": "这个会话还没有交付产物"
-    },
-    "gui.ws.dlv_none_sub": {
-      "en": "Files Raven hands over show up here",
-      "zh": "Raven 交付的文件会出现在这里"
-    },
-    "gui.ws.dlv_none_kept": {
-      "en": "Raven changed a file but did not hand it over.",
-      "zh": "Raven 改动了一个文件，但没有交付。"
-    },
-    "gui.ws.n.dlv_none_kept": {
-      "en": "Raven changed {n} files but handed none over.",
-      "zh": "Raven 改动了 {n} 个文件，但都没有交付。"
-    },
-    "gui.ws.see_changes": {
-      "en": "Show what changed",
-      "zh": "查看改动的文件"
+      "en": "Nothing produced yet",
+      "zh": "还没有产物"
     },
     "gui.ws.dlv_turn": {
       "en": "turn {n}",
@@ -4608,24 +4644,8 @@
       "zh": "{n} 行"
     },
     "gui.ws.no_changes": {
-      "en": "No changes yet",
-      "zh": "还没有变更"
-    },
-    "gui.ws.no_changes_sub": {
-      "en": "Files this session edits show up here",
-      "zh": "这个会话改动的文件会出现在这里"
-    },
-    "gui.ws.no_changes_dlv": {
-      "en": "Nothing was edited, but a file was handed over.",
-      "zh": "没有改动文件，但交付了一个产物。"
-    },
-    "gui.ws.n.no_changes_dlv": {
-      "en": "Nothing was edited, but {n} files were handed over.",
-      "zh": "没有改动文件，但交付了 {n} 个产物。"
-    },
-    "gui.ws.see_delivered": {
-      "en": "Show what was delivered",
-      "zh": "查看交付的产物"
+      "en": "No changes this turn",
+      "zh": "这轮没有改动"
     },
     "gui.ws.no_web": {
       "en": "No pages yet",
@@ -6512,16 +6532,16 @@
       "zh": "复制路径"
     },
     "gui.settings.get_key": {
-      "en": "Get an API key",
-      "zh": "获取 API Key"
+      "en": "Get a key",
+      "zh": "获取密钥"
     },
     "gui.settings.key_ph": {
       "en": "API Key",
       "zh": "API Key"
     },
     "gui.settings.key_set_ph": {
-      "en": "Set; paste to replace",
-      "zh": "已设置，填入以替换"
+      "en": "a new key here replaces it",
+      "zh": "填入新的密钥才会覆盖"
     },
     "gui.settings.less": {
       "en": "Less",
@@ -6852,8 +6872,8 @@
       "zh": "代码在授权完成前过期了，请重新开始。"
     },
     "gui.settings.providers.api_key": {
-      "en": "API Key",
-      "zh": "API Key"
+      "en": "API key",
+      "zh": "API 密钥"
     },
     "gui.settings.providers.paste_key": {
       "en": "Paste an API key",
@@ -6870,6 +6890,10 @@
     "gui.settings.providers.base": {
       "en": "Service address",
       "zh": "服务地址"
+    },
+    "gui.settings.providers.api_base": {
+      "en": "API address",
+      "zh": "API 地址"
     },
     "gui.settings.providers.base_default": {
       "en": "Default",
@@ -6952,8 +6976,8 @@
       "zh": "可选用的模型"
     },
     "gui.settings.providers.no_models_yet": {
-      "en": "None added yet",
-      "zh": "还没有添加"
+      "en": "No models yet. Use \"Add model\" to pick from this vendor's list, or type an id.",
+      "zh": "还没有模型。点「添加模型」从这家的列表里挑，或者直接填一个 id。"
     },
     "gui.settings.providers.remove_model": {
       "en": "Remove {model}",
@@ -7500,8 +7524,8 @@
       "zh": "API Key（服务要求时填）"
     },
     "gui.settings.providers.api_key_optional": {
-      "en": "API Key (optional)",
-      "zh": "API Key（可选）"
+      "en": "API key (optional)",
+      "zh": "API 密钥（可选）"
     },
     "gui.tasks.tab_context": {
       "en": "Context",
