@@ -543,7 +543,7 @@ install_office() {
       ;;
     linux)
       if ! have apt-get; then
-        warn "LibreOffice not found; deck preview stays off. Install it with your system package manager (package: libreoffice)."
+        warn "LibreOffice not found; deck preview stays off. Install it with your system package manager (packages: libreoffice fonts-noto-cjk)."
         return 0
       fi
       # Installing needs sudo, so ask first -- and under `curl | sh` stdin is
@@ -552,35 +552,159 @@ install_office() {
       # without -i), so probe by opening it rather than stat-ing it; no
       # openable terminal means skip cleanly, never hang on the read.
       if ! { : < /dev/tty; } 2>/dev/null || ! have sudo; then
-        warn "LibreOffice not found; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+        warn "LibreOffice not found; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice fonts-noto-cjk"
         return 0
       fi
       # Default yes: for the deck lane this is the one dependency that matters
       # (the whole render-truth capability is soffice being present), and the
       # macOS path already installs it without asking. sudo's own password
       # prompt still stands between Enter and any change.
-      printf 'Install LibreOffice for deck preview (needs sudo)? Without it a deck still builds, but no page is ever rendered, measured or checked. [Y/n] '
+      printf 'Install LibreOffice and a CJK font for deck preview (needs sudo)? Without them a deck still builds, but no page is ever rendered, measured or checked -- and Chinese pages come out as boxes. [Y/n] '
       # A failed read is not an Enter: Ctrl-D, or a tty that closed after the
       # gate passed, must decline -- only a deliberate empty Enter accepts.
       answer=""
       read -r answer < /dev/tty || {
-        warn "Skipping LibreOffice (no answer read); deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+        warn "Skipping LibreOffice (no answer read); deck preview stays off. Install it later with: sudo apt-get install -y libreoffice fonts-noto-cjk"
         return 0
       }
       case "$answer" in
         n|N|[nN][oO])
-          warn "Skipping LibreOffice; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+          warn "Skipping LibreOffice; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice fonts-noto-cjk"
           ;;
         *)
           # sudo's password prompt also reads stdin: give it the tty too.
           # shellcheck disable=SC2024  # input redirect on purpose; opening /dev/tty needs no elevation.
-          sudo apt-get install -y libreoffice < /dev/tty \
-            || warn "LibreOffice install failed; deck preview stays off. Retry later with: sudo apt-get install -y libreoffice"
+          sudo apt-get install -y libreoffice fonts-noto-cjk < /dev/tty \
+            || warn "LibreOffice install failed; deck preview stays off. Retry later with: sudo apt-get install -y libreoffice fonts-noto-cjk"
           ;;
       esac
       ;;
   esac
 }
+
+# --- 4b. the face a Chinese deck is drawn with -------------------------------
+# A .pptx names its fonts and carries none of them, so whether a Chinese page
+# comes out as characters or as boxes is decided by this machine rather than by
+# the file -- the same deck that renders here as boxes opens correctly in
+# PowerPoint. Nothing else installs one: apt's libreoffice recommends the Latin
+# Noto packages and never the CJK one, and macOS ships PingFang in a form
+# LibreOffice does not draw from. The failure is silent, which is what makes it
+# worth its own step rather than a note in the docs: the conversion succeeds,
+# the PDF is well formed, and the boxes are visible only to whoever looks at the
+# page -- including the model that renders a deck to check its own work, which
+# was reviewing pages it could not read.
+#
+# So this step ends with a Han face present, not with advice about one. The
+# package manager is asked first because a system font serves every program on
+# the machine, and where that cannot happen -- no brew, no sudo, no apt -- the
+# font is fetched into the user's own font directory, which needs no privileges
+# and which both fontconfig and CoreText already read.
+
+# Pinned to a tag rather than a branch: a branch moves, and a font that changes
+# under a recorded digest turns every later install into a failed checksum.
+HAN_FONT_URL="https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf"
+HAN_FONT_SHA256="faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9"
+HAN_FONT_BYTES="8331336"
+HAN_FONT_NAME="NotoSansSC-Regular.otf"
+
+han_font_hint() {
+  case "$NODE_OS" in
+    darwin) printf '%s' "brew install --cask font-noto-sans-cjk" ;;
+    linux) have apt-get && printf '%s' "sudo apt-get install -y fonts-noto-cjk" || printf '%s' "your package manager's fonts-noto-cjk" ;;
+    *) printf '%s' "your package manager's fonts-noto-cjk" ;;
+  esac
+}
+
+have_han_font() {
+  # fontconfig answers this directly wherever it exists. A Mac has no fc-list,
+  # and its own PingFang does not settle the question, so ask the directories a
+  # font can be installed into without privileges -- which is where both the
+  # cask and the fallback below put one.
+  if have fc-list; then
+    [ -n "$(fc-list :lang=zh family 2>/dev/null)" ] && return 0
+    return 1
+  fi
+  for face in "$HOME/Library/Fonts"/*CJK* "$HOME/Library/Fonts"/*NotoSans[ST]C* \
+              "/Library/Fonts"/*CJK* "${XDG_DATA_HOME:-$HOME/.local/share}/fonts"/*CJK*; do
+    [ -f "$face" ] && return 0
+  done
+  return 1
+}
+
+# Where this platform reads a font installed by a user who is not root.
+han_font_dir() {
+  case "$NODE_OS" in
+    darwin) printf '%s' "$HOME/Library/Fonts" ;;
+    *) printf '%s' "${XDG_DATA_HOME:-$HOME/.local/share}/fonts" ;;
+  esac
+}
+
+sha256_of() {
+  if have sha256sum; then sha256sum "$1" | cut -d' ' -f1
+  elif have shasum; then shasum -a 256 "$1" | cut -d' ' -f1
+  else printf ''; fi
+}
+
+# The fallback, and the only part of this guaranteed to be available: a font
+# file copied into the user's own font directory. Verified before it is put in
+# place, because a truncated download is not a visible failure -- a half-written
+# OTF still parses, still reports its glyph count, and still draws nothing.
+fetch_han_font() {
+  target_dir="$(han_font_dir)"
+  mkdir -p "$target_dir" || {
+    warn "Could not create $target_dir; Chinese pages in a deck will render as boxes."
+    return 1
+  }
+  part="$target_dir/.$HAN_FONT_NAME.part"
+  info "Downloading a CJK font (Chinese pages in a deck)..."
+  if ! curl -fsSL --max-time 120 -o "$part" "$HAN_FONT_URL"; then
+    rm -f "$part"
+    warn "Font download failed; Chinese pages in a deck will render as boxes."
+    return 1
+  fi
+  size="$(wc -c < "$part" | tr -d ' ')"
+  if [ "$size" != "$HAN_FONT_BYTES" ]; then
+    rm -f "$part"
+    warn "Font download was incomplete ($size of $HAN_FONT_BYTES bytes); Chinese pages will render as boxes."
+    return 1
+  fi
+  actual="$(sha256_of "$part")"
+  if [ -n "$actual" ] && [ "$actual" != "$HAN_FONT_SHA256" ]; then
+    rm -f "$part"
+    warn "Font download did not match its recorded checksum; discarded it. Chinese pages will render as boxes."
+    return 1
+  fi
+  mv -f "$part" "$target_dir/$HAN_FONT_NAME" || {
+    rm -f "$part"
+    return 1
+  }
+  # fontconfig reads from a cache; a font dropped in after it was built is
+  # invisible until the cache is rebuilt. CoreText needs no such step.
+  have fc-cache && fc-cache -f "$target_dir" >/dev/null 2>&1
+  ok "CJK font installed to $target_dir/$HAN_FONT_NAME"
+  return 0
+}
+
+install_han_font() {
+  have_han_font && return 0
+  # A system font serves every program here, not only raven, so it is worth the
+  # attempt -- but never worth a second sudo prompt: the Linux package above
+  # already carries this one for anybody who answered yes to it, so reaching
+  # here on Linux means that path did not happen, and the fallback is the
+  # answer rather than another question.
+  case "$NODE_OS" in
+    darwin)
+      if have brew; then
+        info "Installing a CJK font (Chinese pages in a deck)..."
+        brew install --cask font-noto-sans-cjk >/dev/null 2>&1 \
+          || warn "The font cask did not install; falling back to a direct download."
+      fi
+      ;;
+  esac
+  have_han_font && return 0
+  fetch_han_font || warn "No CJK font could be installed. Every Chinese page in a deck will render as boxes (the deck file itself is fine, and opens correctly in PowerPoint). Install one later with: $(han_font_hint)"
+}
+
 
 # --- 5. launch -------------------------------------------------------------
 # The install ends on a running page. `--stop` first, because a gateway an
@@ -622,6 +746,7 @@ main() {
 
   [ -n "${RAVEN_MINIMAL:-}" ] || install_browser
   [ -n "${RAVEN_MINIMAL:-}" ] || install_office
+  [ -n "${RAVEN_MINIMAL:-}" ] || install_han_font
 
   # Before the launch, not after: the page holds this terminal until Ctrl-C,
   # and `uv tool update-shell` only reaches future shells.

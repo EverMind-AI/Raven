@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.utils import office
+from raven.utils import fonts, office
 
 
 def test_the_argv_asks_for_a_conversion_and_nothing_else(tmp_path: Path) -> None:
@@ -52,7 +52,7 @@ def test_the_profile_is_this_runs_own_and_is_thrown_away(tmp_path: Path, monkeyp
     the directory it lived in does not outlive the call."""
     seen: list[str] = []
 
-    def _fake(command, *, timeout_s):
+    def _fake(command, *, timeout_s, env=None):
         profile = next(token for token in command if token.startswith("-env:UserInstallation="))
         seen.append(profile)
         Path(command[command.index("--outdir") + 1], "deck.pdf").write_bytes(b"%PDF-1.4")
@@ -277,3 +277,49 @@ def test_a_finished_conversion_leaves_the_registry(monkeypatch: pytest.MonkeyPat
     with pytest.raises(TimeoutError):
         office._run(["soffice", "--version"], timeout_s=0.01)
     assert office._LIVE == set(), "a conversion that timed out leaves it too"
+
+
+def test_a_conversion_carries_the_font_directory_it_was_given(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A .pptx names fonts and carries none, so a render that reaches LibreOffice
+    without raven's font directory draws Chinese as boxes -- and says nothing,
+    because the conversion itself succeeds."""
+    face_dir = tmp_path / "faces"
+    face_dir.mkdir()
+    (face_dir / "NotoSansSC-Regular.otf").write_bytes(b"OTTO not a real font")
+    monkeypatch.setenv(fonts.ENV_FONT_DIR, str(face_dir))
+
+    captured: dict[str, str] = {}
+
+    def _fake(command, *, timeout_s, env=None):
+        # Read here rather than afterwards: the configuration lives in the
+        # conversion's own scratch directory and is gone with it, which is the
+        # point -- it describes one run and outlives nothing.
+        config = (env or {}).get("FONTCONFIG_FILE", "")
+        captured["config"] = config
+        captured["text"] = Path(config).read_text(encoding="utf-8") if config else ""
+        Path(command[command.index("--outdir") + 1], "deck.pdf").write_bytes(b"%PDF-1.4")
+        return 0, "", ""
+
+    monkeypatch.setattr(office, "_run", _fake)
+    staged = tmp_path / "out"
+    staged.mkdir()
+    office.to_pdf(tmp_path / "deck.pptx", staged, executable="soffice", timeout_s=5)
+
+    assert captured["config"], "the conversion ran without being told where raven's faces are"
+    assert str(face_dir) in captured["text"]
+
+
+def test_a_host_with_no_face_is_not_silently_taken_for_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """fc-match answers every question with its nearest approximation, so on a host
+    with no Han face it names a Latin one. Taking that for a Han face is how a deck
+    gets measured against glyphs that do not exist."""
+    monkeypatch.setattr(fonts, "_SYSTEM_HAN_FACES", ())
+    monkeypatch.setattr(fonts, "bundled_face", lambda: None)
+    monkeypatch.setattr(fonts, "user_han_faces", list)
+    monkeypatch.setattr(fonts, "_fc_listed_han", lambda: None)
+    monkeypatch.setattr(fonts, "host_han_faces", list)
+    monkeypatch.setattr(fonts.sys, "platform", "linux")
+
+    assert fonts.han_face() is None
+    assert fonts.can_draw_han() is False
+    assert "fonts-noto-cjk" in fonts.install_hint() or "CJK" in fonts.install_hint()

@@ -127,10 +127,13 @@ def cjk_face(serif: bool) -> str:
 BUNDLED_FONT_DIR = Path(__file__).resolve().parent / "fonts"
 _SYSTEM_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 _SYSTEM_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-# Not bundled -- a CJK face is 20MB and the deterministic full-em advance is
+# Not bundled -- a CJK face is 8MB and the deterministic full-em advance is
 # correct for Han. Used when present because it is not correct for CJK
 # punctuation, which is where a measured line differs from a counted one.
-_SYSTEM_CJK = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+# Located rather than hardcoded: the path below is one Linux distribution's,
+# and the installer now puts a face in the user's own font directory, which is
+# where a Mac -- and any host whose package manager was not the one that
+# supplied it -- actually has one.
 
 ENV_REGULAR = "RAVEN_PPT_FONT_REGULAR"
 ENV_BOLD = "RAVEN_PPT_FONT_BOLD"
@@ -149,6 +152,20 @@ class FontError(RuntimeError):
 def _bundled_or_system(filename: str, system_path: str) -> str:
     bundled = BUNDLED_FONT_DIR / filename
     return str(bundled) if bundled.is_file() else system_path
+
+
+def _host_cjk_face() -> str:
+    """Whatever face this host has for Han, or empty where it has none.
+
+    Empty stays a supported answer: measurement falls back to the full-em
+    advance, which is right for Han and wrong only for CJK punctuation. What
+    changed is that a Mac and a host installed by raven's own installer now
+    resolve to a real face instead of always to the empty string.
+    """
+    from raven.utils import fonts as raven_fonts
+
+    face = raven_fonts.han_face()
+    return str(face) if face is not None else ""
 
 
 @dataclass(frozen=True)
@@ -179,5 +196,5 @@ def measurement_fonts(
     return MeasurementFonts(
         regular=regular or os.environ.get(ENV_REGULAR) or _bundled_or_system("DejaVuSans.ttf", _SYSTEM_REGULAR),
         bold=bold or os.environ.get(ENV_BOLD) or _bundled_or_system("DejaVuSans-Bold.ttf", _SYSTEM_BOLD),
-        cjk=cjk or os.environ.get(ENV_CJK) or (_SYSTEM_CJK if Path(_SYSTEM_CJK).is_file() else ""),
+        cjk=cjk or os.environ.get(ENV_CJK) or _host_cjk_face(),
     )

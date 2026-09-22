@@ -50,6 +50,8 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from raven.utils import fonts
+
 KILL_TIMEOUT_S = 10.0
 """Long enough for a tree kill to walk the tree, short enough that a wedged one
 does not hold the caller past the budget it has already given up on."""
@@ -167,7 +169,12 @@ def to_pdf(
         profile = Path(scratch) / "profile"
         profile.mkdir()
         command = convert_command(Path(source), Path(staged), profile, executable=executable, fmt=fmt)
-        returncode, stdout, stderr = _run(command, timeout_s=timeout_s)
+        # The face raven brought, offered to the renderer for this run. Without
+        # it the conversion draws whatever the host happens to have, which on a
+        # stock Mac and on a Linux host installed the usual way is nothing that
+        # carries Han -- and the boxes that come back are not reported by
+        # anything, because the conversion itself succeeds.
+        returncode, stdout, stderr = _run(command, timeout_s=timeout_s, env=fonts.render_env(scratch=Path(scratch)))
     return Converted(
         produced=sorted(Path(staged).glob(f"*.{fmt}")), returncode=returncode, stdout=stdout, stderr=stderr
     )
@@ -199,13 +206,14 @@ def stop_running() -> int:
     return len(live)
 
 
-def _run(command: Sequence[str], *, timeout_s: float) -> tuple[int, str, str]:
+def _run(command: Sequence[str], *, timeout_s: float, env: dict[str, str] | None = None) -> tuple[int, str, str]:
     windows = sys.platform == "win32"
     process = subprocess.Popen(  # noqa: S603 - fixed argv, never a shell string
         list(command),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=env,
         # Its own session where there are sessions, and the process group the
         # teardown can signal where there are not.
         start_new_session=not windows,
