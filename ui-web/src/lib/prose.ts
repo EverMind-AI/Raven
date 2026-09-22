@@ -12,6 +12,7 @@
 
 import { t } from '../i18n/t'
 import { sources } from '../state/sources'
+import { mathHtml } from './math'
 
 export interface ProseTarget {
   p: string
@@ -48,6 +49,13 @@ const source = (): ProseSource => sources.prose || NO_PATHS
 
 const esc = (s: unknown): string =>
   String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string)
+
+/* esc() undone, for the one reader that needs the source rather than the
+   markup: the TeX converter. Exactly the four esc() makes, so this is its
+   inverse over anything esc() produced. */
+const unesc = (s: string): string =>
+  s.replace(/&(amp|lt|gt|quot);/g, (_, e: string) =>
+    ({ amp: '&', lt: '<', gt: '>', quot: '"' })[e] as string)
 
 /* The shell's copy glyph, carried here rather than reached for: the button
    below is built as a string, and the constant is markup, not behaviour. */
@@ -189,6 +197,38 @@ export function md(src: string): string {
     const held: string[] = []
     const keep = (html: string): string => `\u0001${held.push(html) - 1}\u0001`
     let t_ = esc(s).replace(/`([^`]+)`/g, (_, c: string) => keep(codeSpan(c)))
+    /* TeX, held out whole like a code span and for the same reason: `a_1` and
+       `x*y` inside a formula are not emphasis, and the passes below would eat
+       the underscores and pair the stars with the next bold in the line.
+       After the code spans, so a dollar sign inside backticks stays a dollar
+       sign. `esc()` has already run, so the four entities it makes are turned
+       back before the TeX is read -- `<`, `>` and `&` are ordinary characters
+       in mathematics, and the converter is owed the source as written. A run
+       it cannot read is put back exactly as it came.
+
+       What counts as a formula is the rule the markdown extensions settled on,
+       and it is there to keep money out: no space just inside either dollar,
+       no digit just after the closing one, and an escaped dollar opens
+       nothing. Without it "it costs $5 and $10 total" set "5 and" as
+       mathematics, which is a sentence models write far more often than they
+       write a formula. The leading character is matched rather than looked
+       behind, and handed back, so the shipped pass needs no lookbehind. The
+       dollar is a character class rather than a backslash escape on purpose:
+       escaped, it is immediately followed by the group's paren, and those two
+       characters together are the page's own "reach for an element" helper.
+       The gate that counts those reaches reads the file as text, so the
+       escaped spelling registers as one. */
+    /* The display pair first, or the single-dollar rule below would match the
+       inner two of `$$x$$` and leave the outer two standing as text. */
+    t_ = t_.replace(/(^|[^\\])[$][$]([^\n]+?)[$][$]/g, (whole: string, lead: string, tex: string) => {
+      const html = mathHtml(unesc(tex), true)
+      return html ? lead + keep(html) : whole
+    })
+    t_ = t_.replace(/(^|[^\\])[$]([^\s$][^$\n]*?[^\s$]|[^\s$])[$](?!\d)/g,
+      (whole: string, lead: string, tex: string) => {
+        const html = mathHtml(unesc(tex), false)
+        return html ? lead + keep(html) : whole
+      })
     /* [text](target) is the form a model writes far more often than a bare url.
        http(s) becomes a link, a workspace path becomes the usual chip, and any
        other target is dropped -- a dead link is worse than plain text. */
@@ -216,6 +256,39 @@ export function md(src: string): string {
   let i = 0
   while (i < L.length) {
     const l = L[i]!
+    /* Display TeX, which is a block for the same reason a fenced code block is:
+       it opens and closes on its own lines and everything between is one run
+       taken verbatim, not prose to be read for emphasis and links. Scanned
+       before the fence because the two never overlap and this is the cheaper
+       test. An opener with no closer is not a formula -- a lone `$$` in an
+       answer is a dollar sign the author typed -- so it falls through to the
+       paragraph scanner below and is drawn as what it is. */
+    const one = /^[ \t]*[$][$]([^]*?)[$][$][ \t]*$/.exec(l)
+    const open = /^[ \t]*[$][$][ \t]*$/.test(l)
+    if (one || open) {
+      /* Both spellings, because models write both and a report tends to pick
+         one and keep it: the formula alone on its line between its own pair of
+         markers, and the whole thing on one line. Reading only the first left
+         a document written in the second with its formulas set inline and a
+         stray marker on each side of every one. */
+      let tex = one ? one[1]! : ''
+      let end = i
+      if (!one) {
+        let j = i + 1
+        while (j < L.length && !/^[ \t]*[$][$][ \t]*$/.test(L[j]!)) j++
+        /* An opener with no closer is not a formula -- a lone pair of markers
+           is punctuation the author typed -- so it falls through to the
+           paragraph scanner and is drawn as what it is. */
+        if (j >= L.length) { tex = '' } else { tex = L.slice(i + 1, j).join('\n'); end = j }
+      }
+      if (tex.trim()) {
+        const html = mathHtml(tex, true)
+        /* Unreadable: the source, in a shape the reader can at least copy. */
+        o.push(html ? `<div class="mathblk">${html}</div>` : `<pre>${esc(tex)}</pre>`)
+        i = end + 1
+        continue
+      }
+    }
     /* Indentation is allowed on the fence: a fenced block inside a list item is
        something models write constantly, and anchoring at column 0 left it in
        the prose as literal backtick lines. The body is dedented by the fence's

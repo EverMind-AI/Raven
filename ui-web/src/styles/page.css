@@ -2005,6 +2005,22 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   background: var(--raised); border-radius: 10px; color: var(--text);
   padding: 12px 15px; overflow-x: auto; tab-size: 2;
 }
+/* Mathematics, which the browser sets itself from MathML: nothing here picks a
+   typeface or a size, because the reader's own math font is the one that pairs
+   with their own text font, and a size set here would fight the one the browser
+   derives from the surrounding line.
+
+   What is left is placement. A display formula is a block like a listing is:
+   its own vertical space, centred the way mathematics is set on a page, and
+   scrollable sideways rather than clipped -- a long derivation is exactly what
+   a narrow column cannot hold, and a formula cut at the edge is unreadable in
+   a way a cut sentence is not. */
+.mathblk { margin: 14px 0; overflow-x: auto; text-align: center; }
+/* An inline formula sits in the line's own rhythm; only its descenders need
+   room, or a fraction pushes the lines apart. */
+.prose math { font-size: inherit; }
+.prose .mathblk math { display: block; }
+
 /* The margin lives on the wrapper so the button can be positioned against the
    block itself: with it on the <pre> the margin collapses through and every
    offset here is measured from the wrong edge -- which is what put the button

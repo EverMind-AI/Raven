@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "temml": "^0.13.5"
   }
 }
