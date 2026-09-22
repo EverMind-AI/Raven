@@ -3,6 +3,16 @@
 Build, run, and test Raven from a local source checkout. The project uses
 **Python with `uv`** for dependency management and `hatchling` for packaging.
 
+For product extensions, choose [Building an Agent](building-agent.md),
+[Building a Plugin](building-plugin.md), or
+[Protocol and Backend Integration](protocol-backends.md). Those guides cover
+the extension contracts; this page covers the shared checkout workflow.
+
+For benchmark-driven harness experiments, start with
+[Evolver: usage and experiments](evolver.md), including its lifecycle and
+security limits. For failures in the current harness, use
+[Trajectory debugging and replay](trajectory-debugging.md).
+
 ## System prerequisites
 
 `uv` installs Raven's Python dependencies. Install **LibreOffice** separately

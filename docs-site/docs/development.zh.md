@@ -3,6 +3,12 @@
 本文介绍如何从本地源码构建、运行和测试 Raven。项目使用 **Python 与 `uv`** 管理依赖，
 使用 `hatchling` 打包。
 
+产品扩展请选择[构建 Agent](building-agent.md)、[构建插件](building-plugin.md)或
+[协议与后端集成](protocol-backends.md)。这些指南介绍扩展契约，本页介绍共享仓库工作流。
+
+基准驱动的 harness 实验请先读[Evolver：使用与实验](evolver.md)，包括维护状态
+和安全边界。当前 harness 故障的诊断见[轨迹调试与回放](trajectory-debugging.md)。
+
 ## 系统依赖 { #system-prerequisites }
 
 `uv` 负责安装 Raven 的 Python 依赖。**LibreOffice** 需要单独安装，用于将幻灯片和其他

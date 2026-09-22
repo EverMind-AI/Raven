@@ -2,10 +2,10 @@
 
 # Raven 文档
 
-<p class="em-standfirst">安装并配置 Raven，选择部署方式，查阅常用命令。</p>
+<p class="em-standfirst">安装并使用 Raven，连接 Agent 与消息平台，或构建自己的扩展。</p>
 
-从安装开始，通过 Docker 或源码部署 Raven，并使用 WebUI 开展日常工作。
-参考文档介绍命令用法、运行时架构和仓库结构。
+从安装开始，再根据目标选择对应路径。**指南**介绍日常使用和部署；**参考**说明协议
+与运行时行为；**开发者指南**介绍如何构建、调试和扩展 Raven。
 
 ## 从这里开始 { #start-here }
 
@@ -37,82 +37,59 @@
 
 </div>
 
-## 选择运行方式 { #choose-how-to-run-it }
+## 使用 Raven { #use-raven }
 
-<div class="grid cards em-run" markdown>
+<div class="grid cards em-use" markdown>
 
--   __Docker Compose__
-
-    ---
-
-    在同一个容器中构建并启动网关和 WebUI。
-
-    [用 Compose 启动](self-hosting.md#compose)
-
--   __从源码运行__
+-   __使用 Raven__
 
     ---
 
-    从本地克隆的仓库构建并运行 Raven，开发新功能或体验尚未发布的改动。
+    通过子 Agent、浏览器与人工协作、知识库、Playbook、主动提醒与跟进，
+    以及 Oncall 完成日常任务。
 
-    [从源码启动](self-hosting.md#from-source)
+    [打开使用指南](using-raven.md)
+
+-   __连接与扩展 Raven__
+
+    ---
+
+    连接消息平台和 Agent，并添加技能、记忆、MCP、插件及其他扩展。
+
+    [查看集成指南](agent-integrations.md)
+
+-   __部署与运行 Raven__
+
+    ---
+
+    选择自托管或 Docker 部署，启动 WebUI，并为本地工具执行设置边界。
+
+    [打开部署指南](self-hosting.md)
 
 </div>
-
-两种部署方式、配置说明和 Docker 镜像构建步骤，请参阅[自托管](self-hosting.md)。
 
 ## 浏览文档 { #explore-the-documentation }
 
-<div class="grid cards em-docs" markdown>
+<div class="grid cards em-explore" markdown>
 
--   __自托管__
-
-    ---
-
-    通过 Docker Compose 或源码部署，并管理运行配置。
-
-    [阅读](self-hosting.md)
-
--   __Docker 部署__
+-   __架构与运行时契约__
 
     ---
 
-    了解容器服务、登录方式、模型服务商配置和数据存储。
+    了解 Raven 的架构、协议、编排、权限、命令和仓库结构。
 
-    [阅读](docker.md)
+    [浏览参考文档](architecture.md)
 
--   __启动 WebUI__
-
-    ---
-
-    打开浏览器界面，启动或停止后台服务。
-
-    [阅读](webui.md)
-
--   __架构__
+-   __构建与扩展 Raven__
 
     ---
 
-    了解装配根、运行时分层和核心系统。
+    通过 Agent、插件、适配器、轨迹回放、Evolver 和埋点构建与扩展 Raven。
 
-    [阅读](architecture.md)
-
--   __命令参考__
-
-    ---
-
-    查阅 Raven 命令及其用途。
-
-    [阅读](commands.md)
-
--   __仓库布局__
-
-    ---
-
-    浏览顶层目录、运行时包及对应的提交范围（scope）。
-
-    [阅读](repo-layout.md)
+    [打开开发者指南](development.md)
 
 </div>
+
+可通过站点搜索或[命令参考](commands.md)查找具体功能的配置步骤、示例和排障方法。
 
 Raven 由 EverMind 开源维护。

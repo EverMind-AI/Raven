@@ -69,20 +69,38 @@ plugins:
             Guide: 指南
             Overview: 总览
             Quick Start: 快速开始
+            Using Raven: 使用 Raven
+            Working with Sub-agents: 与子 Agent 协作
+            Browser and Human Collaboration: 浏览器与人工协作
+            Knowledge Bases: 知识库与文档检索
+            Long-running Work (Oncall): 长任务托管（Oncall）
+            Playbooks: Playbooks 使用指南
+            Channels and Messaging: 渠道与消息
+            Agent Integrations: Agent 集成
             Self-Hosting: 自托管
             Docker Deployment: Docker 部署
             Launch WebUI: 启动 WebUI
             Sandbox: 沙箱
             Reference: 参考
             Architecture: 架构
+            Agent Protocols: Agent 协议
+            DAG Orchestration: DAG 编排
+            Permissions and Security: 权限与安全
+            Skills, Memory and Extensions: 技能、记忆与扩展
             Command Reference: 命令参考
             Repo Layout: 仓库布局
             Developers: 开发者
             Development: 开发
-            Proactivity Guide: 主动性使用指南
+            Building an Agent: 构建 Agent
+            Building a Plugin: 构建插件
+            Protocol and Backend Integration: 协议与后端集成
+            Proactive Reminders and Follow-ups: 主动提醒与跟进
             Proactivity Design and Implementation: 主动性设计与实现
-            Self-Evolution Map: 自进化映射
-            Tracing API: 追踪 API
+            Evolver: Evolver
+            Usage and Experiments: 使用与实验
+            Design and Implementation: 设计与实现
+            Trajectory Debugging and Replay: 轨迹调试与回放
+            Tracing and Instrumentation API: 追踪与埋点 API
 
   - git-revision-date-localized:
       type: date
@@ -93,17 +111,37 @@ nav:
   - Guide:
       - Overview: index.md
       - Quick Start: quick-start.md
-      - Self-Hosting: self-hosting.md
-      - Docker Deployment: docker.md
-      - Launch WebUI: webui.md
-      - Sandbox: sandbox.md
-      - Proactivity Guide: proactivity.md
+      - Using Raven:
+          - Overview: using-raven.md
+          - Launch WebUI: webui.md
+          - Sandbox: sandbox.md
+          - Working with Sub-agents: agent-collaboration.md
+          - Browser and Human Collaboration: browser-collaboration.md
+          - Knowledge Bases: knowledge.md
+          - Playbooks: playbooks.md
+          - Proactive Reminders and Follow-ups: proactivity.md
+          - Long-running Work (Oncall): oncall.md
+      - Channels and Messaging: channels.md
+      - Agent Integrations: agent-integrations.md
+      - Skills, Memory and Extensions: skills-and-extensions.md
+      - Self-Hosting:
+          - Overview: self-hosting.md
+          - Docker Deployment: docker.md
   - Reference:
       - Architecture: architecture.md
+      - Agent Protocols: agent-protocols.md
+      - DAG Orchestration: orchestration.md
+      - Permissions and Security: permissions.md
       - Command Reference: commands.md
       - Repo Layout: repo-layout.md
   - Developers:
       - Development: development.md
+      - Building an Agent: building-agent.md
+      - Building a Plugin: building-plugin.md
+      - Protocol and Backend Integration: protocol-backends.md
       - Proactivity Design and Implementation: proactivity-design.md
-      - Self-Evolution Map: self-evolution-map.md
-      - Tracing API: tracing-api.md
+      - Trajectory Debugging and Replay: trajectory-debugging.md
+      - Evolver:
+          - Usage and Experiments: evolver.md
+          - Design and Implementation: self-evolution-map.md
+      - Tracing and Instrumentation API: tracing-api.md

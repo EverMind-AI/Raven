@@ -3,7 +3,7 @@
 For developers extending or debugging the Proactive Engine. This is the site's
 implementation reference, with the design rationale kept alongside the
 contracts it explains. For configuration, costs, and operating procedures, use
-the [Proactivity Guide](proactivity.md).
+the [Proactive Reminders and Follow-ups](proactivity.md).
 
 Paths below are relative to `raven/proactive_engine/` unless stated otherwise.
 Configuration types live in `raven/config/raven.py`; canonical runtime terms

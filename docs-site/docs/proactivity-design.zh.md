@@ -1,7 +1,7 @@
 # 主动性设计与实现
 
 本文面向扩展或调试 Proactive Engine 的开发者，是站点中的实现参考，设计理由与其解释的契约
-放在一起。配置、成本与操作步骤请阅读[主动性使用指南](proactivity.md)。
+放在一起。配置、成本与操作步骤请阅读[主动提醒与跟进](proactivity.md)。
 
 除非另有说明，以下路径均相对于 `raven/proactive_engine/`。配置类型定义在
 `raven/config/raven.py`，运行时规范术语定义在 `CONTEXT.md`。

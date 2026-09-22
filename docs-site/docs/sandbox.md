@@ -328,8 +328,10 @@ Because `/workspace` is a read-write mount, deleting a file there also deletes
 it on the host.
 
 `ExecTool` enforces its own command and workspace restrictions.
-`restrict_to_workspace` applies to both backends: commands that reference paths
-outside the workspace are rejected and logged.
+`restrict_to_workspace` applies to both backends: it checks command text for
+recognizable paths outside the allowed working directories and rejects those
+commands. It cannot inspect every filesystem access performed by the programs
+a command launches. Use VM mounts and OS permissions for isolation.
 
 ## 6. Wiring into `AgentLoop`
 
@@ -665,10 +667,10 @@ on each run, then starts the MCP server and validates the full `initialize` +
 uv run python -m pytest tests/test_sandbox_unit.py tests/integration/test_sandbox_real_vm.py -v
 ```
 
-**Run the full project test suite** (all test files, excluding integration):
+**Run the project tests without integration tests:**
 
 ```bash
-uv run python -m pytest tests/ --ignore=tests/integration/test_sandbox_real_vm.py -q
+uv run pytest tests/ --ignore=tests/integration -q
 ```
 
 ### 9.6 Run a single test
