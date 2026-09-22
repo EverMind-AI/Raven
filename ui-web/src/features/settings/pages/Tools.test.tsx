@@ -10,7 +10,8 @@ import { TOOL_GROUPS, blocker } from './Tools'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => {}, get: () => [] }))
+const toasts = vi.hoisted(() => ({ calls: [] as string[] }))
+vi.mock('../../../state/toast', () => ({ show: (m: string) => { toasts.calls.push(m) }, subscribe: () => () => {}, get: () => [] }))
 
 
 beforeEach(() => {
@@ -19,6 +20,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  toasts.calls = []
   store._resetForTests()
   vi.restoreAllMocks()
   resetSources()
@@ -60,6 +62,18 @@ describe('tools page', () => {
        built in the counter left it out, so the total under-reported what the
        reader can actually turn off. */
     expect(screen.getByText('gui.settings.tools.counter {"on":5,"total":8}')).toBeTruthy()
+  })
+
+  /* No "built in" label beside a meta tool: the row already draws a control
+     nobody can move, and the word was one more thing to read for a fact the
+     reader cannot act on. The click says it instead, and only when it is
+     asked -- a control that swallows a click in silence reads as broken. */
+  it('says why a meta tool cannot be switched, on the click rather than in a label', async () => {
+    install()
+    await mount('tools')
+    expect(screen.queryByText('gui.settings.tools.builtin')).toBeNull()
+    act(() => { screen.getByLabelText('tool_search').click() })
+    expect(toasts.calls).toEqual(['gui.settings.tools.builtin_locked'])
   })
 
   it('the badge says needs setup where a key or a model is missing, and the panel names the missing piece', async () => {
