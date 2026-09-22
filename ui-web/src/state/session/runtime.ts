@@ -41,6 +41,7 @@ import { set as setCtx } from '../ctxChip'
 import { ds, sources } from '../sources'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
+import { clearStaged as clearStagedWorkdir, staged as stagedWorkdir } from '../workdir'
 import { ask, noteRow, noteSay, pitch, splitAtts } from './conversation'
 import { generation } from './generation'
 import { beginNaming, namingDeclined } from './naming'
@@ -396,13 +397,21 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
      the reader has opened since. */
   const gen = generation()
   const draftRt = viewRuntime()
-  const r = await gateway().call('session.create', {})
+  /* The folder the draft picked goes on the create, because the create is the
+     only moment the engine takes one (raven/rpc/methods/session.py); the row
+     carries it too, so the rail groups the conversation and the chip reports it
+     before the list is read back. Spent once the session exists, and left
+     staged when the create fails, since the draft is still on screen. */
+  const workdir = stagedWorkdir()
+  const r = await gateway().call('session.create', workdir ? { workdir } : {})
   setWsRoot(draftRt, r.info && r.info.cwd)
   const s: SessRow = {
     id: r.session_id, title: t('gui.new_task'), last: preview || t('gui.sess.not_started'),
     when: t('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false,
+    workdir: workdir || null,
   }
   sessionRows().unshift(s); sessionSet(s.id)
+  clearStagedWorkdir()
   /* The draft IS the conversation now: everything it was holding -- the staged
      model, tier and permission mode, the lane it drew into -- belongs to the
      session that was just minted. */
