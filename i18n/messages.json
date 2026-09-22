@@ -3284,7 +3284,7 @@
       "zh": "设置"
     },
     "gui.perm.ask": {
-      "en": "ask approval",
+      "en": "Ask Approval",
       "zh": "请求批准"
     },
     "gui.perm.ask_h": {
@@ -3292,7 +3292,7 @@
       "zh": "只允许读，其他操作请求审批"
     },
     "gui.perm.full": {
-      "en": "full access",
+      "en": "Full Access",
       "zh": "完全访问"
     },
     "gui.perm.full_h": {
@@ -3300,7 +3300,7 @@
       "zh": "不弹审批，可能执行危险操作；禁止规则仍然生效"
     },
     "gui.perm.smart": {
-      "en": "smart",
+      "en": "Smart",
       "zh": "智能模式"
     },
     "gui.perm.smart_h": {
