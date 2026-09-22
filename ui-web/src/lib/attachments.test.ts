@@ -4,7 +4,8 @@
    and drawing those as the question is what a reloaded page used to do. */
 import { describe, expect, it } from 'vitest'
 
-import { splitAttachments, stripRuntimeNotes } from './attachments'
+import { I18N } from '../i18n/t'
+import { readMessage, splitAttachments, stripRuntimeNotes } from './attachments'
 
 /* Both spellings the catalogue carries, since a message sent under one
    language is read back under whichever is in force. */
@@ -129,6 +130,36 @@ describe('reading a sent message back', () => {
     const stored = '[attachments, saved in the workspace]\n- old.png\n\n'
       + 'and then\n\n[attachments, saved in the workspace]\n- new.png'
     expect(splitAttachments(stored, NOTES).atts).toEqual(['new.png'])
+  })
+
+  it('reads a note at the head even when the runtime annotated nothing', () => {
+    /* The gate that decides whether there is anything to take off asked only
+       the blank-line spelling while the loop under it knew two, so this shape
+       was refused before the loop ever saw it. No resumed message reaches the
+       page in it today -- the engine writes a `(path: ...)` line on every
+       branch, so the gate always passed for another reason -- but the rule
+       then lived in two places that knew different amounts, which is the very
+       thing this file exists to argue against. */
+    const bare = '[attachments, saved in the workspace]\n- uploads/shot.png'
+    expect(splitAttachments(bare, NOTES)).toEqual({ body: '', atts: ['uploads/shot.png'] })
+    /* The control: the same message one blank line down, which always worked. */
+    expect(splitAttachments(`look\n\n${bare}`, NOTES)).toEqual({ body: 'look', atts: ['uploads/shot.png'] })
+  })
+
+  it('reads a message through the catalogue, in the language it was not sent in', () => {
+    /* `readMessage` is the reader the page actually calls, and it takes the
+       note's spellings from the catalogue rather than from a caller. The point
+       of that list is the OTHER language -- a message sent under one is read
+       back under whichever is in force -- and nothing held it: answering with
+       the English spelling alone passed every case, because every case handed
+       its own spellings in. */
+    const spellings = I18N.ui['gui.att.note'] as Record<string, string>
+    for (const [lang, note] of Object.entries(spellings)) {
+      const sent = `[image] \n\n${note}\n- uploads/shot.png\n\n`
+        + '[Image: shot.png (path: /w/uploads/shot.png) | 1x1px]'
+      expect(readMessage(sent), lang).toEqual({ body: '', atts: ['/w/uploads/shot.png'] })
+    }
+    expect(Object.keys(spellings).length, 'the catalogue carries more than one spelling').toBeGreaterThan(1)
   })
 
   it('leaves alone the words a person wrote that only look like a marker', () => {
