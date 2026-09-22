@@ -1270,6 +1270,20 @@ def test_a_vendors_own_id_reads_the_catalogue_row_filed_under_it(monkeypatch):
     assert rates.effective_context_window("deepseek/deepseek-v4-pro", None, allow_fetch=False) == 1_048_576
 
 
+def test_a_vendors_own_id_matches_the_row_whatever_case_it_is_spelled_in(monkeypatch):
+    """The catalogue publishes every id in lower case; a routed id need not be.
+    Raven's own MiniMax shortlist stores ``minimax/MiniMax-M3``, which the
+    catalogue keys ``minimax/minimax-m3``, so an exact match on the string as
+    typed left a built-in vendor route on the fallback window while the row
+    sat in the table.
+    """
+    _patch_litellm_blind(monkeypatch)
+    _seed_catalog(monkeypatch, {"minimax/minimax-m3": {"context_length": 1_048_576}})
+
+    assert rates.resolve_context_window("minimax/MiniMax-M3", allow_fetch=False) == 1_048_576
+    assert rates.resolve_context_window("openrouter/MiniMax/MiniMax-M3", allow_fetch=False) == 1_048_576
+
+
 def test_a_deployment_named_after_somebody_elses_model_still_reads_nothing(monkeypatch):
     """Why the door was shut in the first place, and why matching the vendor
     half rather than dropping it is what reopens it safely: a self-hosted

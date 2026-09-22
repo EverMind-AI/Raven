@@ -630,7 +630,12 @@ def _lookup_openrouter_entry(
     own = model.startswith("openrouter/")
     if not own and not (by_vendor and "/" in model):
         return None
-    key = model.removeprefix("openrouter/")
+    # Case-folded, like the modalities reader above and for its reason: the
+    # catalogue spells every id it publishes in lower case, while a routed id
+    # need not. Raven's own shortlist stores ``minimax/MiniMax-M3``, which is
+    # the row keyed ``minimax/minimax-m3`` -- an exact match on the string as
+    # typed missed it and left a built-in route on the fallback window.
+    key = model.removeprefix("openrouter/").lower()
     if table is None:
         table = _fetch_openrouter_models() if allow_fetch and own else _cache_only_openrouter_models()
     for candidate in (key, *_dotted_version_variants(key)):
