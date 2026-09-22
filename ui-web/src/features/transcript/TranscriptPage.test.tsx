@@ -1002,6 +1002,24 @@ describe('transcript island, history', () => {
     expect((notes[1] as HTMLElement).title).toBe('send failed · socket closed')
   })
 
+  it('replays a turn that died on a model error as the red row the live page drew', () => {
+    const reason = 'Error calling LLM (first_byte_timeout): no first byte'
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'hello', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'assistant', text: `(turn failed: ${reason})`,
+          turn_ended: { status: 'failed', reason }, timestamp: iso(Date.now() - 3000),
+        },
+      ])
+    })
+    const notes = $$('.tnote')
+    expect(notes).toHaveLength(1)
+    expect(notes[0]?.classList.contains('bad')).toBe(true)
+    expect((notes[0] as HTMLElement).title).toBe(`${mount.failedTurnLabel()} · ${reason}`)
+    expect($$('.answer')).toHaveLength(0)
+  })
+
   it('keeps its rendered shape', () => {
     act(() => {
       mount.history([

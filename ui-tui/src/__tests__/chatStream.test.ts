@@ -387,7 +387,7 @@ describe('createChatStream — cancel preserves streamed content', () => {
       payload: { code: -32099, message: 'turn_failed', reason: 'internal', detail: "No module named 'orjson'" }
     })
 
-    expect(sysCalls).toContain("error: turn_failed (code=-32099): No module named 'orjson'")
+    expect(sysCalls).toContain("Turn failed - No module named 'orjson'")
   })
 
   it('keeps the streamed partial in the transcript on a local forceReset', async () => {
@@ -704,11 +704,19 @@ describe('createChatStream — direct-chat routing', () => {
     fake.__pushEvent({ type: 'message.start', payload: { target, turn_id: 't1' } })
     fake.__pushEvent({
       type: 'error',
-      payload: { code: -32099, message: 'turn_failed', reason: 'internal', target }
+      payload: {
+        code: -32099,
+        detail: 'Error calling LLM (network@x): boom',
+        message: 'turn_failed',
+        reason: 'internal',
+        target
+      }
     })
 
     expect(getDirectChat().running).toEqual([])
-    expect(getDirectTranscript(directKey('A', 'one')).map(m => m.role)).toEqual(['system'])
+    expect(getDirectTranscript(directKey('A', 'one')).map(m => [m.role, m.text])).toEqual([
+      ['system', 'Turn failed - Error calling LLM (network@x): boom']
+    ])
   })
 
   it('sendTo addresses the instance named, not the view on screen', async () => {

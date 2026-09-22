@@ -36,7 +36,7 @@ import { ask, noteRow, unask } from './conversation'
 import { namingEnded, settleNaming } from './naming'
 import { viewRuntime } from './registry'
 import {
-  drain, ensureStep, finishTurn, flushSay, send, softStop,
+  drain, duration, ensureStep, finishTurn, flushSay, reset, send, softStop,
 } from './runtime'
 
 import type { DirectTarget, TurnEvent } from '../../rpc/generated'
@@ -236,10 +236,21 @@ export const STAGES: readonly Stage[] = [
       setTimeout(drain, 400)
       return
     }
+    /* The turn ends the way a stop ends it (softStop): the prose that streamed
+       before the failure is promoted and its steps sealed, so the note lands
+       under a finished turn rather than beside an open one; the runtime is
+       reset for the next send, and a send that queued behind the turn goes
+       out, since the engine is free. `turn_failed` is the lane's code for a
+       turn that died and reads as the words the replayed marker reads; every
+       other code keeps its own name. */
+    transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt))
     rt.dispatch({ type: 'idle' })
-    noteRow(p.message || 'error', p.detail || p.reason || '',
-      rt.lastAsk ? { retry: () => send(rt.lastAsk) } : null)
+    noteRow(p.message === 'turn_failed' ? transcript.failedTurnLabel() : (p.message || 'error'),
+      p.detail || p.reason || '', rt.lastAsk ? { retry: () => send(rt.lastAsk) } : null)
+    transcript.artifacts(wsCurrentTurn())
+    reset(rt)
     goState(); drawMeter(); sessionDraw()
+    drain()
   }),
 
   arm('cron.delivered', (_rt, p) => { toast(t('gui.cron.new_output', { name: p.name })) }),

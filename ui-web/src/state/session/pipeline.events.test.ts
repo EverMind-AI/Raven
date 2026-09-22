@@ -84,7 +84,7 @@ async function harness({
       'src/features/composer/mount': {
         drawMeter: () => log.push(['drawMeter']),
         goPaint: () => log.push(['goState']),
-        queueShift: () => undefined,
+        queueShift: () => { log.push(['queueShift']); return undefined },
         turn: {
           busy: () => busy,
           phase: () => phase,
@@ -125,6 +125,7 @@ async function harness({
         killStatus: () => log.push(['killStatus']),
         step: step,
         status: (text: string) => log.push(['showStatus', text]),
+        failedTurnLabel: () => 'FAILED_LABEL',
       },
       'src/features/transcript/tail': {
         down: () => log.push(['down']),
@@ -494,6 +495,30 @@ describe('error', () => {
     expect(h.did('dispatch')).toEqual([['dispatch', 'idle', undefined]])
     expect(h.did('noteRow')).toEqual([['noteRow', 'the model refused', 'try later', ['retry']]])
     expect(h.did('softStop')).toEqual([])
+  })
+
+  it('ends a died turn the way a stop does: the fold, then the note in the replay\'s words, then the products', async () => {
+    const h = await harness()
+    h.park.lastAsk = 'send this again'
+    h.dispatch({ type: 'episode.start', payload: { index: 0 } })
+
+    h.dispatch({
+      type: 'error',
+      payload: { message: 'turn_failed', reason: 'internal', detail: 'Error calling LLM (first_byte_timeout): no first byte' },
+    })
+
+    expect(h.did('finishTurn')).toHaveLength(1)
+    expect(h.did('noteRow')).toEqual([
+      ['noteRow', 'FAILED_LABEL', 'Error calling LLM (first_byte_timeout): no first byte', ['retry']],
+    ])
+    const order = h.order()
+    expect(order.indexOf('finishTurn')).toBeLessThan(order.indexOf('noteRow'))
+    expect(order.indexOf('artifacts')).toBeGreaterThan(order.indexOf('noteRow'))
+    expect(h.did('dispatch')).toEqual([['dispatch', 'idle', undefined]])
+    expect(h.live.st).toBeNull()
+    expect(h.live.steps).toEqual([])
+    expect(h.park.lastAsk).toBe('send this again')
+    expect(h.did('queueShift')).toHaveLength(1)
   })
 })
 

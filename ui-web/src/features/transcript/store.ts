@@ -1640,6 +1640,10 @@ const callParts = (raw: unknown): { name: string; display: string } => {
   return m ? { name: m[1] as string, display: m[2] as string } : { name: String(raw || ''), display: '' }
 }
 
+/* The label a failed turn's row reads, live and replayed alike: one string, so
+   the two views of one turn cannot drift apart. */
+export const failedTurnLabel = (): string => t('gui.turn_died', { e: '' }).replace(/\s*[-·]\s*$/, '')
+
 export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMessage[] = []): void {
   /* A different conversation, so a different roster -- but only on the lane that
      IS one.
@@ -1861,7 +1865,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
       /* Same promise as the live stop, checked the same way: a replayed turn
          whose whole content is this marker has no output above to keep. */
       const halted = turnKept(lane) ? 'gui.halted' : 'gui.halted_bare'
-      note(lane, stopped ? t(halted) : t('gui.turn_died', { e: '' }).replace(/\s*[-·]\s*$/, ''),
+      note(lane, stopped ? t(halted) : failedTurnLabel(),
         stopped ? '' : (m.turn_ended.reason || ''), { quiet: stopped })
       return
     }

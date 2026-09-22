@@ -36,7 +36,7 @@ import type { Msg, TurnArtifacts } from '../types.js'
 import type { DirectTargetRef } from './directChatStore.js'
 
 import { TOOL_PREVIEW_TRUNCATED_SUFFIX } from '../domain/episodeFold.js'
-import { deliveredMessageKey, noticeLine } from '../domain/messages.js'
+import { deliveredMessageKey, failedTurnLine, noticeLine } from '../domain/messages.js'
 import { addUnique, artifactMessage, changedFile, deliveryFiles } from '../domain/turnArtifacts.js'
 import { t } from '../i18n/index.js'
 import { argPreview, dagPromptTemplates } from '../lib/toolArgs.js'
@@ -210,11 +210,15 @@ const dispatchDirect = (
     case 'error': {
       state.turns.delete(viewKeyOf(target))
       clearRunning(target)
-      const { code, message, reason } = event.payload
-      appendDirectMessage(key, {
-        role: 'system',
-        text: reason === 'cancelled_by_client' ? 'interrupted' : `error: ${message} (code=${code})`
-      })
+      const { code, message, reason, detail } = event.payload
+      const line = detail ? detail.split('\n')[0].slice(0, 200) : ''
+      const said =
+        reason === 'cancelled_by_client'
+          ? 'interrupted'
+          : message === 'turn_failed'
+            ? failedTurnLine(line)
+            : `error: ${message} (code=${code})${line ? `: ${line}` : ''}`
+      appendDirectMessage(key, { role: 'system', text: said })
       disarmEscape(target)
       patchUiState({ status: 'ready' })
       sys?.(`${target.agent}/${target.handle}: ${message}`)
@@ -545,15 +549,16 @@ const onError = (
   appendArtifacts(state, appendMessage)
   state.artifacts = { changes: [], deliveries: [] }
   // Non-cancellation error: surface a sys note, idle the turn, and reset
-  // the live anchor so the user can submit again. Append the real failure
-  // detail (e.g. the underlying exception) when present, so a generic
-  // `turn_failed` code is not the only thing the user sees.
+  // the live anchor so the user can submit again. A turn that died reads by
+  // the line a resumed transcript gives it, with the real failure detail (e.g.
+  // the underlying exception); any other code keeps its own name and detail.
+  const line = detail ? detail.split('\n')[0].slice(0, 200) : ''
+  const died = message === 'turn_failed'
   if (sys) {
-    const extra = detail ? `: ${detail.split('\n')[0].slice(0, 200)}` : ''
-    sys(`error: ${message} (code=${code})${extra}`)
+    sys(died ? failedTurnLine(line) : `error: ${message} (code=${code})${line ? `: ${line}` : ''}`)
   }
   turnController.recordError({ appendMessage })
-  patchUiState({ status: `error: ${message.slice(0, 80)}` })
+  patchUiState({ status: (died ? failedTurnLine('') : `error: ${message}`).slice(0, 80) })
   patchTurnState({ activity: [], outcome: '' })
 }
 

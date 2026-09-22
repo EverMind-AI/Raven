@@ -221,9 +221,15 @@ class LoopOutcome:
     budget" for "done". ``checkpoint_id`` and
     ``edited_files`` carry the shadow-git snapshot info used to build the
     next turn's recovery prompt.
+
+    ``error`` is the loop's own account of a model call it gave up on, in the
+    words a reader is shown; None when the call succeeded or a hook salvaged
+    an answer. The caller fails the turn on it unless the message tool already
+    answered in this turn.
     """
 
     status: str = "completed"  # "completed" | "interrupted" | "error"
+    error: str | None = None
     checkpoint_id: str | None = None
     edited_files: list[str] = field(default_factory=list)
 

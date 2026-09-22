@@ -258,10 +258,12 @@ async def stream_llm_call(
                     reasoning_chars,
                 )
                 stop_thinking()
+                # In the canonical error shape, so the readers of that shape (the
+                # loop's failure report, the CLI's diagnosis) keep this account.
                 return LLMResponse(
                     content=(
-                        f"The model's reply was cut off by the connection after {elapsed:.0f}s, before any "
-                        f"content arrived ({reasoning_chars} chars of reasoning were lost)."
+                        f"Error calling LLM (network): the model's reply was cut off by the connection after "
+                        f"{elapsed:.0f}s, before any content arrived ({reasoning_chars} chars of reasoning were lost)"
                     ),
                     finish_reason="error",
                     error_classification=ErrorClassification("network", retryable=True, should_fallback=True),

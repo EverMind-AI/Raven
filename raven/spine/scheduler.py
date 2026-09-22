@@ -18,7 +18,7 @@ from loguru import logger
 
 from raven.spine.events import RunnerEvent, TurnEnded, TurnEvent, TurnFailed, TurnStarted
 from raven.spine.runner import Emit, TurnOutcome, TurnRunner
-from raven.spine.turn import BusyPolicy, Origin, TurnRequest
+from raven.spine.turn import AnswerlessTurnError, BusyPolicy, Origin, TurnRequest
 
 
 def describe_failure(exc: BaseException) -> str:
@@ -28,9 +28,14 @@ def describe_failure(exc: BaseException) -> str:
     what a stalled model stream raises -- has an empty one, so the client was
     told ``turn_failed`` and nothing else, and the parent of a sub-agent read
     that as a crash of whatever tool call it saw last.
+
+    An ``AnswerlessTurnError`` is the runner's own wording of the failure and
+    is carried as it is.
     """
     text = str(exc).strip()
     name = type(exc).__name__
+    if isinstance(exc, AnswerlessTurnError):
+        return text or name
     if not text:
         return name
     # Several SDK errors already open with their own class name; a second

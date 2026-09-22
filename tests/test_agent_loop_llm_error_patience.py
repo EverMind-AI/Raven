@@ -22,7 +22,7 @@ from raven.agent.window import shrink
 from raven.contracts.tool import Tool, ToolResult
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
-from raven.spine.turn import Origin, TurnRequest
+from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 from raven.utils.images import image_block, is_image_part, text_block
 
 
@@ -100,10 +100,11 @@ async def test_the_ladder_is_the_budget(workspace):
     provider = _FailsThenAnswers(3, ErrorClassification("server", retryable=True, should_fallback=True))
     agent = _agent(workspace, provider, delays=(0.0, 0.0))
 
-    out = await _turn(agent)
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _turn(agent)
 
-    assert provider.calls == 3, "two waits, three calls, then the turn ends on the third error"
-    assert out is not None and "Error calling LLM" in (out[0] or "")
+    assert provider.calls == 3, "two waits, three calls, then the turn fails on the third error"
+    assert "Error calling LLM" in str(failed.value)
 
 
 @pytest.mark.asyncio
@@ -111,10 +112,11 @@ async def test_a_non_retryable_error_is_not_asked_again(workspace):
     provider = _FailsThenAnswers(1, ErrorClassification("invalid_request", retryable=False))
     agent = _agent(workspace, provider, delays=(0.0, 0.0, 0.0))
 
-    out = await _turn(agent)
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _turn(agent)
 
     assert provider.calls == 1
-    assert out is not None and "Error calling LLM" in (out[0] or "")
+    assert "Error calling LLM" in str(failed.value)
 
 
 class _StallsThenAnswers(LLMProvider):
@@ -865,10 +867,11 @@ async def test_an_image_refusal_with_nothing_to_withdraw_is_not_waited_out(works
     provider = _FailsThenAnswers(5, ErrorClassification("image_too_large", strip_images=True))
     agent = _agent(workspace, provider, delays=(0.0, 0.0, 0.0))
 
-    out = await _turn(agent)
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _turn(agent)
 
     assert provider.calls == 1
-    assert out is not None and "Error calling LLM" in (out[0] or "")
+    assert "Error calling LLM" in str(failed.value)
 
 
 async def _watch(text: str) -> None:
