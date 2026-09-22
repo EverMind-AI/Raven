@@ -133,7 +133,9 @@ already reads on. Each such read of a running node also re-reads its row through
 row is the run's closing message when the lane left one (`<node_id>.closing.md`), the whole
 output otherwise, so a narrating agent's progress notes are read once, on the steps they
 preceded. A call with no result is drawn in flight only while the node runs; on a settled node
-it reads as not run, and a folded step counts those calls beside its failures.
+it reads as not run, and a folded step counts those calls beside its failures. A step opens on a
+thought, and on narration that follows calls, so a run whose model returned no reasoning text
+still reads as one step per thing it said before calling rather than as one fold.
 
 ### 5. Live updates
 

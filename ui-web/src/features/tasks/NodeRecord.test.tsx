@@ -79,6 +79,38 @@ describe('groupSteps', () => {
     expect(groups).toHaveLength(2)
   })
 
+  it('opens a new group when narration arrives after the current one already has calls', () => {
+    /* A model that returns no reasoning text (deepseek-v4-flash through the
+       provider bills thinking and hands none back) used to fold every call of
+       the run into one group with all its narration piled on top. */
+    const groups = groupSteps([
+      { kind: 'say', text: 'looking at the release page first' },
+      tool({ name: 'web_fetch', id: 'c1' }),
+      { kind: 'say', text: 'now the changelog' },
+      tool({ name: 'web_fetch', id: 'c2' }),
+      tool({ name: 'read_file', id: 'c3' }),
+    ])
+    expect(groups).toHaveLength(2)
+    const [a, b] = groups as Array<Extract<ReturnType<typeof groupSteps>[number], { kind: 'group' }>>
+    expect(a?.say).toBe('looking at the release page first')
+    expect(a?.calls.map((c) => c.id)).toEqual(['c1'])
+    expect(b?.say).toBe('now the changelog')
+    expect(b?.calls.map((c) => c.id)).toEqual(['c2', 'c3'])
+  })
+
+  it('keeps narration that follows a thought in that thought\'s own step', () => {
+    const groups = groupSteps([
+      { kind: 'think', text: 'plan' },
+      { kind: 'say', text: 'doing it' },
+      tool({ name: 'exec', id: 'c1' }),
+    ])
+    expect(groups).toHaveLength(1)
+    const [g] = groups as Array<Extract<ReturnType<typeof groupSteps>[number], { kind: 'group' }>>
+    expect(g?.think).toBe('plan')
+    expect(g?.say).toBe('doing it')
+    expect(g?.calls).toHaveLength(1)
+  })
+
   it('keeps a console entry on its own, outside any group', () => {
     const groups = groupSteps([
       { kind: 'think', text: 'first' },

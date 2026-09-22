@@ -112,10 +112,15 @@ function hunkOfCall(name: string, args: Record<string, unknown>): { add: number;
 }
 
 /* ── grouping: a thought, what it said, and the calls it led to ──────────
-   Mirrors proto.js's `toSteps`: a new group opens on a thought that arrives
-   after the current one already has calls or something said, so a run of
-   "think, call, call, think, call" reads as two steps rather than five flat
-   rows. */
+   proto.js's `toSteps`, with one more boundary: a new group opens on a
+   thought that arrives after the current one already has calls or something
+   said, so a run of "think, call, call, think, call" reads as two steps
+   rather than five flat rows -- and on narration that arrives after calls,
+   so a run whose model returns no reasoning text (a lane that bills thinking
+   but does not hand it back) still reads as one step per thing it said
+   before calling, rather than one fold with every call in it and the
+   narration piled above them. Narration after a thought stays in that
+   thought's step: "think, say, call" is one step, as it was. */
 
 type ToolCall = Extract<NodeStep, { kind: 'tool' }>
 interface Group { key: number; kind: 'group'; think: string | null; say: string | null; calls: ToolCall[] }
@@ -129,6 +134,7 @@ export function groupSteps(steps: NodeStep[]): GroupOrConsole[] {
   steps.forEach((s) => {
     if (s.kind === 'console') { out.push({ key: key++, kind: 'console', text: s.text }); cur = null; return }
     if (s.kind === 'think' && cur && (cur.calls.length || cur.say)) cur = null
+    if (s.kind === 'say' && cur && cur.calls.length) cur = null
     if (!cur) { cur = { key: key++, kind: 'group', think: null, say: null, calls: [] }; out.push(cur) }
     if (s.kind === 'think') cur.think = cur.think ? `${cur.think}\n${s.text}` : s.text
     else if (s.kind === 'say') cur.say = cur.say ? `${cur.say}\n\n${s.text}` : s.text
