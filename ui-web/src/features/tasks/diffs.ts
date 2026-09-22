@@ -9,7 +9,7 @@
  * `write_file` as; an edit is the real before/after slice.
  */
 
-import { fromDelete, fromEdit, fromWrite } from '../../lib/hunks'
+import { applyEdit, fromDelete, fromEdit, fromWrite } from '../../lib/hunks'
 
 import type { WsHunk } from '../../lib/hunks'
 import type { NodeStep, TaskFile } from './types'
@@ -19,6 +19,7 @@ interface FileToolArgs {
   content?: string
   old_text?: string
   new_text?: string
+  replace_all?: boolean
 }
 
 function parseArgs(raw: string): FileToolArgs {
@@ -54,10 +55,10 @@ function samePath(a: string | undefined, b: string): boolean {
    back out. The contents can only be what the node's own calls left there --
    the wire carries no deleted file's body for a task, and the removal itself
    reaches the lane as a count -- so the body is followed call by call: a write
-   is the whole file, an edit is applied to it. An edit that does not fit what
-   is being followed (the tool matched loosely, or the node never wrote the
-   file whole) ends the following, and the deletion then has no body to show;
-   the chip's own counts still say what went. */
+   is the whole file, an edit is applied to it the way the tool applies it
+   (`applyEdit`). An edit that cannot be followed ends the following, and the
+   deletion then has no body to show; the chip's own counts still say what
+   went. */
 export function hunksForFile(
   steps: readonly NodeStep[], path: string, op?: TaskFile['op'],
 ): WsHunk[] {
@@ -69,7 +70,7 @@ export function hunksForFile(
     if (!samePath(args.path, path)) return
     if (isEdit(step.name) && args.old_text !== undefined && args.new_text !== undefined) {
       out.push(fromEdit(args.old_text, args.new_text))
-      body = body != null && body.includes(args.old_text) ? body.replace(args.old_text, args.new_text) : null
+      body = body == null ? null : applyEdit(body, args.old_text, args.new_text, args.replace_all === true)
     } else if (args.content !== undefined) {
       body = args.content
       out.push(fromWrite(args.content))

@@ -215,6 +215,18 @@ describe('recording a file the turn removed', () => {
     expect(rowFor('/w/notes.md')?.hunks[0]?.rows.map((r) => r[1])).toEqual(['new', 'kept'])
   })
 
+  it('rebuilds every occurrence an edit with replace_all changed', () => {
+    const wrote = { path: '/w/notes.md', content: 'old\nold\n' }
+    wsOnTool('write_file', wrote)
+    wsOnToolDone('write_file', wrote, true, '', null, undefined, { path: '/w/notes.md', after: 'old\nold\n', before: 'was' })
+    wsOnTool('edit_file', { path: '/w/notes.md', old_text: 'old', new_text: 'new', replace_all: true })
+
+    wsOnToolDone('exec', { command: 'rm /w/notes.md' }, true, '', null, undefined, undefined,
+      [{ path: '/w/notes.md' }])
+
+    expect(rowFor('/w/notes.md')?.hunks[0]?.rows.map((r) => r[1])).toEqual(['new', 'new'])
+  })
+
   /* An edit the followed text cannot take means the final contents are not
      known, and a body that might be wrong is worse than none. */
   it('gives up the rebuilt contents when an edit does not fit what was followed', () => {

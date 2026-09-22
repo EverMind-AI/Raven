@@ -70,15 +70,16 @@ export function wsRecordChange(path: string, kind: WsChange['kind'], hunk: WsHun
 /* Following the file's contents through the turn's own calls, so a removal
    that arrives without them can still say what was lost. A whole-file write is
    the file; an append adds to what was followed and is lost when nothing was.
-   An edit is applied to the followed text, and one that does not fit it -- the
-   tool matched loosely, or the file was never written whole this turn -- ends
-   the following: a body that might be wrong is worse than none. */
+   An edit is applied the way the tool applies it (lib/hunks.ts's applyEdit),
+   and one that cannot be followed -- the file was never written whole this
+   turn, the tool matched loosely, or the call was ambiguous -- ends the
+   following: a body that might be wrong is worse than none. */
 function followWrite(c: WsChange, content: string, append: boolean): void {
   c.body = append ? (c.body == null ? null : c.body + content) : content
 }
 
-function followEdit(c: WsChange, oldText: string, newText: string): void {
-  c.body = c.body != null && c.body.includes(oldText) ? c.body.replace(oldText, newText) : null
+function followEdit(c: WsChange, oldText: string, newText: string, replaceAll: boolean): void {
+  c.body = c.body == null ? null : hunks.applyEdit(c.body, oldText, newText, replaceAll)
 }
 
 /* Two spellings of one file. A change row is keyed by the path as the model
@@ -126,7 +127,7 @@ export function wsOnTool(name: string, args: unknown, _silent?: boolean): void {
   let hit: WsChange | null = null
   if (name === 'edit_file' && path) {
     hit = wsRecordChange(path, 'edit', hunks.fromEdit(a.old_text as string, a.new_text as string))
-    followEdit(hit, String(a.old_text ?? ''), String(a.new_text ?? ''))
+    followEdit(hit, String(a.old_text ?? ''), String(a.new_text ?? ''), a.replace_all === true)
   } else if (name === 'write_file' && path) {
     hit = wsRecordChange(path, 'write', hunks.fromWrite(a.content as string))
     followWrite(hit, String(a.content == null ? '' : a.content), a.mode === 'append')

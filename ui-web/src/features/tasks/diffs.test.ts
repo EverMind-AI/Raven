@@ -73,6 +73,27 @@ describe('hunksForFile', () => {
     expect(hunks[2]?.rows.map((r) => r[1])).toEqual(['new'])
   })
 
+  /* `replace_all` changes every occurrence, and the tool refuses a repeated
+     match without it -- the follower does what the tool does, and gives the
+     body up where it cannot know what the tool did. */
+  it('closes on every occurrence replaced when the edit said replace_all', () => {
+    const hunks = hunksForFile([
+      tool('write_file', { path: '/w/a.md', content: 'old\nold\n' }),
+      tool('edit_file', { path: '/w/a.md', old_text: 'old', new_text: 'new', replace_all: true }),
+    ], '/w/a.md', 'delete')
+
+    expect(hunks[2]?.rows.map((r) => r[1])).toEqual(['new', 'new'])
+  })
+
+  it('closes with no body when a repeated match was edited without replace_all', () => {
+    const hunks = hunksForFile([
+      tool('write_file', { path: '/w/a.md', content: 'old\nold\n' }),
+      tool('edit_file', { path: '/w/a.md', old_text: 'old', new_text: 'new' }),
+    ], '/w/a.md', 'delete')
+
+    expect(hunks).toHaveLength(2)
+  })
+
   /* An edit the followed body cannot take -- the tool matched loosely, or the
      text was never there -- means the final contents are not known; a body that
      might be wrong is worse than none. */

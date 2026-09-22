@@ -60,6 +60,20 @@ export function fromDelete(content: string): WsHunk {
   return { rows, add: 0, del: all.length }
 }
 
+/* One `edit_file` call, applied to a followed body the way the tool applies it
+   to the file: every occurrence with `replace_all`, the one occurrence
+   otherwise. Null when the body cannot be followed further -- no occurrence
+   (the tool matched loosely, so what it changed is not known here) or several
+   without `replace_all` (the tool refuses that call, but whether it did is a
+   verdict this reader does not see). A body that might be wrong is worse than
+   none. */
+export function applyEdit(body: string, oldText: string, newText: string, replaceAll: boolean): string | null {
+  const count = oldText ? body.split(oldText).length - 1 : 0
+  if (count === 0) return null
+  if (replaceAll) return body.split(oldText).join(newText)
+  return count === 1 ? body.replace(oldText, newText) : null
+}
+
 /* One hunk's rows, back into unified-diff lines: a `@@ ... @@` header per run
    the rows carry, then a prefixed line per row. A 'gap' row is dropped -- it
    marks lines the builder chose not to number (fromEdit's context beyond

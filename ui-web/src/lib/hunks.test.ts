@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { fromDelete, fromEdit, fromUnified, fromWrite, toUnified } from './hunks'
+import { applyEdit, fromDelete, fromEdit, fromUnified, fromWrite, toUnified } from './hunks'
 
 describe('diff hunk builders', () => {
   it('folds distant unchanged edit context around the changed lines', () => {
@@ -122,5 +122,15 @@ describe('toUnified', () => {
 
   it('is just the file header for a change with no hunks', () => {
     expect(toUnified('empty.txt', [])).toBe('diff --git a/empty.txt b/empty.txt')
+  })
+})
+
+describe('applyEdit', () => {
+  it('replaces the one occurrence, every occurrence with replace_all, and gives up otherwise', () => {
+    expect(applyEdit('a\nb\n', 'a', 'A', false)).toBe('A\nb\n')
+    expect(applyEdit('a\na\n', 'a', 'A', true)).toBe('A\nA\n')
+    expect(applyEdit('a\na\n', 'a', 'A', false)).toBeNull()
+    expect(applyEdit('a\nb\n', 'zzz', 'A', false)).toBeNull()
+    expect(applyEdit('a\nb\n', '', 'A', true)).toBeNull()
   })
 })
