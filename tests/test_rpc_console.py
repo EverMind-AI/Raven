@@ -1803,13 +1803,20 @@ async def test_fs_dirs_marks_the_listed_directory_itself(tmp_path: Path, monkeyp
 
 
 def _dialog_answers(monkeypatch, answer: str | None) -> list[list[str]]:
-    """Stand in for the dialog: record the command, answer with a folder or a dismissal."""
+    """Stand in for the dialog: record the command, answer with a folder or a dismissal.
+
+    The command itself is stood in for as well, because which one a host has is
+    not what these cases are about: a headless runner has neither zenity nor
+    kdialog, and without this they failed at `_pick_dir_argv` before reaching
+    the answer they were written to pin.
+    """
     asked: list[list[str]] = []
 
     async def run(argv: list[str]) -> str | None:
         asked.append(argv)
         return answer
 
+    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: ["dialog"])
     monkeypatch.setattr(console_module, "_run_pick_dir", run)
     return asked
 
