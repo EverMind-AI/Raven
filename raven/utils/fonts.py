@@ -40,6 +40,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 FONT_DIRNAME = "fonts"
 """Raven's own font directory, under its runtime directory rather than a system
@@ -90,14 +91,18 @@ def _fontconfig_xml(directories: list[Path], cache: Path, *, inherit: str) -> st
     adds a face, it does not take the host's away, and a machine with a better
     Han font than this one should go on using it.
     """
-    dirs = "\n".join(f"  <dir>{directory}</dir>" for directory in directories)
+    # Escaped, because these are paths rather than literals: a directory with an
+    # ampersand in its name would otherwise make the file malformed, and
+    # fontconfig answers a malformed file by discarding all of it -- leaving the
+    # render with no fonts at all, which is worse than the problem being fixed.
+    dirs = "\n".join(f"  <dir>{escape(str(directory))}</dir>" for directory in directories)
     return (
         '<?xml version="1.0"?>\n'
         '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n'
         "<fontconfig>\n"
-        f"  <include ignore_missing='yes'>{inherit}</include>\n"
+        f"  <include ignore_missing='yes'>{escape(inherit)}</include>\n"
         f"{dirs}\n"
-        f"  <cachedir>{cache}</cachedir>\n"
+        f"  <cachedir>{escape(str(cache))}</cachedir>\n"
         "</fontconfig>\n"
     )
 

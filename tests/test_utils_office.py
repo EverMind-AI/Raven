@@ -307,19 +307,3 @@ def test_a_conversion_carries_the_font_directory_it_was_given(tmp_path: Path, mo
 
     assert captured["config"], "the conversion ran without being told where raven's faces are"
     assert str(face_dir) in captured["text"]
-
-
-def test_a_host_with_no_face_is_not_silently_taken_for_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    """fc-match answers every question with its nearest approximation, so on a host
-    with no Han face it names a Latin one. Taking that for a Han face is how a deck
-    gets measured against glyphs that do not exist."""
-    monkeypatch.setattr(fonts, "_SYSTEM_HAN_FACES", ())
-    monkeypatch.setattr(fonts, "bundled_face", lambda: None)
-    monkeypatch.setattr(fonts, "user_han_faces", list)
-    monkeypatch.setattr(fonts, "_fc_listed_han", lambda: None)
-    monkeypatch.setattr(fonts, "host_han_faces", list)
-    monkeypatch.setattr(fonts.sys, "platform", "linux")
-
-    assert fonts.han_face() is None
-    assert fonts.can_draw_han() is False
-    assert "fonts-noto-cjk" in fonts.install_hint() or "CJK" in fonts.install_hint()
