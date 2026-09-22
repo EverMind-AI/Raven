@@ -4022,6 +4022,53 @@ async def test_a_node_writes_down_its_own_transcript() -> None:
     assert '"name": "read"' in written
 
 
+class _ClosingExec(_PublishingExec):
+    """The acp lane after a narrating turn: steps, then what it said last."""
+
+    async def run(self, task: str, **kw) -> str:
+        from raven.agent.subagent import activity
+
+        activity.note_closing("the report")
+        return await super().run(task, **kw)
+
+
+async def _run_one_node(exec_: _FakeExec) -> _InMemBackend:
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "node a", "prompt_template": "hello"}],
+        }
+    )
+    exec_.run_id = ""
+    backend = _InMemBackend()
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": exec_}),
+        backend=backend,
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+    )
+    return backend
+
+
+async def test_a_node_writes_down_its_closing_message_beside_its_output() -> None:
+    backend = await _run_one_node(_ClosingExec())
+
+    assert backend.files["/hist/nodes/a.closing.md"].decode() == "the report"
+    assert backend.files["/hist/nodes/a.out.md"], "the whole output is still written"
+
+
+async def test_a_node_whose_lane_reported_no_closing_leaves_an_empty_one() -> None:
+    """Empty rather than absent: the id is reused across attempts, and an
+    earlier attempt's closing left in place would stand in for this attempt's
+    answer. The reader treats a blank file as no closing."""
+    backend = await _run_one_node(_PublishingExec())
+
+    assert backend.files["/hist/nodes/a.closing.md"] == b""
+
+
 async def test_a_node_in_flight_is_findable_in_the_live_index() -> None:
     """The transcript file is written when the node ends, and a reader watching
     a node that is still going needs an answer before then."""

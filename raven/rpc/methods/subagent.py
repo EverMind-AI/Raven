@@ -137,13 +137,19 @@ def _outcome(files: _NodeFiles) -> tuple[str | None, bool]:
     """The answer this call produced, and whether it produced one at all.
 
     ``error.md`` and ``out.md`` are written by the same ``finish``, never both,
-    so whichever exists is the outcome.
+    so whichever exists is the outcome. ``closing.md``, when the lane left one
+    beside ``out.md``, is what the run said after its last step and stands in
+    for the whole reply as the answer row: the whole reply repeats the
+    narration already drawn on the steps (CONTEXT.md, Closing Message).
     """
-    for name in ("out.md", "error.md"):
+    for name in ("closing.md", "out.md", "error.md"):
         path = files.path(name)
         try:
             if path.is_file():
-                return path.read_text(encoding="utf-8", errors="replace"), True
+                text = path.read_text(encoding="utf-8", errors="replace")
+                if name == "closing.md" and not text.strip():
+                    continue
+                return text, True
         except OSError:
             logger.warning("subagent.context: could not read {}", path)
     return None, False

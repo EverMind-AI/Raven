@@ -405,6 +405,14 @@ class SpawnRecord:
                         "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in transcript),
                         encoding="utf-8",
                     )
+                # What it said after its last step, when the lane can tell that
+                # apart from the whole reply. The context read draws this as
+                # the answer row, so a narrating agent's progress notes stay
+                # on the steps they preceded instead of opening the answer a
+                # second time; `out.md` keeps the whole reply for the caller.
+                closing = getattr(activity, "closing", None)
+                if output is not None and isinstance(closing, str) and closing.strip():
+                    self.file("closing.md").write_text(closing, encoding="utf-8")
             self._write_meta(meta)
         except OSError as exc:
             logger.warning("Subagent history at {} could not be finished: {}", self.dir, exc)

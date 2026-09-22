@@ -285,6 +285,8 @@ async def read_node(
     truncated = total > max_output_chars
     if output is not None and truncated:
         output = output[:max_output_chars]
+    artifact_root = _artifact_root(entry, nodes_root)
+    closing = await _read_text(backend, backend.join_path(artifact_root, f"{node_id}.closing.md"))
     return {
         "run_id": run_id,
         "node": node_id,
@@ -296,9 +298,9 @@ async def read_node(
         "output_truncated": truncated,
         "status": entry.get("status") if isinstance(entry, dict) else None,
         "error": entry.get("error") if isinstance(entry, dict) else None,
-        "transcript": await _read_transcript(
-            backend, backend.join_path(_artifact_root(entry, nodes_root), f"{node_id}.transcript.jsonl")
-        ),
+        # Blank means the lane reported none, and the whole output stands in.
+        "closing": closing[:max_output_chars] if closing and closing.strip() else None,
+        "transcript": await _read_transcript(backend, backend.join_path(artifact_root, f"{node_id}.transcript.jsonl")),
     }
 
 

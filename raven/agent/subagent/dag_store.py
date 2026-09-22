@@ -549,6 +549,15 @@ class DagRunStore:
         """
         return self._backend.join_path(self._nodes_root, f"{node_id}.attempt-{attempt}.transcript.jsonl")
 
+    def closing_path(self, node_id: str) -> str:
+        """Path of a node's closing message: ``<nodes_root>/<node_id>.closing.md``.
+
+        Written on every attempt, empty when the lane reported none: the id is
+        reused across attempts, and an earlier attempt's closing left in place
+        would stand in for this attempt's answer.
+        """
+        return self._backend.join_path(self._nodes_root, f"{node_id}.closing.md")
+
     def memory_path(self, node_id: str) -> str:
         """Path of a node's distilled memory file. See :func:`memory_path_in`."""
         return memory_path_in(self._backend, self._nodes_root, node_id)

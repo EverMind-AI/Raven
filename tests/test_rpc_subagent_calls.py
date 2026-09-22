@@ -431,6 +431,42 @@ async def test_the_transcript_carries_the_runs_own_turns_when_recorded(workspace
     del mgr
 
 
+async def test_the_answer_row_is_the_closing_message_when_the_lane_reports_one(workspace: Path) -> None:
+    """A narrating agent's whole reply repeats the notes already drawn on the
+    steps; the answer row is what it said after its last call, and the whole
+    reply stays in out.md for the caller that received it."""
+
+    class _Narrating:
+        async def run(self, task: str, **_kw: Any) -> str:
+            from raven.agent.subagent import activity
+
+            activity.note_transcript(
+                [
+                    {
+                        "role": "assistant",
+                        "content": "looking first",
+                        "tool_calls": [
+                            {"id": "t1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "t1", "content": "ok"},
+                ]
+            )
+            activity.note_closing("the report")
+            return "looking first\n\nthe report"
+
+    mgr = await _spawn(workspace, backend=_Narrating())
+    row = (await subagent_list({"session_id": SESSION}))["items"][0]
+    ctx = await subagent_context({"id": row["id"], "session_id": SESSION})
+
+    assert ctx["messages"][-1]["text"] == "the report"
+    assert ctx["messages"][1]["text"] == "looking first", "the narration stays on the step it preceded"
+    assert (
+        _node_file_on_disk(workspace, row["id"], "out.md").read_text(encoding="utf-8") == "looking first\n\nthe report"
+    )
+    del mgr
+
+
 async def test_the_context_read_names_a_stored_call_in_ravens_vocabulary(workspace: Path) -> None:
     """The record keeps the transport's name and so does the wire: a claude_code
     row is rendered under Claude Code's own names, so a direct chat reads as a
