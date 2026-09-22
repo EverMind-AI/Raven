@@ -573,6 +573,35 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
     assert '{"error"' not in result.output
 
 
+def test_print_turn_failure_draws_a_failure_not_a_reply(capsys: pytest.CaptureFixture) -> None:
+    """A failed turn's words are printed as a failure and the command exits
+    non-zero. The canonical error sentence still takes the diagnosis path; any
+    other text is marked as an error rather than drawn under the answer banner."""
+    from raven.cli import agent_commands
+
+    agent_commands._ONE_SHOT_EXIT["code"] = 0
+    try:
+        agent_commands._print_turn_failure("APIError: OpenrouterException - Cannot connect to host")
+        out = capsys.readouterr().out
+        assert "Error: turn failed: APIError: OpenrouterException - Cannot connect to host" in out
+        assert "Raven" not in out
+        assert agent_commands._ONE_SHOT_EXIT["code"] == 1
+
+        # Provider text is not markup: a bracketed path must print, not raise.
+        agent_commands._print_turn_failure("APIError: bad value [/v1/chat] rejected")
+        out = capsys.readouterr().out
+        assert "[/v1/chat]" in out
+
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
+        agent_commands._print_turn_failure("Error calling LLM (network@openrouter): connection refused")
+        out = capsys.readouterr().out
+        assert "Error: turn failed" not in out
+        assert "connection refused" in out
+        assert agent_commands._ONE_SHOT_EXIT["code"] == 1
+    finally:
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
+
+
 def test_print_llm_error_renders_diagnosis_and_marks_exit(capsys: pytest.CaptureFixture) -> None:
     """``_print_llm_error`` turns the canonical error content into a
     diagnosis + fix hint and marks the one-shot exit code; ordinary reply

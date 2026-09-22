@@ -25,6 +25,7 @@ from raven.config.schema import DeepResearchToolConfig
 from raven.contracts.llm_provider import ChatDelta, LLMResponse, ToolCallRequest
 from raven.contracts.loop_hooks import AgentHook, HookDecision
 from raven.contracts.tool import Tool, ToolResult
+from raven.providers.base import ErrorClassification
 from raven.sandbox import SandboxInitError
 from raven.spine.events import EpisodeStart as EvEpisodeStart
 from raven.spine.events import MediaOut as EvMediaOut
@@ -1046,6 +1047,33 @@ async def test_run_message_tool_text_streams_and_dissolves(tmp_path):
     assert any(isinstance(e, EvStreamDelta) and e.delta == "hi via tool" for e in sink.events)
     assert not any(isinstance(e, EvText) for e in sink.events)  # tool reply dissolves
     assert outcome.explicit_reply is True
+
+
+async def test_run_message_tool_reply_outlives_a_failed_follow_up_call(tmp_path):
+    # The tool delivered the reply; the model call after it failed for good. The
+    # turn is answered, so it ends as it always has -- no AnswerlessTurnError, no
+    # error text delivered as a second reply.
+    provider = _FakeStreamToolProvider(
+        [
+            [_message_tool_call('{"content": "hi via tool"}')],
+            [
+                ChatDelta(
+                    content="Error calling LLM (network@fake): boom",
+                    finish_reason="error",
+                    error_classification=ErrorClassification("network", retryable=False),
+                )
+            ],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("hi"), sink, _drain)
+
+    assert outcome.explicit_reply is True
+    assert not any(isinstance(e, EvText) for e in sink.events)
+    assert not any(isinstance(e, EvStreamDelta) and "Error calling LLM" in e.delta for e in sink.events)
 
 
 async def test_run_message_tool_media_is_not_dropped(tmp_path):

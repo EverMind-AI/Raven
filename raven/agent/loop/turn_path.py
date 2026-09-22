@@ -86,16 +86,40 @@ from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, fil
 from raven.contracts.harness import ActionRequest, CapabilityRequest, PlanningRequest, WindowPressure, WindowState
 from raven.contracts.loop_hooks import HookDecision
 from raven.permissions.turn import set_current_tool_call_id
+from raven.providers.base import parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
+from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise.turn_spend import TurnSpend
 
 if TYPE_CHECKING:
     from raven.agent.loop.checkpoint import CheckpointService
     from raven.contracts.token_strategy import UsageSnapshot
+    from raven.providers.base import ErrorClassification
     from raven.spine.events import NoticeKind
     from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
+
+
+def _llm_failure_detail(content: str | None, verdict: ErrorClassification | None, *, retry_after_output: bool) -> str:
+    """The one line a model call the loop gave up on is reported by.
+
+    The error response's own text when it is the provider's canonical
+    ``Error calling LLM (...)`` sentence, or when retries after output are off
+    and it is therefore the provider's account of the failure. Otherwise a
+    canonical sentence built from the classification: with retries after
+    output on, ``stream_llm_call`` hands a stall back with the reply that had
+    streamed as its content, and a reader's own half answer must not be filed
+    as the reason the turn ended; and a response with no text at all still
+    needs a sentence the readers of that format can parse.
+    """
+    text = (content or "").strip()
+    if text and (parse_llm_error(text) is not None or not retry_after_output):
+        return text
+    category = verdict.category if verdict is not None else "unknown"
+    if not text:
+        return f"Error calling LLM ({category}): the provider gave no detail"
+    return f"Error calling LLM ({category}): the call failed after the reply had started streaming"
 
 
 def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, Any] | None, turn_base: int) -> None:
@@ -554,10 +578,14 @@ class TurnPathMixin:
         tools_used: list[str] = []
         effective_model = model or self.model
 
-        # Track whether the turn was a normal exit or a
-        # max-iter interruption. ``status`` is the only piece read downstream
-        # (used to label the shadow-git commit and stamp the ``LoopOutcome``).
+        # Track whether the turn was a normal exit or a max-iter interruption.
+        # ``status`` labels the shadow-git commit and, with ``error_detail`` --
+        # the loop's own words for a model call it gave up on -- stamps the
+        # ``LoopOutcome`` the caller fails the turn on. The empty-response exit
+        # below sets only ``status``: it also fires after a tool has already
+        # delivered the reply, so its account stays a reply rather than a failure.
         status = "completed"
+        error_detail: str | None = None
 
         # The turn's window bookkeeping: the last billed context size, the retry
         # budgets every shrink draws on, and the picture window. Held here and
@@ -1484,6 +1512,9 @@ class TurnPathMixin:
                     logger.error("LLM returned error: {}", (clean or "")[:200])
                     final_content = clean or "Sorry, I encountered an error calling the AI model."
                     status = "error"
+                    error_detail = _llm_failure_detail(
+                        clean, verdict, retry_after_output=self._recovery_limits.llm_retry_after_output
+                    )
                     break
 
                 # Empty-response recovery: an empty assistant turn would
@@ -1772,6 +1803,7 @@ class TurnPathMixin:
                 final_content = str(decision.short_circuit_result)
                 messages = self.context.add_assistant_message(messages, final_content)
                 hook_ctx.metadata["turn_end"]["salvaged"] = True
+                error_detail = None
 
         if any(any(m.get(k) for k in _TURN_TRANSIENT_KEYS) for m in messages):
             messages = [m for m in messages if not any(m.get(k) for k in _TURN_TRANSIENT_KEYS)]
@@ -1781,7 +1813,7 @@ class TurnPathMixin:
         # run from ``_process_message``); ``outcome.status`` is surfaced so that
         # pipeline can gate on completion.
 
-        outcome = LoopOutcome(status=status)
+        outcome = LoopOutcome(status=status, error=error_detail)
         checkpoint = self._turn_checkpoint()
         if checkpoint is not None:
             # Per-turn snapshot: one commit covering all of this turn's edits,
@@ -2332,6 +2364,15 @@ class TurnPathMixin:
                         # budget allows more reruns than the one.
                         await on_progress("That attempt produced no answer; running the turn again.")
                     final_content, _, all_msgs, outcome = await _attempt(_seed_for_the_rerun(all_msgs), attempt_no)
+                # The loop gave up on the model. Its ladder, its rerun and its
+                # salvage have all had their say, so what is left is a turn with
+                # no answer: the failure the handler below files and the lane
+                # reports, not a reply for the outlets to deliver. A turn the
+                # message tool already answered is not answerless, and keeps
+                # ending the way it always has.
+                mt = self.tools.get("message")
+                if outcome.error and not (isinstance(mt, MessageTool) and mt.sent_in_turn):
+                    raise AnswerlessTurnError(outcome.error)
         except asyncio.CancelledError:
             # A stop is not a failure, but it is also not amnesia: what already
             # streamed is work the reader saw, so it lands in the session with a
@@ -2344,6 +2385,13 @@ class TurnPathMixin:
                 streamed,
                 status="cancelled",
             )
+            raise
+        except AnswerlessTurnError as exc:
+            # The attempt's own list rather than `live["messages"]`: a window pass
+            # that rebound `messages` mid-turn leaves `live` on the seed, and the
+            # marker would then be filed with none of this turn's work between the
+            # question and itself. `all_msgs` is what the healthy path persists.
+            self._save_broken_turn(session, all_msgs, persist_from, None, streamed, status="failed", reason=str(exc))
             raise
         except Exception as exc:
             self._save_broken_turn(
@@ -3028,6 +3076,10 @@ class TurnPathMixin:
                         drain=drain,
                         hook_sink=hook_sink,
                     )
+                except AnswerlessTurnError:
+                    # A turn the loop gave up on is not a crash: the executor and
+                    # the servers it holds are fine, and the next turn needs them.
+                    raise
                 except Exception:
                     # Before the executor goes: the prewarm this turn started is
                     # still running, and a stdio handshake inside it is spawned

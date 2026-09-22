@@ -1073,7 +1073,7 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
     from raven.config.schema import ToolSearchConfig
     from raven.session.manager import SessionManager
     from raven.spine.message import ChatType, Source
-    from raven.spine.turn import Origin, TurnRequest
+    from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 
     state = ReplayState(mode=mode)
     provider = ReplayProvider(recording, state)
@@ -1150,7 +1150,12 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
                     text=turn.content,
                 )
                 on_token_delta = _drop_delta if turn.trace_id in streamed_traces else None
-                result = await loop._process_message(req, session_key=turn.session_key, on_token_delta=on_token_delta)
+                try:
+                    result = await loop._process_message(
+                        req, session_key=turn.session_key, on_token_delta=on_token_delta
+                    )
+                except AnswerlessTurnError:
+                    result = None
                 replies.append(result[0] if result else None)
                 turns_replayed += 1
     finally:

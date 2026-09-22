@@ -766,3 +766,25 @@ describe('withoutSpentIntro', () => {
     expect(withoutSpentIntro(rows)).toEqual(rows)
   })
 })
+
+describe('a stopped or died turn replays as the line the live path wrote', () => {
+  it('draws the failed marker as a system line, not as the model speaking', () => {
+    const reason = 'Error calling LLM (first_byte_timeout): no first byte'
+    const msgs = toTranscriptMessages([
+      { role: 'user', text: 'hello' },
+      { role: 'assistant', text: `(turn failed: ${reason})`, turn_ended: { reason, status: 'failed' } }
+    ])
+
+    expect(msgs.some(m => m.role === 'system' && m.text === `Turn failed - ${reason}`)).toBe(true)
+    expect(msgs.some(m => m.text.includes('(turn failed'))).toBe(false)
+  })
+
+  it('draws the cancelled marker as the stop line', () => {
+    const msgs = toTranscriptMessages([
+      { role: 'user', text: 'hello' },
+      { role: 'assistant', text: '(turn cancelled by the user)', turn_ended: { status: 'cancelled' } }
+    ])
+
+    expect(msgs.at(-1)).toMatchObject({ role: 'system', text: 'Stopped by user' })
+  })
+})

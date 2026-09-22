@@ -20,6 +20,8 @@ from raven.spine import (
     Text,
     ToolEvent,
     ToolPhase,
+    TurnEvent,
+    TurnFailed,
     TurnRequest,
 )
 from raven.spine.delivery import Capabilities, DeliveryHub, make_hub_sink
@@ -212,6 +214,7 @@ def build_one_shot_spine(
     render: Callable[[str], None],
     *,
     render_notice: Callable[[str], None] | None = None,
+    render_error: Callable[[str], None] | None = None,
     send_progress: bool = False,
     send_tool_hints: bool = False,
     user_pool: int = 1,
@@ -227,6 +230,8 @@ def build_one_shot_spine(
 
     ``render_notice`` + the two config flags are threaded to the CliOutlet so
     progress lines render; a caller that omits them keeps Notice eaten.
+    ``render_error`` draws a failed turn's own words; a caller that omits it
+    gets them through ``render``.
 
     The per-turn usage summary (cli.turn_summary) is wired here, at the
     CliOutlet's deliver tail, so it renders once right after the reply."""
@@ -245,11 +250,20 @@ def build_one_shot_spine(
     runner: Any = _OneShotTurnRunner(agent_loop, stream=False, inline_tool_stream=True)
     if summary is not None:
         runner = _SummaryTurnRunner(runner, summary)
-    scheduler = Scheduler(
-        runner,
-        OriginPools(user=user_pool, system=system_pool),
-        make_hub_sink(hub),
-    )
+    hub_sink = make_hub_sink(hub)
+
+    async def sink(event: TurnEvent) -> None:
+        # The hub sink drops lifecycle events and nothing on this path reads the
+        # turn's outcome, so a failed turn printed nothing and exited clean. Its
+        # own words are the one report a one-shot reader gets, drawn after
+        # whatever the turn had already delivered.
+        if isinstance(event, TurnFailed) and not event.cancelled:
+            await hub.wait_idle(channel)
+            (render_error or render)(event.error)
+            return
+        await hub_sink(event)
+
+    scheduler = Scheduler(runner, OriginPools(user=user_pool, system=system_pool), sink)
 
     async def teardown() -> None:
         await scheduler.shutdown(grace=shutdown_grace)

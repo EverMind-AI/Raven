@@ -8,7 +8,8 @@ import type {
   SubagentCall,
   SubagentListResult,
   TranscriptDelegated,
-  TranscriptNotice
+  TranscriptNotice,
+  TranscriptTurnEnded
 } from '../rpc/index.js'
 import type { Msg, SessionInfo } from '../types.js'
 import type { DagRunState } from './dagRun.js'
@@ -120,6 +121,32 @@ export const noticeLine = (notice?: null | TranscriptNotice): string => {
 }
 
 /**
+ * The line a turn that died reads by, live or replayed -- one wording, for the
+ * same reason `noticeLine` is one. With no reason the label stands alone.
+ */
+export const failedTurnLine = (reason: string): string => {
+  const said = t('gui.turn_died', 'Turn failed - {e}', { e: reason })
+
+  return reason ? said : said.replace(/\s*[-·]\s*$/, '')
+}
+
+/**
+ * The line the closing marker of a stopped or died turn draws; empty when the
+ * entry carries none.
+ */
+export const turnEndedLine = (ended?: null | TranscriptTurnEnded): string => {
+  if (!ended) {
+    return ''
+  }
+
+  if (ended.status === 'cancelled') {
+    return t('gui.halted_bare', 'Stopped by user')
+  }
+
+  return failedTurnLine(typeof ended.reason === 'string' ? ended.reason.trim() : '')
+}
+
+/**
  * Rows as the transcript draws them, with each closed turn's artifact shelf
  * folded in at the boundary that closed it.
  *
@@ -171,7 +198,8 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
       role,
       text,
       tool_call_id: toolCallId,
-      tool_calls: toolCalls
+      tool_calls: toolCalls,
+      turn_ended: turnEnded
     } = row as TranscriptRow
 
     if (role === 'user' && origin) {
@@ -236,6 +264,27 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
           addUnique(artifacts.changes, change)
         }
       }
+    }
+
+    // The marker a stopped or died turn closes on. Its text is the account the
+    // model reads next turn, not the reader's: it is drawn as the system line
+    // the live path wrote, which closes the turn the way the notice below does.
+    const ending = role === 'assistant' ? turnEndedLine(turnEnded) : ''
+
+    if (ending) {
+      if (calls.length || reasoning) {
+        folded.push({
+          role,
+          text: '',
+          ...(calls.length ? { calls } : {}),
+          ...(reasoning ? { reasoning } : {}),
+          ...(reasoningMs != null ? { reasoningMs } : {})
+        })
+      }
+
+      folded.push({ role: 'system', text: ending })
+
+      continue
     }
 
     // An assistant entry that carries a notice had its text written by the
@@ -463,4 +512,6 @@ interface TranscriptRow {
   text?: string
   tool_call_id?: string
   tool_calls?: TranscriptToolCallRow[]
+  /** See `GatewayTranscriptMessage.turn_ended`: the marker a stopped or died turn closes on. */
+  turn_ended?: TranscriptTurnEnded
 }

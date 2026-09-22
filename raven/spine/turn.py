@@ -16,6 +16,17 @@ class Origin(StrEnum):
     SUBAGENT = "subagent"
 
 
+class AnswerlessTurnError(Exception):
+    """A runner's own report that the turn it ran ended with no answer.
+
+    Raised where an ordinary exception would misreport the failure: the runner
+    has already put it into words a reader can act on (the model call it gave
+    up on, and why), so ``describe_failure`` passes the text through unchanged
+    instead of prefixing it with this class name, and the ``turn_ended`` marker
+    that says so is filed before the failure leaves the loop.
+    """
+
+
 class BusyPolicy(StrEnum):
     """What to do when the conversation's lane is already busy."""
 

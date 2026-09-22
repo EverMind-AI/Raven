@@ -334,6 +334,18 @@ def test_a_message_that_already_names_its_class_is_not_prefixed_twice():
     assert describe_failure(ValueError("boom")) == "ValueError: boom"
 
 
+def test_a_turn_failure_is_reported_in_its_own_words():
+    """A runner that raises ``AnswerlessTurnError`` has already worded the failure for a
+    reader, so the event carries the text as it is, with no class name in front."""
+    from raven.spine import AnswerlessTurnError
+    from raven.spine.scheduler import describe_failure
+
+    assert describe_failure(AnswerlessTurnError("Error calling LLM (first_byte_timeout): no first byte")) == (
+        "Error calling LLM (first_byte_timeout): no first byte"
+    )
+    assert describe_failure(AnswerlessTurnError("")) == "AnswerlessTurnError"
+
+
 async def test_run_exception_is_logged_with_a_traceback():
     # The failure event carries only str(exc) to the front-end, so without a log
     # here the process side of a failed turn is completely silent.

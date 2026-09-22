@@ -580,6 +580,30 @@ async def test_run_replay_drives_the_loop_and_executes_nothing(tmp_path, monkeyp
     assert trace.enabled(), "suppression must not outlive the replay"
 
 
+async def test_run_replay_records_a_turn_the_loop_gave_up_on_as_a_missing_reply(tmp_path) -> None:
+    """A recorded call that answered with an error response fails the turn now;
+    the replay files the missing reply and drives on instead of aborting. The
+    sentence is worded as an auth failure so the loop's own retry ladder, which
+    only waits for retryable classes, does not run here."""
+    bundle = _make_bundle(
+        tmp_path,
+        llm_calls=[
+            (
+                None,
+                _llm_output(
+                    content="Error calling LLM (auth@replay): Unauthorized: invalid api key", finish_reason="error"
+                ),
+            )
+        ],
+        turns=[{"content": "go", "channel": "cli", "chat_id": "direct"}],
+    )
+
+    report = await run_replay(bundle, mode="warn")
+
+    assert (report.turns_replayed, report.turns_recorded) == (1, 1)
+    assert report.replies == [None]
+
+
 async def test_run_replay_serves_a_folded_recording_unchanged(tmp_path) -> None:
     """A replay reproduces a request; it does not assemble one.
 

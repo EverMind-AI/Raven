@@ -175,6 +175,11 @@ export function turnKept(): boolean {
   return store.turnKept(mainLane())
 }
 
+/** The words a failed turn's row reads, so the live row says what the replay says. */
+export function failedTurnLabel(): string {
+  return store.failedTurnLabel()
+}
+
 export function history(messages: HistoryMessage[]): void {
   const lane = mainLane()
   store.history(lane, messages)

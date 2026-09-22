@@ -62,6 +62,19 @@ async def _wait_for_background_work(agent_loop, scheduler, conversation: str) ->
         await asyncio.sleep(1.0)
 
 
+def _print_turn_failure(text: str) -> None:
+    """A turn the runtime gave up on: drawn as a failure rather than as the
+    reply, and a failed command for the exit code."""
+    from rich.markup import escape
+
+    if _print_llm_error(text):
+        return
+    console.print()
+    console.print(f"[red]Error: turn failed: {escape(text[:200])}[/red]")
+    console.print()
+    _ONE_SHOT_EXIT["code"] = 1
+
+
 def _print_agent_response(response: str, render_markdown: bool) -> None:
     """Render assistant response with consistent terminal styling."""
     content = response or ""
@@ -332,6 +345,7 @@ def register(app: typer.Typer) -> None:
                     "cli",
                     lambda t: _print_agent_response(t, render_markdown=markdown),
                     render_notice=lambda c: console.print(f"  [dim]↳ {c}[/dim]"),
+                    render_error=_print_turn_failure,
                     send_progress=bool(ch.send_progress) if ch else False,
                     send_tool_hints=bool(ch.send_tool_hints) if ch else False,
                 )
