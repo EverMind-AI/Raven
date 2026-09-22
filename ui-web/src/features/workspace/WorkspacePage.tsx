@@ -391,30 +391,14 @@ const whySaid = (e: unknown): string => {
   return said?.data?.detail || said?.message || String(e)
 }
 
-/* Two controls for a deck, in words: its own file, and the folder it sits
-   in. Nothing else -- no application picker, no viewer toolbar in the frame
-   below. The deck is read here and changed by talking to the agent; what a
-   reader still needs from the bar is the bytes, or the file among the others
-   in the file manager. Reveal runs where the GATEWAY runs, like every fs call,
-   so on a remote serve it shows the file on that host. */
-function DeckActions({ f, revealTip }: { f: WsFile; revealTip: string }): JSX.Element {
-  const saveAt = deliveries.byPath(f.path)?.downloadPath || fileURL(f.path)
-  const reveal = (): void => {
-    store.source().reveal?.(f.path).then(() => {}, (e: unknown) => toast(whySaid(e)))
-  }
-  return (
-    <span className="workspace-deck-acts">
-      <a className="mini" href={saveAt} download={f.path.split('/').pop() || ''}>{t('gui.ws.download')}</a>
-      <button className="mini ghost" onClick={reveal}>{revealTip}</button>
-    </span>
-  )
-}
-
+/* A deck adds nothing to the bar: no application picker, no viewer toolbar
+   in the frame below, no download control. The deck is read here and changed
+   by talking to the agent; what a reader still needs from the bar is the
+   file, or the file among the others in the file manager, and the folder
+   button every kind gets covers the second. So a deck's bar reads as the
+   same bar an image or a PDF gets. */
 function Fbar({ f, running }: { f: WsFile | null; running: boolean }): JSX.Element {
   const platform = hostPlatform()
-  /* Subscribed for the same reason BinNote is: the delivery row a save link
-     prefers can arrive after the pane mounts. */
-  useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
   const revealTip = t(platform === 'mac' ? 'gui.ws.reveal_finder'
     : platform === 'windows' ? 'gui.ws.reveal_explorer' : 'gui.ws.reveal_folder')
   const rel = f ? store.source().shortPath(f.path) : ''
@@ -482,8 +466,9 @@ function Fbar({ f, running }: { f: WsFile | null; running: boolean }): JSX.Eleme
           <Ico d={ICO.ext} />
         </button>
       ) : null}
-      {f && f.kind === 'pptx' ? <DeckActions f={f} revealTip={revealTip} /> : null}
-      {f && f.kind !== 'pptx' ? (
+      {/* Reveal runs where the GATEWAY runs, like every fs call, so on a remote
+          serve it shows the file on that host. */}
+      {f ? (
         <button
           className="ghost-ic tipdn"
           data-tip={revealTip}
