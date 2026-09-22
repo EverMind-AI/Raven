@@ -1367,10 +1367,10 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     _everos_config_module()
     from raven.config.update import EmbeddingPinError
     from raven_everos.config import (
-        REQUIRED_ROLES,
         RERANK_PROTOCOLS,
         ROLES,
         EverosRootNotOwnedError,
+        RoleRequiredError,
         clear_role,
         rerank_protocol,
         rerank_protocol_for_role,
@@ -1384,9 +1384,13 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
         raise ConfigValidationError(f"unknown everos role: {section}")
 
     if params.get("clear") is True:
-        if section in REQUIRED_ROLES:
-            raise ConfigValidationError(f"{section} is required for EverOS memory and cannot be cleared")
-        clear_role(section)
+        # The rule is `clear_role`'s now, so this door translates rather than
+        # restates it -- a second copy here is what let the wizard's own copy
+        # drift from this one.
+        try:
+            clear_role(section)
+        except RoleRequiredError as e:
+            raise ConfigValidationError(str(e)) from e
         return _everos_applied(agent_loop_factory)
 
     model = str(params.get("model") or "").strip()

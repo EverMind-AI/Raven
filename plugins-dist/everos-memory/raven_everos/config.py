@@ -225,6 +225,15 @@ def everos_owned() -> bool:
     return root_is_raven_owned(everos_root())
 
 
+class RoleRequiredError(RuntimeError):
+    """Raised when something tries to erase a role listed in REQUIRED_ROLES.
+
+    Its own class rather than a bare ValueError so every door can turn it into
+    that door's refusal: the RPC into a ConfigValidationError the page renders,
+    the wizard into a line rather than a traceback.
+    """
+
+
 class EverosRootNotOwnedError(RuntimeError):
     """A write was attempted against a root the user manages.
 
@@ -652,7 +661,7 @@ VENDORS: list[dict[str, Any]] = [
         "label": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
         "supports": {"llm", "embedding", "rerank", "multimodal"},
-        "rerank_provider": "vllm",
+        "rerank_protocol": "vllm",
     },
     {
         "name": "deepseek",
@@ -665,7 +674,7 @@ VENDORS: list[dict[str, Any]] = [
         "label": "DeepInfra",
         "base_url": "https://api.deepinfra.com/v1/openai",
         "supports": {"llm", "embedding", "rerank"},
-        "rerank_provider": "deepinfra",
+        "rerank_protocol": "deepinfra",
         "rerank_base_url": "https://api.deepinfra.com/v1/inference",
     },
     {
@@ -673,14 +682,14 @@ VENDORS: list[dict[str, Any]] = [
         "label": "SiliconFlow",
         "base_url": "https://api.siliconflow.cn/v1",
         "supports": {"llm", "embedding", "rerank"},
-        "rerank_provider": "vllm",
+        "rerank_protocol": "vllm",
     },
     {
         "name": "dashscope",
         "label": "DashScope (Alibaba)",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "supports": {"llm", "embedding", "rerank"},
-        "rerank_provider": "dashscope",
+        "rerank_protocol": "dashscope",
         "rerank_base_url": "https://dashscope.aliyuncs.com",
     },
 ]
@@ -751,7 +760,7 @@ RERANK_PROTOCOLS: tuple[str, ...] = ("deepinfra", "vllm", "dashscope")
 
 EverOS's own ``rerank.provider`` field, whose values these are. Named here
 because three surfaces have to agree on them -- the vendor table's
-``rerank_provider``, the wizard's question for a self-hosted endpoint, and the
+``rerank_protocol``, the wizard's question for a self-hosted endpoint, and the
 settings page's validation -- and a fourth spelling would be accepted, stored,
 and then fail at the first query.
 """
@@ -766,7 +775,7 @@ def rerank_protocol(name: str) -> str | None:
     vendor this table has never heard of.
     """
     row = vendor(name)
-    return row.get("rerank_provider") if row else None
+    return row.get("rerank_protocol") if row else None
 
 
 def rerank_protocol_for_role() -> str | None:
@@ -945,6 +954,13 @@ def clear_role(section: str) -> None:
     """
     if section not in ROLES:
         raise KeyError(f"unknown everos role {section!r}; roles: {ROLES}")
+    if section in REQUIRED_ROLES:
+        # The rule lives here, with the operation, rather than only at the RPC
+        # door that used to be its only reader. The wizard reaches this function
+        # too, and its own table answers a different question -- `optional`
+        # means "may be left unset", not "may be erased" -- so it cleared the
+        # one endpoint every knowledge base embeds with.
+        raise RoleRequiredError(f"{section} is required for EverOS memory and cannot be cleared")
     _require_owned(f"clear the {section} role")
     if section == "embedding":
         from raven.config.update import set_embedding_endpoint

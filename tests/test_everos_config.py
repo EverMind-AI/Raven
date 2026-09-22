@@ -66,7 +66,7 @@ class TestVendorTable:
         """A row offering rerank without a protocol would silently take EverOS's
         default (deepinfra), which is the defect this table exists to prevent."""
         if "rerank" in (row.get("supports") or ()):
-            assert row.get("rerank_provider"), row["name"]
+            assert row.get("rerank_protocol"), row["name"]
 
 
 class TestWhichVendorsAreOffered:
@@ -853,21 +853,39 @@ class TestTheEdgesThatOnlyShowUpWhenSomethingIsWrong:
 
         assert role_pin("multimodal") is None
 
-    def test_clearing_embedding_empties_ravens_own_block(self, pinned) -> None:
-        """Embedding's pin is not in this plugin's slice, so clearing it cannot
-        be a slice delete -- it has to reach the writer a knowledge base reads."""
+    def test_a_required_role_cannot_be_cleared_through_any_door(self, pinned) -> None:
+        """This replaces a case that pinned the defect as the behaviour.
+
+        It asserted that clearing embedding empties raven's own block -- which
+        it did, and that block is the one endpoint every knowledge base embeds
+        with. REQUIRED_ROLES said the opposite, and only the RPC door read it,
+        so the wizard's Skip reached this function and wiped it.
+        """
         import json
 
-        from raven_everos.config import clear_role, role_pin
+        from raven_everos.config import RoleRequiredError, clear_role, role_pin
 
         raw = json.loads(pinned.read_text(encoding="utf-8"))
         raw["embedding"] = {"model": "bge-m3", "provider": "deepinfra"}
         pinned.write_text(json.dumps(raw), encoding="utf-8")
         assert role_pin("embedding") is not None
 
-        clear_role("embedding")
+        for section in ("llm", "embedding"):
+            with pytest.raises(RoleRequiredError, match="cannot be cleared"):
+                clear_role(section)
 
-        assert role_pin("embedding") is None
+        assert role_pin("embedding") == ("bge-m3", "deepinfra")
+
+    def test_a_role_that_is_not_required_still_clears(self, pinned) -> None:
+        """The control: the guard refuses the two named roles and nothing else."""
+        from raven_everos.config import clear_role, role_pin, set_role
+
+        set_role("rerank", model="bge-reranker", provider="openrouter")
+        assert role_pin("rerank") is not None
+
+        clear_role("rerank")
+
+        assert role_pin("rerank") is None
 
     def test_clearing_an_unknown_role_is_refused_by_name(self, pinned) -> None:
         from raven_everos.config import clear_role

@@ -5655,6 +5655,53 @@ def test_keeping_the_stored_endpoint_still_reaches_the_service(
     assert env["EVEROS_EMBEDDING__API_KEY"] == "sk-sf"
 
 
+def test_a_configured_required_role_is_not_offered_a_skip(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`optional` answers "may be left unset", not "may be erased".
+
+    Embedding's table entry says optional, because a fresh install may leave it
+    unset and fall back to keyword recall. This menu is the other question --
+    the role IS set, and Skip here called `clear_role`, which wiped the one
+    endpoint every knowledge base embeds with. REQUIRED_ROLES is the answer to
+    that question, and rerank is the control that shows the guard is narrow.
+    """
+    import questionary
+
+    from raven.config.update import set_embedding_endpoint
+    from raven.config.update_providers import set_provider_fields
+    from raven_everos.config import set_role
+
+    set_provider_fields("openrouter", {"api_key": "sk-or"})
+    set_embedding_endpoint({"model": "bge-m3", "provider": "openrouter"})
+    set_role("rerank", model="bge-reranker", provider="openrouter")
+
+    offered: dict[str, list[str]] = {}
+
+    class _FQ:
+        def ask(self) -> str:
+            return "keep"
+
+    def _select(message: str, **kw: object) -> _FQ:
+        if "Already configured" in message:
+            offered[_select.section] = [str(getattr(c, "value", c)) for c in kw.get("choices") or []]
+        return _FQ()
+
+    monkeypatch.setattr(questionary, "select", _select)
+
+    for section in ("embedding", "rerank"):
+        _select.section = section
+        onboard_everos._config_everos_role(
+            section=section,
+            main_model="openrouter/anthropic/claude-sonnet-4-5",
+            non_interactive=False,
+            warnings=[],
+        )
+
+    assert "off" not in offered["embedding"], f"a required role was offered erasure: {offered['embedding']}"
+    assert "off" in offered["rerank"], f"the control lost its Skip: {offered['rerank']}"
+
+
 # --------------------------------------------------------------------------- capability tiers
 
 
