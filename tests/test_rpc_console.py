@@ -8,6 +8,7 @@ those, so the property it pins is one somebody already proved was unguarded.
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1863,6 +1864,32 @@ async def test_fs_pick_dir_refuses_a_path_that_is_not_a_directory(tmp_path: Path
     _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
     _dialog_answers(monkeypatch, str(tmp_path / "notes.md"))
     with pytest.raises(ConfigValidationError, match="not a directory"):
+        await console_module.fs_pick_dir({})
+
+
+async def test_run_pick_dir_reads_what_the_dialog_printed_and_nothing_else() -> None:
+    """The runner is the one piece a stub cannot stand in for: it is where a
+    dialog's stdout becomes a path, and where silence becomes no path. A
+    python that prints and one that does not stand in for the two answers,
+    with no dialog and no desktop needed to ask.
+    """
+    said = await console_module._run_pick_dir([sys.executable, "-c", "print('  /tmp/picked  ')"])
+    assert said == "/tmp/picked"
+    assert await console_module._run_pick_dir([sys.executable, "-c", "pass"]) is None
+
+
+async def test_fs_pick_dir_reports_a_dialog_that_would_not_start(monkeypatch) -> None:
+    """A dialog that cannot be launched at all fails the call rather than
+    reading as a dismissal: nobody was asked, so answering "no folder" would
+    leave the menu looking as though they had said no.
+    """
+
+    async def boom(argv: list[str]) -> str | None:
+        raise OSError("dialog: not executable")
+
+    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: ["dialog"])
+    monkeypatch.setattr(console_module, "_run_pick_dir", boom)
+    with pytest.raises(ConfigValidationError, match="folder dialog failed"):
         await console_module.fs_pick_dir({})
 
 
