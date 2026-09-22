@@ -201,7 +201,10 @@ export interface ModelSource {
   setProtocol?(m: string, provider: string, protocol: ApiProtocol): Promise<void>
   /* The settings door, for the picker's own footer. Only offered when the
      picker was opened from the composer chip, since the settings page opening
-     itself is not a way out of it. */
+     itself is not a way out of it. It lands on Model providers, which is the
+     page the footer names: keys are entered and model lists are built there,
+     and a door that opened wherever settings was left last answered a reader
+     who asked for one particular page. */
   openSettings(): void
   openProviderModels?(provider: string): void
 }
