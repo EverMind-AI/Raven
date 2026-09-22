@@ -398,10 +398,11 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
     refuse first. **Also spends the agent's own quota** -- see `_test_acp` for
     why the handshake alone could not stand in for it.
 
-    openai: the same bar, after the free ``/models`` probe, which refuses on its
-    own when the endpoint does not know the credential -- so nothing is spent on
-    one that cannot answer. **Otherwise spends the endpoint's own quota**, like
-    the two above.
+    openai: the same bar, after the free ``/models`` probe, which decides alone
+    only when nothing is listening. **Otherwise spends the endpoint's own
+    quota**, like the two above -- a reachable endpoint is settled by asking it,
+    because the probe cannot tell a rejected key from an endpoint that simply
+    serves no model list, and the second of those works.
 
     The verdict is "exited 0 and returned something", not "the reply contains
     PONG": asserting content would flake on an agent that answers with a
@@ -435,10 +436,15 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
         return await _test_acp(cfg, source=source, elapsed=elapsed)
     probe = await probe_one(cfg, source=source)
     if kind == "openai":
-        # The free probe first, and alone when it refuses: an endpoint that has
-        # already rejected the credential cannot answer a prompt, so there is
-        # nothing to spend and its own words are the better report.
-        if probe.status != "ready":
+        # The free probe runs first but decides alone only when it has proved
+        # there is nothing to send to. `/models` is optional -- the backend only
+        # ever POSTs `/chat/completions` -- so "reachable, but no model list" is
+        # a working agent, and it shares the `attention` verdict with a rejected
+        # key. Vetoing on that verdict would fail a Test that Connect accepts,
+        # which is the disagreement this whole gate exists to remove, so
+        # anything reachable is settled by asking it. A rejected key then costs
+        # one POST the endpoint refuses before it infers anything.
+        if probe.status == "missing":
             return TestResult(cfg.name, source, "openai", False, probe.detail, None, elapsed())
         answered = await ping_agent(cfg)
         detail = probe.detail if answered.ok else f"{answered.detail}; {probe.detail}"
