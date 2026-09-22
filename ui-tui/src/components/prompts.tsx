@@ -115,7 +115,9 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
   return (
     <Box borderColor={t.color.border} borderStyle="round" flexDirection="column" paddingX={1}>
       <Text bold color={t.color.warn}>
-        ⚠ {tr('gui.confirm.title', 'Approval needed')} · {req.description}
+        ⚠ {tr('gui.confirm.title', 'Approval needed')}
+        {req.asker ? ` · ${tr('gui.confirm.asker', 'asked by {name}', { name: req.asker })}` : ''} ·{' '}
+        {req.description}
       </Text>
 
       <Box flexDirection="column" paddingLeft={1}>
