@@ -60,16 +60,21 @@ export interface ApprovalRequestParams {
   tool_call_id: string
   command: string
   description: string
-  action_digest: string
   suggested_pattern: string
-  created_at: number
-  expires_at: number
+  /** The layout the sheet draws: shell.exec, file.write, mcp.call or unknown. */
+  kind: string
+  /** The shell command family that words the prompt, or empty. */
+  family: string
+  /** Who is asking: the request's origin, and a sub-agent's name. */
+  origin: { kind: string; name: string }
+  /** The tool's own account of the call, shaped by `kind`. */
+  evidence: Record<string, unknown>
 }
 
 /**
  * raven/rpc/approval_broker.py. `reason` is the choice a person made, or one
- * of the three nobody chose: "cancelled", "timeout", "error". The last two are
- * what the page turns into the lapsed notice.
+ * of the three nobody chose: "cancelled", "timeout" (a host that set a
+ * ceiling), "error". The last two are what the page turns into the lapsed notice.
  */
 export interface ApprovalClosedParams {
   approval_id: string

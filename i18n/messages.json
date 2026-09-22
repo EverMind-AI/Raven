@@ -5408,8 +5408,8 @@
       "zh": "拒绝并停止"
     },
     "gui.confirm.note_ph": {
-      "en": "Optional note for the agent (sent with a refusal)",
-      "zh": "可选备注，随拒绝发给智能体"
+      "en": "Tell it what to do instead (optional)",
+      "zh": "要告诉它该怎么做吗？不写也行"
     },
     "gui.perm.save_failed": {
       "en": "Could not save the permission mode; the engine keeps the previous one.",
@@ -5444,20 +5444,164 @@
       "zh": "要保存的前缀规则；在所有工作目录生效"
     },
     "gui.confirm.pattern_keys": {
-      "en": "Enter save · Esc back · expires in {n}s",
-      "zh": "Enter 保存 · Esc 返回 · {n} 秒后过期"
+      "en": "Enter save · Esc back",
+      "zh": "Enter 保存 · Esc 返回"
     },
     "gui.confirm.keys": {
-      "en": "up/down select · Enter confirm · 1-{count} quick pick · Tab add note · Ctrl+C deny · expires in {n}s",
-      "zh": "上下键选择 · Enter 确认 · 1-{count} 快选 · Tab 加备注 · Ctrl+C 拒绝 · {n} 秒后过期"
+      "en": "up/down select · Enter confirm · 1-{count} quick pick · Tab add note · Ctrl+C deny",
+      "zh": "上下键选择 · Enter 确认 · 1-{count} 快选 · Tab 加备注 · Ctrl+C 拒绝"
     },
     "gui.confirm.note_keys": {
-      "en": "Enter send · Esc back · expires in {n}s",
-      "zh": "Enter 发送 · Esc 返回 · {n} 秒后过期"
+      "en": "Enter send · Esc back",
+      "zh": "Enter 发送 · Esc 返回"
     },
     "gui.confirm.lapsed": {
       "en": "An approval request expired unanswered - the action did not run",
       "zh": "一个操作等待批准超时未回应 · 该操作没有执行"
+    },
+    "gui.confirm.always": {
+      "en": "Always allow: {pattern} (every directory)",
+      "zh": "始终允许：{pattern}（所有工作目录）"
+    },
+    "gui.confirm.title.shell": {
+      "en": "Allow {who} to run this command?",
+      "zh": "允许 {who} 运行这条命令吗？"
+    },
+    "gui.confirm.title.delete_command": {
+      "en": "Allow {who} to delete files?",
+      "zh": "允许 {who} 删除文件吗？"
+    },
+    "gui.confirm.title.publish_command": {
+      "en": "Allow {who} to push to the remote?",
+      "zh": "允许 {who} 推送到远端吗？"
+    },
+    "gui.confirm.title.install_command": {
+      "en": "Allow {who} to install packages?",
+      "zh": "允许 {who} 安装软件包吗？"
+    },
+    "gui.confirm.title.remote_exec_command": {
+      "en": "Allow {who} to run a command on a remote machine?",
+      "zh": "允许 {who} 在远程机器上执行命令吗？"
+    },
+    "gui.confirm.title.credential_command": {
+      "en": "Allow {who} to access credentials?",
+      "zh": "允许 {who} 访问凭据吗？"
+    },
+    "gui.confirm.title.destructive_vcs_command": {
+      "en": "Allow {who} to rewrite version history?",
+      "zh": "允许 {who} 改写版本历史吗？"
+    },
+    "gui.confirm.title.fetch_side_effect": {
+      "en": "Allow {who} to fetch and run external content?",
+      "zh": "允许 {who} 拉取并执行外部内容吗？"
+    },
+    "gui.confirm.title.file_write": {
+      "en": "Allow {who} to edit {name}?",
+      "zh": "允许 {who} 修改 {name} 吗？"
+    },
+    "gui.confirm.title.mcp_call": {
+      "en": "Allow {who} to use {tool}?",
+      "zh": "允许 {who} 使用 {tool} 吗？"
+    },
+    "gui.confirm.title.unknown": {
+      "en": "Allow {who} to do this?",
+      "zh": "允许 {who} 执行这个操作吗？"
+    },
+    "gui.confirm.why.shell": {
+      "en": "{who} wants to run a command in {cwd}; you have not allowed it yet.",
+      "zh": "{who} 要在 {cwd} 运行一条命令，你还没授权过。"
+    },
+    "gui.confirm.why.delete_command": {
+      "en": "{who} wants to run a delete command in {cwd}; you have not allowed deleting yet.",
+      "zh": "{who} 要在 {cwd} 运行一条删除命令，你还没授权过删除。"
+    },
+    "gui.confirm.why.publish_command": {
+      "en": "{who} wants to push work out of {cwd}; once it is up, others can see it.",
+      "zh": "{who} 要把 {cwd} 里的工作推出去，推上去别人就看得到。"
+    },
+    "gui.confirm.why.install_command": {
+      "en": "{who} wants to install software from {cwd}; that changes what this machine runs.",
+      "zh": "{who} 要在 {cwd} 安装软件，这会改变这台机器能运行什么。"
+    },
+    "gui.confirm.why.remote_exec_command": {
+      "en": "{who} wants to run a command on another machine from {cwd}.",
+      "zh": "{who} 要从 {cwd} 在另一台机器上执行命令。"
+    },
+    "gui.confirm.why.credential_command": {
+      "en": "{who} wants to read or change credentials from {cwd}.",
+      "zh": "{who} 要从 {cwd} 读取或改动凭据。"
+    },
+    "gui.confirm.why.destructive_vcs_command": {
+      "en": "{who} wants to rewrite version history in {cwd}; commits can be lost.",
+      "zh": "{who} 要在 {cwd} 改写版本历史，提交可能丢失。"
+    },
+    "gui.confirm.why.fetch_side_effect": {
+      "en": "{who} wants to fetch content from outside and act on it, in {cwd}.",
+      "zh": "{who} 要在 {cwd} 拉取外部内容并直接执行。"
+    },
+    "gui.confirm.why.file_write": {
+      "en": "{who} wants to write {path}; you have not allowed this file yet.",
+      "zh": "{who} 要写 {path}，你还没授权过这个文件。"
+    },
+    "gui.confirm.why.mcp_call": {
+      "en": "{who} wants to use the external tool {server}; you have not allowed it yet.",
+      "zh": "{who} 要用外部工具 {server}，你还没授权过这个工具。"
+    },
+    "gui.confirm.why.unknown": {
+      "en": "{who} wants to do this; you have not allowed it yet.",
+      "zh": "{who} 要执行这个操作，你还没授权过。"
+    },
+    "gui.confirm.ev.created": {
+      "en": "new file",
+      "zh": "新建文件"
+    },
+    "gui.confirm.ev.nodiff": {
+      "en": "No preview of the change",
+      "zh": "无法预览改动"
+    },
+    "gui.confirm.ev.cut": {
+      "en": "shortened to what fits -- the rest is not shown",
+      "zh": "内容过长，这里只显示了前一部分"
+    },
+    "gui.confirm.land.once": {
+      "en": "Allowed, just this once",
+      "zh": "已允许 · 只这一次"
+    },
+    "gui.confirm.land.always": {
+      "en": "Won't ask again for: {pattern}, in every working directory",
+      "zh": "以后不再问：{pattern}，在所有工作目录生效"
+    },
+    "gui.confirm.land.revoke": {
+      "en": "Undo",
+      "zh": "收回"
+    },
+    "gui.confirm.land.revoked": {
+      "en": "Revoked, it will ask again",
+      "zh": "已收回，下次还会问你"
+    },
+    "gui.confirm.land.revoke_failed": {
+      "en": "Could not take {pattern} back; remove it under permissions.tools.exec in the config",
+      "zh": "没能收回 {pattern}，去配置的 permissions.tools.exec 里删掉它"
+    },
+    "gui.confirm.land.deny": {
+      "en": "Denied, not asked again this turn",
+      "zh": "已拒绝 · 这一轮不再问同一条"
+    },
+    "gui.confirm.land.unsent": {
+      "en": "Not delivered: the request had already gone or the connection dropped; the turn is still waiting",
+      "zh": "没送出去 · 这条请求已失效或连接断了，会话还在等"
+    },
+    "gui.confirm.land.deny_note": {
+      "en": "Denied, you said: {text}",
+      "zh": "已拒绝 · 你说：{text}"
+    },
+    "gui.confirm.elsewhere": {
+      "en": "Another conversation is waiting for you",
+      "zh": "另一条会话在等你同意"
+    },
+    "gui.confirm.elsewhere_go": {
+      "en": "Open",
+      "zh": "去看看"
     },
     "gui.set.usg.cost_unknown": {
       "en": "cost unknown",

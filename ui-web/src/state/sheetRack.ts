@@ -206,11 +206,13 @@ export function remove(el: HTMLElement): void {
 
 /* Retire the sheets of one class in one session's bucket, and only there: a new
    question replaces the pending one it belongs beside, never one another
-   conversation is still waiting on. */
-export function dropClass(cls: string, key?: string): void {
+   conversation is still waiting on. `keep` names the sheets the sweep leaves
+   standing -- a question whose call would wait forever if it were taken down
+   unanswered. */
+export function dropClass(cls: string, key?: string, keep?: (el: HTMLElement) => boolean): void {
   const bucket = SHEETS.get(key || session())
   if (!bucket) return
-  ;[...bucket].forEach((el) => { if (el.classList.contains(cls)) remove(el) })
+  ;[...bucket].forEach((el) => { if (el.classList.contains(cls) && !(keep && keep(el))) remove(el) })
 }
 
 /* Called wherever the open session changes. Mount what belongs here, detach

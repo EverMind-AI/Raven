@@ -299,7 +299,7 @@ describe('the one listener that reads the order', () => {
   it('both denies an approval and stops the running turn', () => {
     const said: string[] = []
     openApproval({ approvalId: '1', command: 'rm -rf build/', description: 'shell' },
-      (choice) => said.push(choice), 'a')
+      { onChoice: (choice: string) => { said.push(choice) } }, 'a')
     turn.dispatch({ type: 'send' })
     key('Escape')
     expect(said).toEqual(['deny'])

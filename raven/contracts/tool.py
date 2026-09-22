@@ -230,6 +230,17 @@ class Tool(ABC):
     # per turn -- see ToolRegistry.set_channel.
     channels: frozenset[str] | None = None
 
+    # What an approval prompt shows for a call to this tool. ``approval_kind``
+    # picks the layout ("shell.exec", "file.write", "mcp.call"; empty reads as
+    # unknown) and ``approval_evidence`` fills it -- None means the arguments
+    # themselves are the evidence. The permission gate reads both only once a
+    # call has landed on a prompt, so a tool may do a little work here (read
+    # the file it is about to overwrite) without paying for it on every call.
+    approval_kind: str = ""
+
+    def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        return None
+
     def blocking_for(self, params: dict[str, Any]) -> bool:
         """This call's blocking verdict. Defaults to the class flag.
 

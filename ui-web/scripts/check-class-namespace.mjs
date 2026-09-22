@@ -203,8 +203,10 @@ const LEGACY_LOCAL = {
      the old settings page, which also named `.icb`, `.other`, `.srow` and
      `.what`, so what the check read as two domains' it now reads as
      composer's own. Up one more with the playbooks page, which was the other
-     reader of `.ic`. */
-  composer: 12,
+     reader of `.ic`. Down two with the permission sheet's redesign: its own
+     parts carry the prefix, and `.note-in` and `.pattern-in` left with the old
+     sheet. */
+  composer: 10,
   connections: 4,
   /* Down from 17 with the schedules section: the page's hero, its filter
      chips and its own list and row classes went with the two-pane frame
@@ -329,8 +331,9 @@ const LEGACY_CHROME = {
 
 const LEGACY_CHROME_EXPR = {
   /* Up from 1 for `.hot`, `.risk`, `.rule` and `.warm`: four names written
-     inside a `${...}` hole, which the expression reader used to skip over. */
-  chrome: 4,
+     inside a `${...}` hole, which the expression reader used to skip over.
+     Down one when `.rule` left with the approval sheet's prefix editor. */
+  chrome: 3,
   /* Up from 8 by the same deletion: `.led`, written from inside an expression
      in SetupRow.tsx and SetupSheet.tsx, was shared with the old settings page
      and is these two files' own now. */

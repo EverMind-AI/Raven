@@ -86,6 +86,28 @@ def allow_exec_pattern(pattern: str, *, config_path: Path | None = None) -> bool
     return added
 
 
+def remove_exec_pattern(pattern: str, *, config_path: Path | None = None) -> bool:
+    """Take back one ``permissions.tools.exec`` allow rule; False when none was there.
+
+    Only an ``allow`` entry goes: a ``deny`` or ``ask`` under the same pattern is
+    the user's own rule, not one a prompt wrote, and a prompt does not undo it.
+    """
+    path = config_path or get_config_path()
+
+    def _apply(_text: str | None) -> tuple[str, bool]:
+        data = read_raw_or_raise(path)
+        table = data.get("permissions", {}).get("tools", {}).get("exec")
+        removed = isinstance(table, dict) and table.get(pattern) == "allow"
+        if removed:
+            del table[pattern]
+        return json.dumps(data, indent=2, ensure_ascii=False), removed
+
+    removed = atomic_update(path, _apply)
+    if removed:
+        logger.info("config/update: permissions.tools.exec[{!r}] removed", pattern)
+    return removed
+
+
 def reset_cron_config(*, config_path: Path | None = None) -> None:
     """Remove the entire ``cron`` section from on-disk config.
 

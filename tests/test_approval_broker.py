@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 
 import pytest
 
@@ -47,7 +46,6 @@ async def test_response_resolves_matching_request(choice: str, expected: Approva
     assert params["turn_id"] == "turn-a"
     assert params["tool_call_id"] == "call-a"
     assert params["command"] == "rm file.txt"
-    assert params["action_digest"] == hashlib.sha256(b"rm file.txt").hexdigest()
     assert broker.resolve(params["approval_id"], choice, conversation_id="session-a") is True
     assert (await waiting).choice is expected
 
@@ -107,7 +105,7 @@ async def test_timeout_denies_and_expires_request() -> None:
     async def send(frame: dict) -> None:
         frames.append(frame)
 
-    broker = ApprovalBroker(send, visible_timeout_s=0.01, hard_timeout_s=0.02)
+    broker = ApprovalBroker(send, hard_timeout_s=0.02)
     result = await broker.await_approval(
         conversation_id="session-a",
         turn_id="turn-a",
@@ -133,13 +131,53 @@ async def test_timeout_denies_and_expires_request() -> None:
     assert broker.resolve(approval_id, "allow", conversation_id="session-a") is False
 
 
-async def test_request_exposes_the_shorter_frontend_deadline() -> None:
+async def test_the_request_carries_the_prompts_view_and_no_deadline() -> None:
+    """What a surface draws the prompt from rides on the request as given, and
+    nothing on it says when the question expires, because it does not."""
     frames: list[dict] = []
 
     async def send(frame: dict) -> None:
         frames.append(frame)
 
-    broker = ApprovalBroker(send, visible_timeout_s=30, hard_timeout_s=35)
+    broker = ApprovalBroker(send)
+    waiting = asyncio.create_task(
+        broker.await_approval(
+            conversation_id="session-a",
+            turn_id="turn-a",
+            tool_call_id="call-a",
+            command="rm coverage.xml",
+            description="Delete files",
+            kind="shell.exec",
+            family="delete_command",
+            origin="subagent",
+            origin_name="raven-code",
+            evidence={"command": "rm coverage.xml", "cwd": "/w"},
+        )
+    )
+    params = (await _wait_for_frame(frames))["params"]
+
+    assert params["kind"] == "shell.exec"
+    assert params["family"] == "delete_command"
+    assert params["origin"] == {"kind": "subagent", "name": "raven-code"}
+    assert params["evidence"] == {"command": "rm coverage.xml", "cwd": "/w"}
+    assert not {"created_at", "expires_at", "action_digest"} & params.keys()
+    await asyncio.sleep(0.05)
+    assert not waiting.done(), "with no ceiling set the question stays open"
+    assert broker.resolve(params["approval_id"], "deny", conversation_id="session-a") is True
+    assert (await waiting).choice is ApprovalChoice.DENY
+    assert frames[-1]["method"] == "approval.closed"
+    assert frames[-1]["params"]["reason"] == "deny"
+
+
+async def test_a_request_without_a_view_still_names_its_kind() -> None:
+    """A caller handing over only the action line -- an older responder, a
+    fake -- still produces a frame a client can lay out."""
+    frames: list[dict] = []
+
+    async def send(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = ApprovalBroker(send)
     waiting = asyncio.create_task(
         broker.await_approval(
             conversation_id="session-a",
@@ -151,11 +189,20 @@ async def test_request_exposes_the_shorter_frontend_deadline() -> None:
     )
     params = (await _wait_for_frame(frames))["params"]
 
-    assert 29 <= params["expires_at"] - params["created_at"] <= 30
-    assert broker.resolve(params["approval_id"], "deny", conversation_id="session-a") is True
-    assert (await waiting).choice is ApprovalChoice.DENY
-    assert frames[-1]["method"] == "approval.closed"
-    assert frames[-1]["params"]["reason"] == "deny"
+    assert params["kind"] == "unknown"
+    assert params["family"] == ""
+    assert params["origin"] == {"kind": "", "name": ""}
+    assert params["evidence"] == {}
+    assert broker.resolve(params["approval_id"], "allow", conversation_id="session-a") is True
+    assert (await waiting).approved
+
+
+def test_a_ceiling_must_be_positive_when_set() -> None:
+    async def send(frame: dict) -> None:
+        pass
+
+    with pytest.raises(ValueError):
+        ApprovalBroker(send, hard_timeout_s=0)
 
 
 async def test_cancel_all_denies_every_pending_request() -> None:
@@ -422,7 +469,7 @@ async def test_the_session_grant_and_the_pattern_travel_back() -> None:
     async def send(frame: dict) -> None:
         frames.append(frame)
 
-    broker = ApprovalBroker(send, visible_timeout_s=1.0, hard_timeout_s=2.0)
+    broker = ApprovalBroker(send, hard_timeout_s=2.0)
     waiting = asyncio.ensure_future(
         broker.await_approval(
             conversation_id="session-a",
@@ -458,3 +505,151 @@ async def test_the_session_grant_and_the_pattern_travel_back() -> None:
     assert outcome.choice is ApprovalChoice.ALLOW_SESSION
     assert outcome.approved is True
     assert outcome.pattern == ""
+
+
+async def test_a_second_request_in_the_same_conversation_waits_for_the_first() -> None:
+    """Both surfaces draw one prompt per conversation and replace it when
+    another lands, so two open at once would take the first off the screen
+    with nobody having answered it -- and nothing behind it would ever end
+    that call. The second is sent once the first is answered."""
+    frames: list[dict] = []
+
+    async def send(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = ApprovalBroker(send)
+    ask = lambda call, command: broker.await_approval(  # noqa: E731
+        conversation_id="session-a", turn_id="turn-a", tool_call_id=call, command=command, description="Delete"
+    )
+    first = asyncio.create_task(ask("call-1", "rm a"))
+    second = asyncio.create_task(ask("call-2", "rm b"))
+    await _wait_for_frame(frames)
+    await asyncio.sleep(0.02)
+
+    requests = [f["params"]["command"] for f in frames if f["method"] == "approval.request"]
+    assert requests == ["rm a"], "the second request is not on the wire while the first is open"
+    assert broker.pending("session-a") and broker.pending("session-a")[0]["command"] == "rm a"
+
+    assert broker.resolve(frames[0]["params"]["approval_id"], "allow", conversation_id="session-a") is True
+    assert (await first).approved
+    for _ in range(20):
+        if len([f for f in frames if f["method"] == "approval.request"]) == 2:
+            break
+        await asyncio.sleep(0)
+    requests = [f["params"]["command"] for f in frames if f["method"] == "approval.request"]
+    assert requests == ["rm a", "rm b"]
+    assert broker.resolve(frames[-1]["params"]["approval_id"], "deny", conversation_id="session-a") is True
+    assert (await second).choice is ApprovalChoice.DENY
+
+
+async def test_conversations_do_not_wait_on_one_another() -> None:
+    frames: list[dict] = []
+
+    async def send(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = ApprovalBroker(send)
+    tasks = [
+        asyncio.create_task(
+            broker.await_approval(
+                conversation_id=f"session-{i}",
+                turn_id="t",
+                tool_call_id=f"c{i}",
+                command=f"rm {i}",
+                description="Delete",
+            )
+        )
+        for i in range(2)
+    ]
+    for _ in range(20):
+        if len(frames) == 2:
+            break
+        await asyncio.sleep(0)
+
+    assert sorted(f["params"]["conversation_id"] for f in frames) == ["session-0", "session-1"]
+    assert len(broker.pending()) == 2
+    assert [p["command"] for p in broker.pending("session-1")] == ["rm 1"]
+    for frame in frames:
+        broker.resolve(frame["params"]["approval_id"], "deny", conversation_id=frame["params"]["conversation_id"])
+    await asyncio.gather(*tasks)
+    assert broker.pending() == []
+
+
+def test_the_default_ceiling_is_a_floor_nobody_present_reaches() -> None:
+    """A day: long enough that a person who stepped away finds the prompt
+    still waiting, short enough that "waits forever" is not a state."""
+    from raven.rpc.approval_broker import DEFAULT_HARD_TIMEOUT_S
+
+    async def send(frame: dict) -> None:
+        pass
+
+    assert DEFAULT_HARD_TIMEOUT_S == 24 * 3600
+    assert ApprovalBroker(send)._hard_timeout_s == DEFAULT_HARD_TIMEOUT_S
+
+
+async def test_only_a_persisted_grant_leaves_a_receipt_to_undo() -> None:
+    """A receipt is minted for the one answer that writes a rule. Anything else
+    has nothing on disk of its own, so an undo naming it finds nothing rather
+    than reaching for a rule wearing the same text."""
+    frames: list[dict] = []
+
+    async def send(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = ApprovalBroker(send)
+    for choice in ("allow", "allow_session", "deny"):
+        frames.clear()
+        waiting = asyncio.create_task(
+            broker.await_approval(
+                conversation_id="session-a",
+                turn_id="turn-a",
+                tool_call_id="call-a",
+                command="git push origin HEAD",
+                description="Push",
+                suggested_pattern="git push *",
+            )
+        )
+        params = (await _wait_for_frame(frames))["params"]
+        broker.resolve(params["approval_id"], choice, conversation_id="session-a", pattern="git push *")
+        outcome = await waiting
+        assert outcome.approval_id == params["approval_id"], "every answer names its request"
+        # No slot, so no wait either: an undo answers at once with nothing.
+        assert await broker.written_pattern(params["approval_id"], timeout_s=5) is None, choice
+
+
+async def test_a_receipt_is_spent_by_the_undo_that_succeeded_not_by_reading_it() -> None:
+    """Reading the receipt tells the undo what to remove; spending it says the
+    removal happened. Keeping the two apart is what lets an undo that failed on
+    the way to disk be pressed again -- the rule is still there, and this is the
+    only record of whose it is. Spending it is still what stops a second undo
+    from reaching a rule some later prompt wrote under the same text."""
+    frames: list[dict] = []
+
+    async def send(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = ApprovalBroker(send)
+    waiting = asyncio.create_task(
+        broker.await_approval(
+            conversation_id="session-a",
+            turn_id="turn-a",
+            tool_call_id="call-a",
+            command="git push origin HEAD",
+            description="Push",
+            suggested_pattern="git push *",
+        )
+    )
+    params = (await _wait_for_frame(frames))["params"]
+    broker.resolve(params["approval_id"], "allow_always", conversation_id="session-a", pattern="git push *")
+    await waiting
+
+    broker.record_grant(params["approval_id"], "git push *", True)
+    # Read twice: an undo whose write failed comes back and finds the same rule.
+    assert await broker.written_pattern(params["approval_id"]) == "git push *"
+    assert await broker.written_pattern(params["approval_id"]) == "git push *"
+
+    broker.forget_grant(params["approval_id"])
+    assert await broker.written_pattern(params["approval_id"], timeout_s=0.02) is None
+    # A report for a grant nobody is holding is dropped rather than kept.
+    broker.record_grant(params["approval_id"], "git push *", True)
+    assert await broker.written_pattern(params["approval_id"], timeout_s=0.02) is None

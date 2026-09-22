@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 192 methods, 106 component schemas.
+// 194 methods, 106 component schemas.
 
 /* eslint-disable */
 /**
@@ -3734,6 +3734,36 @@ export interface ApprovalRespondResult {
    */
   ok: boolean;
 }
+export interface ApprovalRevokeParams {
+  /**
+   * The answered request whose grant to take back.
+   */
+  approval_id: string;
+}
+export interface ApprovalRevokeResult {
+  /**
+   * False when that answer wrote no rule of its own, the undo came twice, or the file could not be written.
+   */
+  ok: boolean;
+}
+export interface ApprovalPendingParams {
+  /**
+   * One conversation's requests; every conversation's when absent.
+   */
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+export interface ApprovalPendingResult {
+  /**
+   * Each open request's approval.request params, exactly as they were first sent.
+   */
+  requests: {
+    [k: string]: JsonValue;
+  }[];
+}
 export interface ClarifyRespondParams {
   answer: string;
   request_id?: string;
@@ -4695,6 +4725,8 @@ export interface RpcMethods {
   'playbooks.run': { params: PlaybooksRunParams; result: PlaybooksRunResult };
   'playbooks.create': { params: PlaybooksCreateParams; result: PlaybooksCreateResult };
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult };
+  'approval.revoke': { params: ApprovalRevokeParams; result: ApprovalRevokeResult };
+  'approval.pending': { params: ApprovalPendingParams; result: ApprovalPendingResult };
   'clarify.respond': { params: ClarifyRespondParams; result: ClarifyRespondResult };
   'confirm.respond': { params: ConfirmRespondParams; result: ConfirmRespondResult };
   'slash.exec': { params: SlashExecParams; result: SlashExecResult };
@@ -4762,7 +4794,9 @@ export type ResultOf<M extends RpcMethod> = RpcMethods[M]['result'];
 
 /** Method names present in the contract, for a runtime guard at the edges. */
 export const RPC_METHODS = [
+  "approval.pending",
   "approval.respond",
+  "approval.revoke",
   "browser.close",
   "browser.frame",
   "browser.input",

@@ -639,7 +639,12 @@ export type GatewayEvent =
         command: string
         conversation_id: string
         description: string
-        expires_at: number
+        // What a richer surface draws the prompt from; the terminal shows the
+        // description and the command and ignores these.
+        evidence: Record<string, unknown>
+        family: string
+        kind: string
+        origin: { kind: string; name: string }
         suggested_pattern?: string
         tool_call_id: string
         turn_id: string

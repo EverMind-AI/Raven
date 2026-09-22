@@ -58,3 +58,40 @@
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip:focus-visible { border-color: var(--text); }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > img { flex: none; width: 100%; height: 100%; object-fit: contain; scroll-snap-align: start; user-select: none; }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > .cp-tpl-cover.cp-tpl-empty { position: static; width: 100%; height: 100%; border: 0; }
+
+/* The permission sheet's own parts: why the agent is asking, the evidence
+   block by kind, the landed line an answer leaves. The row of answers is laid
+   out in styles/page.css beside the rack's `.opt`, which is the rack's class. */
+.cp-why { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-bottom: 8px; }
+.cp-ev { display: grid; gap: 6px; }
+.cp-ev-path { font-weight: 600; }
+.cp-ev-none { color: var(--faint); font-style: italic; }
+/* Not faint like `.cp-ev-none`: that says there was nothing to show, this says
+   there is more than is shown, and the reader is about to answer about it. */
+.cp-ev-cut { color: var(--amber); font-size: 12px; }
+.cp-diff, .cp-json { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cp-add { color: var(--moss); }
+.cp-del { color: var(--clay); }
+.cp-hunk { color: var(--faint); }
+.cp-land { display: flex; align-items: center; gap: 10px; min-height: 27px; font-size: 12.5px; color: var(--muted); }
+.cp-land-text { flex: none; }
+.cp-note {
+  flex: 1; min-width: 0; border: 0; border-radius: 7px; padding: 5px 9px;
+  background: var(--surface); font: inherit; font-size: 12.5px; color: var(--text); outline: 0;
+}
+.cp-undo {
+  border: 0; background: none; color: var(--amber); font: inherit; font-size: 12px;
+  cursor: pointer; padding: 2px 6px; border-radius: 6px;
+}
+.cp-undo:hover { text-decoration: underline; }
+
+/* Another conversation waiting on the reader, said above the sheets. The dock
+   passes pointer events through (styles/page.css `.dock`), so like every card
+   in it this line takes them back for itself, and it keeps the cards' column. */
+.cp-elsewhere {
+  display: flex; align-items: center; gap: 10px; max-width: var(--col); margin: 0 auto 6px;
+  padding: 6px 12px; border-radius: 10px; background: var(--raised); color: var(--muted);
+  font-size: 12.5px; pointer-events: auto;
+}
+.cp-elsewhere button { border: 0; background: none; color: var(--amber); font: inherit; cursor: pointer; padding: 0; }
+.cp-elsewhere button:hover { text-decoration: underline; }

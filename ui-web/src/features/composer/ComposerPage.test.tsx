@@ -161,6 +161,15 @@ afterEach(() => {
   resetSources()
 })
 
+describe('a sentence sent from outside the field', () => {
+  it('goes through the source trimmed, and an empty one goes nowhere', () => {
+    const { calls } = wire()
+    store.say('  use git clean instead  ')
+    store.say('   ')
+    expect(calls.sent).toEqual(['use git clean instead'])
+  })
+})
+
 describe('the send button', () => {
   it('is dead with an empty field, live once something is typed', () => {
     wire()

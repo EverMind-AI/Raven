@@ -98,12 +98,18 @@ class ApprovalChoice(StrEnum):
 @dataclass(frozen=True)
 class ApprovalOutcome:
     """One round-trip's result. ``feedback`` is the sentence a human attached to
-    a refusal, verbatim; ``answered`` is false when nobody said anything."""
+    a refusal, verbatim; ``answered`` is false when nobody said anything.
+
+    ``approval_id`` names the request this answered, for a transport that has to
+    report back what the grant did -- the only way a later "undo" can be about
+    the rule this answer wrote rather than about any rule wearing that text.
+    Empty from a transport that mints no ids."""
 
     choice: ApprovalChoice
     feedback: str = ""
     answered: bool = True
     pattern: str = ""
+    approval_id: str = ""
 
     @property
     def approved(self) -> bool:

@@ -53,7 +53,7 @@ import { refusal as uploadRefusal } from '../lib/upload'
 import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
 import * as page from '../state/page'
-import { clarifyRequest, dispatch, installPipeline } from '../state/session/pipeline'
+import { clarifyRequest, dispatch, installPipeline, replayPendingApprovals } from '../state/session/pipeline'
 import { reconnect, switchToDraft } from '../state/session/registry'
 import { installComposerActions, installSlashActions } from '../state/session/runtime'
 import * as settingsDialog from '../state/settings'
@@ -323,6 +323,9 @@ export function installPushes(): void {
 async function afterReconnect(): Promise<void> {
   await gateway().call('system.hello', { client_version: '0.1.0', surface: surface() }).catch(() => {})
   await reconnect()
+  /* The sheets a question was waiting in are gone with the old socket; the
+     questions are not. */
+  await replayPendingApprovals()
   /* The installed skills, plugins and tools are read once at boot into
      module state and served from there, so a socket that was down when boot
      ran leaves all three empty for the life of the tab -- an empty page
