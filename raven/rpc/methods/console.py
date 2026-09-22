@@ -1210,9 +1210,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
 # settings.everos — the EverOS model roles behind long-term memory
 # ---------------------------------------------------------------------------
 
-_EVEROS_FIELDS = ("model", "api_key", "base_url", "provider")
-_EVEROS_REQUIRED = ("llm", "embedding")
-
 
 def _everos_config_module():
     """The plugin's config module, or a typed error naming what to install.
@@ -1251,168 +1248,216 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
             "sections": {},
             "config_path": "",
         }
-    from raven.config.raven import load_raven_config
-    from raven_everos.config import (
-        WRITABLE_SECTIONS,
-        everos_has_own_embedding,
-        get_everos_config_path,
-        host_embedding_section,
-        load_everos_config,
-    )
+    from raven_everos.config import describe_roles
 
-    data = load_everos_config()
-    sections = {}
-    for sec in WRITABLE_SECTIONS:
-        cur = data.get(sec) or {}
-        if sec == "embedding" and not everos_has_own_embedding():
-            # The endpoint's other home. Reading only the file left this card
-            # blank for an install the wizard had just configured, and filling
-            # it in from there wrote a second endpoint that silently outranked
-            # the one a knowledge base goes on reading.
-            #
-            # The pair as stored, beside the address it resolves to: the model
-            # the card offers to edit has to be the one on file, not the id the
-            # vendor is addressed by, or saving the row back would store a
-            # spelling the user never chose.
-            pin = load_raven_config().embedding
-            cur = {
-                **host_embedding_section(),
-                "model": pin.model or "",
-                "provider": pin.provider or "",
-            }
-        model = str(cur.get("model") or "")
-        # A guard against a hand-written "<fill me>", not the mechanism that
-        # makes an unconfigured role read as unset: the shipped template seeds
-        # every section with a real model name and an empty key, so a role
-        # nobody configured arrives here with a model. `api_key_set` is what
-        # carries "not configured" to the card.
-        if model.startswith("<"):
-            model = ""
-        sections[sec] = {
-            "model": model,
-            "base_url": str(cur.get("base_url") or ""),
-            "provider": str(cur.get("provider") or ""),
-            "api_key_set": bool(cur.get("api_key")),
+    return describe_roles()
+
+
+# One restart at a time, and one more run queued at most. Two saves in quick
+# succession must end at the final configuration without their stop/spawn
+# windows overlapping -- overlapping ones race for the same port and the loser
+# reports a startup failure for a configuration that is actually in force.
+_everos_restart: dict[str, Any] = {"running": False, "again": False, "loops": []}
+# Held rather than dropped: a bare create_task is collectable while it is the
+# only reference to a running task, and a collected one silently skips the
+# restart the save promised.
+_everos_restart_tasks: set[asyncio.Task] = set()
+
+
+async def _restart_everos_for_config(loop: Any) -> None:
+    """Apply what was just written, and report the outcome to the page.
+
+    Backgrounded by the caller: a spawn is seconds, and a save that blocks on
+    one cannot say anything while it waits. The outcome arrives as
+    ``memory.health``, the frame the page's standing banner already reads --
+    success included, because that is the only thing that clears it.
+    """
+    from raven_everos.config import everos_root, recorded_slice
+    from raven_everos.server import DEFAULT_EVEROS_BASE_URL, restart_for_config_change
+
+    # Every session that asked, not the one that happened to start the run. The
+    # outcome of a restart a second session queued is that session's answer too,
+    # and reporting only to the first left its banner on whatever was there.
+    loops: list = _everos_restart["loops"]
+    if not any(existing is loop for existing in loops):
+        loops.append(loop)
+
+    if _everos_restart["running"]:
+        _everos_restart["again"] = True
+        return
+    _everos_restart["running"] = True
+
+    def _report(ok: bool, error: str | None) -> None:
+        for target in list(_everos_restart["loops"]):
+            try:
+                target._emit_mcp_event("memory.health", {"ok": ok, "error": error})
+            except Exception:  # noqa: BLE001 - one closed session must not silence the rest
+                logger.debug("settings/everos: could not report the restart to a session")
+
+    try:
+        while True:
+            _everos_restart["again"] = False
+            # Read inside the loop: a second save that arrived mid-restart
+            # changed these, and the whole point of the extra run is to end at
+            # what it wrote.
+            base_url = str(recorded_slice().get("base_url") or DEFAULT_EVEROS_BASE_URL)
+            try:
+                await restart_for_config_change(everos_root(), base_url, on_result=_report)
+            except asyncio.CancelledError:
+                # A gateway shutting down mid-restart. Said out loud, because the
+                # banner otherwise keeps whatever the last run put there and the
+                # next session inherits a claim nobody can check.
+                _report(False, "the restart was interrupted before it finished")
+                raise
+            except Exception as exc:  # noqa: BLE001 - a dropped outcome leaves the banner lying
+                logger.warning("settings/everos: restart chain failed: {}", exc)
+                _report(False, str(exc))
+            if not _everos_restart["again"]:
+                return
+    finally:
+        _everos_restart["running"] = False
+        _everos_restart["loops"] = []
+
+
+def _everos_applied(agent_loop_factory: Any, cost: str = "") -> dict:
+    """Start the restart the write just earned, or say why it did not run.
+
+    Refused synchronously when no loop is up: the outcome only reaches the page
+    as a pushed frame, so a restart started here would report to nobody -- and
+    the caller would read ``applied`` as "this configuration is running" while
+    the old server kept serving.
+
+    ``cost`` is what the write costs the stores -- moving the embedding model
+    orphans every vector already written under the old one. Said here because
+    this is where the person made the change; it outranks the refusal text,
+    which describes when the change takes effect rather than what it costs.
+    """
+    loop = _safe_loop(agent_loop_factory)
+    if loop is None:
+        return {
+            "applied": False,
+            "warning": cost
+            or (
+                "Saved, but the memory service was not restarted: no session is connected "
+                "to report the outcome to. The change takes effect at the next start."
+            ),
         }
-    return {
-        "available": True,
-        "note": None,
-        "sections": sections,
-        "config_path": str(get_everos_config_path()),
-    }
+    task = asyncio.get_running_loop().create_task(_restart_everos_for_config(loop))
+    _everos_restart_tasks.add(task)
+    task.add_done_callback(_everos_restart_tasks.discard)
+    return {"applied": True, **({"warning": cost} if cost else {})}
 
 
 async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
-    """Merge fields into one EverOS section, or clear an optional section."""
+    """Record which model and provider serve one EverOS role, or clear the role.
+
+    A forwarder by design: the plugin owns these keys, validates them, and
+    enforces the ownership guard at its own write primitive so a new caller --
+    this one, most recently -- cannot opt out of it.
+
+    The pair is stored, not the credential. What used to be ``borrow_from``, which
+    copied a lender's key into ``everos.toml``, is now just ``provider``: the file
+    is no longer read by EverOS for these sections, so the reason that copy
+    existed is gone, and a stored name follows a later key rotation on its own.
+
+    ``protocol`` is the one thing a pair cannot answer for: reranking against
+    somebody's own server needs a request shape, and no table knows what they
+    deployed. Ignored for every vendor the table does answer for.
+    """
     _everos_config_module()
+    from raven.config.update import EmbeddingPinError
     from raven_everos.config import (
-        WRITABLE_SECTIONS,
-        clear_everos_section,
-        embedding_is_env_managed,
-        everos_has_own_embedding,
-        host_embedding_section,
-        set_everos_section,
+        REQUIRED_ROLES,
+        RERANK_PROTOCOLS,
+        ROLES,
+        EverosRootNotOwnedError,
+        clear_role,
+        rerank_protocol,
+        rerank_protocol_for_role,
+        role_is_env_managed,
+        role_pin,
+        set_role,
     )
 
     section = str(params.get("section", ""))
-    if section not in WRITABLE_SECTIONS:
-        raise ConfigValidationError(f"unknown everos section: {section}")
+    if section not in ROLES:
+        raise ConfigValidationError(f"unknown everos role: {section}")
 
     if params.get("clear") is True:
-        if section in _EVEROS_REQUIRED:
+        if section in REQUIRED_ROLES:
             raise ConfigValidationError(f"{section} is required for EverOS memory and cannot be cleared")
-        clear_everos_section(section)
-        return {"applied": True}
+        clear_role(section)
+        return _everos_applied(agent_loop_factory)
 
-    fields = params.get("fields")
-    if not isinstance(fields, dict):
-        raise ConfigValidationError("fields must be an object")
-    clean: dict[str, str] = {}
-    for k, v in fields.items():
-        if k not in _EVEROS_FIELDS:
-            raise ConfigValidationError(f"field not writable: {k}")
-        if not isinstance(v, str):
-            raise ConfigValidationError(f"{k} must be a string")
-        v = v.strip()
-        if len(v) > 500:
-            raise ConfigValidationError(f"{k} too long (max 500)")
-        if v:
-            clean[k] = v
-    # Which home this save lands in, decided before the borrow: raven's block
-    # names the provider rather than holding a copy of its credentials, so
-    # there a borrow is the name itself and lending would produce two fields
-    # the block has no place for.
-    to_host_block = section == "embedding" and not everos_has_own_embedding()
-
-    borrow = params.get("borrow_from")
-    if borrow is not None:
-        if not isinstance(borrow, str) or not borrow.strip():
-            raise ConfigValidationError("borrow_from must be a provider name")
-        if to_host_block:
-            clean["provider"] = borrow.strip()
-        else:
-            from raven.config.update_providers import lend_provider_credentials
-
-            try:
-                lent = lend_provider_credentials(borrow.strip())
-            except KeyError as exc:
-                raise ConfigValidationError(f"no such provider: {borrow}") from exc
-            except ValueError as exc:
-                raise ConfigValidationError(str(exc)) from exc
-            # The borrowed values win over anything the client sent for the same
-            # keys: the page cannot read a stored key -- `model.endpoints` redacts
-            # it -- so a client-sent api_key alongside a borrow is the redaction
-            # itself being echoed back, which would overwrite a real key with the
-            # word for one.
-            clean.update(lent)
-
-    if not clean:
-        raise ConfigValidationError("fields must carry at least one non-empty value")
-    if section == "embedding" and embedding_is_env_managed():
-        # The exported variables outrank both files, so a save here would be
-        # accepted, written, and then ignored -- the silent no-op this card was
-        # just fixed for, arriving by the one route left. Naming the variables
-        # is the only thing raven can usefully do: it cannot edit a shell.
+    model = str(params.get("model") or "").strip()
+    provider = str(params.get("provider") or "").strip()
+    if not model or not provider:
+        raise ConfigValidationError("both model and provider are required")
+    if len(model) > 500 or len(provider) > 500:
+        raise ConfigValidationError("model and provider must be under 500 characters")
+    protocol = str(params.get("protocol") or "").strip()
+    if protocol and protocol not in RERANK_PROTOCOLS:
+        raise ConfigValidationError(f"unknown rerank protocol: {protocol}")
+    if role_is_env_managed(section):
+        # The exported variables outrank both raven and the file, so a save here
+        # would be accepted, written, and then ignored. Naming the variables is
+        # the only useful thing raven can do: it cannot edit a shell.
+        #
+        # All four roles, not just embedding: `everos_env` skips an env-managed
+        # role whole, so a save accepted for any of them is a save that silently
+        # never takes.
+        prefix = f"EVEROS_{section.upper()}__"
         raise ConfigValidationError(
-            "the embedding endpoint is set by the EVEROS_EMBEDDING__MODEL / __BASE_URL / __API_KEY "
-            "environment variables, which outrank anything saved here; change them instead"
+            f"the {section} endpoint is set by the {prefix}MODEL / {prefix}BASE_URL / "
+            f"{prefix}API_KEY environment variables, which outrank anything saved here; "
+            "change them instead"
         )
-    if to_host_block:
-        # Written where it is read from, so the card cannot edit one home while
-        # the service and the knowledge base use the other. The block names a
-        # model and a provider and holds no credential of its own, so an
-        # address or a key sent here is refused rather than dropped: a value
-        # accepted and discarded reads to the caller as one that was stored.
-        # The card renders the resolved address, because a reader configuring an
-        # endpoint wants to see where it goes -- and the row then sends it back
-        # on every save. An address equal to what the provider already answers
-        # with is this page echoing what it was shown, the same shape as the
-        # redacted key the borrow path already drops; refusing it made the row
-        # unsaveable without emptying a field nobody had touched. An address
-        # that differs is an instruction, and the block has no place for it.
-        # Only the address, and only when it matches: the card renders it as a
-        # `defaultValue`, so every save carries it back whether or not anyone
-        # touched it. The key is a placeholder rather than a value, so one that
-        # arrives here was typed on purpose and still has nowhere to live.
-        shown = host_embedding_section().get("base_url", "")
-        if shown and clean.get("base_url", "").rstrip("/") == shown.rstrip("/"):
-            clean.pop("base_url")
-        stray = sorted(k for k in ("base_url", "api_key") if k in clean)
-        if stray:
-            raise ConfigValidationError(
-                f"{' and '.join(stray)} belongs to the provider, not to raven's embedding endpoint; "
-                "pick the provider that serves this model instead"
-            )
-        from raven.config.update import EmbeddingPinError, embedding_model_change, set_embedding_endpoint
 
-        pin = {"model": clean.get("model"), "provider": clean.get("provider")}
-        try:
-            previous = set_embedding_endpoint(pin)
-        except EmbeddingPinError as exc:
-            raise ConfigValidationError(str(exc)) from exc
-        warning = embedding_model_change(previous, pin)
-        return {"applied": True, "warning": warning} if warning else {"applied": True}
-    set_everos_section(section, clean)
+    # Refused here rather than discovered later: a pin naming a provider with no
+    # usable credential saves cleanly and then reads back as "not configured",
+    # which looks like the save was lost. The same question the gate asks.
+    from raven.config.update_providers import resolve_provider_credentials
+
+    try:
+        resolved = resolve_provider_credentials(provider)
+    except KeyError:
+        raise ConfigValidationError(f"unknown provider: {provider}") from None
+    if resolved is None:
+        raise ConfigValidationError(
+            f"{provider} has no usable credential, so a role pinned to it cannot run -- give it an API key first"
+        )
+
+    if section == "rerank" and not protocol and not rerank_protocol(provider):
+        # The shape already on file, when this save keeps the same vendor. A
+        # role the wizard configured against somebody's own box carries the
+        # answer they gave; not reading it back made that role permanently
+        # unsaveable from the page -- not even a model-only edit.
+        pinned = role_pin("rerank")
+        protocol = rerank_protocol_for_role() or "" if pinned and pinned[1] == provider else ""
+    if section == "rerank" and not protocol and not rerank_protocol(provider):
+        # Refused rather than guessed. EverOS falls back to its own default shape
+        # when told nothing, and posting a deepinfra-shaped request to a vLLM
+        # server is the defect this change started from -- silent, and looking
+        # exactly like a bad model.
+        raise ConfigValidationError(
+            f"reranking on {provider} needs its request shape named "
+            f"({' / '.join(RERANK_PROTOCOLS)}); nothing knows what a self-hosted server runs"
+        )
+
+    try:
+        cost = set_role(section, model=model, provider=provider, protocol=protocol)
+    except EmbeddingPinError as exc:
+        # A pair that cannot embed. The embedding branch used to catch this and
+        # the rewrite dropped it, which sent the page `internal_error` plus a
+        # traceback instead of the sentence naming the model.
+        raise ConfigValidationError(str(exc)) from exc
+    except EverosRootNotOwnedError as exc:
+        # A refusal the page has to be able to read. Left as a RuntimeError it
+        # reaches the dispatcher, which renders any non-RpcError as
+        # "internal_error" plus a traceback -- and the one useful thing this
+        # refusal carries, the path of the root somebody else manages, never
+        # arrives.
+        raise ConfigValidationError(str(exc)) from exc
     if section == "llm":
         # The CLI wizard records the backend name on a CONFIGURED outcome from
         # its own onboard step; a web save has no such step, so record it here.
@@ -1426,7 +1471,7 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
         raw = read_raw_or_raise(get_config_path())
         if "backend" not in (raw.get("memory") or {}):
             set_memory_backend(SHIPPED_DEFAULT_BACKEND)
-    return {"applied": True}
+    return _everos_applied(agent_loop_factory, cost)
 
 
 # ---------------------------------------------------------------------------

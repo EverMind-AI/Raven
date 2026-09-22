@@ -512,15 +512,21 @@ export interface ToolUsageCount {
  */
 export interface EverosSection {
   /**
-   * Empty when the shipped placeholder is still in place.
+   * Empty when nothing is pinned for this role.
    */
   model: string;
-  base_url: string;
+  /**
+   * The vendor serving `model`. Empty when nothing is pinned.
+   */
   provider: string;
   /**
-   * Whether a key is stored; the value never goes on the wire.
+   * Whether that provider has a usable credential -- the same question the memory gate answers, so the card and the gate cannot disagree. No key ever goes on the wire.
    */
   api_key_set: boolean;
+  /**
+   * The endpoint came from exported EVEROS_<ROLE>__* variables, which outrank raven. The slot is read-only: raven cannot edit a shell.
+   */
+  env_managed?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4354,27 +4360,46 @@ export interface SettingsEverosResult {
    * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
    */
   note?: string | null;
+  /**
+   * Whether raven manages this EverOS root. False makes the role slots read-only: raven neither writes that install's config nor starts or stops its server.
+   */
+  owned?: boolean;
+  /**
+   * Which roles each vendor can serve, so a slot does not offer a provider that cannot do the job. Keyed by provider name.
+   */
+  supports?: {
+    [k: string]: string[];
+  };
+  /**
+   * Roles that cannot be cleared, so the page knows which slots get a clear control. Sent rather than mirrored: a mirrored copy drew one on a slot whose clear the write refuses.
+   */
+  required?: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SettingsEverosSetParams".
  */
 export interface SettingsEverosSetParams {
+  /**
+   * Which EverOS role: llm, embedding, rerank or multimodal.
+   */
   section: string;
   /**
-   * Merged into the section; ignored when clearing.
+   * Model id, as the provider names it.
    */
-  fields?: {
-    [k: string]: string;
-  };
+  model?: string | null;
   /**
-   * Drop the section; refused for llm and embedding.
+   * Which configured provider serves `model`. Its address and key are what the call goes out on, resolved at spawn time rather than copied -- so rotating a key is one edit in the provider and every role serving on it follows.
    */
-  clear?: boolean;
+  provider?: string | null;
   /**
-   * Take api_key and base_url from this connected provider, copied not referenced. Wins over the same keys in `fields`, which cannot carry a real key: the page only ever sees a redacted one.
+   * Rerank only, and only for a self-hosted endpoint: which request shape EverOS must post (`deepinfra` / `vllm` / `dashscope`). A curated vendor's shape comes from the vendor table and this is ignored; somebody's own server is the one case nothing but the operator can answer.
    */
-  borrow_from?: string;
+  protocol?: string | null;
+  /**
+   * Drop the role; refused for llm and embedding.
+   */
+  clear?: boolean | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

@@ -1693,29 +1693,40 @@ def test_the_wizard_says_what_moving_the_embedding_model_costs(
     assert ui.set_embedding_endpoint({"model": "the-new-one", "provider": openrouter["name"]}) == ""
 
 
-def test_memory_enable_writes_everos_sections(
+def test_memory_enable_pins_the_roles_in_ravens_config(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Enabling memory + LLM (custom source) + embedding (a listed provider)
-    writes the EverOS toml; rerank/multimodal skipped."""
+    """Enabling memory + LLM (a self-hosted endpoint) + embedding (a listed
+    provider) records both in raven's config and leaves the EverOS toml alone;
+    rerank/multimodal skipped.
+
+    The self-hosted half is the case the pin shape had to keep working for: a
+    hand-typed address belongs to the `custom` slot, which raven already keeps
+    for exactly that, so the wizard records a vendor like any other role.
+    """
     import tomllib
 
     import questionary
 
+    from raven_everos.config import vendors
     from raven_everos.onboard import _EVEROS_PROVIDERS
 
     _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
     openrouter = next(p for p in _EVEROS_PROVIDERS if p["name"] == "openrouter")
+    # A self-hosted endpoint is a provider like any other -- `custom` is the slot
+    # raven already keeps for one -- so the picker offers it rather than a
+    # separate "Other" path that had nowhere to record the vendor.
+    custom_slot = next(p for p in vendors() if p["name"] == "custom")
 
     # _step4_memory select() calls, in order:
-    #   1. LLM source picker            -> ("custom",)
+    #   1. LLM source picker            -> the `custom` self-hosted slot
     #   2. embedding "Configure it?"    -> "redo"   (optional since it degrades
     #                                               rather than breaks memory)
     #   3. embedding source picker      -> openrouter, whose key is already on
     #      file, so this role asks for no endpoint of its own
     #   4. rerank "Configure it?"       -> "skip"
     #   5. multimodal "Configure it?"   -> "skip"
-    select_answers = iter(["managed", ("custom",), "redo", ("provider", openrouter), "skip", "skip"])
+    select_answers = iter(["managed", ("provider", custom_slot), "redo", ("provider", openrouter), "skip", "skip"])
     # text(): LLM base_url, LLM model, embed model.
     text_answers = iter(["https://llm/v1", "mem-llm", "mem-embed"])
     # password(): LLM api key.
@@ -1756,14 +1767,22 @@ def test_memory_enable_writes_everos_sections(
     from raven.config.raven import load_raven_config
 
     assert load_raven_config().memory.backend == "everos"
+    # The role lands in raven's config as a pair naming the vendor, and the
+    # endpoint it names lands on that vendor's provider row -- one address and
+    # one key, wherever else they are needed.
+    assert data["plugins"]["config"]["everos-memory"]["llm"] == {
+        "model": "mem-llm",
+        "provider": "custom",
+    }
+    assert data["providers"]["custom"]["apiKey"] == "k-llm"
+    assert data["providers"]["custom"]["apiBase"] == "https://llm/v1"
+
+    # And the toml this used to be written into is untouched: it still holds the
+    # shipped template, which is what makes the env raven sends the only thing
+    # deciding what memory runs.
     with everos_isolated.open("rb") as f:
         everos = tomllib.load(f)
-    assert everos["llm"]["model"] == "mem-llm"
-    assert everos["llm"]["api_key"] == "k-llm"
-    assert everos["llm"]["base_url"] == "https://llm/v1"
-    # The embedding endpoint lands in raven's own block, not this file: a
-    # knowledge base reads the same endpoint and never speaks to the memory
-    # service, so writing it here left every other reader falling back.
+    assert everos["llm"]["model"] != "mem-llm", "the wizard should not write this file's llm"
     assert everos["embedding"]["model"] != "mem-embed", "the wizard should not write this file's embedding"
     # The pair, and only the pair: the address and the key stay with the
     # provider, so this block names a choice rather than copying a credential.
@@ -1781,15 +1800,17 @@ def test_the_memory_step_reaches_the_capability_report(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A report nothing calls is dead code. Walks the same path as
-    `test_memory_enable_writes_everos_sections` and only checks that the step
-    gets as far as reporting what the server can do."""
+    `test_memory_enable_pins_the_roles_in_ravens_config` and only checks that the
+    step gets as far as reporting what the server can do."""
     import questionary
 
+    from raven_everos.config import vendors
     from raven_everos.onboard import _EVEROS_PROVIDERS
 
     _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
     openrouter = next(p for p in _EVEROS_PROVIDERS if p["name"] == "openrouter")
-    select_answers = iter(["managed", ("custom",), "redo", ("provider", openrouter), "skip", "skip"])
+    custom_slot = next(p for p in vendors() if p["name"] == "custom")
+    select_answers = iter(["managed", ("provider", custom_slot), "redo", ("provider", openrouter), "skip", "skip"])
     text_answers = iter(["https://llm/v1", "mem-llm", "mem-embed"])
     password_answers = iter(["k-llm"])
 
@@ -2463,28 +2484,43 @@ def test_memory_llm_reuse_pulls_provider_creds(
     onboard_everos._config_everos_role(
         section="llm", main_model="openai/gpt-4o-mini", non_interactive=False, warnings=[]
     )
-    with everos_isolated.open("rb") as f:
-        everos = tomllib.load(f)
-    assert everos["llm"]["model"] == "gpt-4.1-mini"
-    assert everos["llm"]["api_key"] == "sk-main"
-    assert everos["llm"]["base_url"] == "https://api.openai.com/v1"
+    # The pin, and the key where a pin expects to find it. Nothing was written
+    # into everos.toml: raven records the pair and resolves it at spawn time.
+    from raven.config.update_providers import resolve_provider_credentials
+    from raven_everos.config import role_pin
+
+    assert role_pin("llm") == ("gpt-4.1-mini", "openai")
+    assert resolve_provider_credentials("openai") == ("https://api.openai.com/v1", "sk-main")
+    assert not everos_isolated.is_file() or "llm" not in tomllib.loads(everos_isolated.read_text(encoding="utf-8"))
+
+
+def _seed_everos_role(section: str, *, model: str, provider: str, api_key: str = "", base_url: str = ""):
+    """Seed a role the way raven records it now: a pin, plus the provider's key.
+
+    The old shape wrote model+api_key+base_url into everos.toml. raven does not
+    write that file for these sections any more, and the wizard reads the pin and
+    asks the provider for the credential -- so a fixture that seeds the file is
+    seeding somewhere nothing reads.
+    """
+    from raven.config.update_providers import set_provider_fields
+    from raven_everos.config import set_role
+
+    fields = {}
+    if api_key:
+        fields["api_key"] = api_key
+    if base_url:
+        fields["api_base"] = base_url
+    if fields:
+        set_provider_fields(provider, fields)
+    set_role(section, model=model, provider=provider)
 
 
 def test_memory_rerank_reuse_llm_provider(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """rerank picks the LLM's provider by default and reuses its key."""
-    import tomllib
-
-    from raven_everos.config import set_everos_section
-
-    set_everos_section(
-        "llm",
-        {
-            "model": "m",
-            "api_key": "k-llm",
-            "base_url": "https://api.deepinfra.com/v1/openai",
-        },
+    _seed_everos_role(
+        "llm", model="m", provider="deepinfra", api_key="k-llm", base_url="https://api.deepinfra.com/v1/openai"
     )
 
     import questionary
@@ -2499,7 +2535,13 @@ def test_memory_rerank_reuse_llm_provider(
     deepinfra_prov = next(p for p in onboard_everos._EVEROS_PROVIDERS if p["name"] == "deepinfra")
     # No service-type select needed — curated provider auto-resolves it.
     select_answers = iter(["redo", ("provider", deepinfra_prov)])
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
+    seen: dict = {}
+
+    def _select(*a, **kw):
+        seen["default"] = kw.get("default")
+        return _FQ(next(select_answers))
+
+    monkeypatch.setattr(questionary, "select", _select)
     monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("rerank-model"))
     monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: None)
     monkeypatch.setattr(onboard_everos, "_probe_rerank", lambda *a, **kw: (True, "ok"))
@@ -2510,12 +2552,45 @@ def test_memory_rerank_reuse_llm_provider(
         non_interactive=False,
         warnings=[],
     )
-    with everos_isolated.open("rb") as f:
-        everos = tomllib.load(f)
-    assert everos["rerank"]["provider"] == "deepinfra"
-    assert everos["rerank"]["model"] == "rerank-model"
-    assert everos["rerank"]["api_key"] == "k-llm"
-    assert everos["rerank"]["base_url"] == "https://api.deepinfra.com/v1/inference"
+    # The pin names the vendor; the request shape and the rerank address are
+    # derived from the vendor table at spawn time rather than stored twice.
+    from raven_everos.config import everos_env, role_pin
+
+    # The cursor, not just the outcome: the answer above names deepinfra
+    # explicitly, so without this the default could be anything and this case
+    # would still pass while its first sentence stopped being true.
+    assert seen["default"] == ("provider", deepinfra_prov)
+    assert role_pin("rerank") == ("rerank-model", "deepinfra")
+
+    # The provider row keeps the vendor's own address, not this role's. DeepInfra
+    # serves reranking from /v1/inference and chat from /v1/openai, and this row
+    # is what every other role and the main chat model on deepinfra resolve
+    # through -- it held /v1/inference until this line, which sent all of them
+    # somewhere that does not answer.
+    import json as _json
+
+    row = _json.loads(tmp_env.read_text())["providers"]["deepinfra"]
+    assert row["apiBase"] == "https://api.deepinfra.com/v1/openai"
+    env = everos_env()
+    assert env["EVEROS_RERANK__PROVIDER"] == "deepinfra"
+    assert env["EVEROS_RERANK__BASE_URL"] == "https://api.deepinfra.com/v1/inference"
+    assert env["EVEROS_RERANK__API_KEY"] == "k-llm"
+
+
+def test_the_menu_names_each_roles_own_model(tmp_env: Path, everos_isolated: Path) -> None:
+    """The keep/reconfigure menu names the model that role will actually run.
+
+    All four roles read raven now, but from two different blocks -- embedding's
+    is raven's own, the other three are this plugin's slice. A reader that falls
+    back to embedding's block answers with the embedding model for the memory
+    LLM: a model that step never configured, offered as its current one.
+    """
+    _seed_everos_role("llm", model="llm-model", provider="openrouter", api_key="k")
+    _seed_everos_role("embedding", model="embed-model", provider="openrouter", api_key="k")
+
+    assert onboard_everos._configured_model("llm") == "llm-model"
+    assert onboard_everos._configured_model("embedding") == "embed-model"
+    assert onboard_everos._configured_model("rerank") is None
 
 
 def test_memory_rerank_default_is_qwen8b() -> None:
@@ -2544,13 +2619,36 @@ def test_every_recommendation_reaches_the_catalog() -> None:
 
 
 def test_memory_seeded_role_is_not_configured(tmp_env: Path, everos_isolated: Path) -> None:
-    """A seeded model with an empty api_key does not count as configured."""
-    from raven_everos.config import set_everos_section
+    """A half-configured role does not count as configured.
 
+    The shape changed but the hazard did not: the shipped everos.toml seeds each
+    section with a model and an empty api_key, and a gate that answered "yes" to
+    that sent the wizard's Back step round forever. raven records the pair itself
+    now, so half is a model pinned to a vendor with no usable credential -- and
+    the seeded file, which raven no longer reads for this, is not configuration
+    at all.
+    """
+    import json
+
+    # The seeded file, which used to be the whole question, now answers nothing.
+    # Written directly: raven's own writers cannot address these sections any
+    # more, which is the point.
+    everos_isolated.parent.mkdir(parents=True, exist_ok=True)
+    everos_isolated.write_text('[llm]\nmodel = "openai/gpt-4.1-mini"\napi_key = ""\n', encoding="utf-8")
     assert onboard_everos._everos_role_configured("llm") is False
-    set_everos_section("llm", {"model": "openai/gpt-4.1-mini", "api_key": ""})
+
+    raw = json.loads(tmp_env.read_text(encoding="utf-8")) if tmp_env.is_file() else {}
+    raw.setdefault("providers", {})["deepseek"] = {"apiBase": "https://api.deepseek.com/v1"}
+    raw.setdefault("plugins", {}).setdefault("config", {}).setdefault("everos-memory", {})["llm"] = {
+        "model": "deepseek-chat",
+        "provider": "deepseek",
+    }
+    tmp_env.write_text(json.dumps(raw), encoding="utf-8")
+    # Pinned, but the vendor has no key: still half.
     assert onboard_everos._everos_role_configured("llm") is False
-    set_everos_section("llm", {"api_key": "sk-real"})
+
+    raw["providers"]["deepseek"]["apiKey"] = "sk-real"
+    tmp_env.write_text(json.dumps(raw), encoding="utf-8")
     assert onboard_everos._everos_role_configured("llm") is True
 
 
@@ -2560,12 +2658,7 @@ def test_memory_required_role_back_reaches_give_up_menu(
     """Backing out of the picker must offer the give-up exit even when the
     shipped everos.toml template already seeded a model with an empty api_key —
     otherwise Back re-asks the provider picker forever."""
-    from raven_everos.config import set_everos_section
-
-    set_everos_section(
-        "llm",
-        {"model": "openai/gpt-4.1-mini", "api_key": "", "base_url": "https://openrouter.ai/api/v1"},
-    )
+    _seed_everos_role("llm", model="openai/gpt-4.1-mini", provider="openrouter")
 
     import questionary
 
@@ -5119,34 +5212,34 @@ def test_a_provider_configured_in_raven_needs_no_second_key_entry(tmp_env: Path,
     used: embedding and rerank routinely move to another vendor, and raven
     already holds that vendor's key."""
     from raven.config.update_providers import set_provider_fields
-    from raven_everos.config import set_everos_section
 
     set_provider_fields("siliconflow", {"api_key": "sk-sf"})
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://openrouter.ai/api/v1"})
+    _seed_everos_role("llm", model="m", provider="openrouter", api_key="k-llm", base_url="https://openrouter.ai/api/v1")
 
     creds, origin = onboard_everos._reusable_creds(
-        "embedding",
-        _everos_prov("siliconflow"),
-        "openrouter/anthropic/claude-sonnet-4-5",
-        onboard_everos._everos_section("llm"),
+        "embedding", _everos_prov("siliconflow"), "openrouter/anthropic/claude-sonnet-4-5"
     )
 
     assert origin == "config"
     assert creds == {"api_key": "sk-sf", "base_url": "https://api.siliconflow.cn/v1"}
 
 
-def test_the_memory_llms_own_key_answers_first_for_the_roles_after_it(tmp_env: Path, everos_isolated: Path) -> None:
-    """A key typed into the memory-LLM step lives in that section and nowhere
-    else, so it has to be read from there or it is lost."""
-    from raven_everos.config import set_everos_section
+def test_a_key_typed_for_the_memory_llm_serves_the_roles_after_it(tmp_env: Path, everos_isolated: Path) -> None:
+    """The behaviour survives; the route changed.
 
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://api.siliconflow.cn/v1"})
-
-    creds, origin = onboard_everos._reusable_creds(
-        "rerank", _everos_prov("siliconflow"), None, onboard_everos._everos_section("llm")
+    A key typed into the memory-LLM step used to live in that everos.toml
+    section and nowhere else, so a second store existed to read it back. Every
+    step keeps its key under the provider now, which is the store the later
+    roles already ask -- so one reader answers, and there is no second place for
+    a key to be stranded in.
+    """
+    _seed_everos_role(
+        "llm", model="m", provider="siliconflow", api_key="k-llm", base_url="https://api.siliconflow.cn/v1"
     )
 
-    assert origin == "llm"
+    creds, origin = onboard_everos._reusable_creds("rerank", _everos_prov("siliconflow"), None)
+
+    assert origin == "config"
     assert creds == {"api_key": "k-llm", "base_url": "https://api.siliconflow.cn/v1"}
 
 
@@ -5156,7 +5249,9 @@ def test_the_main_chat_models_key_answers_for_the_memory_llm(tmp_env: Path, ever
     set_provider_fields("openrouter", {"api_key": "sk-or"})
 
     creds, origin = onboard_everos._reusable_creds(
-        "llm", _everos_prov("openrouter"), "openrouter/anthropic/claude-sonnet-4-5", {}
+        "llm",
+        _everos_prov("openrouter"),
+        "openrouter/anthropic/claude-sonnet-4-5",
     )
 
     assert origin == "main"
@@ -5166,7 +5261,7 @@ def test_the_main_chat_models_key_answers_for_the_memory_llm(tmp_env: Path, ever
 def test_a_provider_with_nothing_on_file_still_costs_a_key_entry(tmp_env: Path, everos_isolated: Path) -> None:
     """The reuse must not invent a key: an unconfigured provider has to ask,
     and the picker's label has to stay silent about reuse for it."""
-    creds, origin = onboard_everos._reusable_creds("embedding", _everos_prov("dashscope"), None, {})
+    creds, origin = onboard_everos._reusable_creds("embedding", _everos_prov("dashscope"), None)
 
     assert (creds, origin) == (None, "")
 
@@ -5185,7 +5280,7 @@ def test_an_endpoint_held_key_is_lent_with_its_own_address(tmp_env: Path, everos
         },
     )
 
-    creds, origin = onboard_everos._reusable_creds("embedding", _everos_prov("openrouter"), None, {})
+    creds, origin = onboard_everos._reusable_creds("embedding", _everos_prov("openrouter"), None)
 
     assert origin == "config"
     assert creds == {"api_key": "endpoint-key", "base_url": "https://endpoint.example/v1"}
@@ -5215,7 +5310,7 @@ def test_a_header_authenticated_provider_is_not_offered_for_reuse(
         },
     )
 
-    assert onboard_everos._reusable_creds("llm", _everos_prov("openai"), "openai/gpt-4o-mini", {}) == (None, "")
+    assert onboard_everos._reusable_creds("llm", _everos_prov("openai"), "openai/gpt-4o-mini") == (None, "")
 
     labels: list[str] = []
     asked: list[str] = []
@@ -5255,9 +5350,9 @@ def test_a_loan_that_cannot_speak_for_the_rerank_path_is_declined(tmp_env: Path,
     dashscope = _everos_prov("dashscope")
     assert dashscope["rerank_base_url"], "this test is about the roles that need a service-specific path"
 
-    declined, origin = onboard_everos._reusable_creds("rerank", dashscope, None, {})
+    declined, origin = onboard_everos._reusable_creds("rerank", dashscope, None)
     # The same section still lends for a role that speaks the chat protocol.
-    lent, lent_origin = onboard_everos._reusable_creds("embedding", dashscope, None, {})
+    lent, lent_origin = onboard_everos._reusable_creds("embedding", dashscope, None)
 
     assert (declined, origin) == (None, "")
     assert (lent, lent_origin) == (
@@ -5332,11 +5427,10 @@ def test_the_picker_tags_every_provider_whose_key_is_on_file(
     import questionary
 
     from raven.config.update_providers import set_provider_fields
-    from raven_everos.config import set_everos_section
 
     monkeypatch.setattr(i18n, "_language", lang)
     set_provider_fields("siliconflow", {"api_key": "sk-sf"})
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://openrouter.ai/api/v1"})
+    _seed_everos_role("llm", model="m", provider="openrouter", api_key="k-llm", base_url="https://openrouter.ai/api/v1")
 
     labels: list[str] = []
 
@@ -5419,10 +5513,9 @@ def test_picking_another_configured_provider_does_not_ask_for_its_key(
     import questionary
 
     from raven.config.update_providers import set_provider_fields
-    from raven_everos.config import set_everos_section
 
     set_provider_fields("siliconflow", {"api_key": "sk-sf"})
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://openrouter.ai/api/v1"})
+    _seed_everos_role("llm", model="m", provider="openrouter", api_key="k-llm", base_url="https://openrouter.ai/api/v1")
 
     class _FQ:
         def __init__(self, a: object) -> None:
@@ -7111,6 +7204,39 @@ class TestReconfiguringRestartsOurOwnService:
 
         monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
         assert onboard_everos._stop_for_reload(Path("/r")) is False
+
+    def test_a_stop_that_does_not_finish_says_which_way_it_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Three situations a bool collapsed into one: a process raven never
+        started, a signal that could not be delivered, and a server still
+        draining. The wizard told a user whose memory tasks were mid-flight that
+        raven had not started the process, which is simply untrue."""
+        from raven_everos.server import StopOutcome
+
+        said: list[str] = []
+        monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: SimpleNamespace(pid=7))
+        # The whole UI, not one field: it is a frozen dataclass, and what this
+        # case is about is the sentence, not the plumbing under it.
+        monkeypatch.setattr(
+            onboard_everos,
+            "_UI",
+            SimpleNamespace(
+                console=SimpleNamespace(print=lambda *a, **kw: said.append(str(a[0]))),
+                t=lambda text, **kw: text.format(**kw) if kw else text,
+            ),
+        )
+        monkeypatch.setattr("raven_everos.server.stop_for_reload", lambda _root: StopOutcome.STILL_DRAINING)
+
+        assert onboard_everos._stop_for_reload(Path("/r")) is False
+        assert any("still finishing memory work" in m for m in said), said
+
+    def test_a_role_the_shell_set_reports_the_shell_s_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An operator who exported the endpoint outranks raven, so the menu has
+        to name what they set rather than the pin raven happens to hold."""
+        monkeypatch.setattr(onboard_everos, "_everos_role_configured", lambda _s: True)
+        monkeypatch.setattr("raven_everos.config.role_is_env_managed", lambda _s: True)
+        monkeypatch.setenv("EVEROS_RERANK__MODEL", "theirs/reranker")
+
+        assert onboard_everos._configured_model("rerank") == "theirs/reranker"
 
 
 class TestIntentAndAddressAreDifferentQuestions:

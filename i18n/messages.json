@@ -7107,9 +7107,17 @@
       "en": "Connect a provider first",
       "zh": "先连接一个供应商"
     },
-    "gui.settings.roles.no_key_provider": {
-      "en": "No provider with an API key of its own",
-      "zh": "没有带 API Key 的供应商"
+    "gui.settings.roles.no_vendor_for_role": {
+      "en": "No connected vendor serves this role",
+      "zh": "已连接的供应商都不支持这个角色"
+    },
+    "gui.settings.roles.locked_foreign": {
+      "en": "This EverOS install is yours to manage, so Raven reads its config and does not write it",
+      "zh": "这个 EverOS 由你自己管理，Raven 只读它的配置、不写"
+    },
+    "gui.settings.roles.locked_env": {
+      "en": "Set by exported EVEROS_* variables, which outrank anything saved here",
+      "zh": "由导出的 EVEROS_* 环境变量设定，优先级高于这里保存的任何值"
     },
     "gui.settings.roles.connect_openrouter": {
       "en": "Connect OpenRouter",

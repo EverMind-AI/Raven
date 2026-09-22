@@ -1049,6 +1049,33 @@ SkillForge's three sources at RRF weight 0.9). The name refers to the external p
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
 adapter. The same plugin also contributes the `understand_media` multimodal-parsing tool.
 
+**EverOS role**:
+One of the four models EverOS talks to: `llm` (reads each conversation and extracts
+what matters), `embedding` (what recall matches meaning with), `rerank` (sharpens
+recall ordering) and `multimodal` (what `understand_media` parses with). Named as a
+set because every surface reasons about all four at once -- the settings slots, the
+wizard, the spawn environment, the migration.
+
+**role pin**:
+What raven records for a role: a model id and the **provider** serving it, never a
+credential. The address and key are resolved from that provider at the moment the
+call goes out, so rotating a key is one edit and every role on that provider
+follows. Two homes, one reader (`role_pin`): `embedding`'s pin is raven's own
+top-level `embedding` block, because a knowledge base embeds with it too and must
+keep working when the memory plugin is not the configured backend; the other three
+live in the plugin's `plugins.config["everos-memory"]` slice.
+_Avoid_: "role block" and "role section" -- `[llm]` and friends in `everos.toml` are
+sections, and raven does not write them.
+
+**rerank protocol**:
+EverOS's `rerank.provider` field: which client implementation it builds, i.e. the
+shape of the request. `deepinfra` posts to `{base}/{model}`, `vllm` to
+`{base}/rerank`. Derived from the vendor table for a vendor raven knows, and
+recorded on the role only for a self-hosted endpoint no table can answer for.
+_Avoid_: calling it a provider -- raven's `provider` names a vendor, and the two
+meanings sharing one word is how reranking came to be configured against the wrong
+endpoint.
+
 **Memory Engine face** (`memory_engine/__init__.py`):
 The one address the rest of the tree reaches memory machinery by: `MemoryStore`,
 `MemoryConsolidator`, the attention and behaviors parsers, the skill catalog,

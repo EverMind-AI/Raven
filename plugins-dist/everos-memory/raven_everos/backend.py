@@ -206,11 +206,6 @@ class ServiceState(Enum):
 # behind somebody else's server answering on the same port.
 _TERMINAL_STATES = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY})
 
-# Only the opening state may spawn. Every other non-ready state has already
-# either spawned once (STARTING / FAILED), found the data occupied
-# (UNRESPONSIVE), been told not to (FOREIGN), or knows a spawn cannot succeed.
-_SPAWNABLE_STATES = frozenset({ServiceState.UNKNOWN})
-
 # Minimum gap between out-of-band probes. Coarse on purpose: this exists to
 # stop a task per turn from piling up, not to schedule anything.
 _PROBE_MIN_INTERVAL_S: float = 2.0
@@ -623,15 +618,6 @@ class EverosBackend:
         """Hold the spawned child, even if the start it belongs to then fails."""
         self._proc = proc
 
-    def _may_spawn(self) -> bool:
-        """Whether starting a server could still help.
-
-        Guards against the loop where a child that dies on startup is spawned
-        again on the next turn, and again, filling the log with identical
-        tracebacks while the user waits.
-        """
-        return self._state in _SPAWNABLE_STATES
-
     def _should_report(self) -> bool:
         """True once per state per session, so a warning stays a warning."""
         if self._state in self._reported:
@@ -741,15 +727,6 @@ class EverosBackend:
         """
         return self._state
 
-    def _host_embedding(self) -> Any:
-        """The host's embedding block, through the service grant.
-
-        Off ``ctx.services`` rather than read from raven's config: a plugin
-        does not open the host's config file, and this endpoint is the host's
-        to hand over.
-        """
-        return getattr(self._services, "embedding", None)
-
     async def start(self) -> None:
         try:
             self._validate_identity()
@@ -774,7 +751,7 @@ class EverosBackend:
         # backend to ask health() -- raven doctor's path -- stays read-only.
         # Runs here, once identity is known good, on every start path.
         from raven_everos.config import (
-            configure_embedding_env,
+            bind_roles_here,
             configure_everos_env,
             ensure_everos_home,
             everos_owned,
@@ -782,12 +759,23 @@ class EverosBackend:
         )
 
         root = everos_root()
+        # Before anything reads a pin. An install upgrading into this still has
+        # its four roles in everos.toml, and raven no longer reads that file for
+        # them -- so without this the environment sent to the service blanks all
+        # four and long-term memory stops. Scheduled here rather than in raven's
+        # config migrations because the host may know this plugin only through
+        # the plugin contract; idempotent, so every later start pays nothing.
+        from raven_everos.config import migrate_roles
+
+        for notice in migrate_roles():
+            self.notify(notice)
         configure_everos_env(root)
-        # The host owns the embedding endpoint: one installation, one endpoint,
-        # read by the knowledge base too. Sent down here rather than kept in
-        # everos.toml, the same direction the data root above travels.
-        if configure_embedding_env(self._host_embedding()):
-            self._logger.info("EverosBackend: embedding endpoint taken from the host config")
+        # All four roles, into this process as well as into any child. The
+        # in-process half is what `understand_media` reads: multimodal runs here,
+        # through EverOS's cached settings, so a role bound only for the spawn
+        # was one that tool could not use.
+        bound = bind_roles_here()
+        self._logger.info("EverosBackend: bound %d EverOS role variables from raven's config", len(bound))
         # See tools.py: a root the user manages is read-only, template files
         # included.
         if everos_owned():
@@ -974,7 +962,12 @@ class EverosBackend:
         itself is the only source for a root the user runs -- no root is
         recorded for one, and its ``everos.toml`` is not Raven's to read.
         """
-        from raven_everos.config import everos_owned, everos_role_configured, everos_root
+        from raven_everos.config import (
+            everos_owned,
+            everos_role_configured,
+            everos_root,
+            everos_toml_role_notes,
+        )
         from raven_everos.health import (
             DEGRADING_SECTIONS,
             REQUIRED_SECTIONS,
@@ -1005,6 +998,12 @@ class EverosBackend:
                 )
             )
         checks.append(HealthCheck("address", "ok", base_url))
+        # What everos.toml still says about the four roles. Reported from here
+        # rather than from doctor: reading that file and knowing which root is
+        # raven's are both this plugin's to answer, and the host may know it only
+        # through the backend contract.
+        for note in everos_toml_role_notes():
+            checks.append(HealthCheck("everos.toml", "ok", note))
 
         report = await asyncio.to_thread(probe_capabilities, base_url)
         sections = (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS)

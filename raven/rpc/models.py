@@ -3428,10 +3428,22 @@ class SettingsUsageResult(_Strict):
 class EverosSection(_Strict):
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
-    model: str = Field(..., description="Empty when the shipped placeholder is still in place.")
-    base_url: str
-    provider: str
-    api_key_set: bool = Field(..., description="Whether a key is stored; the value never goes on the wire.")
+    model: str = Field(..., description="Empty when nothing is pinned for this role.")
+    provider: str = Field(..., description="The vendor serving `model`. Empty when nothing is pinned.")
+    api_key_set: bool = Field(
+        ...,
+        description=(
+            "Whether that provider has a usable credential -- the same question the memory "
+            "gate answers, so the card and the gate cannot disagree. No key ever goes on the wire."
+        ),
+    )
+    env_managed: bool = Field(
+        default=False,
+        description=(
+            "The endpoint came from exported EVEROS_<ROLE>__* variables, which outrank raven. "
+            "The slot is read-only: raven cannot edit a shell."
+        ),
+    )
 
 
 class SettingsEverosParams(_Strict):
@@ -3441,6 +3453,28 @@ class SettingsEverosParams(_Strict):
 class SettingsEverosResult(_Strict):
     sections: dict[str, EverosSection]
     config_path: str
+    owned: bool = Field(
+        default=True,
+        description=(
+            "Whether raven manages this EverOS root. False makes the role slots read-only: "
+            "raven neither writes that install's config nor starts or stops its server."
+        ),
+    )
+    supports: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Which roles each vendor can serve, so a slot does not offer a provider that "
+            "cannot do the job. Keyed by provider name."
+        ),
+    )
+    required: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Roles that cannot be cleared, so the page knows which slots get a clear "
+            "control. Sent rather than mirrored: a mirrored copy drew one on a slot whose "
+            "clear the write refuses."
+        ),
+    )
     available: bool = Field(
         description="Whether this install has an EverOS to configure at all. False leaves sections empty and note set.",
     )
@@ -3455,17 +3489,26 @@ class SettingsEverosResult(_Strict):
 
 
 class SettingsEverosSetParams(_Strict):
-    section: str
-    fields: dict[str, str] | None = Field(default=None, description="Merged into the section; ignored when clearing.")
-    clear: bool | None = Field(default=None, description="Drop the section; refused for llm and embedding.")
-    borrow_from: str | None = Field(
+    section: str = Field(description="Which EverOS role: llm, embedding, rerank or multimodal.")
+    model: str | None = Field(default=None, description="Model id, as the provider names it.")
+    provider: str | None = Field(
         default=None,
         description=(
-            "Take api_key and base_url from this connected provider, copied not "
-            "referenced. Wins over the same keys in `fields`, which cannot carry a "
-            "real key: the page only ever sees a redacted one."
+            "Which configured provider serves `model`. Its address and key are what the "
+            "call goes out on, resolved at spawn time rather than copied -- so rotating "
+            "a key is one edit in the provider and every role serving on it follows."
         ),
     )
+    protocol: str | None = Field(
+        default=None,
+        description=(
+            "Rerank only, and only for a self-hosted endpoint: which request shape EverOS "
+            "must post (`deepinfra` / `vllm` / `dashscope`). A curated vendor's shape comes "
+            "from the vendor table and this is ignored; somebody's own server is the one "
+            "case nothing but the operator can answer."
+        ),
+    )
+    clear: bool | None = Field(default=None, description="Drop the role; refused for llm and embedding.")
 
 
 class SettingsEverosSetResult(_Strict):

@@ -83,9 +83,7 @@ export interface RoleValue {
   provider: string
 }
 
-/* The pair a role is set to, or null for "follows the chat model" / not set.
-   An EverOS section stores an address rather than a provider, so the provider
-   is whichever connected one serves that address. */
+/* The pair a role is set to, or null for "follows the chat model" / not set. */
 export function roleValue(r: Role, snap: SettingsSnapshot): RoleValue | null {
   if (r.id === 'chat') return snap.model ? { model: snap.model, provider: snap.curProvider } : null
   if (r.keys) {
@@ -95,11 +93,9 @@ export function roleValue(r: Role, snap: SettingsSnapshot): RoleValue | null {
     return { model, provider: typeof provider === 'string' ? provider : '' }
   }
   if (r.everos) {
-    const sec = snap.everos && snap.everos.sections && snap.everos.sections[r.everos]
+    const sec = snap.everos?.sections?.[r.everos]
     if (!sec || !sec.model) return null
-    const base = (sec.base_url || '').replace(/\/+$/, '')
-    const p = base ? snap.providers.find((x) => [x.apiBase, x.defaultApiBase].some((b) => (b || '').replace(/\/+$/, '') === base)) : undefined
-    return { model: sec.model, provider: p ? p.id : '' }
+    return { model: sec.model, provider: sec.provider || '' }
   }
   if (r.media) {
     const sel = dig(snap.raw, `tools.media.${r.media}`) as { model?: string } | undefined
@@ -109,13 +105,45 @@ export function roleValue(r: Role, snap: SettingsSnapshot): RoleValue | null {
 }
 
 /* Which connected providers may serve a role: media runs on OpenRouter, an
-   EverOS section needs a provider with a key of its own to copy, the rest
-   take any. */
+   EverOS role takes whichever vendors can actually serve it, the rest take any.
+
+   Capability, not auth shape. The filter used to ask `kind === 'key'`, which is
+   how the rerank slot came to offer OpenAI -- and, once a self-hosted endpoint
+   became an ordinary vendor here, how every one of them disappeared: they are
+   `local` and `endpoint`, not `key`. Whether a vendor holds a usable credential
+   is a separate question, refused at the save with a sentence naming it. */
 export function roleProviders(r: Role, snap: SettingsSnapshot): ProviderRow[] {
   const on = snap.providers.filter((p) => p.on)
   if (r.media) return on.filter((p) => p.id === MEDIA_PROVIDER)
-  if (r.everos) return on.filter((p) => p.kind === 'key' && p.acceptsKey !== false)
+  if (r.everos) {
+    const role = r.everos
+    const offered = on.filter((p) => (snap.everos?.supports?.[p.id] || []).includes(role))
+    if (role !== 'rerank') return offered
+    /* Reranking against somebody's own box needs a request shape the vendor
+       table cannot name, and this page has nowhere to ask for one -- a first
+       save of such a provider is refused, so offering it here would be a picker
+       entry whose only outcome is an error. The wizard asks, so one already
+       configured stays pickable and its model stays editable. */
+    const pinned = snap.everos?.sections?.rerank?.provider
+    return offered.filter((p) => !isSelfHost(snap, p.id) || p.id === pinned)
+  }
   return on
+}
+
+/* A vendor whose rerank request shape nothing but its operator knows: raven
+   carries no table entry naming it, which is exactly the self-hosted case. */
+function isSelfHost(snap: SettingsSnapshot, id: string): boolean {
+  const p = snap.providers.find((x) => x.id === id)
+  return !!p && (p.kind === 'local' || p.id === 'custom')
+}
+
+/* Whether this role's slot can be edited at all. A root the user manages is
+   raven's to read and not to write -- it neither starts nor configures it --
+   and a role set from exported variables outranks anything saved here. */
+export function everosLocked(r: Role, snap: SettingsSnapshot): 'foreign' | 'env' | null {
+  if (!r.everos) return null
+  if (snap.everos?.owned === false) return 'foreign'
+  return snap.everos?.sections?.[r.everos]?.env_managed ? 'env' : null
 }
 
 /* The roles a provider (and optionally one of its models) serves right now.
@@ -147,7 +175,7 @@ async function setRole(r: Role, model: string, provider: string, typed: boolean,
     return src.load()
   }
   if (r.keys) { await src.set(r.keys[0], model); return src.set(r.keys[1], provider) }
-  if (r.everos) return src.everosSet(r.everos, { model }, provider)
+  if (r.everos) return src.everosSet(r.everos, model, provider)
   if (r.media) {
     await src.set(`tools.media.${r.media}`, mediaSelection(r.media, model))
     return src.set('tools.disabledTools', disabledTools(store.get().snap.raw).filter((x) => x !== r.tool))
@@ -202,7 +230,7 @@ export function RolePill({ role }: { role: Role }): JSX.Element {
        fresh install starts in. */
     const label = role.media
       ? 'gui.settings.roles.connect_openrouter'
-      : role.everos ? 'gui.settings.roles.no_key_provider' : 'gui.settings.roles.no_provider'
+      : role.everos ? 'gui.settings.roles.no_vendor_for_role' : 'gui.settings.roles.no_provider'
     return (
       <button type="button" className="mini ghost" onClick={() => {
         /* The tab first: switching a section clears every drawer of the one it
@@ -217,8 +245,25 @@ export function RolePill({ role }: { role: Role }): JSX.Element {
       </button>
     )
   }
+  /* Shown, not offered. Raven cannot write a root somebody else manages, and it
+     cannot edit the shell an EVEROS_* export came from -- a slot that took the
+     click and saved anyway would report success for a value that never applies. */
+  const locked = everosLocked(role, s.snap)
+  if (locked) {
+    return (
+      <span className="settings-mpill settings-dim" title={t(`gui.settings.roles.locked_${locked}`)}>
+        <span className="settings-id">{val ? val.model : t('gui.settings.roles.unset')}</span>
+        {val && <span className="settings-pv">{providerName(s.snap, val.provider)}</span>}
+      </span>
+    )
+  }
   const dim = !val
-  const clearable = !!val && role.id !== 'chat'
+  /* Asked of the server, not remembered here. Clearing `llm` turns long-term
+     memory off outright and `embedding` is what every stored vector was written
+     under, so the write refuses both -- and this page drew the button anyway
+     until the contract came down the wire. */
+  const required = s.snap.everos?.required || []
+  const clearable = !!val && role.id !== 'chat' && !(role.everos && required.includes(role.everos))
   const cls = ['settings-mpill', dim ? 'settings-dim' : '', clearable ? 'settings-clearable' : ''].filter(Boolean).join(' ')
   const offer: Offer = {
     kind: ROLE_KIND[role.id],
