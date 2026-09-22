@@ -41,8 +41,11 @@ def test_a_file_whose_size_did_not_change_is_still_modified(tmp_path: Path) -> N
     same_size.write_text("aaa\n")
     before = snapshot.take(tmp_path)
     assert before is not None
-    os.utime(same_size, ns=(before[str(same_size)][1] + 1_000_000_000,) * 2)
     same_size.write_text("bbb\n")
+    # Stamped after the rewrite, not before it: the write takes the clock's
+    # current time, which on a coarse filesystem clock is the baseline's again.
+    later = before[str(same_size)][1] + 1_000_000_000
+    os.utime(same_size, ns=(later, later))
 
     _, modified, _ = snapshot.diff(before, snapshot.take(tmp_path))
     assert modified == [str(same_size)]

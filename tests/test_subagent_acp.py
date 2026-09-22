@@ -958,8 +958,9 @@ async def test_a_diff_block_over_an_existing_file_is_an_edit_with_its_counts(tmp
     assert did.files == [{"path": "notes.md", "op": "edit", "add": 2, "del": 1, "size": 15}]
 
 
-async def test_a_failed_call_records_no_file_at_all(tmp_path: Path) -> None:
-    """Half an edit the agent then abandoned is not a change anyone can open."""
+async def test_a_failed_call_records_nothing_from_its_blocks(tmp_path: Path) -> None:
+    """Half an edit the agent then abandoned is not a change anyone can open:
+    the block is a claim, and only what the disk shows counts -- here nothing."""
     from raven.acp_client.acp_agent import _TurnCollector
     from raven.agent.subagent import activity
 
@@ -5596,3 +5597,19 @@ async def test_a_permission_request_opens_the_listing_before_the_call_is_announc
         )
 
     assert did.files == [{"path": "w.md", "op": "add", "add": 1, "del": 0, "size": 4}]
+
+
+async def test_a_failed_call_still_records_what_it_left_on_disk(tmp_path: Path) -> None:
+    """A command that wrote a file and then exited non-zero left that file
+    behind; the exit status is the agent's verdict on the call, not on the
+    disk."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "execute"})
+        (tmp_path / "partial.txt").write_text("half\n", encoding="utf-8")
+        await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "failed"})
+
+    assert did.files == [{"path": "partial.txt", "op": "add", "add": 1, "del": 0, "size": 5}]

@@ -392,9 +392,10 @@ class _TurnCollector:
         changes: the diff blocks the agent attaches to the call, which carry the
         text and so the line counts, and a listing of the workspace taken when
         the call opened against one taken when it completed, which is the only
-        sign of a file a command of the agent's wrote. A failed call records
-        nothing -- what it half did is not a change anyone can open -- and a call
-        id settles once, however many frames repeat it.
+        sign of a file a command of the agent's wrote. A failed call keeps only
+        the second: its blocks are claims about a change that may not have
+        landed, while what the listing finds on disk is there whatever the exit
+        status said. A call id settles once, however many frames repeat it.
 
         Written into the run captured at construction, not the ambient one: this
         runs on the connection's read loop, whose ContextVar predates the run.
@@ -424,7 +425,10 @@ class _TurnCollector:
         before = self._listings.pop(call_id, None)
         blocks = self._blocks.pop(call_id, {})
         if status == "failed":
-            return
+            # The blocks describe what the call meant to do, which a failed call
+            # may not have done; the disk says what it did do. A command that
+            # wrote a file and then exited non-zero left that file behind.
+            blocks = {}
         accounted: list[str] = []
         # Settled before this call's own blocks are noted, so a file it just
         # wrote is not stat'ed to say it exists -- the order the in-process lane
