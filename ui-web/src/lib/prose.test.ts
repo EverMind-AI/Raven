@@ -220,3 +220,119 @@ describe('prose renderer, line flow', () => {
     expect(md('**one** x\n**two** y')).toBe('<p><strong>one</strong> x<br><strong>two</strong> y</p>')
   })
 })
+
+describe('prose renderer, mathematics', () => {
+  /* A model asked for mathematics writes TeX. The renderer had no opinion
+     about it, so a report on group theory arrived as its own source. */
+  it('sets an inline formula as mathematics the browser can typeset', () => {
+    wire()
+    const out = md('the group $(G, \\cdot)$ is abelian')
+    expect(out).toContain('<math')
+    expect(out).toContain('</math>')
+    /* MathML, not positioned glyphs: the browser sets it with its own fonts,
+       which is why this ships no typeface. */
+    expect(out).toContain('<mi>G</mi>')
+    expect(out).not.toContain('$')
+  })
+
+  it('keeps a formula out of the markdown passes', () => {
+    wire()
+    /* Subscripts and products are underscores and stars, which the emphasis
+       passes would otherwise eat -- `a_1 * b_2` losing its underscores, and
+       the star pairing with the next bold in the line. */
+    const out = md('take $a_1 * b_2$ here')
+    expect(out).toContain('<msub>')
+    expect(out).not.toContain('<em>')
+    /* A code span still wins: a dollar in backticks is a dollar. */
+    expect(md('the var `$PATH` is set')).toBe('<p>the var <code>$PATH</code> is set</p>')
+  })
+
+  it('leaves money alone, which is what a stray dollar usually is', () => {
+    wire()
+    /* The rule the markdown extensions settled on, and the reason for it: no
+       space just inside either dollar, no digit just after the closing one,
+       and an escaped dollar opens nothing. Without it this sentence set
+       "5 and" as mathematics. */
+    expect(md('it costs $5 and $10 total')).toBe('<p>it costs $5 and $10 total</p>')
+    expect(md('from $5 to $10')).toBe('<p>from $5 to $10</p>')
+    expect(md('a $ x $ b')).toBe('<p>a $ x $ b</p>')
+    expect(md('costs \\$5 and \\$10 here')).not.toContain('<math')
+  })
+
+  it('gives the converter the source, not the escaped markup', () => {
+    wire()
+    /* `<`, `>` and `&` are ordinary characters in mathematics, and esc() has
+       already turned them into entities by the time the TeX is read. */
+    const out = md('when $a < b$ holds')
+    expect(out).toContain('<math')
+    expect(out).toContain('&lt;')
+    expect(out).not.toContain('&amp;lt;')
+  })
+
+  it('draws display mathematics as a block of its own, in both spellings', () => {
+    wire()
+    /* The formula alone on its line between its own markers. */
+    const split = md('before\n\n$$\n\\sum_{i=1}^{n} i\n$$\n\nafter')
+    expect(split).toContain('<div class="mathblk">')
+    expect(split).toContain('display="block"')
+    expect(split).toContain('<p>before</p>')
+    expect(split).toContain('<p>after</p>')
+
+    /* And the whole thing on one line, which is what a report tends to be
+       written in: reading only the spelling above set every one of them
+       inline, with a stray marker standing on each side. */
+    const one = md('before\n\n$$A \\cong \\mathbb{Z}/n\\mathbb{Z}$$\n\nafter')
+    expect(one).toContain('<div class="mathblk">')
+    expect(one).toContain('display="block"')
+    expect(one).not.toContain('$')
+    expect(one).toContain('<p>before</p>')
+    expect(one).toContain('<p>after</p>')
+  })
+
+  it('reaches a displayed formula written under a list item', () => {
+    wire()
+    /* The list scanner takes the indented lines under an item as more of its
+       text and hands them to the inline pass one at a time, where a bare pair
+       of markers matches nothing -- so the item showed the delimiters and the
+       source. A formula standing alone under an item is a block belonging to
+       the item, and leaves the list the way an indented fence already does. */
+    const out = md('- derivation\n  $$\n  x^2 + y^2\n  $$')
+    expect(out).toContain('<div class="mathblk">')
+    expect(out).toContain('display="block"')
+    expect(out).not.toContain('$')
+    expect(out).toContain('<li>derivation</li>')
+
+    /* Both spellings, so where it is written does not decide what it is. */
+    const one = md('- derivation\n  $$x^2 + y^2$$')
+    expect(one).toContain('<div class="mathblk">')
+    expect(one).not.toContain('$')
+
+    /* A pair inside the item's own sentence is not that shape: it stays in the
+       item, and it is set inline, or it takes a line of its own and breaks the
+       sentence in three. Where it was written says which it is. */
+    const inside = md('- when $$x$$ holds we win')
+    expect(inside).not.toContain('mathblk')
+    expect(inside).toContain('<li>when <math')
+    expect(inside).toContain('holds we win</li>')
+    expect(inside).not.toContain('display="block"')
+  })
+
+  it('leaves the list scanner alone otherwise', () => {
+    wire()
+    /* The break above must fire on a formula line and nothing else. */
+    expect(md('- one\n  more of one')).toBe('<ul><li>one more of one</li></ul>')
+    expect(md('- one\n  - two')).toContain('<li>one<ul><li>two</li></ul></li>')
+    expect(md('- code\n  ```js\n  let a = 1\n  ```')).toContain('cblk')
+  })
+
+  it('leaves TeX it cannot read as the author wrote it', () => {
+    wire()
+    /* A formula rendered wrong is worse than a formula not rendered: the
+       source is at least honest about being source. */
+    const out = md('broken $\\frobnicate{x}$ here')
+    expect(out).not.toContain('<math')
+    expect(out).toContain('$')
+    /* A lone opener is a dollar sign the author typed, not a block. */
+    expect(md('$$\nnot closed')).not.toContain('mathblk')
+  })
+})
