@@ -63,11 +63,52 @@ const IMAGE_PART = /^(?:\[image\]\s*)+/
    picture, since the chip is a link to it. */
 const FILE_PATH = /^\[(?:Image|Attachment): .*?\(path: (.+?)\).*\]$/
 
+import { I18N } from '../i18n/t'
+
+/* Where a note begins in `text`, and where its paths begin after it.
+   A note sits after a blank line, or -- when the person typed nothing and sent
+   only files -- at the very head. The composer stores the flattened marker and
+   the note as two text parts, `session.resume` joins them with a space, and
+   taking the marker off takes that blank line with it, so a wordless message
+   arrives with the note first.
+
+   The blank-line spelling is searched first and from the end, so a message
+   that quotes an earlier note is still read by its own; the head is the
+   fallback, never the preference.
+
+   One function because there are two readers -- the gate that decides whether
+   there is anything to take off, and the loop that decides what -- and asking
+   one question in two places is how they come to know different amounts. They
+   already had: the loop learned the head and the gate did not, so a note at
+   the head of a message the runtime had not annotated was refused by the gate
+   before the loop ever saw it. */
+function noteSpan(text: string, note: string): { at: number; from: number } | null {
+  const lead = `\n\n${note}\n`
+  const at = text.lastIndexOf(lead)
+  if (at >= 0) return { at, from: at + lead.length }
+  if (text.startsWith(`${note}\n`)) return { at: 0, from: note.length + 1 }
+  return null
+}
+
 export interface Attachments {
   /** The person's own words. */
   body: string
   /** The paths the note listed, in the order it listed them. */
   atts: string[]
+}
+
+/* Every spelling of the note's heading the catalogue carries, which is what
+   the reader has to be handed: a message sent under one language is read back
+   under whichever is in force. It lives here, beside the grammar that consumes
+   it, because it was written out twice at two call sites -- and two copies of
+   one grammar is how the bubble and the send came to disagree in the first
+   place, which is the whole argument of this file. */
+export const noteWords = (): string[] =>
+  Object.values((I18N.ui['gui.att.note'] ?? {}) as Record<string, string>).filter(Boolean)
+
+/** A sent message read back: the person's words and the files, in one call. */
+export function readMessage(text: string): Attachments {
+  return splitAttachments(text, noteWords())
 }
 
 /** The absolute path of every file the engine named, in the order named. */
@@ -100,7 +141,7 @@ export function stripRuntimeNotes(text: string): string {
 export function splitAttachments(text: string, notes: readonly string[]): Attachments {
   const raw = String(text)
   const absolute = runtimePaths(raw)
-  const carried = notes.some((note) => !!note && raw.includes(`\n\n${note}\n`))
+  const carried = notes.some((note) => !!note && noteSpan(raw, note) !== null)
   /* Nothing the runtime wrote, so nothing to take off. Without this the reader
      rewrote a message that carried no files at all: a person who begins a
      sentence with the word in brackets meant to write it, and this helper
@@ -121,12 +162,12 @@ export function splitAttachments(text: string, notes: readonly string[]): Attach
   const s = stripRuntimeNotes(raw)
   for (const note of notes) {
     if (!note) continue
-    const at = s.lastIndexOf(`\n\n${note}\n`)
-    if (at < 0) continue
-    const tail = s.slice(at + note.length + 3).split('\n')
+    const span = noteSpan(s, note)
+    if (!span) continue
+    const tail = s.slice(span.from).split('\n')
     if (!tail.length || !tail.every((l) => !l.trim() || /^- /.test(l))) continue
     return {
-      body: s.slice(0, at),
+      body: s.slice(0, span.at),
       atts: tail.filter((l) => /^- /.test(l)).map((l) => resolve(l.slice(2).trim())),
     }
   }

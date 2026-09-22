@@ -1,7 +1,6 @@
 import { t } from '../../i18n/t'
-import { I18N } from '../../i18n/t'
 import { argPath, firstErrLine, phraseOf, shortArg, splitMcp, verbIngOf, verbOf } from '../../lib/actVerbs'
-import { splitAttachments } from '../../lib/attachments'
+import { readMessage } from '../../lib/attachments'
 import { formatDuration } from '../../lib/duration'
 import * as hunks from '../../lib/hunks'
 import { md } from '../../lib/prose'
@@ -1953,8 +1952,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
 export function askText(
   lane: Lane, text: string, when?: string | null, opts?: { midTurn?: boolean } | null,
 ): AskData {
-  const notes = Object.values((I18N.ui['gui.att.note'] ?? {}) as Record<string, string>).filter(Boolean)
-  const { body, atts } = splitAttachments(String(text), notes)
+  const { body, atts } = readMessage(String(text))
   return ask(lane, body, atts, when, opts)
 }
 
