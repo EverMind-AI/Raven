@@ -42,12 +42,6 @@ import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-FONT_DIRNAME = "fonts"
-"""Raven's own font directory, under its runtime directory rather than a system
-font path: installing a font machine-wide needs privileges this must not ask
-for, and a font that belongs to raven is one raven can replace without asking
-who else is using it."""
-
 ENV_FONT_DIR = "RAVEN_FONT_DIR"
 """Points the whole mechanism somewhere else, for a deployment that manages its
 own fonts or a test that wants an empty directory."""
@@ -55,14 +49,19 @@ own fonts or a test that wants an empty directory."""
 FONT_SUFFIXES = (".otf", ".ttf", ".ttc", ".otc")
 
 
-def font_dir() -> Path:
-    """The directory raven offers a render its own faces from."""
-    override = os.environ.get(ENV_FONT_DIR)
-    if override:
-        return Path(override).expanduser()
-    from raven.config.paths import get_runtime_subdir
+def font_dir() -> Path | None:
+    """The directory a deployment puts its own faces in, or None where none is named.
 
-    return get_runtime_subdir(FONT_DIRNAME)
+    The environment alone decides this. An earlier draft defaulted to a
+    directory under raven's runtime data, which meant ``raven.utils`` importing
+    ``raven.config`` -- and ``raven.config`` already imports ``raven.utils``, so
+    the pair became a cycle. Nothing ever wrote to that default: the installer
+    puts its fallback face in the platform's own user font directory, where
+    fontconfig and CoreText find it without being told. The default was a cycle
+    bought for nothing.
+    """
+    override = os.environ.get(ENV_FONT_DIR)
+    return Path(override).expanduser() if override else None
 
 
 def bundled_face() -> Path | None:
@@ -73,7 +72,7 @@ def bundled_face() -> Path | None:
     deployment drops in here is its choice, and the renderer reads a directory.
     """
     directory = font_dir()
-    if not directory.is_dir():
+    if directory is None or not directory.is_dir():
         return None
     for candidate in sorted(directory.iterdir()):
         if candidate.is_file() and candidate.suffix.lower() in FONT_SUFFIXES:
@@ -119,7 +118,7 @@ def render_env(base: dict[str, str] | None = None, *, scratch: Path | None = Non
     face = bundled_face()
     if face is None or sys.platform == "darwin":
         return env
-    where = scratch or font_dir()
+    where = scratch or face.parent
     where.mkdir(parents=True, exist_ok=True)
     config = where / "fonts.conf"
     # Inherit whatever configuration was already in force, not the system
@@ -154,10 +153,15 @@ def host_han_faces() -> list[str]:
 _HAN_NAME_HINTS = ("cjk", "notosanssc", "notosanstc", "notoserifsc", "sourcehan", "pingfang", "heiti", "msyh", "simsun")
 
 _SYSTEM_HAN_FACES = (
+    # Package paths, for a host that has the fontconfig library but not the
+    # fc-list binary: there a file on disk does mean the renderer reaches it.
+    # macOS is deliberately absent. PingFang is present on every Mac and
+    # LibreOffice still does not draw from it -- that is the failure this
+    # module exists for, so naming it here would answer "yes, this host can set
+    # Chinese" for exactly the host that cannot.
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-VF.otf.ttc",
     "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-    "/System/Library/Fonts/PingFang.ttc",
     "C:/Windows/Fonts/msyh.ttc",
 )
 

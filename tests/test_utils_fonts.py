@@ -72,12 +72,12 @@ def test_a_host_with_no_face_is_not_silently_taken_for_one(monkeypatch: pytest.M
     """fc-match answers every query with its nearest approximation, so on a host
     with no Han face it names a Latin one. Taking that for a Han face is how a
     deck gets measured against glyphs that do not exist."""
-    monkeypatch.setattr(fonts, "_SYSTEM_HAN_FACES", ())
     monkeypatch.setattr(fonts, "bundled_face", lambda: None)
     monkeypatch.setattr(fonts, "user_han_faces", list)
     monkeypatch.setattr(fonts, "_fc_listed_han", lambda: None)
     monkeypatch.setattr(fonts, "host_han_faces", list)
     monkeypatch.setattr(fonts.sys, "platform", "linux")
+    monkeypatch.setattr(fonts.Path, "is_file", lambda self: False)
 
     assert fonts.han_face() is None
     assert fonts.can_draw_han() is False
@@ -91,4 +91,39 @@ def test_the_face_raven_brought_outranks_whatever_the_host_has(tmp_path: Path, m
     monkeypatch.setattr(fonts, "host_han_faces", lambda: ["Some Host Face"])
 
     assert fonts.han_face() == face
+    assert fonts.can_draw_han() is True
+
+
+def test_a_stock_mac_is_not_taken_for_a_host_that_can_set_chinese(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PingFang sits on every Mac and LibreOffice still does not draw from it --
+    that is the failure this module exists for. A face list naming it would
+    answer "yes, this host sets Chinese" for precisely the host that does not.
+
+    The list is left intact rather than emptied: its contents are what is under
+    test, and a test that replaces them tests nothing.
+    """
+    monkeypatch.setattr(fonts.sys, "platform", "darwin")
+    monkeypatch.setattr(fonts.shutil, "which", lambda name: None)
+    monkeypatch.setattr(fonts, "bundled_face", lambda: None)
+    monkeypatch.setattr(fonts, "user_han_faces", list)
+    monkeypatch.setattr(fonts.Path, "is_file", lambda self: str(self) == "/System/Library/Fonts/PingFang.ttc")
+
+    assert fonts.han_face() is None, "a Mac's own PingFang was taken for a face the renderer can use"
+    assert fonts.can_draw_han() is False
+
+
+def test_a_linux_package_path_still_answers_where_fontconfig_cannot_be_asked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other side of the same list: a host can carry the fontconfig library
+    without the fc-list binary, and there a packaged face on disk is reachable.
+    Dropping the whole list to solve the Mac case would lose that."""
+    packaged = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+    monkeypatch.setattr(fonts.sys, "platform", "linux")
+    monkeypatch.setattr(fonts.shutil, "which", lambda name: None)
+    monkeypatch.setattr(fonts, "bundled_face", lambda: None)
+    monkeypatch.setattr(fonts, "user_han_faces", list)
+    monkeypatch.setattr(fonts.Path, "is_file", lambda self: str(self) == packaged)
+
+    assert fonts.han_face() == Path(packaged)
     assert fonts.can_draw_han() is True

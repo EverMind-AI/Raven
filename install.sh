@@ -662,7 +662,10 @@ fetch_han_font() {
     warn "Could not create $target_dir; Chinese pages in a deck will render as boxes."
     return 1
   }
-  part="$target_dir/.$HAN_FONT_NAME.part"
+  # Per-process, so two installs under one account cannot write the same
+  # scratch file: the checks below would catch the interleaving and both runs
+  # would fail, which is a needless way to lose an install.
+  part="$target_dir/.$HAN_FONT_NAME.$$.part"
   info "Downloading a CJK font (Chinese pages in a deck)..."
   if ! curl -fsSL --max-time 120 -o "$part" "$HAN_FONT_URL"; then
     rm -f "$part"
