@@ -7367,9 +7367,9 @@
       "en": "Needs setup",
       "zh": "待配置"
     },
-    "gui.settings.tools.builtin": {
-      "en": "Built in",
-      "zh": "内置"
+    "gui.settings.tools.builtin_locked": {
+      "en": "This tool is built in and cannot be switched here.",
+      "zh": "该工具为内置，无法在此手动开关。"
     },
     "gui.settings.tools.model": {
       "en": "Model",

@@ -14,6 +14,13 @@ import type { JSX } from 'react'
 export const MAX_DAYS = 90
 
 const money = (n: number | null | undefined): string => `$${(n || 0).toFixed(2)}`
+/* Whether any call in the range came back with a price at all. A catalogue
+   with no rates prices nothing, and every cost surface then reads $0.00 --
+   a number, where the honest answer is that there is none. So the cost tile,
+   the per-day bars and the model table's cost column are all drawn only when
+   at least one call was priced; the per-row "no price" note covers the mixed
+   range, where some models are priced and some are not. */
+const anyPriced = (u: UsageStats): boolean => u.llm.total.calls > u.llm.total.cost_missing_calls
 const hit = (input: number | null | undefined, cached: number | null | undefined): number => {
   const c = cached || 0
   const all = (input || 0) + c
@@ -35,7 +42,7 @@ function Tiles({ u }: { u: UsageStats }): JSX.Element {
     <Card raw>
       <div className="settings-tiles4">
         <div className="settings-tl"><div className="settings-n">{tot.calls.toLocaleString()}</div><div className="settings-l">{t('gui.settings.usage.calls')}</div></div>
-        <div className="settings-tl"><div className="settings-n">{money(tot.cost_usd)}</div><div className="settings-l">{t('gui.settings.usage.cost')}</div></div>
+        {anyPriced(u) && <div className="settings-tl"><div className="settings-n">{money(tot.cost_usd)}</div><div className="settings-l">{t('gui.settings.usage.cost')}</div></div>}
         <div className="settings-tl"><div className="settings-n">{fmt(tot.output_tokens || 0)}</div><div className="settings-l">{t('gui.settings.usage.output')}</div></div>
         <div className="settings-tl settings-good"><div className="settings-n">{(hit(tot.input_tokens, tot.cache_read_tokens) * 100).toFixed(1)}%</div><div className="settings-l">{t('gui.settings.usage.hit')}</div></div>
       </div>
@@ -64,6 +71,7 @@ function Bars({ u }: { u: UsageStats }): JSX.Element {
 
 function Models({ u }: { u: UsageStats }): JSX.Element {
   const rows = u.llm.models
+  const priced = anyPriced(u)
   const anyWrite = rows.some((m) => (m.cache_write_tokens || 0) > 0)
   const most = Math.max(1, ...rows.map((m) => m.calls))
   return (
@@ -75,7 +83,8 @@ function Models({ u }: { u: UsageStats }): JSX.Element {
               <th>{t('gui.settings.usage.model')}</th><th>{t('gui.settings.usage.calls')}</th>
               <th>{t('gui.settings.usage.input_fresh')}</th><th>{t('gui.settings.usage.input_cached')}</th>
               {anyWrite && <th>{t('gui.settings.usage.cache_write')}</th>}
-              <th>{t('gui.settings.usage.output')}</th><th>{t('gui.settings.usage.hit')}</th><th>{t('gui.settings.usage.cost')}</th>
+              <th>{t('gui.settings.usage.output')}</th><th>{t('gui.settings.usage.hit')}</th>
+              {priced && <th>{t('gui.settings.usage.cost')}</th>}
             </tr>
           </thead>
           <tbody>
@@ -88,10 +97,10 @@ function Models({ u }: { u: UsageStats }): JSX.Element {
                 {anyWrite && <td>{m.cache_write_tokens ? fmt(m.cache_write_tokens) : '—'}</td>}
                 <td>{fmt(m.output_tokens || 0)}</td>
                 <td>{Math.round(hit(m.input_tokens, m.cache_read_tokens) * 100)}%</td>
-                <td>{m.cost_usd == null ? <span className="settings-dim">{t('gui.settings.usage.no_price')}</span> : money(m.cost_usd)}</td>
+                {priced && <td>{m.cost_usd == null ? <span className="settings-dim">{t('gui.settings.usage.no_price')}</span> : money(m.cost_usd)}</td>}
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan={anyWrite ? 8 : 7}><Rov>{t('gui.settings.usage.none')}</Rov></td></tr>}
+            {!rows.length && <tr><td colSpan={(anyWrite ? 8 : 7) - (priced ? 0 : 1)}><Rov>{t('gui.settings.usage.none')}</Rov></td></tr>}
           </tbody>
         </table>
       </div>
@@ -166,7 +175,7 @@ export function Usage(): JSX.Element {
       {u && (
         <>
           <Tiles u={u} />
-          <Bars u={u} />
+          {anyPriced(u) && <Bars u={u} />}
           <Models u={u} />
           <ToolsTable u={u} />
         </>

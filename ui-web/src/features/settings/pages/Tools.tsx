@@ -5,6 +5,7 @@ import { useState } from 'react'
 
 import { KeyInput } from '../../../components/KeyInput'
 import { t } from '../../../i18n/t'
+import { show as toast } from '../../../state/toast'
 import { Card, Chip, KeyLink, Row, Rov, Switch, Xrow } from '../Fields'
 import { ROLES, RolePill, disabledTools, roleValue } from '../providers/Roles'
 import { FETCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, keySet, legacyKey, str, vendorKey, webVendor } from '../source'
@@ -156,16 +157,15 @@ export function Tools(): JSX.Element {
       <Xrow
         key={id}
         name={<span className="mono">{id}</span>}
-        status={meta
-          ? <Rov>{t('gui.settings.tools.builtin')}</Rov>
-          : blk ? <Chip state="warn">{t('gui.settings.tools.setup')}</Chip> : null}
+        status={!meta && blk ? <Chip state="warn">{t('gui.settings.tools.setup')}</Chip> : null}
         ctl={meta
           /* The state is the row's, not the branch's. A fixed control used to
              hard-code checked, which was true while every meta-tool the page
              saw was a registered one; `tool_search` with the fold off is
              reported here precisely because it is not, and drawing it on said
              the opposite of the note beside it. */
-          ? <span className="settings-swi settings-swi-fixed" role="switch" aria-checked={!!known_.on} aria-disabled="true" aria-label={id} />
+          ? <span className="settings-swi settings-swi-fixed" role="switch" aria-checked={!!known_.on} aria-disabled="true" aria-label={id}
+              onClick={(e) => { e.stopPropagation(); toast(t('gui.settings.tools.builtin_locked')) }} />
           : <Switch on={isOn} label={id} onChange={(v) => flip(id, v)} />}
         panel={!meta && hasPanel(id) ? <Panel id={id} raw={raw} /> : undefined}
         open={s.toolOpen === id}
