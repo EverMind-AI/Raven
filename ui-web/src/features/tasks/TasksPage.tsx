@@ -122,6 +122,14 @@ function humanSize(bytes: number): string {
    one thing. The colour carries it; the text is the label on the colour. */
 const ErrorTag = (): JSX.Element => <span className="tkerr">error</span>
 
+/* What shape the work has, when that is worth a word. A spawn is one agent
+   and draws as one node; a `run_subagent_dag` with a single node draws the
+   same way, so neither gets the tag -- only a row whose graph has more than
+   one step does. Read off the nodes rather than off `kind` for that reason. */
+const isGraph = (row: TaskRow): boolean => row.kind === 'dag' && row.nodes.length > 1
+
+const GraphTag = (): JSX.Element => <span className="tkgraph">{t('gui.tasks.graph_tag')}</span>
+
 /* ── the list ─────────────────────────────────────────────────────────── */
 
 function Row({ row, now, open, onOpen }: {
@@ -147,6 +155,7 @@ function Row({ row, now, open, onOpen }: {
       <div className="bd">
         <div className="tline">
           <span className="nm">{row.task_summary || row.id}</span>
+          {isGraph(row) ? <GraphTag /> : null}
         </div>
         <s className="st">{line}</s>
       </div>
