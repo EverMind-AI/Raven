@@ -254,11 +254,18 @@ class WsGateway:
         session_key = request.query.get("session", "")
         workspace = None
         if self.agent_loop_factory is not None and session_key:
-            from raven.rpc.methods.console import _safe_loop, _workspace_root
+            from raven.rpc.methods.console import _safe_loop, _workspace_root, viewer_root
 
             workspace = _workspace_root(_safe_loop(self.agent_loop_factory), session_key)
             if raw and not Path(raw).expanduser().is_absolute():
-                raw = str(workspace / raw)
+                # Which root the path belongs to is its own question: an upload
+                # is relative to agent home and everything else to the session's
+                # own directory (raven/rpc/methods/console.py's viewer_root).
+                # Resolved before the fence below, which is then applied against
+                # the root the path was actually written under.
+                rel = Path(raw)
+                workspace = viewer_root(workspace, rel)
+                raw = str(workspace / rel)
         try:
             path = resolve_readable(raw, workspace=workspace)
         except ValueError as exc:
