@@ -943,6 +943,26 @@ class TestLiveVendorKeyFollowsTheCanonicalOrder:
         _write(path, {"tools": {"web": {"providers": {"serper": {"apiKey": "sk-serper"}, "tavily": {"apiKey": ""}}}}})
         assert live_vendor_key(live, "tavily", boot="tv-harness") == ""
 
+    @pytest.mark.parametrize(("leaf", "vendor"), [("jinaApiKey", "jina"), ("search", "serper")])
+    def test_a_rotated_leaf_reaches_the_next_read(self, tmp_path: Path, leaf: str, vendor: str) -> None:
+        """The boot value would satisfy a leaf the file still carries unchanged;
+        a leaf rotated in the file is what the live read of it is for, and a
+        ``providers`` subtree naming another vendor must not hide it."""
+        from raven.config.live import live_vendor_key
+
+        def web(key: str) -> dict:
+            value = {"apiKey": key} if leaf == "search" else key
+            return {leaf: value, "providers": {"firecrawl": {"apiKey": "fc"}}}
+
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"web": web("sk-old")}})
+        live = LiveConfig(path)
+        assert live_vendor_key(live, vendor, boot="sk-old") == "sk-old"
+
+        _write(path, {"tools": {"web": web("sk-new")}})
+
+        assert live_vendor_key(live, vendor, boot="sk-old") == "sk-new"
+
     def test_a_revoked_leaf_is_an_answer_not_a_miss(self, tmp_path: Path) -> None:
         from raven.config.live import live_vendor_key
 
