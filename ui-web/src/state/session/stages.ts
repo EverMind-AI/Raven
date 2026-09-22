@@ -212,9 +212,9 @@ export const STAGES: readonly Stage[] = [
     o.h.done(ok, preview, took, null, p.truncated)
     /* p.diff is the real change on disk -- the only place a whole-file write's
        previous content survives; p.file_change says whether there was a file
-       there at all. */
+       there at all, and p.file_removed which files this call made vanish. */
     if (typeof wsOnToolDone === 'function') {
-      wsOnToolDone(o.name, o.args, ok, preview, took, p.diff, p.file_change)
+      wsOnToolDone(o.name, o.args, ok, preview, took, p.diff, p.file_change, p.file_removed)
     }
   }),
 

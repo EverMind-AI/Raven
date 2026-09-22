@@ -46,6 +46,20 @@ export function fromWrite(content: string): WsHunk {
   return { rows, add: all.length, del: 0 }
 }
 
+/* The mirror of fromWrite, for a file that is gone rather than one that
+   arrived: every line it held, as a del row numbered on the old side. */
+export function fromDelete(content: string): WsHunk {
+  const all = String(content == null ? '' : content).split('\n')
+  /* A trailing empty split is not a line in the file or in a diff count. */
+  if (all.length > 1 && all[all.length - 1] === '') all.pop()
+  /* An empty file held no lines at all -- and the count a reload carries for
+     it is the runtime's own `splitlines`, which says zero here too. */
+  if (all.length === 1 && all[0] === '') all.pop()
+  const rows: DiffRow[] = all.slice(0, 40).map((line, i) => ['del', line, i + 1, null])
+  if (all.length > 40) rows.push(['gap', all.slice(40)])
+  return { rows, add: 0, del: all.length }
+}
+
 /* One hunk's rows, back into unified-diff lines: a `@@ ... @@` header per run
    the rows carry, then a prefixed line per row. A 'gap' row is dropped -- it
    marks lines the builder chose not to number (fromEdit's context beyond

@@ -443,6 +443,7 @@ describe('tool.complete', () => {
         truncated: true,
         diff: '@@ -1 +1 @@',
         file_change: { path: '/w/a.md', after: 'now' },
+        file_removed: [{ path: '/w/old.md', before: 'was here' }],
       },
     })
 
@@ -457,10 +458,11 @@ describe('tool.complete', () => {
     expect(truncated).toBe(true)
     expect(h.live.open.has('c1')).toBe(false)
     expect(h.did('wsOnToolDone')[0]!.slice(1, 4)).toEqual(['exec', { command: 'ls' }, false])
-    /* Both halves of what the tool reported about the file: the diff, and the
-       payload that says whether there was a file under the write at all. */
+    /* Everything the tool reported about files: the diff, the payload that says
+       whether there was a file under the write at all, and the files this call
+       made vanish -- which for an `exec` is the only report there is. */
     expect(h.did('wsOnToolDone')[0]!.slice(6))
-      .toEqual(['@@ -1 +1 @@', { path: '/w/a.md', after: 'now' }])
+      .toEqual(['@@ -1 +1 @@', { path: '/w/a.md', after: 'now' }, [{ path: '/w/old.md', before: 'was here' }]])
   })
 })
 

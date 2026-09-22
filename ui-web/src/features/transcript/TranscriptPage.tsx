@@ -1510,6 +1510,7 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview }: {
   )
 })
 
+const ARTS_CHANGE = { new: 'gui.arts.new', edit: 'gui.arts.edit', deleted: 'gui.arts.deleted' } as const
 
 const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsData }): ReactElement | null {
   useSeg(lane, seg)
@@ -1549,7 +1550,7 @@ const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsDa
         </div>
         <div className="achanges">
           {shownChanges.map((row) => <button key={row.path} className="achange" onClick={() => wsOpenPath(row.path)}>
-            <span className={'ck ' + row.change}>{t(row.change === 'new' ? 'gui.arts.new' : 'gui.arts.edit')}</span>
+            <span className={'ck ' + row.change}>{t(ARTS_CHANGE[row.change])}</span>
             <span className="cn">{row.name}</span>
             <span className="ct">{row.ext ? row.ext.toUpperCase() : t('gui.arts.file')}</span>
             <span className="ca">+{row.lines}</span>

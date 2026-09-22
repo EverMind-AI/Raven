@@ -58,7 +58,8 @@ export type ScriptEvent = { d?: number } & (
   | { t: 'say'; x: string }
   | { t: 'answer'; x: string }
   | { t: 't+'; id: number; n: string; a?: string | ToolArgs }
-  | { t: 't-'; id: number; r: string; ok?: boolean; ms?: number; diff?: string[]; meta?: DeliveryMeta }
+  | { t: 't-'; id: number; r: string; ok?: boolean; ms?: number; diff?: string[]; meta?: DeliveryMeta;
+      removed?: Array<{ path: string; before: string }> }
   | DagEntry
   | { t: 'end' }
 )
@@ -130,6 +131,12 @@ const FIX_DELIVERY_FILES: DeliveryFile[] = [
     size:2184, media_type:'text/markdown' },
 ];
 
+/* What the GTM run throws away on its way: the first pass at the same
+   comparison, superseded by the document above. It is deleted with `rm`, which
+   is how a file goes on a real run -- there is no delete tool, and the runtime
+   notices the file is missing after the command ran. */
+const GTM_SUPERSEDED = '# GTM notes (first pass)\n\nClay, 11x, Unify -- names only, no comparison yet.\nSuperseded by gtm-compare.md.\n'
+
 const GTM_FILE_EVENTS: ScriptEvent[] = [
   { t:'t+', d:180, id:6, n:'write_file', a:{ path:'research/pricing.csv', content:'product,plan,price\nClay,Launch,167\n11x,Digital Worker,custom\nUnify,Growth,custom\n' } },
   { t:'t-', d:220, id:6, ok:true, r:'wrote research/pricing.csv (4 lines)', ms:220 },
@@ -141,6 +148,9 @@ const GTM_FILE_EVENTS: ScriptEvent[] = [
   { t:'t-', d:180, id:9, ok:true, r:'updated research/sources.md', ms:180 },
   { t:'t+', d:260, id:10, n:'write_file', a:{ path:'research/gtm-compare.md', content: GTM_DOC } },
   { t:'t-', d:340, id:10, ok:true, r:'wrote research/gtm-compare.md (18 lines)', ms:340 },
+  { t:'t+', d:140, id:11, n:'exec', a:'rm research/gtm-notes.md' },
+  { t:'t-', d:110, id:11, ok:true, r:'', ms:110,
+    removed:[{ path:'~/work/raven/research/gtm-notes.md', before: GTM_SUPERSEDED }] },
 ];
 
 const ANSWER_GTM = `## GTM Agent 赛道速览
@@ -225,8 +235,8 @@ const RUNS: Record<string, Run> = {
       { t:'ep', d:420 },
       { t:'think', d:850, s:5, x:'三家数据够了，整理成对比表，再给趋势判断。要标注搜索没跑，融资数字可能滞后。' },
       ...GTM_FILE_EVENTS,
-      { t:'t+', d:120, id:11, n:'deliver_files', a:{ files:[{ path:'research/gtm-compare.md' }] } },
-      { t:'t-', d:120, id:11, ok:true, r:'Delivered 1 file: gtm-compare.md', ms:120,
+      { t:'t+', d:120, id:12, n:'deliver_files', a:{ files:[{ path:'research/gtm-compare.md' }] } },
+      { t:'t-', d:120, id:12, ok:true, r:'Delivered 1 file: gtm-compare.md', ms:120,
         meta:{ raven_delivery:{ files:GTM_DELIVERY_FILES } } },
       { t:'answer', d:500, x: ANSWER_GTM + `
 
@@ -274,8 +284,8 @@ const RUNS: Record<string, Run> = {
       { t:'ep', d:400 },
       { t:'think', d:850, s:5, x:'官网与检索结果对得上，可以出表。' },
       ...GTM_FILE_EVENTS,
-      { t:'t+', d:120, id:11, n:'deliver_files', a:{ files:[{ path:'research/gtm-compare.md' }] } },
-      { t:'t-', d:120, id:11, ok:true, r:'Delivered 1 file: gtm-compare.md', ms:120,
+      { t:'t+', d:120, id:12, n:'deliver_files', a:{ files:[{ path:'research/gtm-compare.md' }] } },
+      { t:'t-', d:120, id:12, ok:true, r:'Delivered 1 file: gtm-compare.md', ms:120,
         meta:{ raven_delivery:{ files:GTM_DELIVERY_FILES } } },
       { t:'answer', d:500, x: ANSWER_GTM + `
 
@@ -422,7 +432,8 @@ function framesOf(run: Run, websearchOn: boolean, turnId: string): Frame[] {
       frames.push({ after, event: { type: 'tool.complete', payload: {
         tool_call_id: String(e.id), result_preview: e.r, truncated: false,
         ok: e.ok !== false, ...(e.meta ? { metadata: e.meta } : {}),
-        ...(e.diff ? { diff: e.diff.join('\n') } : {}) } } })
+        ...(e.diff ? { diff: e.diff.join('\n') } : {}),
+        ...(e.removed ? { file_removed: e.removed.map((f) => ({ path: f.path, before: f.before })) } : {}) } } })
     } else if (e.t === 'dag') {
       frames.push({ after, event: dagFrame(e) })
     } else if (e.t === 'answer') {
@@ -472,7 +483,10 @@ function historyOf(run: Run, websearchOn: boolean, at: number): ResultOf<'sessio
     } else if (e.t === 't-') {
       flush()
       messages.push({ role: 'tool', name: nameOfCall(run, websearchOn, String(e.id)),
-        tool_call_id: String(e.id), text: e.r, timestamp: String(at) })
+        tool_call_id: String(e.id), text: e.r, timestamp: String(at),
+        /* The stored shape, not the live one: a conversation on disk keeps how
+           many lines a removed file held, never its contents. */
+        ...(e.removed ? { file_removed: e.removed.map((f) => ({ path: f.path, del: lineCount(f.before) })) } : {}) })
     } else if (e.t === 'answer') {
       flush()
       messages.push({ role: 'assistant', text: e.x, timestamp: String(at), duration_ms: run.use.wall })
@@ -480,6 +494,12 @@ function historyOf(run: Run, websearchOn: boolean, at: number): ResultOf<'sessio
   }
   flush()
   return messages
+}
+
+const lineCount = (text: string): number => {
+  const lines = text.split('\n')
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+  return lines.length
 }
 
 const nameOfCall = (run: Run, websearchOn: boolean, id: string): string => {

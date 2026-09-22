@@ -9,10 +9,10 @@
  * `write_file` as; an edit is the real before/after slice.
  */
 
-import { fromEdit, fromWrite } from '../../lib/hunks'
+import { fromDelete, fromEdit, fromWrite } from '../../lib/hunks'
 
 import type { WsHunk } from '../../lib/hunks'
-import type { NodeStep } from './types'
+import type { NodeStep, TaskFile } from './types'
 
 interface FileToolArgs {
   path?: string
@@ -48,9 +48,18 @@ function samePath(a: string | undefined, b: string): boolean {
    A `TaskFile` folds a node's touches of one path into one item whose counts
    are the sum of every touch, so the patch a reader opens from it shows every
    touch too: a write is the whole content as added, an edit the before/after
-   slice. Summing these hunks' counts gives the chip's own numbers back. */
-export function hunksForFile(steps: readonly NodeStep[], path: string): WsHunk[] {
+   slice. Summing these hunks' counts gives the chip's own numbers back.
+
+   A file the node then removed ends on one more hunk, every line of it taken
+   back out. The contents can only be the node's own last write of that path --
+   the wire carries no deleted file's body for a task, and the removal itself
+   reaches the lane as a count. Without such a write the deletion has no body
+   to show, and the chip's own counts still say what went. */
+export function hunksForFile(
+  steps: readonly NodeStep[], path: string, op?: TaskFile['op'],
+): WsHunk[] {
   const out: WsHunk[] = []
+  let written: string | null = null
   steps.forEach((step) => {
     if (step.kind !== 'tool' || (!isWrite(step.name) && !isEdit(step.name))) return
     const args = parseArgs(step.args)
@@ -58,8 +67,10 @@ export function hunksForFile(steps: readonly NodeStep[], path: string): WsHunk[]
     if (isEdit(step.name) && args.old_text !== undefined && args.new_text !== undefined) {
       out.push(fromEdit(args.old_text, args.new_text))
     } else if (args.content !== undefined) {
+      written = args.content
       out.push(fromWrite(args.content))
     }
   })
+  if (op === 'delete' && written != null) out.push(fromDelete(written))
   return out
 }

@@ -2,6 +2,7 @@
 import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import catalogue from '../../../../i18n/messages.json'
 import { setTranslator } from '../../i18n/t'
 import { I18N } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
@@ -20,7 +21,7 @@ import * as tail from './tail';
 
 import type { ProseTarget } from '../../lib/prose'
 import type { WorkspaceSource } from '../workspace/types'
-import type { ArtifactsSource, HistoryMessage, SpawnListRow, TranscriptSource } from './types'
+import type { ArtifactRow, ArtifactsSource, HistoryMessage, SpawnListRow, TranscriptSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -1787,6 +1788,36 @@ describe("the turn's delivered files and file changes", () => {
     })
     await act(async () => { await Promise.resolve() })
     expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.edit'])
+  })
+
+  /* The third verdict a change row can carry, and the one no tool argument can
+     state: the file is gone, so the card says so rather than calling the lines
+     it held an edit. */
+  it('calls a file the turn removed deleted, not edited', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    PRODUCED.set(1, [wrote('scratch.md', 'gone', 'delete')])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'drop it', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.deleted'])
+    expect($('.achange .ck')?.className).toBe('ck deleted')
+  })
+
+  /* The three words come off a lookup keyed by the verdict, which the
+     catalogue gate reads literal keys only and cannot follow -- a verdict whose
+     word was never added renders its own key at the reader with nothing red.
+     Written as a record of the union so a fourth verdict fails to compile until
+     it is listed. */
+  it('has a catalogue word for every verdict a change row can carry', () => {
+    const verdicts: Record<ArtifactRow['change'], string> = {
+      new: 'gui.arts.new', edit: 'gui.arts.edit', deleted: 'gui.arts.deleted',
+    }
+    const ui = (catalogue as { ui: Record<string, unknown> }).ui
+    expect(Object.values(verdicts).filter((key) => !(key in ui))).toEqual([])
   })
 
   /* A file a playbook or a sub-agent wrote landed on another lane, so this

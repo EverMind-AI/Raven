@@ -400,6 +400,33 @@ describe('a task pane', () => {
       expect((panes[0]! as { change: WsChange }).change.hunks[0]).toMatchObject({ add: 2, del: 0 })
     })
 
+    /* A removed file has nothing left to open, so its chip opens the patch the
+       way an edit's does -- and says only what went: a `+0` beside it would be
+       a number about a file that is not there. */
+    it('opens a removed file as a diff and counts only what it took out', async () => {
+      record = {
+        dispatch: 'go', outputTruncated: false, answer: null,
+        steps: [{
+          kind: 'tool', id: 'c1', name: 'write_file',
+          args: JSON.stringify({ path: '/w/dead.py', content: 'one\ntwo\n' }), result: 'ok', ok: true,
+        }],
+      }
+      const withGone = task({
+        id: 'a', kind: 'dag', status: 'completed',
+        nodes: [node({ node_id: 'n1', status: 'completed',
+          files: [{ path: '/w/dead.py', op: 'delete', add: 0, del: 2, size: null }] })],
+      })
+      render(<TaskPane task={withGone} />)
+      const chip = document.querySelector('.tkchips .wchip') as HTMLElement
+      expect(chip.querySelector('.tkdstat')?.textContent).toBe('\u22122')
+
+      await act(async () => { chip.click() })
+      const panes = desk.get().panes
+      expect(panes).toHaveLength(1)
+      expect((panes[0]! as { change: WsChange }).change.kind).toBe('delete')
+      expect((panes[0]! as { change: WsChange }).change.hunks.at(-1)).toMatchObject({ add: 0, del: 2 })
+    })
+
     it('draws no chip strip for a task that left nothing behind', () => {
       render(<TaskPane task={task({ id: 'a', kind: 'dag', status: 'completed' })} />)
       expect(document.querySelector('.tkchips')).toBeNull()

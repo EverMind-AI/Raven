@@ -2135,6 +2135,10 @@
       "en": "Edited",
       "zh": "编辑"
     },
+    "gui.arts.deleted": {
+      "en": "Deleted",
+      "zh": "删除"
+    },
     "gui.arts.lines": {
       "en": "{n} lines",
       "zh": "{n} 行"
@@ -4518,6 +4522,14 @@
     "gui.ws.chip.write_t": {
       "en": "Whole file written",
       "zh": "整文件写入"
+    },
+    "gui.ws.chip.delete": {
+      "en": "D",
+      "zh": "删"
+    },
+    "gui.ws.chip.delete_t": {
+      "en": "Deleted",
+      "zh": "文件删除"
     },
     "gui.ws.copied_name": {
       "en": "Name copied",

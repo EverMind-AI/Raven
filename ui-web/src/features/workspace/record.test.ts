@@ -13,6 +13,8 @@ import { setWsPane } from '../../state/wsPane'
 import { wsOnHistory, wsOnTool, wsOnToolDone } from './record'
 import * as store from './store'
 
+import type { WsChange } from './types'
+
 beforeEach(() => {
   store.reset()
   /* The record redraws the pane's badge as it counts; an island runs inside
@@ -129,5 +131,172 @@ describe('telling a created file from a rewritten one', () => {
     wsOnToolDone('edit_file', args, true, '', null, NEW_FILE)
 
     expect(kindOf('/w/a.py')).toBe('edit')
+  })
+})
+
+/* A file that is gone, which no tool argument can say: `exec` deletes it and
+   the runtime reports it afterwards, on whichever call made it vanish. */
+describe('recording a file the turn removed', () => {
+  const rowFor = (path: string): WsChange | undefined =>
+    store.shared().changes.find((c) => c.key === path)
+
+  it('draws every line the removed file held, with the contents the runtime caught', () => {
+    wsOnToolDone('exec', { command: 'rm /w/old.md' }, true, '', null, undefined, undefined,
+      [{ path: '/w/old.md', before: 'one\ntwo\nthree\n' }])
+
+    const row = rowFor('/w/old.md')
+    expect(row?.kind).toBe('delete')
+    expect(row?.add).toBe(0)
+    expect(row?.del).toBe(3)
+    expect(row?.hunks).toHaveLength(1)
+    expect(row?.hunks[0]?.rows.every((r) => r[0] === 'del')).toBe(true)
+  })
+
+  /* Created and removed inside one turn is nothing at all -- git shows the
+     same nothing for it, and a row saying a file went would name one the
+     reader never had. */
+  it('leaves no row at all for a file the same turn created', () => {
+    const args = { path: '/w/scratch.md', content: 'tmp' }
+    wsOnTool('write_file', args)
+    wsOnToolDone('write_file', args, true, '', null,
+      '--- a/w/scratch.md\n+++ b/w/scratch.md\n@@ -0,0 +1,1 @@\n+tmp',
+      { path: '/w/scratch.md', after: 'tmp' })
+    expect(rowFor('/w/scratch.md')?.kind).toBe('add')
+
+    wsOnToolDone('exec', { command: 'rm /w/scratch.md' }, true, '', null, undefined, undefined,
+      [{ path: '/w/scratch.md', before: 'tmp' }])
+
+    expect(rowFor('/w/scratch.md')).toBeUndefined()
+  })
+
+  /* The contents can be past capture -- too large, not text, or never read --
+     and then what this turn wrote into the file is the best account of what
+     was lost. The removal rides the LATER call, not the write's own. */
+  it('rebuilds the lost contents from this turn\'s own write when the runtime caught none', () => {
+    const args = { path: '/w/notes.md', content: 'alpha\nbeta\n' }
+    wsOnTool('write_file', args)
+    wsOnToolDone('write_file', args, true, '', null,
+      '--- a/w/notes.md\n+++ b/w/notes.md\n@@ -1,1 +1,2 @@\n-was\n+alpha\n+beta',
+      { path: '/w/notes.md', after: 'alpha\nbeta\n', before: 'was' })
+
+    wsOnToolDone('exec', { command: 'rm /w/notes.md' }, true, '', null, undefined, undefined,
+      [{ path: '/w/notes.md' }])
+
+    const row = rowFor('/w/notes.md')
+    expect(row?.kind).toBe('delete')
+    expect(row?.del).toBe(2)
+    expect(row?.hunks[0]?.rows.map((r) => r[1])).toEqual(['alpha', 'beta'])
+  })
+
+  /* Nothing written and nothing caught: the row still says the file went, and
+     says nothing it cannot support about what was in it. */
+  it('records the removal with no hunk when nothing can say what was in it', () => {
+    wsOnToolDone('exec', { command: 'rm /w/opaque.bin' }, true, '', null, undefined, undefined,
+      [{ path: '/w/opaque.bin' }])
+
+    const row = rowFor('/w/opaque.bin')
+    expect(row?.kind).toBe('delete')
+    expect(row?.hunks).toEqual([])
+    expect(row?.del).toBe(0)
+  })
+
+  /* An edit's hunk is the slice it touched, so reading it back would draw two
+     changed lines as the whole of a file that had two hundred. */
+  it('does not mistake an edited row\'s slice for the file that was lost', () => {
+    const args = { path: '/w/mod.py', old_text: 'x = 1\n', new_text: 'x = 2\n' }
+    wsOnTool('edit_file', args)
+
+    wsOnToolDone('exec', { command: 'rm /w/mod.py' }, true, '', null, undefined, undefined,
+      [{ path: '/w/mod.py' }])
+
+    const row = rowFor('/w/mod.py')
+    expect(row?.kind).toBe('delete')
+    expect(row?.hunks).toEqual([])
+  })
+
+  /* The row is keyed by the path the model typed -- `write_file` takes a
+     relative one -- and the removal arrives under the path the runtime
+     resolved. Matching on the string alone left the same file drawn twice:
+     created, and gone. */
+  it('matches a removal to this turn\'s row for the same file under the resolved path', () => {
+    const args = { path: 'scratch.md', content: 'tmp\n' }
+    wsOnTool('write_file', args)
+    wsOnToolDone('write_file', args, true, '', null,
+      '--- a/w/scratch.md\n+++ b/w/scratch.md\n@@ -0,0 +1,1 @@\n+tmp',
+      { path: '/w/scratch.md', after: 'tmp\n' })
+
+    wsOnToolDone('exec', { command: 'rm scratch.md' }, true, '', null, undefined, undefined,
+      [{ path: '/w/scratch.md', before: 'tmp\n' }])
+
+    expect(store.shared().changes).toHaveLength(0)
+  })
+
+  it('rebuilds the one row, not a second, when the turn edited the file first', () => {
+    const args = { path: 'mod.py', old_text: 'x = 1\n', new_text: 'x = 2\n' }
+    wsOnTool('edit_file', args)
+
+    wsOnToolDone('exec', { command: 'rm mod.py' }, true, '', null, undefined, undefined,
+      [{ path: '/w/mod.py', before: 'x = 2\n' }])
+
+    expect(store.shared().changes).toHaveLength(1)
+    expect(store.shared().changes[0]?.kind).toBe('delete')
+    expect(store.shared().changes[0]?.del).toBe(1)
+  })
+
+  /* A replay has no payload to re-key from either: the stored call carries the
+     argument the model wrote and the stored removal the resolved path. */
+  it('matches a replayed removal to the row the stored relative argument keyed', () => {
+    wsOnHistory([
+      { role: 'user', text: 'write it then drop it' },
+      {
+        role: 'assistant',
+        tool_calls: [
+          { id: 'c1', name: 'write_file', arguments: JSON.stringify({ path: 'tmp.md', content: 'a\nb\n' }) },
+          { id: 'c2', name: 'exec', arguments: JSON.stringify({ command: 'rm tmp.md' }) },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'c1', diff: '--- a/w/tmp.md\n+++ b/w/tmp.md\n@@ -0,0 +1,2 @@\n+a\n+b' },
+      { role: 'tool', tool_call_id: 'c2', file_removed: [{ path: '/w/tmp.md', del: 2 }] },
+    ])
+
+    expect(store.shared().changes).toHaveLength(0)
+  })
+
+  /* A reload carries the stored shape instead: a line count, never the body. */
+  it('replays a stored removal as the same row, off its line count', () => {
+    wsOnHistory([
+      { role: 'user', text: 'clean it up' },
+      {
+        role: 'assistant',
+        tool_calls: [{ id: 'c1', name: 'exec', arguments: JSON.stringify({ command: 'rm /w/dead.py' }) }],
+      },
+      { role: 'tool', tool_call_id: 'c1', file_removed: [{ path: '/w/dead.py', del: 46 }] },
+    ])
+
+    const row = rowFor('/w/dead.py')
+    expect(row?.kind).toBe('delete')
+    expect(row?.add).toBe(0)
+    expect(row?.del).toBe(46)
+    expect(row?.hunks).toEqual([])
+  })
+
+  it('replays a removal of a file the same stored turn wrote, hunk and all', () => {
+    wsOnHistory([
+      { role: 'user', text: 'write it then drop it' },
+      {
+        role: 'assistant',
+        tool_calls: [
+          { id: 'c1', name: 'write_file', arguments: JSON.stringify({ path: '/w/tmp.md', content: 'a\nb\n' }) },
+          { id: 'c2', name: 'exec', arguments: JSON.stringify({ command: 'rm /w/tmp.md' }) },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'c1', diff: '--- a/w/tmp.md\n+++ b/w/tmp.md\n@@ -1,1 +1,2 @@\n-was\n+a\n+b' },
+      { role: 'tool', tool_call_id: 'c2', file_removed: [{ path: '/w/tmp.md', del: 2 }] },
+    ])
+
+    const row = rowFor('/w/tmp.md')
+    expect(row?.kind).toBe('delete')
+    expect(row?.del).toBe(2)
+    expect(row?.hunks[0]?.rows.map((r) => r[1])).toEqual(['a', 'b'])
   })
 })

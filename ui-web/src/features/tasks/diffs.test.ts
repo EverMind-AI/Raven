@@ -47,6 +47,33 @@ describe('hunksForFile', () => {
     expect(hunks.map((h) => [h.add, h.del])).toEqual([[1, 1], [1, 0]])
   })
 
+  /* A node has no delete tool: the file goes under an `exec` the lane never
+     sees the body of, so the only account of what was lost is the node's own
+     last write of that path. */
+  it('closes a removed file with every line of the node\'s last write of it', () => {
+    const hunks = hunksForFile([
+      tool('write_file', { path: '/w/a.md', content: 'one\ntwo\n' }),
+      tool('write_file', { path: '/w/a.md', content: 'one\ntwo\nthree\n' }),
+    ], '/w/a.md', 'delete')
+
+    expect(hunks).toHaveLength(3)
+    expect(hunks[2]).toMatchObject({ add: 0, del: 3 })
+    expect(hunks[2]?.rows.map((r) => r[1])).toEqual(['one', 'two', 'three'])
+  })
+
+  it('leaves a removed file the node never wrote with no hunk to close', () => {
+    const hunks = hunksForFile(
+      [tool('edit_file', { path: '/w/a.py', old_text: 'a\n', new_text: 'b\n' })], '/w/a.py', 'delete',
+    )
+    expect(hunks).toHaveLength(1)
+    expect(hunks[0]).toMatchObject({ add: 1, del: 1 })
+  })
+
+  it('appends nothing for a file the node only wrote', () => {
+    const hunks = hunksForFile([tool('write_file', { path: '/w/a.md', content: 'one\n' })], '/w/a.md', 'write')
+    expect(hunks).toHaveLength(1)
+  })
+
   it('answers nothing with no matching tool call at all', () => {
     expect(hunksForFile([{ kind: 'think', text: 'thinking' }], '/w/a.md')).toEqual([])
   })

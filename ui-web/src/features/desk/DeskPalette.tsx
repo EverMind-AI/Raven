@@ -20,7 +20,7 @@ import {
 import * as desk from './store'
 
 import type { TaskFile, TaskNode, TaskRow } from '../tasks/types'
-import type { DeliveryRow } from '../workspace/types'
+import type { DeliveryRow, WsChange } from '../workspace/types'
 import type { DeskGeometry, DeskTab } from './types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
 
@@ -79,6 +79,10 @@ function DeskEmpty({ kind, title }: { kind: DeskTab; title: string }): JSX.Eleme
    handed over, which only `deliver_files` decides. */
 interface TaskFileEntry { row: TaskRow; node: TaskNode; file: TaskFile }
 
+/* Git's own three letters, over both halves of the list: a file that arrived,
+   one that went, and one that was changed in place. */
+const diffGlyph = (kind: WsChange['kind']): string => (kind === 'delete' ? 'D' : kind === 'add' ? '+' : 'M')
+
 function taskFileEntries(): TaskFileEntry[] {
   const out: TaskFileEntry[] = []
   tasksStore.rows().forEach((row) => row.nodes.forEach((node) => node.files.forEach((file) => {
@@ -100,7 +104,7 @@ function DiffNav(): JSX.Element {
     <div className="desk-list">
       {changes.map((change) => (
         <button key={`${change.key}:${change.turn}`} className="desk-row desk-diff-row" onClick={() => desk.openDeskDiff(change)}>
-          <i className={`chgc ${change.kind}`}>{change.kind === 'add' ? '+' : 'M'}</i>
+          <i className={`chgc ${change.kind}`}>{diffGlyph(change.kind)}</i>
           <span className="desk-name" title={change.key}>{change.dir}<b>{change.name}</b></span>
           <span className="chgs">
             {change.add ? <i className="a">+{change.add}</i> : null}
@@ -119,11 +123,11 @@ function DiffNav(): JSX.Element {
                 className="desk-row desk-diff-row"
                 onClick={() => { void tasksStore.fileDiffChange(row, node, file).then(desk.openDeskDiff) }}
               >
-                <i className={`chgc ${kind}`}>{kind === 'add' ? '+' : 'M'}</i>
+                <i className={`chgc ${kind}`}>{diffGlyph(kind)}</i>
                 <span className="desk-name" title={file.path}>{file.path}</span>
                 <span className="chgs">
-                  <i className="a">+{file.add}</i>
-                  <i className="d">−{file.del}</i>
+                  {file.add ? <i className="a">+{file.add}</i> : null}
+                  {file.del ? <i className="d">−{file.del}</i> : null}
                 </span>
               </button>
             )
