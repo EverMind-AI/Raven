@@ -115,9 +115,11 @@ let picked: string | null = null
 /** The draft's pick, for the promotion to hand to `session.create`. */
 export const staged = (): string | null => picked
 
-/** The pick is spent or the draft is gone. */
+/* The pick is spent or the draft is gone -- and so is any menu that was open
+   over it: a fresh draft starts with the chip closed. */
 export function clearStaged(): void {
   picked = null
+  set({ ...get(), open: false })
   draw()
 }
 
@@ -157,7 +159,12 @@ export function draw(): void {
       locked: true,
     }
   }
-  set({ ...get(), paint })
+  /* A locked chip has no popover: the reader who opened the menu on a draft and
+     then picked a conversation from the rail would otherwise be left with live
+     rows over a folder the conversation cannot change, and a click on one
+     would stage a pick for some later draft. The rail's draw runs on every
+     switch, which is what makes this the moment. */
+  set({ ...get(), paint, open: paint.locked ? false : get().open })
 }
 
 /* ---- the menu ---------------------------------------------------------------- */
@@ -192,7 +199,9 @@ const menuRows = (): readonly WdRow[] => {
 }
 
 /* Open only while the pick can still change: a conversation's chip is disabled,
-   and a click that reached here anyway must not raise a menu over it. */
+   and a click that reached here anyway must not raise a menu over it. The way
+   back out is the chip, a pointer landing outside (state/globalListeners.ts's
+   click-away arbitration), a pick, or leaving the draft. */
 export function open(): void {
   if (get().paint?.locked) return
   set({ ...get(), open: true, view: 'menu', listed: menuRows(), err: null, opened: get().opened + 1 })

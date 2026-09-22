@@ -128,11 +128,44 @@ describe('the working-directory chip', () => {
     expect(name().textContent).toBe('gui.wd.none')
   })
 
-  it('drops the pick with the draft', () => {
+  it('drops the pick with the draft, and the menu with it', () => {
     act(() => wd.pick('/w/beta'))
+    act(() => chip().click())
+    expect(pop().dataset.open).toBe('true')
     act(() => wd.clearStaged())
     expect(wd.staged()).toBeNull()
     expect(name().textContent).toBe('gui.wd.none')
+    expect(pop().dataset.open).toBe('false')
+  })
+
+  it('closes when the reader leaves the draft for a conversation while it stands open', () => {
+    /* The chip locks on the switch; a menu left standing over it would still
+       take a click and stage a folder for some later draft. */
+    rail([row('s1', '/w/thesis')])
+    act(() => wd.draw())
+    act(() => chip().click())
+    expect(pop().dataset.open).toBe('true')
+    setCurrent('s1')
+    act(() => wd.draw())
+    expect(chip().disabled).toBe(true)
+    expect(pop().dataset.open).toBe('false')
+    expect(pop().querySelectorAll('.prow')).toHaveLength(0)
+  })
+
+  it('closes on a pointer landing outside it, and stays for one on the chip or inside', async () => {
+    const { installGlobalListeners } = await import('./globalListeners')
+    installGlobalListeners()
+    act(() => wd.draw())
+    act(() => chip().click())
+    const down = (target: Element): void => {
+      act(() => { target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true })) })
+    }
+    down(chip())
+    expect(pop().dataset.open).toBe('true')
+    down(byName('gui.wd.open'))
+    expect(pop().dataset.open).toBe('true')
+    down(document.getElementById('ta')!)
+    expect(pop().dataset.open).toBe('false')
   })
 
   it('walks the listing and offers the folder only where the engine would take it', async () => {

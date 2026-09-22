@@ -133,9 +133,9 @@ export function WorkdirPopover(): JSX.Element {
       aria-label={lang.attr('gui.wd.title')}
     >
       <div className="hd"><span className="lab">{t('gui.wd.title')}</span></div>
-      {/* Nothing until the first open: a popover never opened has no rows, and
-          the served tree carries the heading alone. */}
-      {s.opened
+      {/* Only while it stands: a closed popover has no rows, so nothing under
+          it can take a click, and the served tree carries the heading alone. */}
+      {s.open
         ? (s.view === 'browse' && s.listing
           ? <Browser at={s.listing} loading={s.loading} err={s.err} />
           : <Menu rows={s.listed || []} err={s.err} />)
