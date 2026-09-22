@@ -25,6 +25,7 @@ Two consequences worth stating, because they are what the transport buys:
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
@@ -67,7 +68,10 @@ from raven.agent.subagent.backends.observability import (
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry
 from raven.agent.subagent.mcp_grant import McpDispatchError, McpGrant, McpSource, acp_target, resolve_grant
+from raven.agent.tools.removals import RemovalWatch
+from raven.agent.tools.snapshot import take as take_snapshot
 from raven.contracts.subagent_backend import SubagentActionAbortedError
+from raven.contracts.tool import FileChange
 from raven.mcp.endpoint import McpEndpoints, bridge_command
 from raven.spine.message import Media
 
@@ -152,6 +156,31 @@ async def _replay_dropped(router: Any, session_id: str) -> AsyncIterator[None]:
         router.detach(session_id, _drop)
 
 
+#: Workspace listings one turn holds for calls that have not settled. Each is a
+#: whole directory, and a call that never reports an end would otherwise keep
+#: its own copy for as long as the turn lasts.
+_MAX_OPEN_LISTINGS = 64
+
+
+def _diff_blocks(content: Any) -> list[dict[str, Any]]:
+    """The ``diff`` entries of a tool call's content, whole enough to record.
+
+    A block without a path or without the text it left is not a change anyone
+    can draw, so it is dropped rather than recorded with a guess in its place.
+    """
+    if not isinstance(content, list):
+        return []
+    return [
+        item
+        for item in content
+        if isinstance(item, dict)
+        and item.get("type") == "diff"
+        and isinstance(item.get("path"), str)
+        and item["path"]
+        and isinstance(item.get("newText"), str)
+    ]
+
+
 class _TurnCollector:
     """Accumulates one session's notifications while a prompt is in flight.
 
@@ -181,6 +210,7 @@ class _TurnCollector:
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         dialect: AcpDialect | None = None,
         prompt: str | None = None,
+        workspace: Path | None = None,
     ) -> None:
         self._on_delta = on_delta
         # The prompt this turn was opened with. A ``user_message_chunk`` that
@@ -197,6 +227,15 @@ class _TurnCollector:
         # carries predates this run -- and a pooled connection shared by two
         # runs would put this one's steps on the other one's live record.
         self._run = activity.current()
+        # Where this turn's files are, for the account of what it wrote. The
+        # agent reports a diff block for a file its own tools touched; a file one
+        # of its commands produced is only ever visible as a directory that
+        # changed around the call, which is what the per-call listings are for.
+        self._workspace = workspace
+        self._blocks: dict[str, dict[str, dict[str, Any]]] = {}
+        self._listings: dict[str, Any] = {}
+        self._settled_calls: set[str] = set()
+        self._removals = RemovalWatch()
         self.answer: list[str] = []
         self.thoughts: list[str] = []
         self.kinds: list[str] = []
@@ -307,6 +346,7 @@ class _TurnCollector:
                         }
                     )
                     self._backfill_subject(str(update.get("toolCallId") or ""), update)
+            self._note_files(update)
         elif kind == "plan":
             self._plan(update)
         elif kind == "usage_update":
@@ -322,6 +362,89 @@ class _TurnCollector:
         # already listed the calls.
         if kind in (*_BREAKING_UPDATES, "plan"):
             activity.set_tool_calls(self._run, self.tool_calls, self.failed_calls)
+
+    def _note_files(self, update: dict[str, Any]) -> None:
+        """Record what one tool call did to the files, once it has settled.
+
+        The account is built from two sources, because neither sees the other's
+        changes: the diff blocks the agent attaches to the call, which carry the
+        text and so the line counts, and a listing of the workspace taken when
+        the call opened against one taken when it completed, which is the only
+        sign of a file a command of the agent's wrote. A failed call records
+        nothing -- what it half did is not a change anyone can open -- and a call
+        id settles once, however many frames repeat it.
+
+        Written into the run captured at construction, not the ambient one: this
+        runs on the connection's read loop, whose ContextVar predates the run.
+        """
+        call_id = str(update.get("toolCallId") or "")
+        if not call_id or call_id in self._settled_calls:
+            return
+        if call_id not in self._listings and len(self._listings) < _MAX_OPEN_LISTINGS:
+            self._listings[call_id] = take_snapshot(self._workspace) if self._workspace is not None else None
+        for block in _diff_blocks(update.get("content")):
+            # Keyed by the resolved path, so one file revised twice in a call is
+            # one change and the newest block is the one that stands.
+            self._blocks.setdefault(call_id, {})[self._absolute(block["path"])] = block
+        status = update.get("status")
+        if status not in ("completed", "failed"):
+            return
+        self._settled_calls.add(call_id)
+        before = self._listings.pop(call_id, None)
+        blocks = self._blocks.pop(call_id, {})
+        if status == "failed":
+            return
+        accounted: list[str] = []
+        # Settled before this call's own blocks are noted, so a file it just
+        # wrote is not stat'ed to say it exists -- the order the in-process lane
+        # keeps around its own tool results.
+        for removal in self._removals.settle():
+            accounted.append(removal.path)
+            activity.record_file_change(
+                self._run,
+                activity.workspace_relative(removal.path, self._workspace),
+                "delete",
+                0,
+                len((removal.before or "").splitlines()),
+                None,
+            )
+        for path, block in blocks.items():
+            accounted.append(path)
+            old_text = block.get("oldText")
+            # A block that carries no text for what was there is a creation,
+            # whether the field is absent, null, or a shape that is not text.
+            old_text = old_text if isinstance(old_text, str) else None
+            add, delete = activity.count_line_changes(old_text, block["newText"])
+            activity.record_file_change(
+                self._run,
+                activity.workspace_relative(path, self._workspace),
+                # No `oldText` is a file that was not there: the block is the
+                # whole of what the call put at the path.
+                "add" if old_text is None else "edit",
+                add,
+                delete,
+                len(block["newText"].encode("utf-8")),
+            )
+            self._removals.note_write(FileChange(path=path, after=block["newText"]))
+        if before is not None:
+            activity.record_snapshot_changes(
+                before,
+                take_snapshot(self._workspace) if self._workspace is not None else None,
+                self._workspace,
+                already=accounted,
+                run=self._run,
+            )
+
+    def _absolute(self, path: str) -> str:
+        """A diff block's path as the filesystem knows it.
+
+        The spec calls for an absolute path and adapters have been seen to send
+        one relative to the session's working directory, which is the only thing
+        it could be relative to.
+        """
+        if os.path.isabs(path) or self._workspace is None:
+            return path
+        return str(Path(self._workspace) / path)
 
     def _revise_call(self, update: dict[str, Any]) -> None:
         """Re-read a call's arguments from a later frame.
@@ -1248,7 +1371,12 @@ class AcpAgentBackend:
                 sink = bounded_delta(on_delta, self.max_output_chars)
                 # From the live handshake, not the stored snapshot: this is the
                 # process actually answering, and a snapshot can be stale.
-                collector = _TurnCollector(sink, dialect_for(connection.initialize), prompt=task)
+                # `session_cwd` rather than `workspace`: it is the directory the
+                # agent's own tools resolve against, so it is where a file this
+                # turn writes actually lands.
+                collector = _TurnCollector(
+                    sink, dialect_for(connection.initialize), prompt=task, workspace=Path(session_cwd)
+                )
                 # Built here, in the turn's context, for the reason `_TurnCollector`
                 # documents: the read loop's ContextVars predate this run, and the
                 # asker is bound per turn.

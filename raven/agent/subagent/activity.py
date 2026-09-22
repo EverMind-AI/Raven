@@ -26,15 +26,20 @@ rather than raising into a backend's happy path.
 
 from __future__ import annotations
 
+import difflib
+import os
 import time
-from collections.abc import Awaitable, Callable, Iterable, Iterator
+from collections.abc import Awaitable, Callable, Collection, Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from loguru import logger
+
+from raven.agent.tools import snapshot as workdir_snapshot
 
 # Names a provider might report token counts under. OpenAI-shaped
 # (``prompt_tokens``) is what raven's own providers normalise to; the camelCase
@@ -75,9 +80,10 @@ class RunActivity:
     # One entry per path a writing tool touched, in the order it was first
     # touched: ``{path, op: add|write|edit|delete, add, del, size}``, folded
     # across repeat touches of one path by ``merge_file_change`` -- see it for
-    # which op survives which. Only the in-process lane fills this (see
-    # ``backends/raven_loop.py``) -- the acp and cli lanes see no tool result to
-    # record one from.
+    # which op survives which. Every lane fills it, from whatever that lane can
+    # see: the in-process one from its tools' own results, the acp one from the
+    # diff blocks its agent reports, and all three from a before/after listing
+    # of the working directory for the files only a command touched.
     files: list[dict[str, Any]] = field(default_factory=list)
     tokens_in: int | None = None
     tokens_out: int | None = None
@@ -459,11 +465,111 @@ def note_file_change(path: str, op: str, add: int, delete: int, size: int | None
     See :func:`merge_file_change` for how a repeat touch of a path already
     recorded combines with what is there.
     """
-    activity = _current.get()
+    record_file_change(_current.get(), path, op, add, delete, size)
+
+
+def record_file_change(
+    activity: "RunActivity | None", path: str, op: str, add: int, delete: int, size: int | None
+) -> None:
+    """:func:`note_file_change` for a lane that holds its run rather than running
+    inside it.
+
+    The ACP collector is called from the connection's read loop, a task created
+    before this run existed, so the ContextVar there names another run or none --
+    see ``_TurnCollector``, which captures the run for exactly this reason.
+    """
     if activity is None or not isinstance(path, str) or not path:
         return
     _touch(activity)
     merge_file_change(activity.files, {"path": path, "op": op, "add": add, "del": delete, "size": size})
+
+
+def count_line_changes(before: str | None, after: str) -> tuple[int, int]:
+    """Lines added and removed between two whole contents.
+
+    ``before is None`` is a file that did not exist, so every line of ``after``
+    counts as added; otherwise the two are compared line by line.
+    """
+    after_lines = after.splitlines()
+    if before is None:
+        return len(after_lines), 0
+    before_lines = before.splitlines()
+    add = delete = 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, before_lines, after_lines).get_opcodes():
+        if tag in ("insert", "replace"):
+            add += j2 - j1
+        if tag in ("delete", "replace"):
+            delete += i2 - i1
+    return add, delete
+
+
+def workspace_relative(path: str, workspace: Path | str | None) -> str:
+    """The path a file record carries: relative to the run's workspace when the
+    file is under it (the file endpoint anchors relative paths there, and the
+    panel reads ``work/notes.md`` where an absolute path says nothing), absolute
+    otherwise."""
+    if workspace is None:
+        return path
+    try:
+        return str(Path(path).resolve().relative_to(Path(workspace).resolve()))
+    except (ValueError, OSError):
+        return path
+
+
+#: Past this a created file's lines are not counted. Reading it would mean
+#: holding a quarter of a megabyte of text to learn a number the panel shows
+#: beside a file it will open itself.
+SNAPSHOT_TEXT_MAX_BYTES = 256 * 1024
+
+
+def record_snapshot_changes(
+    before: workdir_snapshot.Snapshot | None,
+    after: workdir_snapshot.Snapshot | None,
+    workspace: Path | str | None,
+    *,
+    already: Collection[str] = (),
+    run: "RunActivity | None" = None,
+) -> None:
+    """Record what a command left behind, from two listings of its directory.
+
+    Recorded here rather than in ``snapshot`` so that module stays a reading of
+    the filesystem with no opinion about the record it feeds.
+
+    A created file is an ``add`` and counts its lines; a file that merely changed
+    is a ``write`` with no counts, because the listing never held its old
+    content and inventing a count would be worse than showing none. ``already``
+    are the absolute paths this same call accounted for from a tool result or a
+    diff block -- the listing sees those too, and recording one again would
+    count a single deletion twice.
+    """
+    created, modified, deleted = workdir_snapshot.diff(before, after)
+    if not (created or modified or deleted):
+        return
+    accounted = {os.path.realpath(path) for path in already}
+    target = run if run is not None else _current.get()
+    for path in created:
+        if os.path.realpath(path) in accounted:
+            continue
+        size = (after or {})[path][0]
+        record_file_change(target, workspace_relative(path, workspace), "add", _line_count(path, size), 0, size)
+    for path in modified:
+        if os.path.realpath(path) in accounted:
+            continue
+        record_file_change(target, workspace_relative(path, workspace), "write", 0, 0, (after or {})[path][0])
+    for path in deleted:
+        if os.path.realpath(path) in accounted:
+            continue
+        record_file_change(target, workspace_relative(path, workspace), "delete", 0, 0, None)
+
+
+def _line_count(path: str, size: int) -> int:
+    """Lines in a file the listing found, or 0 when it is too large or not text."""
+    if size > SNAPSHOT_TEXT_MAX_BYTES:
+        return 0
+    try:
+        return len(Path(path).read_text(encoding="utf-8").splitlines())
+    except (OSError, UnicodeDecodeError):
+        return 0
 
 
 def note_tool_failure(name: str) -> None:
@@ -702,6 +808,7 @@ __all__ = [
     "live_instance",
     "record_settled",
     "settled",
+    "count_line_changes",
     "merge_file_change",
     "note_alive",
     "note_closing",
@@ -718,4 +825,7 @@ __all__ = [
     "note_transcript",
     "note_usage",
     "persisted_output",
+    "record_file_change",
+    "record_snapshot_changes",
+    "workspace_relative",
 ]
