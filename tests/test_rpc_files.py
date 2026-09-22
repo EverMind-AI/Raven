@@ -591,13 +591,22 @@ def test_a_pdf_page_falls_back_to_pdftoppm_and_then_says_what_is_missing(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     script = fake_bin / "pdftoppm"
-    script.write_text('#!/bin/bash\nout="${@: -1}"\nprintf "PNGfake" > "$out-1.png"\n')
+    script.write_text(
+        '#!/bin/bash\nprintf "%s " "$@" > "'
+        + str(fake_bin / "argv.txt")
+        + '"\nout="${@: -1}"\nprintf "PNGfake" > "$out-1.png"\n'
+    )
     script.chmod(0o755)
     monkeypatch.setenv("PATH", str(fake_bin))
 
     target = tmp_path / "cache" / "one.png"
     pdf_preview._rasterise_pdf_page(source, target, 640)
     assert target.read_bytes() == b"PNGfake"
+    # One number for the long side, not a pinned width with the height left to
+    # follow: the child must not be able to draw what this process refuses to.
+    argv = (fake_bin / "argv.txt").read_text().split() if (fake_bin / "argv.txt").exists() else []
+    if argv:
+        assert "-scale-to" in argv and "-scale-to-y" not in argv
 
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     with pytest.raises(pdf_preview.PdfPreviewUnavailableError, match="no PDF rasteriser"):

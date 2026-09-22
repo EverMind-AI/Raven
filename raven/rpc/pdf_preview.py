@@ -278,10 +278,9 @@ def _rasterise_pdf_page(source: Path, target: Path, width: int, timeout_s: float
     decks has it -- and poppler's ``pdftoppm`` is the fallback for one that
     does not. Neither is a dependency of this package; both are probed.
 
-    ``timeout_s`` bounds the fallback, which is a child process. The PyMuPDF
-    path is bounded by :data:`THUMB_MAX_PIXELS` instead: it draws in this
-    thread, where a clock would not stop it, so what is bounded is the work
-    rather than the wait.
+    Both paths are bounded in the picture they may draw, and the fallback in
+    the time it may take as well: it is a child process, so a clock reaches it,
+    while the PyMuPDF path draws in this thread where a clock would not stop it.
     """
     root = cache_dir()
     root.mkdir(parents=True, exist_ok=True)
@@ -319,10 +318,13 @@ def _rasterise_pdf_page(source: Path, target: Path, width: int, timeout_s: float
                     "1",
                     "-l",
                     "1",
-                    "-scale-to-x",
+                    # The long side, not the width: with the width pinned and the
+                    # height left to follow, the fallback draws the same 1280 x
+                    # 256000 the budget above exists to refuse, only in a child
+                    # process where this one cannot see it. One number bounds
+                    # both sides, and a page shaped like a page is unaffected.
+                    "-scale-to",
                     str(width),
-                    "-scale-to-y",
-                    "-1",
                     "-png",
                     str(source),
                     str(prefix),
