@@ -919,18 +919,54 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
 
 /* ── the other segments ────────────────────────────────────────────────── */
 
+/* One picture the reader attached, shown as itself.
+ *
+ * The bytes are in `attachmentCache` for as long as the page that uploaded
+ * them is open, and after that the file is where it was put: the composer
+ * uploads into the workspace and the message keeps the path. So the cache is
+ * the fast path and `/file` is the standing one -- without it, every picture
+ * in the scrollback turned into a file name the moment the page was reloaded,
+ * which is not what the reader sent.
+ *
+ * A file that cannot be fetched falls back to its name rather than to a broken
+ * image, the same way a generated shot does: an attachment can outlive the
+ * file, and the name is still true when the bytes are gone.
+ */
+function AskShot({ path, live }: { path: string; live: boolean }): ReactElement {
+  const [gone, setGone] = useState(false)
+  const name = String(path).split('/').pop() || String(path)
+  const src = attachmentCache.get(String(path)) || fileURL(String(path))
+  if (gone) {
+    return (
+      <button className="achip" title={String(path)} onClick={() => wsOpenPath(String(path))}>
+        <span className="nm">{name}</span>
+      </button>
+    )
+  }
+  return (
+    <img
+      className="shot" src={src} alt={name}
+      onError={() => setGone(true)}
+      {...(live ? { title: t('gui.img.open', { name }), onClick: () => lightbox.open(src, name) } : {})}
+    />
+  )
+}
+
 const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData }): ReactElement {
   useSeg(lane, seg)
   const bRef = useRef<HTMLDivElement | null>(null)
-  const imgs = seg.atts.filter((p) => attachmentCache.get(String(p)))
-  const docs = seg.atts.filter((p) => !attachmentCache.get(String(p)))
-  const openAll = (): void => store.expandAskAtts(lane, seg)
-  const thumb = (p: string, liveImg: boolean): ReactElement => {
-    const src = attachmentCache.get(String(p)) as string
-    const nm = String(p).split('/').pop() || ''
-    return <img key={p} className="shot" src={src} alt={nm}
-      {...(liveImg ? { title: t('gui.img.open', { name: nm }), onClick: () => lightbox.open(src, nm) } : {})} />
+  /* What the file IS, not whether this page happens to hold its bytes. Asking
+     the cache was asking "did I upload this myself, in this tab": true while
+     the message was being written and false for the same message after a
+     reload, so the pictures became file names on their own. */
+  const isPic = (p: unknown): boolean => {
+    const kind = fileKind(String(p))
+    return kind === 'img' || kind === 'svg'
   }
+  const imgs = seg.atts.filter(isPic)
+  const docs = seg.atts.filter((p) => !isPic(p))
+  const openAll = (): void => store.expandAskAtts(lane, seg)
+  const thumb = (p: string, liveImg: boolean): ReactElement => <AskShot key={p} path={p} live={liveImg} />
   const showClip = seg.clipped && !seg.clipOpen
   return (
     <div className="turn me in">

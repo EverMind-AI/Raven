@@ -39,11 +39,31 @@ const IMAGE_NOTE = /^\[Image: .*\(path: .+?\).*\]$/
 /** The flattening of an image part, left at the head of a multimodal message. */
 const IMAGE_PART = /^\[image\]\s*/
 
+/* The absolute path each of those lines names, which is the one thing in them
+   worth keeping. The note lists what the composer uploaded -- a path relative
+   to the workspace it uploaded into -- and the file route resolves a relative
+   path against the SESSION's own root, which is not always that workspace: a
+   conversation whose root is elsewhere asked for `uploads/x.png` under its own
+   root and got a 404, so the picture fell back to its file name on every
+   reload. The engine's line carries the absolute path of the same file, and
+   that one resolves wherever the session is rooted. */
+const IMAGE_PATH = /^\[Image: .*?\(path: (.+?)\).*\]$/
+
 export interface Attachments {
   /** The person's own words. */
   body: string
   /** The paths the note listed, in the order it listed them. */
   atts: string[]
+}
+
+/** The absolute path of every picture the engine named, in the order named. */
+export function runtimePaths(text: string): string[] {
+  const out: string[] = []
+  for (const line of String(text).split('\n')) {
+    const hit = IMAGE_PATH.exec(line.trim())
+    if (hit && hit[1]) out.push(hit[1])
+  }
+  return out
 }
 
 /** Drop the lines the runtime added, leaving the message as it was sent. */
@@ -64,6 +84,12 @@ export function stripRuntimeNotes(text: string): string {
  * wins, so a message quoting an earlier note is read by its own.
  */
 export function splitAttachments(text: string, notes: readonly string[]): Attachments {
+  const absolute = runtimePaths(text)
+  /* The same file, named twice: the note's path as the composer uploaded it,
+     and the engine's as it stands on disk. The second is preferred wherever
+     both exist, because it resolves whatever the session is rooted at. */
+  const resolve = (att: string): string =>
+    absolute.find((abs) => abs === att || abs.endsWith(`/${att}`)) ?? att
   const s = stripRuntimeNotes(text)
   for (const note of notes) {
     if (!note) continue
@@ -73,7 +99,7 @@ export function splitAttachments(text: string, notes: readonly string[]): Attach
     if (!tail.length || !tail.every((l) => !l.trim() || /^- /.test(l))) continue
     return {
       body: s.slice(0, at),
-      atts: tail.filter((l) => /^- /.test(l)).map((l) => l.slice(2).trim()),
+      atts: tail.filter((l) => /^- /.test(l)).map((l) => resolve(l.slice(2).trim())),
     }
   }
   return { body: s, atts: [] }

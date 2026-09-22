@@ -32,10 +32,27 @@ describe('reading a sent message back', () => {
       + '[attachments, saved in the workspace]\n- uploads/shot.png\n\n'
       + '[Image: shot.png (path: /home/me/.raven/workspace/uploads/shot.png) | 1312x732px, '
       + 'downscaled from 5312x2964 \u2014 re-read it with read_file if you need another look]'
+    /* The path is the engine's, not the note's: the note says where the
+       composer uploaded it, and the file route resolves a relative path
+       against the session's own root, which is not always that workspace. */
     expect(splitAttachments(stored, NOTES)).toEqual({
       body: 'hello, what is wrong with this picture',
-      atts: ['uploads/shot.png'],
+      atts: ['/home/me/.raven/workspace/uploads/shot.png'],
     })
+  })
+
+  it('keeps the note path when the engine named no file', () => {
+    /* A message with attachments the engine said nothing about -- a document,
+       or a picture it declined before it had a path to report. */
+    const sent = 'read it\n\n[attachments, saved in the workspace]\n- uploads/notes.pdf'
+    expect(splitAttachments(sent, NOTES).atts).toEqual(['uploads/notes.pdf'])
+  })
+
+  it('matches the engine path to the file it names, not to another', () => {
+    const stored = 'two of them\n\n[attachments, saved in the workspace]\n- uploads/a.png\n- uploads/b.png\n\n'
+      + '[Image: b.png (path: /w/uploads/b.png) | 2x2px]\n'
+      + '[Image: a.png (path: /w/uploads/a.png) | 1x1px]'
+    expect(splitAttachments(stored, NOTES).atts).toEqual(['/w/uploads/a.png', '/w/uploads/b.png'])
   })
 
   it('reads the four other things the engine says about a picture', () => {
