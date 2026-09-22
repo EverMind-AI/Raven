@@ -567,21 +567,95 @@ async def record_capabilities(cfg: Any) -> Any:
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
     snapshot = await verify_agent(cfg)
+    _note_menu_re_measured(snapshot, getattr(cfg, "name", "") or "")
     store = SnapshotStore()
     store.record(_test_record(snapshot, store.load([cfg], allow_stale=True).get(cfg.name)))
     return snapshot
 
 
+#: Raven's own rows this process has already re-measured for a menu and been
+#: given none again. The reason below is the one re-measure reason nothing
+#: invalidates, so it is the one that has to remember it has been spent.
+_MENULESS_OWN_RE_MEASURED: set[str] = set()
+
+
+def _measured_no_menu(snapshot: Any) -> bool:
+    """A ready snapshot of one of raven's own agents that advertised no model."""
+    return (
+        snapshot is not None
+        and getattr(snapshot, "agent_name", "") == "raven"
+        and getattr(snapshot, "status", "") == "ready"
+        and bool(getattr(snapshot, "model_menu_measured", False))
+        and not getattr(snapshot, "model_choices", ())
+    )
+
+
+def _host_has_a_usable_provider() -> bool:
+    """Does raven itself hold one provider credential?
+
+    ``credential_status`` with ``include_external``, which is the predicate the
+    model picker's own "configured" flag reads (``Config._provider_is_configured``):
+    a sign-in lives in a token file, and asking without it reports every OAuth
+    vendor usable on a host that has never been connected to anything -- exactly
+    the host this bound is here to spare.
+    """
+    from raven.config.loader import load_config
+    from raven.providers.auth import credential_status
+    from raven.providers.registry import find_by_name
+
+    providers = load_config().providers
+    names = [*type(providers).model_fields, *(providers.model_extra or {})]
+    sections = ((name, providers.get(name)) for name in names)
+    return any(
+        section is not None and credential_status(name, section, spec=find_by_name(name), include_external=True).ok
+        for name, section in sections
+    )
+
+
+def _own_row_missing_its_menu(snapshot: Any, name: str) -> bool:
+    """A ready snapshot of one of raven's own agents that measured no model menu,
+    worth spending a handshake on again.
+
+    Raven's own acp agents run on this raven's provider catalogue, so a menu
+    measured empty there is a handshake taken before that catalogue reached
+    them, not a fact about the agent -- and nothing invalidates it: the launch
+    config it was measured against has not moved, so the row would go on
+    offering nothing for as long as the file survives. Only raven's own: a third
+    party that really offers none would be relaunched at every boot to be told
+    so again.
+
+    Twice bounded, because a child raven genuinely advertises no model while the
+    catalogue is empty (``acp.config_options``), and this reason re-arms itself
+    on the record it writes. So: only once this raven has a credential of its
+    own, which is the whole premise of the fallback, and only once per row per
+    process, so a boot that is told "none" again does not go on paying for the
+    same answer at every connect after it.
+    """
+    if not _measured_no_menu(snapshot) or name in _MENULESS_OWN_RE_MEASURED:
+        return False
+    return _host_has_a_usable_provider()
+
+
+def _note_menu_re_measured(snapshot: Any, name: str) -> None:
+    """Spend this row's one re-measure when the live answer is menuless again."""
+    if _measured_no_menu(snapshot):
+        _MENULESS_OWN_RE_MEASURED.add(name)
+
+
 def capabilities_wanted(cfg: Any) -> bool:
     """Does this acp entry lack a fresh, complete capability record?
 
-    The same three cases the boot backfill re-measures: no snapshot, one whose
-    launch config has changed, or one written before the model menu was
-    recorded. A row with a complete record keeps it -- a connect must not spend
-    a handshake re-measuring what is already known.
+    The same four cases the boot backfill re-measures: no snapshot, one whose
+    launch config has changed, one written before the model menu was recorded,
+    or one of raven's own whose menu came back empty -- that last one bounded as
+    ``_own_row_missing_its_menu`` bounds it. A row with a complete record keeps
+    it -- a connect must not spend a handshake re-measuring what is already
+    known.
     """
     snapshot = acp_snapshot_for(cfg)
-    return snapshot is None or snapshot.stale or not getattr(snapshot, "model_menu_measured", True)
+    if snapshot is None or snapshot.stale or not getattr(snapshot, "model_menu_measured", True):
+        return True
+    return _own_row_missing_its_menu(snapshot, getattr(cfg, "name", "") or "")
 
 
 def _test_record(snapshot: Any, previous: Any) -> Any:
@@ -749,21 +823,21 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             continue
         try:
             snapshot = acp_snapshot_for(cfg)
-            outdated_menu = (
-                snapshot is not None
-                and has_model_menu is not None
-                and not has_model_menu(getattr(row, "name", "") or "")
-            )
-            # Two reasons to re-measure besides staleness: a record written
-            # from before the model menu (above), and a credential refusal.
-            # Staleness asks whether the launch config moved, and signing in does
-            # not move it -- so a recorded refusal never goes stale, and the row
-            # it came from would go on saying "Unauthorized" across every restart
-            # after the sign-in that cured it.
+            name = getattr(row, "name", "") or ""
+            outdated_menu = snapshot is not None and has_model_menu is not None and not has_model_menu(name)
+            # Three reasons to re-measure besides staleness: a record written
+            # from before the model menu (above), a credential refusal, and one
+            # of raven's own that came back with an empty menu. Staleness asks
+            # whether the launch config moved, and neither signing in nor
+            # configuring a provider moves it -- so a recorded refusal never goes
+            # stale, and the row it came from would go on saying "Unauthorized"
+            # across every restart after the sign-in that cured it.
             refused = getattr(snapshot, "needs_auth", False)
-            if snapshot is not None and not snapshot.stale and not outdated_menu and not refused:
+            menuless_own = _own_row_missing_its_menu(snapshot, name)
+            if snapshot is not None and not snapshot.stale and not outdated_menu and not refused and not menuless_own:
                 continue
             result = await verify_agent(cfg)
+            _note_menu_re_measured(result, name)
             # A pass, or a refusal the agent explained. Every other failure stays
             # unrecorded on purpose: a timeout or a crashed adapter is a fact
             # about this minute, and a snapshot of one would label a working
@@ -771,7 +845,7 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             if result.status == "ready" or getattr(result, "needs_auth", False):
                 store.record(result)
                 recorded = True
-            logger.info("acp agent {!r}: auto-verify {}", getattr(row, "name", ""), result.status)
+            logger.info("acp agent {!r}: auto-verify {}", name, result.status)
         except Exception as exc:  # noqa: BLE001 - a failed verify must not sink the rest
             logger.warning("acp agent {!r}: auto-verify failed: {}", getattr(row, "name", ""), exc)
     if recorded:

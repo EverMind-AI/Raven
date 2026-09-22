@@ -192,11 +192,13 @@ class SubagentRow(_Strict):
     model_source: Literal["raven", "agent", "fixed"] = Field(
         default="agent",
         description=(
-            "What `subagents.update` accepts for `model` on this row, by kind -- not ownership, which is "
-            "`own`: 'raven' for the built-in row, picking from raven's own provider catalogue; 'agent' for "
-            "an acp row, raven's own or not, picking from the choices its handshake advertised "
-            "(`model_choices`); 'fixed' for an openai row, whose model is a plain config value, and for a "
-            "cli row, which has no menu at all."
+            "What `subagents.update` accepts for `model` on this row, by rule rather than by kind, and "
+            "not ownership, which is `own`: 'raven' for the built-in row and for one of raven's own acp "
+            "rows whose handshake advertised no menu -- both pick from raven's own provider catalogue; "
+            "'agent' for an acp row picking from the choices its handshake advertised (`model_choices`); "
+            "'fixed' for an openai row, whose model is a plain config value, and for a cli row, which has "
+            "no menu at all. The menu, not the whole vocabulary: one of raven's own acp rows also accepts a "
+            "host-qualified id under either rule, since it runs on raven's providers whatever it advertised."
         ),
     )
 

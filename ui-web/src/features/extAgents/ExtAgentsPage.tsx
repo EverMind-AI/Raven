@@ -153,7 +153,13 @@ function shownModel(row: ExtAgentRow): { id: string; by: string; provider: strin
   if (!row.model) return null
   if (row.model_source === 'agent') {
     const hit = (row.model_choices || []).find((c) => c.value === row.model)
-    return { id: hit?.name || row.model, by: hit?.group || '', provider: hit?.group || row.name }
+    if (hit) return { id: hit.name || row.model, by: hit.group || '', provider: hit.group || row.name }
+    /* Not one of its choices. One of Raven's own can be carrying a host id it
+       took while its menu was still empty -- it is measured behind the page,
+       and the id stays what the row dispatches with -- so that one is drawn
+       the way the host draws it rather than as an unattributed string. A third
+       party's ids are its own, whatever they look like. */
+    if (!isOwnRow(row) || !row.model.includes('/')) return { id: row.model, by: '', provider: row.name }
   }
   const cut = row.model.indexOf('/')
   const head = cut > 0 ? row.model.slice(0, cut) : ''

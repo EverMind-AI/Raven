@@ -669,19 +669,62 @@ describe('the model pill', () => {
     expect(picker()!.textContent).toContain('gui.agent.model_no_provider')
   })
 
-  it('wears a disabled pill for a row with no menu, worded by ownership', async () => {
+  it("wears a disabled pill for a row with no menu and none of raven's to fall back on", async () => {
     install([
       row({ name: 'Coder', preset: undefined, kind: 'cli', model_source: 'fixed' }),
-      row({ name: 'Raven-Code', preset: undefined, kind: 'acp', own: true, model_source: 'agent', model_choices: [] }),
+      row({ name: 'codex', preset: 'codex', kind: 'acp', model_source: 'agent', model_choices: [] }),
     ])
     await mount()
     await openSheet('Coder')
     expect(pill()!.textContent).toBe('gui.agent.model_managed')
     expect(pill()!.disabled).toBe(true)
-    await openSheet('Raven-Code')
-    expect(sheetName()).toBe('Raven-Code')
-    expect(pill()!.textContent).toBe('gui.agent.model_follow')
+    await openSheet('codex')
+    expect(sheetName()).toBe('codex')
+    expect(pill()!.textContent).toBe('gui.agent.model_managed')
     expect(pill()!.disabled).toBe(true)
+  })
+
+  it("lets one of raven's own rows that advertised no menu pick from raven's providers", async () => {
+    /* The server sends `raven` for such a row: it runs on this raven's
+       catalogue, so "follows the main Raven" is where it starts, not where it
+       is stuck. */
+    hostModels.providers = [{ id: 'openrouter', name: 'OpenRouter', models: ['z-ai/glm-5.3-flash'], on: true }]
+    const { acts } = install([
+      row({ name: 'Raven-Code', preset: undefined, kind: 'acp', own: true, model_source: 'raven', model_choices: [] }),
+    ])
+    await mount()
+    await openSheet('Raven-Code')
+    expect(pill()!.textContent).toBe('gui.agent.model_follow⌄')
+    expect(pill()!.disabled).toBe(false)
+    await click(pill())
+    expect(picker()!.textContent).toContain('OpenRouter')
+    await click(modelButton('z-ai/glm-5.3-flash'))
+    expect(acts).toEqual([['model', 'Raven-Code', { model: 'z-ai/glm-5.3-flash', provider: 'openrouter' }]])
+  })
+
+  it("draws a host id one of raven's own kept across a re-measure under the provider it is stored on", async () => {
+    /* The pick was made while the row's menu was empty and its rule `raven`;
+       the handshake behind the page has given it one since, so it reads under
+       `agent` now. The stored value did not move, and it is still what the row
+       dispatches with, so neither does the way it is drawn. */
+    hostModels.providers = [{ id: 'openrouter', name: 'OpenRouter', models: ['anthropic/claude-opus-5'], on: true }]
+    const { acts } = install([
+      row({
+        name: 'Raven-Code',
+        preset: undefined,
+        kind: 'acp',
+        own: true,
+        model_source: 'agent',
+        model_choices: choices,
+        model: 'openrouter/anthropic/claude-opus-5',
+      }),
+    ])
+    await mount()
+    await openSheet('Raven-Code')
+    expect(pill()!.querySelector('.extAgents-mid')!.textContent).toBe('anthropic/claude-opus-5')
+    expect(pill()!.querySelector('.extAgents-mpv')!.textContent).toBe('OpenRouter')
+    await click(sheet()!.querySelector('.extAgents-mx'))
+    expect(acts).toEqual([['model', 'Raven-Code', { clear_model: true }]])
   })
 
   it("does not show an endpoint's configured model as a pick, and still lets a menuless acp row clear one", async () => {

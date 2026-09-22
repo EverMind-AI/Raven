@@ -186,4 +186,29 @@ describe('the model verbs', () => {
     expect(store.get().failed.claude_code).toEqual({ op: 'model', args: { model: 'v/bogus' }, detail: 'it offers 3' })
     expect(store.get().joining).toEqual([])
   })
+
+  it('repaints from the listing when a pick is refused, so the sheet leaves the menu that failed behind', async () => {
+    /* A row is re-measured behind the page, which is how its menu can change
+       under an open sheet; a refusal is where the page finds out. */
+    const held = row({ model_source: 'raven', model_choices: [] })
+    const listed = row({ model_source: 'agent', model_choices: [{ value: 'v/m', name: 'M', group: 'V' }] })
+    setSources({
+      extAgents: {
+        load: async () => [listed],
+        act: async () => {
+          throw { data: { detail: 'it offers 55' } }
+        },
+      },
+    })
+    store.set({ rows: [held] })
+
+    await store.setModel(held, 'openrouter/anthropic/claude-opus-5', 'openrouter')
+
+    expect(store.get().rows.map((r) => r.model_source)).toEqual(['agent'])
+    expect(store.get().failed.claude_code).toEqual({
+      op: 'model',
+      args: { model: 'openrouter/anthropic/claude-opus-5', provider: 'openrouter' },
+      detail: 'it offers 55',
+    })
+  })
 })
