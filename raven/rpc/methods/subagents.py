@@ -1112,7 +1112,13 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
 
 
 async def subagents_test_cancel(params: dict) -> dict:
-    """Cancel an in-flight test, killing the agent's process group."""
+    """Cancel an in-flight test. Only the asyncio task is cancelled here.
+
+    What that reaps belongs to the measurement it interrupts: a cli test unwinds
+    into the backend, which kills the agent's process group; an acp test unwinds
+    into the closes its handshake and its ping each hold, and each of those ends
+    the child it launched. Neither leaves a process behind.
+    """
     task = _RUNNING.get(params.get("name", ""))
     if task is None or task.done():
         return {"cancelled": False}
