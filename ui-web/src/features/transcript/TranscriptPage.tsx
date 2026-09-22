@@ -1621,10 +1621,14 @@ function SegView({ lane, seg }: { lane: Lane; seg: Seg }): ReactElement | null {
   }
 }
 
-/* What one AI turn's card holds: the work it did, folded, what it said, and the
-   delegated result the turn was a reaction to. The reader's own message and the
-   page's annotations stay rows of their own -- the first carries its own shape,
-   and the second is the page talking rather than the turn. */
+/* What a card holds: the work the agent did, folded, what it said, and the
+   delegated results that re-entered while it worked. One card spans everything
+   between two things the reader said, so it holds as many turns as the agent
+   took -- a result landing between them is a message inside the card, not a
+   seam across it.
+   The reader's own message and the page's annotations stay rows of their own:
+   the first carries its own shape, and the second is the page talking rather
+   than the agent. */
 const CARDED = new Set(['fold', 'step', 'answer', 'arts', 'sdlv'])
 
 function stageRows(lane: Lane): ReactElement[] {

@@ -1069,12 +1069,12 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* Attachments stack above the bubble rather than inside it: a handed-over file
    is a thing, the sentence is what was said about it, and one bubble holding
    both made the picture look like punctuation. */
-/* One turn, two shapes. What the reader wrote is a bubble that ends where the
-   sentence ends, pulled to their side of the column; what the agent answered is
-   a card of constant width. The card does not track its own length on purpose:
-   a column of cards whose widths follow their word counts reads as a ragged
-   edge, and the rhythm of this column is meant to be one turn, not one
-   sentence. */
+/* Two shapes. What the reader wrote is a bubble that ends where the sentence
+   ends, pulled to their side of the column; what the agent answered is a card
+   of constant width holding everything it did until the reader spoke again.
+   The card does not track its own length on purpose: a column of cards whose
+   widths follow their word counts reads as a ragged edge, and the rhythm of
+   this column is meant to be the exchange, not the sentence. */
 .turn { display: flex; flex-direction: column; min-width: 0; }
 .turn.me { align-self: flex-end; align-items: flex-end; max-width: 70%; }
 .turn.ai { align-self: stretch; width: 100%; max-width: 760px; margin-right: auto; }
