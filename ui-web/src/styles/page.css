@@ -1883,8 +1883,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    the transparent rule outweighed the hover and the copy and branch buttons
    never came back. One element, and the reveal outranks the rest by its own
    pseudo-class. */
-.turn > .ansfoot { opacity: 0; transition: opacity .12s; }
-.turn:hover > .ansfoot, .turn:focus-within > .ansfoot { opacity: 1; }
+/* Both places a footer can sit: under the card, and -- when the card holds
+   more than one turn -- between two turns inside it. */
+.turn > .ansfoot, .msg.ai > .ansfoot { opacity: 0; transition: opacity .12s; }
+.turn:hover > .ansfoot, .turn:focus-within > .ansfoot,
+.turn:hover .msg.ai > .ansfoot, .turn:focus-within .msg.ai > .ansfoot { opacity: 1; }
 .answer .acts, .answer .turnmeta { opacity: 0; transition: opacity .12s; }
 .answer:hover .acts, .answer:hover .turnmeta,
 .answer:focus-within .acts, .answer:focus-within .turnmeta { opacity: 1; }

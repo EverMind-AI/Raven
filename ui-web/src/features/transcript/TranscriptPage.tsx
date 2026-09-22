@@ -1621,11 +1621,11 @@ function SegView({ lane, seg }: { lane: Lane; seg: Seg }): ReactElement | null {
   }
 }
 
-/* What one AI turn's card holds: the work it did, folded, and what it said.
-   Everything else is a row of its own -- the reader's own message, a delegation
-   coming back, and the page's annotations are not things this turn produced,
-   and a card drawn around them would claim they were. */
-const CARDED = new Set(['fold', 'step', 'answer', 'arts'])
+/* What one AI turn's card holds: the work it did, folded, what it said, and the
+   delegated result the turn was a reaction to. The reader's own message and the
+   page's annotations stay rows of their own -- the first carries its own shape,
+   and the second is the page talking rather than the turn. */
+const CARDED = new Set(['fold', 'step', 'answer', 'arts', 'sdlv'])
 
 function stageRows(lane: Lane): ReactElement[] {
   const rows: ReactElement[] = []
@@ -1644,17 +1644,34 @@ function stageRows(lane: Lane): ReactElement[] {
        what the first seconds of every turn looked like. */
     const group = lane.segs.slice(i, end).filter((part) => part.kind !== 'step' || !stepBlank(part))
     if (!group.length) { i = end; continue }
-    /* The footer belongs to the answer but sits under the whole card, so what
-       a turn delivered is above its own copy button rather than below it. */
-    const answer = group.find((part) => part.kind === 'answer') as AnswerData | undefined
+    /* The footer belongs to the answer but sits under whatever that turn
+       delivered, so a turn's products are above its own copy button rather
+       than below it. One per answer, not one per card: a card holds every turn
+       between two things the reader said, so a single footer would have copied
+       the first answer whichever one the reader clicked it beside, and left
+       every later answer without a button at all. The LAST answer keeps its
+       footer outside the card, which is where the one-turn card -- still the
+       ordinary case -- has always drawn it. */
+    const answers = group.filter((part) => part.kind === 'answer') as AnswerData[]
+    const last = answers.length ? answers[answers.length - 1] : undefined
+    const kids: ReactNode[] = []
+    group.forEach((part, idx) => {
+      kids.push(part.kind === 'answer'
+        ? <AnswerView key={`${lane.epoch}:${part.id}`} lane={lane} seg={part} showFoot={false} />
+        : <SegView key={`${lane.epoch}:${part.id}`} lane={lane} seg={part} />)
+      const before = group[idx - 1]
+      const owner = part.kind === 'answer' ? part
+        : part.kind === 'arts' && before?.kind === 'answer' ? before as AnswerData
+        : undefined
+      /* Held back one place when the answer's own products follow it, so the
+         footer still lands under them rather than between the two. */
+      if (!owner || owner === last || (part.kind === 'answer' && group[idx + 1]?.kind === 'arts')) return
+      kids.push(<AnswerFoot key={`${lane.epoch}:${owner.id}f`} lane={lane} seg={owner} />)
+    })
     rows.push(
       <div className="turn ai" key={`${lane.epoch}:${seg.id}`}>
-        <div className="msg ai">
-          {group.map((part) => (part.kind === 'answer'
-            ? <AnswerView key={`${lane.epoch}:${part.id}`} lane={lane} seg={part} showFoot={false} />
-            : <SegView key={`${lane.epoch}:${part.id}`} lane={lane} seg={part} />))}
-        </div>
-        {answer ? <AnswerFoot lane={lane} seg={answer} /> : null}
+        <div className="msg ai">{kids}</div>
+        {last ? <AnswerFoot lane={lane} seg={last} /> : null}
       </div>,
     )
     i = end
