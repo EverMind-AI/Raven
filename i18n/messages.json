@@ -6455,6 +6455,10 @@
       "en": "1 product",
       "zh": "1 个产物"
     },
+    "gui.tasks.graph_tag": {
+      "en": "graph",
+      "zh": "图"
+    },
     "gui.tasks.rec_more": {
       "en": "Show all",
       "zh": "展开全文"

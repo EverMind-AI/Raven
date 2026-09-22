@@ -122,6 +122,28 @@ describe('the tasks list', () => {
     expect(document.querySelector('.sarow.task')?.textContent).not.toContain('nightly-checks')
   })
 
+  /* The list holds three shapes of work and the tag tells one apart: a graph
+     of several steps. A spawn is a single node by construction, and a dag the
+     model composed with one node draws exactly like it, so tagging either
+     would name a difference the reader cannot see. */
+  it('tags a graph of several nodes, and neither a spawn nor a one-node run', async () => {
+    rows = [
+      task({
+        id: 'g', kind: 'dag', status: 'running',
+        nodes: [node({ node_id: 'a', status: 'completed' }), node({ node_id: 'b', status: 'running' })],
+      }),
+      task({ id: 's', kind: 'spawn', status: 'running', nodes: [node({ node_id: 's', status: 'running' })] }),
+      task({ id: 'one', kind: 'dag', status: 'running', nodes: [node({ node_id: 'only', status: 'running' })] }),
+    ]
+    await draw()
+    const tagged = [...document.querySelectorAll('.sarow.task')]
+      .filter((r) => r.querySelector('.tkgraph'))
+      .map((r) => r.querySelector('.nm')?.textContent)
+    expect(tagged).toEqual(['Cross-check quotes'])
+    expect(document.querySelectorAll('.tkgraph')).toHaveLength(1)
+    expect(document.querySelector('.tkgraph')?.textContent).toBe('gui.tasks.graph_tag')
+  })
+
   it('counts products across every node, not per task', async () => {
     rows = [task({
       id: 'a', kind: 'dag', status: 'completed',
