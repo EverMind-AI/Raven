@@ -1,4 +1,8 @@
-# Self-Evolution Map
+# Evolver: design and implementation
+
+New to the tool? Start with [Usage and experiments](evolver.md)
+for status, setup, costs, and the run/resume/finalize workflow. This page is
+the implementation reference.
 
 **Companion:** the authoritative methodology spec is
 `docs/specs/self-evolution-loop-sop.md`, kept in the repository beside the code
@@ -12,13 +16,10 @@ change alters a correspondence, update this document in the same PR.
 
 ## 0. The fundamental architectural difference (read first)
 
-The SOP's loop (§3 / §8.3) is **Claude-driven**: no driver program — a human
-opens Claude and walks the seven-step funnel by hand, state persists in three
-file layers, and the parts are a set of CLI scripts. Raven implements the same
-methodology as a **program-driven** loop:
-`evolver/orchestrator/loop.py::EvolutionOrchestrator` is a deterministic
-driver for the funnel, and the SOP's CLI parts became functions embedded in
-the loop.
+The SOP's loop (§3 / §8.3) is **Claude-driven**: a human opens Claude and
+walks the seven-step funnel by hand. Raven implements the same methodology as a
+**program-driven** loop: `evolver/orchestrator/loop.py::EvolutionOrchestrator`
+drives the funnel, and the SOP's CLI parts became functions inside the loop.
 
 The SOP §8.0 division of labor (semantics to the model, deterministic
 arithmetic to code) is preserved unchanged: diagnosis / design / verdict are
@@ -26,10 +27,8 @@ still LLM calls, wrapped in `orchestrator/nodes/semantic.py::SemanticNode`
 (parsing errors are fed back to the model, with a limited number of repair
 retries). Only "who presses the next-step button" changed.
 
-The SOP itself (§8.3) judges this route: "packaging into one-click tools is a
-large-benchmark task". Raven chose to build the integration now, buying
-cross-window hand-off freedom and mechanized methodology (see §5, "Where we
-exceed the SOP").
+The launcher automates the funnel and persists completed-round checkpoints, so
+an operator can resume without reconstructing the experiment by hand.
 
 ## 1. SOP §0 general rules -> implementation
 
@@ -41,10 +40,10 @@ exceed the SOP").
 | Division of labor: semantics = model, determinism = code | see §0 above | `orchestrator/nodes/semantic.py::SemanticNode` |
 | Two verdicts: navigation = K3 mean > vanilla (bank); credited = paired 2σ (paper) | `PairedResult` keeps them as two independent fields: `promoted` (navigator) and `credited_2sigma` (label); promotion reads only the former | `orchestrator/gates/paired.py::PairedResult / paired_lift` |
 | Paired σ: std of per-task paired diffs, removing between-task difficulty | `d_i = rate_c,i − rate_v,i`, `se = stdev(d)/√n`, `z = lift/se` | `orchestrator/gates/paired.py::paired_lift` |
-| ★ Sealed test: blind-run each round, invisible to decisions, unseal at the end for retention | `SealedTestRunner.score` writes to a driver-invisible directory and **returns None** (no test number can physically enter the decision path); `unseal` only after the loop ends | `orchestrator/sealed/runner.py::SealedTestRunner / unseal_retention` |
+| Sealed test: keep test results out of selection, then evaluate retention | The AppWorld launcher scores the baseline and recorded round deliverables at finalization through `unseal_retention`. `SealedTestRunner.score` returns `None`; results are stored separately, but filesystem access is not isolated from arbitrary code. | `orchestrator/sealed/runner.py::SealedTestRunner / unseal_retention` |
 | Test never enters anchor/train | stronger than the SOP's discipline: a mechanized assertion — leakage raises at startup | `orchestrator/sealed/runner.py::assert_no_test_leak`, wired in `loop.py` construction |
 | Discipline: diagnose from train trajectories only | the diagnosis corpus source hangs off train only; test trajectories have no read path (the sealed runner stores scores only) | `orchestrator/scoring.py::EvalBackend.trajectories` |
-| Discipline: configuration identical throughout | mechanized at the launcher level: `run_meta.json` records a config fingerprint; a changed config refuses to resume | `evolver/launch/state.py::RunMeta.check_config` |
+| Discipline: configuration identical throughout | `run_meta.json` records a configuration fingerprint; the launcher normally refuses a changed configuration or a finalized run. `--force` bypasses these guards and invalidates the sealed-experiment assumption. | `evolver/launch/state.py::RunMeta.check_config`; `evolver/launch/runner.py::_meta_guard` |
 
 ## 2. SOP §1 cold start -> implementation
 
@@ -87,11 +86,11 @@ evolution tree structure. The two are linked by `git_commit_sha`.
 
 ## 5. Where we exceed the SOP
 
-- **The sealed-test runner is mechanized.** SOP §8.2/§9.2 identifies its
-  most significant methodological gap: "not building yet; interim relies on
-  discipline; reviewers will challenge it". Raven's `SealedTestRunner` +
-  `assert_no_test_leak` provides the mechanism isolation the SOP demands,
-  closing that methodological gap.
+- **Sealed-test evaluation is automated.** `assert_no_test_leak` checks that
+  task splits do not overlap. At finalization, `unseal_retention` scores
+  recorded commits and selects the deliverable by training score. These
+  controls separate evaluation from selection; they do not sandbox candidate
+  code or prevent an operator from reading files.
 - **A single candidate's crash cannot sink a round:** the `errored` status +
   errored rounds not burning patience (`max_consecutive_errors` as its own
   backstop); not covered by the SOP.
@@ -107,24 +106,23 @@ evolution tree structure. The two are linked by `git_commit_sha`.
   that task's actual execution trajectory under the candidate is provided to
   the next candidate-design attempt; the SOP only requires flip counts.
 
-## 6. Deliberate deviations and unwired parts (honest list)
+## 6. Deliberate deviations and unwired parts { #6-deliberate-deviations-and-unwired-parts-honest-list }
 
 1. **zero-hit preflight is off by default** (`zero_hit_preflight=False`,
-   decided 2026-07). Rationale: Gate-b already denies credit to never-fired
-   mechanisms (no correctness hole); preflight only saves budget, at a small
-   false-prune risk; TRIGGER_REGEX declaration is opt-in and the actual prune
+   decided 2026-07). With instrumentation supplied, Gate-b excludes tasks where
+   no beacon fired; without it, Gate-b is skipped. Preflight is a separate
+   budget-saving check with a false-prune risk. TRIGGER_REGEX declaration is opt-in and the actual prune
    rate is unknown. Gather data first (enable on a run, inspect
    `pruned_inert` entries in history), then decide the default. SOP §2 tags ③
    as [now]; this is a deliberate deviation.
 2. **Borrowing unwired** (SOP §2 ⑤, tagged [defer]): `tree_aware_bandit` is
-   present, the orchestrator does not call it. The AppWorld train set is
-   affordable to run in full — consistent with the SOP's "small benchmarks
-   don't need it"; wire it for large task sets.
+   present, but the orchestrator does not call it. The AppWorld train set is
+   currently run in full; add borrowing when larger task sets justify it.
 3. **Affinity anchor lacks a data source:** `select_anchor(affinity)` accepts
    it; the appworld side has no trigger-density source (upstream's
-   `affinity_picker.py` was not ported). Anchors are currently icebreakers +
-   sentinels + borderline; screening still works, information efficiency is
-   slightly lower.
+   `affinity_picker.py` was not ported). Anchors are currently icebreakers,
+   sentinels, and borderline tasks; the impact of omitting affinity selection
+   has not been measured here.
 4. **WHERE mechanical binding has 4 tiers** (prompt/runtime/mixed/edit),
    coarser than the judge schema's 14 classes. Sufficient for QD cells;
    refine `_lever_of_path` for fine-grained lever statistics. Self-declared
@@ -137,12 +135,11 @@ evolution tree structure. The two are linked by `git_commit_sha`.
 ## 6.5 The unified entry (added 2026-07)
 
 SOP §8.3's "manual orchestration" is superseded by
-`python -m evolver run --config <yaml>`: a single-command state machine
-running cold start -> rounds -> termination -> unseal, resumable after any
-interruption (artifacts are the state: trial files / journal / metadata markers,
-three types of persisted state records). Config drift and unseal one-wayness
-are mechanized in `run_meta.json` (the codification of SOP §0's same-regime
-discipline).
+`python -m evolver run --config <yaml>`: a single-command state machine runs
+cold start -> rounds -> termination -> unseal. Before finalization, it resumes
+from saved trials and completed-round checkpoints, not from an arbitrary
+instruction inside an interrupted call. Configuration drift and finalization
+are checked against `run_meta.json` unless `--force` overrides the guards.
 Benches plug in via the contract in
 `docs/specs/evolve-bench-contract.md`, kept in the repository beside the code;
 implementation in `evolver/launch/` + `evolver/cli.py`.

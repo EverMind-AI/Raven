@@ -4,8 +4,9 @@
 
 <p class="em-standfirst">安装并配置 Raven，选择部署方式，查阅常用命令。</p>
 
-从安装开始，通过 Docker 或源码部署 Raven，并使用 WebUI 开展日常工作。
-参考文档介绍命令用法、运行时架构和仓库结构。
+从安装开始，再选择适合自己的使用方式。**指南**介绍日常使用、消息渠道、Agent、
+技能与部署；**参考**说明协议和运行时行为；**开发者**介绍如何构建
+Agent、插件和适配器。
 
 ## 从这里开始 { #start-here }
 
@@ -114,5 +115,22 @@
     [阅读](repo-layout.md)
 
 </div>
+
+## 连接与扩展 Raven { #connect-and-extend-raven }
+
+| 下一步任务 | 指南 |
+| --- | --- |
+| 选择日常交互入口 | [使用 Raven](using-raven.md) |
+| 连接消息平台 | [渠道与消息](channels.md) |
+| 配置 Raven 专用或外部 Agent | [Agent 集成](agent-integrations.md) |
+| 连接编辑器或远程 Agent | [Agent 协议：ACP 与 A2A](agent-protocols.md) |
+| 协调并行工作和依赖 | [DAG 编排](orchestration.md) |
+| 理解审批和信任边界 | [权限与安全](permissions.md) |
+| 添加技能、记忆、MCP、插件或 Agent | [技能与扩展](skills-and-extensions.md) |
+| 构建专用 Agent | [构建 Agent](building-agent.md) |
+| 增加运行时工具或 hook | [构建插件](building-plugin.md) |
+| 实现协议或渠道适配器 | [协议与后端集成](protocol-backends.md) |
+
+可通过站点搜索或[命令参考](commands.md)查找具体功能的配置步骤、示例和排障方法。
 
 Raven 由 EverMind 开源维护。

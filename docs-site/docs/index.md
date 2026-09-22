@@ -4,9 +4,10 @@
 
 <p class="em-standfirst">Install and configure Raven, choose a deployment method, and explore its commands.</p>
 
-Start with installation, deploy Raven with Docker or from source, and use the
-WebUI for everyday work. The reference guides cover commands, runtime
-architecture, and repository structure.
+Start with installation, then choose how to use or extend Raven. **Guide**
+covers daily use, messaging, agents, skills, and deployment. **Reference**
+defines protocols and runtime behaviour. **Developers** explains building
+agents, plugins, and adapters on those contracts.
 
 ## Start here
 
@@ -118,5 +119,23 @@ and Docker image builds.
     [Read](repo-layout.md)
 
 </div>
+
+## Connect and extend Raven
+
+| Your next task | Guide |
+| --- | --- |
+| Choose a daily interaction surface | [Using Raven](using-raven.md) |
+| Connect a messaging platform | [Channels and Messaging](channels.md) |
+| Set up Raven specialists or external agents | [Agent Integrations](agent-integrations.md) |
+| Connect an editor or remote agent | [Agent protocols: ACP and A2A](agent-protocols.md) |
+| Coordinate parallel work and dependencies | [DAG orchestration](orchestration.md) |
+| Understand approvals and trust boundaries | [Permissions and security](permissions.md) |
+| Add skills, memory, MCP, plugins, or agents | [Skills and extensions](skills-and-extensions.md) |
+| Build a specialized agent | [Building an Agent](building-agent.md) |
+| Add runtime tools or hooks | [Building a Plugin](building-plugin.md) |
+| Implement a protocol or channel adapter | [Protocol and Backend Integration](protocol-backends.md) |
+
+Use the site search or [Command Reference](commands.md) to find a feature's
+setup instructions, examples, and troubleshooting steps.
 
 Raven is developed in the open by EverMind.

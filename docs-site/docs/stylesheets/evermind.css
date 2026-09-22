@@ -941,6 +941,7 @@
 
   .md-main__inner {
     margin-left: var(--em-rail);
+    margin-right: var(--em-toc);
     max-width: none;
     padding-right: 1.2rem;
   }
