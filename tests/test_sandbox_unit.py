@@ -262,6 +262,26 @@ class TestBuildExecutor:
         assert seen == [tmp_path / "vm-home"]
 
 
+async def _stop_holder(pid: int) -> None:
+    """Kill a process a test left holding the executor's pipes, and let its EOF land.
+
+    The drain that outlives ``exec`` ends with that EOF, and the subprocess
+    transport closes with the drain; both must be gone before pytest-asyncio
+    closes the loop, or they are torn down against a closed loop instead.
+    """
+    try:
+        os.kill(pid, 9)
+    except ProcessLookupError:
+        pass
+    for _ in range(200):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.1)
+
+
 # ---------------------------------------------------------------------------
 # DirectExecutor
 # ---------------------------------------------------------------------------
@@ -377,6 +397,94 @@ class TestDirectExecutor:
         assert result.exit_code == -1
         assert elapsed < 10, f"returned after {elapsed:.1f}s, so the reap outlived the deadline"
 
+    async def test_a_background_child_holding_the_pipes_is_not_a_timeout(self, tmp_path):
+        """The shell's exit ends the call, not the last close of its pipes.
+
+        ``server & curl ...`` is how a model starts a service and checks it in
+        one command. The ``&`` leaves the service holding the shell's stdout,
+        so waiting for EOF waits for the service, and the timeout then kills
+        the process group -- the service included, seconds after the same
+        output reported it healthy. The holder here is a ``sleep``, and the
+        assertion that matters is the last one: it is still alive afterwards.
+        """
+        pid_file = tmp_path / "holder.pid"
+        started = time.monotonic()
+        result = await DirectExecutor().exec(f"sleep 30 & echo $! > {pid_file}; echo started; exit 3", timeout=10)
+        elapsed = time.monotonic() - started
+        holder = int(pid_file.read_text().strip())
+        try:
+            assert result.exit_code == 3
+            assert result.stdout.strip() == "started"
+            assert "Timed out" not in result.stderr
+            assert elapsed < 5, f"returned after {elapsed:.1f}s, so the call waited on the pipes, not the shell"
+            try:
+                os.kill(holder, 0)
+            except ProcessLookupError:
+                pytest.fail("the process the command left behind was killed")
+        finally:
+            await _stop_holder(holder)
+
+    async def test_a_released_pipe_keeps_the_process_behind_it_writing(self, tmp_path):
+        """What the leftover process writes later is drained and dropped, not refused.
+
+        Two wrong answers, both quieter than the bug they would replace. Close
+        the read end and the next write gets EPIPE, which ends most servers on
+        their first log line. Stop reading and the writer blocks once the pipe
+        buffer and the reader's buffer are full, well under the 512 KiB the
+        writer below produces after the call has returned. It reports success
+        only once every block is written, which takes someone still reading.
+        """
+        done_file = tmp_path / "done"
+        pid_file = tmp_path / "holder.pid"
+        command = (
+            f"(sleep 2; dd if=/dev/zero bs=65536 count=8 2>/dev/null && echo done > {done_file}) & "
+            f"echo $! > {pid_file}; echo started"
+        )
+        result = await DirectExecutor().exec(command, timeout=10)
+        holder = int(pid_file.read_text().strip())
+        try:
+            assert result.exit_code == 0
+            assert result.stdout.strip() == "started", "output written after the release must not be kept"
+            for _ in range(400):
+                if done_file.exists():
+                    break
+                await asyncio.sleep(0.02)
+            else:
+                pytest.fail("the process left behind never finished writing: its pipe was closed or left unread")
+        finally:
+            await _stop_holder(holder)
+
+    async def test_a_process_left_behind_does_not_trip_the_loop_shutdown(self, tmp_path):
+        """The pipe a leftover process holds is closed with the loop, not after it.
+
+        ``asyncio.run`` cancels every pending task before it closes the loop,
+        the drain among them. Without closing the transport there, the
+        transport does it itself from ``__del__`` once the loop is gone, and
+        the process exits printing an "Event loop is closed" traceback for a
+        command that succeeded. Driven in a fresh interpreter because the
+        failure is at interpreter exit, which pytest's own loop never reaches.
+        """
+        pid_file = tmp_path / "holder.pid"
+        script = textwrap.dedent(
+            f"""
+            import asyncio
+            from raven.sandbox.direct_executor import DirectExecutor
+
+            async def main():
+                result = await DirectExecutor().exec("sleep 30 & echo $! > {pid_file}; echo held", timeout=10)
+                print(result.exit_code, result.stdout.strip())
+
+            asyncio.run(main())
+            """
+        )
+        run = subprocess.run([sys.executable, "-c", script], cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
+        try:
+            assert run.stdout.strip() == "0 held", run.stderr
+            assert "Exception ignored" not in run.stderr, run.stderr
+            assert run.returncode == 0
+        finally:
+            await _stop_holder(int(pid_file.read_text().strip()))
+
     async def test_cancel_kills_the_whole_process_group(self, tmp_path):
         """A cancelled exec must leave nothing of the command running.
 
@@ -468,7 +576,7 @@ class TestDirectExecutor:
     async def test_a_second_cancellation_does_not_mask_the_first(self, monkeypatch):
         """A repeat cancel interrupts the reap; the kill has already landed.
 
-        Driven with a process whose ``wait()`` never returns, so the reap is
+        Driven with a process whose exit event is never set, so the reap is
         still in flight when the second cancellation arrives -- the same shape a
         shutdown path that cancels twice produces, without waiting out the 5s
         guard for real.
@@ -481,16 +589,15 @@ class TestDirectExecutor:
         async def _never(*a, **kw):
             await asyncio.Event().wait()
 
-        process.wait = _never
         # Stands for a process that produces nothing and never exits: exec
         # drains the pipes itself, so the hang has to live in the reads.
         process.stdout.read = _never
         process.stderr.read = _never
 
         async def _fake_spawn(*a, **kw):
-            return process
+            return process, asyncio.Event(), MagicMock()
 
-        monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_spawn)
+        monkeypatch.setattr(DirectExecutor, "_spawn", _fake_spawn)
         monkeypatch.setattr(os, "killpg", lambda pgid, sig: killed.append(pgid))
 
         task = asyncio.create_task(DirectExecutor().exec("cmd", timeout=60))
