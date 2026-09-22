@@ -60,6 +60,14 @@ export interface DagRunState {
   runId: string
   /** The call this run belongs to, when the host correlates the two. */
   toolCallId?: string
+  /** The multi-round run this graph is one round of. Absent on an ordinary
+   * graph, which is every graph a tool call dispatched. A stint submits one
+   * graph a round into the same conversation, so without this the delegation
+   * view lists thirty unrelated runs and the reader picks the live one out of
+   * them by reading summaries. */
+  stintId?: string
+  /** Which round of that run this graph is, counting from one. */
+  roundIndex?: number
   nodes: DagRunNode[]
   done: boolean
   /** Where the run wrote its per-node outputs; known once it completes. */
@@ -74,6 +82,8 @@ export interface DagRunState {
 const fromStart = (payload: DagRunStartedEvent['payload'], promptTemplates?: Record<string, string>): DagRunState => ({
   runId: payload.run_id,
   ...(payload.tool_call_id ? { toolCallId: payload.tool_call_id } : {}),
+  ...(payload.stint_id ? { stintId: payload.stint_id } : {}),
+  ...(payload.round_index ? { roundIndex: payload.round_index } : {}),
   done: false,
   nodes: payload.nodes.map(node => ({
     id: node.id,
