@@ -702,6 +702,31 @@ describe('the model pill', () => {
     expect(acts).toEqual([['model', 'Raven-Code', { model: 'z-ai/glm-5.3-flash', provider: 'openrouter' }]])
   })
 
+  it("draws a host id one of raven's own kept across a re-measure under the provider it is stored on", async () => {
+    /* The pick was made while the row's menu was empty and its rule `raven`;
+       the handshake behind the page has given it one since, so it reads under
+       `agent` now. The stored value did not move, and it is still what the row
+       dispatches with, so neither does the way it is drawn. */
+    hostModels.providers = [{ id: 'openrouter', name: 'OpenRouter', models: ['anthropic/claude-opus-5'], on: true }]
+    const { acts } = install([
+      row({
+        name: 'Raven-Code',
+        preset: undefined,
+        kind: 'acp',
+        own: true,
+        model_source: 'agent',
+        model_choices: choices,
+        model: 'openrouter/anthropic/claude-opus-5',
+      }),
+    ])
+    await mount()
+    await openSheet('Raven-Code')
+    expect(pill()!.querySelector('.extAgents-mid')!.textContent).toBe('anthropic/claude-opus-5')
+    expect(pill()!.querySelector('.extAgents-mpv')!.textContent).toBe('OpenRouter')
+    await click(sheet()!.querySelector('.extAgents-mx'))
+    expect(acts).toEqual([['model', 'Raven-Code', { clear_model: true }]])
+  })
+
   it("does not show an endpoint's configured model as a pick, and still lets a menuless acp row clear one", async () => {
     const { acts } = install([
       row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', model_source: 'fixed', model: 'miro-1' }),

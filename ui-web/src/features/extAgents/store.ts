@@ -144,6 +144,10 @@ export async function run(
     if (row && args?.new_name && args.new_name !== row.name) renamed = args.new_name
   } catch (e) {
     failedWith = failure(e)
+    /* A refused model write may have been checked against a menu the row has
+       since moved off -- it is re-measured behind the page -- so the sheet
+       repaints from the listing as it is now rather than from what it held. */
+    if (op === 'model') rows = await source().load(false).catch(() => rows)
     if (!opts.quiet) toast(t('gui.agent.failed', { detail: failedWith }))
   }
   const landed: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }

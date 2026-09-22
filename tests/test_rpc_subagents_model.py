@@ -282,20 +282,51 @@ async def test_update_refuses_an_own_acp_row_a_model_no_provider_of_ravens_serve
     assert entry.get("model") is None
 
 
-async def test_update_checks_an_own_acp_row_that_did_advertise_a_menu_against_that_menu(
+async def test_update_takes_either_vocabulary_for_an_own_acp_row_that_did_advertise_a_menu(
     config_path: Path, store_path: Path
 ) -> None:
-    """Ownership is the fallback, never the rule: a row that advertised choices
-    is held to them, host credentials or not."""
+    """One of raven's own runs on this host's providers whatever it advertised,
+    so both vocabularies land: the menu is what the page draws, not a gate. It
+    is also what keeps a pick honest across a re-measure -- the listing a reader
+    picked from is one rule behind the moment the boot backfill writes a menu.
+    """
     _with_providers(config_path, {"openai": {"apiKey": "sk-test"}})
     _acp_row_with_snapshot(config_path, store_path, "Raven-Code", agent_name="raven", menu=("vendor/a",))
 
-    with pytest.raises(ConfigValidationError, match="offers 1"):
-        await subagents_update({"name": "Raven-Code", "model": "openai/gpt-5"})
-    await subagents_update({"name": "Raven-Code", "model": "vendor/a"})
+    await subagents_update({"name": "Raven-Code", "model": "gpt-5", "provider": "openai"})
+    assert next(e for e in _stored(config_path) if e["name"] == "Raven-Code")["model"] == "openai/gpt-5"
 
-    entry = next(e for e in _stored(config_path) if e["name"] == "Raven-Code")
-    assert entry["model"] == "vendor/a"
+    await subagents_update({"name": "Raven-Code", "model": "vendor/a"})
+    assert next(e for e in _stored(config_path) if e["name"] == "Raven-Code")["model"] == "vendor/a"
+
+
+async def test_update_refuses_an_own_acp_row_an_id_neither_vocabulary_holds(
+    config_path: Path, store_path: Path
+) -> None:
+    """Taking both means naming both: a reader of the refusal is looking at one
+    of the two menus and has to be told the other one turned the id down too."""
+    _with_providers(config_path, {"openai": {"apiKey": "sk-test"}})
+    _acp_row_with_snapshot(config_path, store_path, "Raven-Code", agent_name="raven", menu=("vendor/a",))
+
+    with pytest.raises(ConfigValidationError, match="none of the 1 its handshake advertised"):
+        await subagents_update({"name": "Raven-Code", "model": "nonsense/xyz"})
+    with pytest.raises(ConfigValidationError, match="runs on raven's own providers"):
+        await subagents_update({"name": "Raven-Code", "model": "nonsense/xyz"})
+    assert next(e for e in _stored(config_path) if e["name"] == "Raven-Code").get("model") is None
+
+
+async def test_update_refuses_a_host_id_for_a_third_party_acp_row_with_a_menu(
+    config_path: Path, store_path: Path
+) -> None:
+    """The second vocabulary is ownership's, not every acp row's: a third party
+    runs on its own credentials, and raven's ids would be refused by the agent
+    itself once the dispatch got there."""
+    _with_providers(config_path, {"openai": {"apiKey": "sk-test"}})
+    _acp_row_with_snapshot(config_path, store_path, "Outsider", agent_name="other-agent", menu=("vendor/a",))
+
+    with pytest.raises(ConfigValidationError, match="offers 1"):
+        await subagents_update({"name": "Outsider", "model": "gpt-5", "provider": "openai"})
+    assert next(e for e in _stored(config_path) if e["name"] == "Outsider").get("model") is None
 
 
 async def test_update_edits_a_builtin_override_stored_under_the_legacy_spelling_in_place(config_path: Path) -> None:

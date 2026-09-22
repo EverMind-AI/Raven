@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import socket
 from contextlib import closing
@@ -807,6 +808,20 @@ def test_the_factory_honours_the_bounds_its_caller_overrides() -> None:
     assert untouched.timeout == 300
 
 
+def _host_with_a_provider_key() -> None:
+    """Give the isolated home one usable provider.
+
+    The empty-menu re-measure is bounded on this: a child raven advertises no
+    model at all while the catalogue it inherits is empty, so a host with no
+    credentials would be relaunching children to be told what it already knows.
+    Written to the real config the bound reads rather than stubbing the check,
+    since "which sections count as usable" is half of what is under test.
+    """
+    from raven.home import get_config_path
+
+    get_config_path().write_text(json.dumps({"providers": {"openai": {"apiKey": "sk-test"}}}), encoding="utf-8")
+
+
 class _FakeRow:
     def __init__(self, name: str, *, kind: str = "acp", enabled: bool = True, config: object = None) -> None:
         self.name = name
@@ -1183,6 +1198,7 @@ class TestAutomaticSnapshotVerification:
             model_menu_measured: bool = True
             model_choices: tuple = ()
 
+        _host_with_a_provider_key()
         own, third_party = _FakeRow("Raven-PPT"), _FakeRow("Codex")
         snapshots = {id(own.config): Snap(), id(third_party.config): Snap(agent_name="codex")}
         verified: list[str] = []
@@ -1191,6 +1207,7 @@ class TestAutomaticSnapshotVerification:
             verified.append(getattr(cfg, "name", "?"))
             return Snap(model_choices=("v/a",))
 
+        monkeypatch.setattr(probe_mod, "_MENULESS_OWN_RE_MEASURED", set())
         monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: snapshots[id(cfg)])
         monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
         monkeypatch.setattr(
@@ -1211,6 +1228,102 @@ class TestAutomaticSnapshotVerification:
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
         await schedule_snapshot_verification(_FakeManager([own, third_party]))
         assert verified == ["Raven-PPT"], "the menu is measured once; the record it wrote is then trusted"
+
+    async def test_a_row_told_again_it_has_no_menu_is_not_re_measured_a_third_time(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The one re-measure reason nothing invalidates has to spend itself.
+
+        An agent that answers "no models" twice is answering about itself, not
+        about a catalogue that had not arrived yet -- and since the record it
+        writes is the record that arms this reason, an unspent one would put a
+        child launch on every boot and on every connect after it, forever.
+        """
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import capabilities_wanted, schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            agent_name: str = "raven"
+            status: str = "ready"
+            stale: bool = False
+            needs_auth: bool = False
+            model_menu_measured: bool = True
+            model_choices: tuple = ()
+
+        _host_with_a_provider_key()
+        own = _FakeRow("Raven-PPT")
+        verified: list[str] = []
+
+        async def fake_verify(cfg: object) -> Snap:
+            verified.append(getattr(cfg, "name", "?"))
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "_MENULESS_OWN_RE_MEASURED", set())
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: Snap())
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type(
+                "S",
+                (),
+                {"record": staticmethod(lambda s: None), "has_model_menu": staticmethod(lambda agent: True)},
+            )(),
+        )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([own]))
+        assert verified == ["Raven-PPT"]
+
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+        await schedule_snapshot_verification(_FakeManager([own]))
+        assert verified == ["Raven-PPT"], "told once that this row really has none, and it is not asked again"
+        assert capabilities_wanted(own.config) is False, "nor by the connect, which reads the same rule"
+
+    async def test_a_host_with_no_provider_of_its_own_re_measures_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing for the child to inherit, so nothing for a handshake to find:
+        the fallback's premise is a catalogue this raven can pass on."""
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import capabilities_wanted, schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            agent_name: str = "raven"
+            status: str = "ready"
+            stale: bool = False
+            needs_auth: bool = False
+            model_menu_measured: bool = True
+            model_choices: tuple = ()
+
+        own = _FakeRow("Raven-PPT")
+        verified: list[str] = []
+
+        async def fake_verify(cfg: object) -> Snap:
+            verified.append(getattr(cfg, "name", "?"))
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "_MENULESS_OWN_RE_MEASURED", set())
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: Snap())
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type(
+                "S",
+                (),
+                {"record": staticmethod(lambda s: None), "has_model_menu": staticmethod(lambda agent: True)},
+            )(),
+        )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([own]))
+        assert verified == []
+        assert capabilities_wanted(own.config) is False
 
 
 async def test_capabilities_wanted_re_measures_one_of_ravens_own_rows_with_an_empty_menu(
@@ -1245,6 +1358,9 @@ async def test_capabilities_wanted_re_measures_one_of_ravens_own_rows_with_an_em
         )
         return cfg
 
+    assert capabilities_wanted(recorded("own-empty", agent_name="raven")) is False, "no provider of raven's own yet"
+    _host_with_a_provider_key()
+    monkeypatch.setattr(probe_mod, "_MENULESS_OWN_RE_MEASURED", set())
     assert capabilities_wanted(recorded("own-empty", agent_name="raven")) is True
     assert capabilities_wanted(recorded("own-menu", agent_name="raven", menu=("v/a",))) is False
     assert capabilities_wanted(recorded("third-party-empty", agent_name="codex")) is False
