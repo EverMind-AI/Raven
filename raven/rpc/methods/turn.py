@@ -129,6 +129,34 @@ def is_session_busy(session_key: str) -> bool:
     return any(session_of(lane) == session_key for lane in _active_turns)
 
 
+# The spine's scheduler, bound by ``register_turn_methods`` from the same
+# build_rpc_spine bundle the handlers close over. ``_active_turns`` above is
+# this surface's own bookkeeping and knows only the turns ``turn.send``
+# submitted; the scheduler owns every lane, whoever filed the work onto it.
+_scheduler: Scheduler | None = None
+
+
+def bind_scheduler(scheduler: Scheduler | None) -> None:
+    """Hand the spine's scheduler to the module-level readers below."""
+    global _scheduler
+    _scheduler = scheduler
+
+
+def is_session_answering(session_key: str) -> bool:
+    """True if a turn is in flight on this session, whoever started it.
+
+    ``is_session_busy`` reads ``_active_turns``, which only ``turn.send``
+    writes, so a cron run, a channel turn or anything else the runtime submits
+    reads as idle there -- and "is this session answering right now", which is
+    what ``session.list`` and ``session.resume`` report to a page, is a fact
+    about the conversation rather than about which surface filed the work. The
+    scheduler's lane is that fact.
+    """
+    if is_session_busy(session_key):
+        return True
+    return _scheduler is not None and _lane_in_flight(_scheduler, session_key)
+
+
 def clear_active(session_key: str) -> None:
     """Drop a session's active-turn slot. Wired into build_rpc_spine as ``on_turn_end``
     so the slot clears at the end of the turn that owns it (alongside turn_ids)."""
@@ -488,23 +516,29 @@ async def turn_send(
     # the browser page and any other attached terminal.
     claim_conversation(lane)
 
-    if emitter is not None:
-        # The question rides the event that opens the turn so a client which
-        # did not send it can still draw it: the user entry is written to the
-        # transcript only at turn end, so until then this is the only place a
-        # second window can learn what was asked.
-        await emitter.emit(
-            parsed.session_key,
-            {"type": "message.start", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
-        )
-
     # After the submit, so a turn that was never accepted does not name a session
     # that has nothing in it; and only for the main conversation, since a direct
     # chat's opening line names its instance's lane, not this session. Returns
     # immediately -- the call it may start runs on its own task.
+    #
+    # Before the emit below, and that ordering is load-bearing: the namer reads
+    # "no user message on disk" as the mark of an opening turn, the worker files
+    # the question as its first act, and the emit is the first await the
+    # submitted worker can run inside. Naming from the far side of it saw a
+    # session that already had its question and declined to name anything.
     naming = False
     if parsed.target is None:
         naming = _name_session(parsed, agent_loop_factory=agent_loop_factory, emitter=emitter)
+
+    if emitter is not None:
+        # The question rides the event that opens the turn so a client which did
+        # not send it can draw it at once: the turn files it before the first
+        # model call, but a client that waited for the transcript would be
+        # watching a blank screen until it re-read the session.
+        await emitter.emit(
+            parsed.session_key,
+            {"type": "message.start", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
+        )
 
     return {"turn_id": turn_id, "accepted": True, "naming": naming}
 
@@ -575,14 +609,21 @@ async def turn_subscribe(
     *,
     emitter: SubscriptionEmitter | None = None,
 ) -> dict[str, Any]:
-    """``turn.subscribe`` — open a subscription, return ``{subscription_id}``."""
+    """``turn.subscribe`` — open a subscription, return ``{subscription_id, running}``.
+
+    ``running`` is taken on the far side of the publish, which is what makes it
+    trustworthy where ``session.resume``'s answer is not: a turn that ends after
+    this reading emits its completion into this very subscription, so a client
+    armed by ``session.resume`` and told ``false`` here knows the turn ended in
+    the gap between the two calls and that nothing is coming to end it.
+    """
     parsed = TurnSubscribeParams.model_validate(params)
     if emitter is None:
         raise RuntimeError(
             "turn.subscribe requires a SubscriptionEmitter; register_turn_methods must be called with emitter=...",
         )
     sub_id = await emitter.register(parsed.session_key)
-    return {"subscription_id": sub_id}
+    return {"subscription_id": sub_id, "running": emitter.in_flight(parsed.session_key)}
 
 
 async def turn_unsubscribe(
@@ -753,6 +794,8 @@ def register_turn_methods(
     dropped. Defaults to ``"tui"``.
     """
 
+    bind_scheduler(scheduler)
+
     async def _send(params: dict[str, Any]) -> dict[str, Any]:
         return await turn_send(
             params,
@@ -781,6 +824,7 @@ def register_turn_methods(
 
 
 __all__ = [
+    "bind_scheduler",
     "register_turn_methods",
     "register_session_interrupt_method",
     "turn_send",

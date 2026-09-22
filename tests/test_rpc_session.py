@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -592,6 +593,213 @@ async def test_session_list_returns_sessions_for_tui_channel(tmp_path: Path, mon
     ids = [item["id"] for item in items]
     assert "tui:20260610_100000_aaa111" in ids
     assert "tui:20260610_110000_bbb222" in ids
+
+
+async def test_session_list_says_which_sessions_have_a_turn_in_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A page that has just loaded has no other way to know: the running turn's
+    frames went to a socket it did not have. Without the flag the rail draws a
+    conversation that is answering as idle, and a send into it is refused."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    busy_key, quiet_key = "tui:20260610_100000_busy11", "tui:20260610_110000_quiet1"
+    for key in (busy_key, quiet_key):
+        s = mgr.get_or_create(key)
+        s.add_message("user", "hello")
+        mgr.save(s)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    turn_module._active_turns.clear()
+    try:
+        turn_module._active_turns[busy_key] = object()
+        result = await session_list({})
+    finally:
+        turn_module._active_turns.clear()
+
+    running = {item["id"]: item["running"] for item in result["sessions"]}
+    assert running == {busy_key: True, quiet_key: False}
+
+
+async def test_session_resume_says_whether_the_session_is_answering_right_now(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same fact on the bundle a reload reads, which is where the page
+    learns to put the stop button back."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_running"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": "read the repo"}])
+
+    turn_module._active_turns.clear()
+    try:
+        quiet = await session_resume({"session_id": session_key})
+        turn_module._active_turns[session_key] = object()
+        busy = await session_resume({"session_id": session_key})
+    finally:
+        turn_module._active_turns.clear()
+
+    assert quiet["info"]["running"] is False
+    assert busy["info"]["running"] is True
+
+
+class _LaneScheduler:
+    """The spine's scheduler as these readers ask it: one lane in flight."""
+
+    def __init__(self, lane: str) -> None:
+        self._lane = lane
+
+    def has_inflight(self, conversation_id: str) -> bool:
+        return conversation_id == self._lane
+
+
+async def test_session_list_says_running_for_a_turn_turn_send_never_saw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cron run is in flight on the lane and in no map this surface writes.
+
+    ``_active_turns`` is ``turn.send``'s bookkeeping, so a scheduled turn that
+    had been answering for a minute and a half listed as idle: no badge on the
+    rail, and opening it gave an idle composer over a question with no answer.
+    The lane is the fact, whoever filed the work onto it.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    cron_key, quiet_key = "cron:20260610_100000_job111", "tui:20260610_110000_quiet1"
+    for key in (cron_key, quiet_key):
+        s = mgr.get_or_create(key)
+        s.add_message("user", "hello")
+        mgr.save(s)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    turn_module._active_turns.clear()
+    monkeypatch.setattr(turn_module, "_scheduler", _LaneScheduler(cron_key))
+    result = await session_list({"channels": ["tui", "cron"]})
+
+    running = {item["id"]: item["running"] for item in result["sessions"]}
+    assert running == {cron_key: True, quiet_key: False}
+
+
+async def test_session_resume_says_running_for_a_turn_turn_send_never_saw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same fact on the bundle a reload reads, and the elapsed with it:
+    the question the scheduler is answering is on disk, so the age measures
+    from it exactly as it does for a turn this surface started."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    monkeypatch.setattr(session_module, "datetime", _FixedGatewayClock)
+
+    session_key = "cron:20260610_143052_job222"
+    _running_session(tmp_path, session_key, "2026-09-22T10:00:00")
+
+    turn_module._active_turns.clear()
+    monkeypatch.setattr(turn_module, "_scheduler", _LaneScheduler(session_key))
+    busy = await session_resume({"session_id": session_key})
+    monkeypatch.setattr(turn_module, "_scheduler", _LaneScheduler("cron:someone_else"))
+    quiet = await session_resume({"session_id": session_key})
+
+    assert busy["info"]["running"] is True
+    assert busy["info"]["running_ms"] == 5 * 60 * 1000
+    assert quiet["info"]["running"] is False
+
+
+async def test_session_create_reports_a_session_nothing_is_running_in() -> None:
+    """A key minted this instant cannot have a turn on it, and the field is
+    required on the bundle either way."""
+    result = await session_create({})
+    assert result["info"]["running"] is False
+
+
+_GATEWAY_NOW = datetime(2026, 9, 22, 10, 5, tzinfo=timezone(timedelta(hours=8)))
+
+
+class _FixedGatewayClock(datetime):
+    """A gateway whose wall clock stands at 10:05 in a +08:00 zone.
+
+    Answers the two ways the stdlib does, because the measurement depends on
+    both: naive is that zone's wall clock, aware is the same instant rendered
+    in the zone asked for.
+    """
+
+    @classmethod
+    def now(cls, tz: timezone | None = None) -> datetime:
+        return _GATEWAY_NOW.astimezone(tz) if tz is not None else _GATEWAY_NOW.replace(tzinfo=None)
+
+
+def _running_session(tmp_path: Path, session_key: str, stamp: str) -> None:
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "read the repo", timestamp=stamp)
+    mgr.save(session)
+
+
+@pytest.mark.parametrize("stamp", ["2026-09-22T10:00:00", "2026-09-22T02:00:00+00:00"])
+async def test_session_resume_measures_the_running_turn_against_the_gateway_clock(
+    stamp: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The age of the turn, not the stamp it is measured from.
+
+    The loop writes that stamp off this machine's wall clock with no offset on
+    it, so a reader in another zone parsing it against its own clock got the
+    difference between the two zones back as the turn's age -- a turn five
+    minutes old reading as eight hours, or as not yet started. Measured here
+    the zone cancels, which is why both spellings of the same instant answer
+    the same number.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    monkeypatch.setattr(session_module, "datetime", _FixedGatewayClock)
+
+    session_key = "tui:20260610_143052_running"
+    _running_session(tmp_path, session_key, stamp)
+
+    turn_module._active_turns.clear()
+    try:
+        turn_module._active_turns[session_key] = object()
+        busy = await session_resume({"session_id": session_key})
+    finally:
+        turn_module._active_turns.clear()
+
+    assert busy["info"]["running_ms"] == 5 * 60 * 1000
+
+
+async def test_session_resume_reports_no_elapsed_it_cannot_measure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing in flight has no age, and an unreadable stamp is not a zero.
+
+    Zero would draw a turn that has just this second started, on a turn that
+    has been running for however long: the client leaves its clock alone on a
+    null and has nothing to leave it alone on if the field is a guess.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_nostamp"
+    _running_session(tmp_path, session_key, "the day before yesterday")
+
+    turn_module._active_turns.clear()
+    try:
+        quiet = await session_resume({"session_id": session_key})
+        turn_module._active_turns[session_key] = object()
+        busy = await session_resume({"session_id": session_key})
+    finally:
+        turn_module._active_turns.clear()
+
+    assert quiet["info"].get("running_ms") is None
+    assert busy["info"]["running_ms"] is None
 
 
 async def test_session_list_sorted_by_updated_at_desc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

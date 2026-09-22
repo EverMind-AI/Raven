@@ -1208,6 +1208,7 @@ class SessionListItem(_Strict):
     updated_at: float = Field(..., description="Unix timestamp of the latest user or assistant message.")
     title: str
     pinned: bool = Field(default=False, description="User pinned this session to the top of the picker.")
+    running: bool = Field(default=False, description="A turn is in flight on this session right now.")
     workdir: str | None = Field(
         default=None,
         description=(
@@ -1466,6 +1467,10 @@ class TurnSubscribeParams(_Strict):
 
 class TurnSubscribeResult(_Strict):
     subscription_id: str
+    running: bool = Field(
+        default=False,
+        description="A turn is in flight on this session, and this subscription receives the rest of it.",
+    )
 
 
 class TurnUnsubscribeParams(_Strict):
@@ -2964,6 +2969,17 @@ class SessionInitInfo(_Strict):
             "The resumed session's name, when it has one. Absent on a fresh session, which has "
             "nothing to name yet. Carried on the bundle rather than fetched separately because a "
             "client resuming a session is already being told what it is resuming."
+        ),
+    )
+    running: bool = Field(default=False, description="A turn is in flight on this session right now.")
+    running_ms: int | None = Field(
+        default=None,
+        description=(
+            "How long the turn in flight has been running, in milliseconds, measured on the server; "
+            "null when nothing is running or the question carries no readable stamp. The elapsed "
+            "rather than the stamp it was measured from: that stamp is a server wall clock, and a "
+            "client in another timezone reading it against its own clock gets the offset between "
+            "the two back as the turn's age."
         ),
     )
 

@@ -129,6 +129,19 @@ class SubscriptionEmitter:
             return False
         return any(sub.conn_state is None or connection.is_bound(sub.conn_state) for sub in bucket)
 
+    def in_flight(self, session_key: str) -> bool:
+        """Whether a replay buffer is held for this session, i.e. a turn is open.
+
+        The buffer opens on ``message.start`` or ``turn.started`` and is dropped
+        by the completion that ends the turn (see ``_record``), so this is the
+        subscriber's own view of "a turn is running": exactly what a
+        subscription registering now would be replayed. Read right after
+        ``register``, it cannot go stale unnoticed -- the buffer copy and the
+        publish share one synchronous step, so a completion that empties it
+        afterwards is delivered live to that subscription.
+        """
+        return session_key in self._replay
+
     async def unregister(self, sub_id: str) -> bool:
         """Close the subscription if it exists and is open. Idempotent."""
         sub = self._by_id.get(sub_id)

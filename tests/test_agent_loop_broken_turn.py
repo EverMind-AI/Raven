@@ -148,3 +148,64 @@ async def test_a_finished_turn_writes_no_marker(workspace):
     out = await agent._process_message(_make_msg("hello"))
     assert out is not None
     assert all("turn_ended" not in m for m in _persisted(workspace))
+
+
+class _StreamingThenDying(LLMProvider):
+    """Streams ``chunks``, then raises -- the shape a stop or a dropped
+    connection takes while the answer is already on the reader's screen."""
+
+    def __init__(self, chunks: list[str], death: BaseException):
+        super().__init__(api_key="test")
+        self._chunks = chunks
+        self._death = death
+
+    async def chat(self, messages, **kwargs: Any):
+        raise AssertionError("the streaming path is the one under test")
+
+    async def chat_stream(self, **kwargs: Any):
+        from raven.providers.base import ChatDelta
+
+        for chunk in self._chunks:
+            yield ChatDelta(content=chunk)
+        raise self._death
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+async def _streamed_turn(workspace: Path, death: BaseException) -> None:
+    agent = _agent(workspace, _StreamingThenDying(["half an ", "answer"], death))
+
+    async def _sink(_text: str) -> None:
+        return None
+
+    await agent._process_message(_make_msg("do the long thing"), on_token_delta=_sink)
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_turn_files_its_question_once_with_what_had_streamed(workspace):
+    """The question is on disk before the attempt starts, so the rescue must
+    file the tail only -- a rescue that re-filed it left the session opening on
+    the same question twice, and the model reading it that way."""
+    with pytest.raises(asyncio.CancelledError):
+        await _streamed_turn(workspace, asyncio.CancelledError())
+
+    msgs = _persisted(workspace)
+    users = [m for m in msgs if m.get("role") == "user"]
+    assert len(users) == 1, f"the question was filed twice: {users}"
+    assert users[0]["content"] == "do the long thing"
+    assert any("half an answer" in str(m.get("content")) for m in msgs), "what streamed was lost"
+    assert msgs[-1]["content"] == "(turn cancelled by the user)"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_turn_files_its_question_once_with_what_had_streamed(workspace):
+    with pytest.raises(RuntimeError):
+        await _streamed_turn(workspace, RuntimeError("the socket went away"))
+
+    msgs = _persisted(workspace)
+    users = [m for m in msgs if m.get("role") == "user"]
+    assert len(users) == 1, f"the question was filed twice: {users}"
+    assert any("half an answer" in str(m.get("content")) for m in msgs), "what streamed was lost"
+    assert msgs[-1]["turn_ended"]["status"] == "failed"
+    assert "the socket went away" in msgs[-1]["content"]

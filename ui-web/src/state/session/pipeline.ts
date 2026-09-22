@@ -82,7 +82,20 @@ export function stream(frame: unknown): void {
     return
   }
   /* On screen: straight to the stages. */
-  if (rt === viewRuntime()) { dispatch(ev); return }
+  if (rt === viewRuntime()) {
+    const ended = ev.type === 'message.complete' || ev.type === 'error'
+    dispatch(ev)
+    /* The row's own badge, when it was the server that put it there: a page
+       that reloaded into a running turn reads `run` off session.list, and this
+       end is the only notice it will ever get -- the refreshes above are for
+       the conversations this page parked, not for the one it is looking at.
+       Cleared the way a return from parking clears it (./residency.ts). */
+    if (ended) {
+      const s = sess(rt.key)
+      if (s && s.status === 'run') { s.status = null; sessionDraw() }
+    }
+    return
+  }
   /* Neither: no turn of its own and not being looked at, so there is nowhere
      for the frame to be replayed from. */
 }

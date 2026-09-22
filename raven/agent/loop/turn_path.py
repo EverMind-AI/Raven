@@ -2091,6 +2091,25 @@ class TurnPathMixin:
         # entry the mark belongs on.
         if req.delegated and initial_messages:
             initial_messages[-1][_DELEGATED_KEY] = dict(req.delegated)
+        # The question reaches disk here rather than with the rest of the turn.
+        # A session whose first turn is still running had nothing on disk at
+        # all, so it was absent from every listing, and a reader who left the
+        # page could not find their way back to the turn still running in it.
+        # Read prev_len first: everything below that slices "what this turn
+        # added" off the session counts from before this write.
+        prev_len = len(session.messages)
+        self._save_turn(
+            session,
+            initial_messages,
+            turn_start_idx,
+            received_at=turn_received_at,
+            inbound_original=inbound_original,
+        )
+        self.sessions.save(session)
+        # Where the three writes that close the turn start from. The question is
+        # already filed, and filing it again would both double it and stamp the
+        # turn's arrival clock onto the first message injected mid-turn.
+        persist_from = turn_start_idx + 1
         # The stream buffers exist so a turn that dies mid-answer still has the
         # text that was already on the reader's screen: the loop only appends an
         # assistant message once the provider call returns, so a cancel in the
@@ -2149,7 +2168,7 @@ class TurnPathMixin:
                 usage_sink=usage_sink,
                 drain=drain,
                 hook_metadata=turn_hook_meta,
-                session_history=session.messages,
+                session_history=session.messages[:prev_len],
                 origin=req.origin,
                 turn_started_at=turn_t0,
                 attempt=attempt,
@@ -2253,23 +2272,21 @@ class TurnPathMixin:
             self._save_broken_turn(
                 session,
                 live["messages"],
-                turn_start_idx,
-                turn_received_at,
+                persist_from,
+                None,
                 streamed,
                 status="cancelled",
-                inbound_original=inbound_original,
             )
             raise
         except Exception as exc:
             self._save_broken_turn(
                 session,
                 live["messages"],
-                turn_start_idx,
-                turn_received_at,
+                persist_from,
+                None,
                 streamed,
                 status="failed",
                 reason=str(exc),
-                inbound_original=inbound_original,
             )
             raise
         self._stash_recovery(key, outcome)
@@ -2290,7 +2307,7 @@ class TurnPathMixin:
             _send_ctx = AgentHookContext(
                 session_key=key,
                 outbound_content=final_content,
-                session_history=session.messages,
+                session_history=session.messages[:prev_len],
                 metadata=turn_hook_meta,
             )
             _send_decision = await self.hooks.after_send(_send_ctx)
@@ -2306,7 +2323,6 @@ class TurnPathMixin:
         if len(self.hooks) > 0:
             _stamp_turn_observers(all_msgs, turn_hook_meta, turn_start_idx)
 
-        prev_len = len(session.messages)
         # Session-level because this turn may persist no assistant row at all --
         # a turn whose whole budget went to reasoning has no message to hang a
         # record on. Stamped with the index this turn's rows start at, so a
@@ -2329,9 +2345,7 @@ class TurnPathMixin:
             # cleared (SessionManager._metadata_to_write). The reader asks
             # whether this is an int, which None is not.
             session.metadata["output_limit_turn_at"] = None
-        self._save_turn(
-            session, all_msgs, turn_start_idx, received_at=turn_received_at, inbound_original=inbound_original
-        )
+        self._save_turn(session, all_msgs, persist_from)
         self.sessions.save(session)
         await self.harness.memory.after_turn(
             key,
@@ -2414,15 +2428,15 @@ class TurnPathMixin:
         - the marker entry carries ``turn_ended`` so a client can say WHY the
           transcript stops there, and readable text so the model sees the same.
 
-        ``inbound_original`` rides through to :meth:`_save_turn` exactly as it
-        does on the healthy path: a hook's ``modified_content`` rewrite shapes
-        only what the model saw this turn, and a turn the user cancelled (or
-        one that died) must not be the one door through which the rewritten
-        envelope enters the persisted history -- replayed as the user's own
-        words every later turn and eligible for consolidation into memory.
-        Broken turns used to drop it, which is how a product hook's injected
-        block (the design selector cards, ppt's staged-material block) leaked
-        into the record on exactly the outcomes users hit mid-task.
+        ``received_at`` and ``inbound_original`` describe the turn's question,
+        which ``_process_message`` files before the attempt starts and hands
+        this one a ``skip`` that begins after it: both arrive as None from
+        there. They stay on the signature because what this rescues is the tail
+        of an arbitrary message list, and a caller whose list still opens on an
+        unfiled inbound needs them the way the healthy path does -- a hook's
+        ``modified_content`` rewrite shapes only what the model saw, and a
+        cancelled turn must not be the door through which the rewritten
+        envelope enters the persisted history.
 
         Never raises: this runs on the way out of a dying turn, and a rescue
         that throws replaces one loss with another.
@@ -2502,10 +2516,11 @@ class TurnPathMixin:
         """Save new-turn messages into session, truncating large tool results.
 
         ``received_at`` is the wall clock at which the turn's inbound message
-        arrived. This save runs after the turn completes, so stamping every
-        entry "now" would give the user message and the final answer the same
-        timestamp -- and a restored transcript reads the gap between those two
-        as the turn's duration.
+        arrived, and it is the opening write that passes one: the turn's other
+        writes run after work that took time, so stamping every entry "now"
+        would give the user message and the final answer the same timestamp --
+        and a restored transcript reads the gap between those two as the turn's
+        duration.
         """
         first_user_pending = received_at is not None
         # The turn's first user entry is the inbound message; hooks may have

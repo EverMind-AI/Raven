@@ -47,7 +47,7 @@ async def test_turn_subscribe_returns_subscription_id(
     """``turn.subscribe`` with valid session_key returns ``{subscription_id}``."""
     result = await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
 
-    assert set(result) == {"subscription_id"}
+    assert set(result) == {"subscription_id", "running"}
     assert isinstance(result["subscription_id"], str)
     assert len(result["subscription_id"]) >= 16  # uuid hex
 
@@ -67,6 +67,47 @@ async def test_turn_subscribe_rejects_missing_session_key(
     """Missing required ``session_key`` → validation error."""
     with pytest.raises(ValidationError):
         await turn_subscribe({}, emitter=emitter)
+
+
+async def test_turn_subscribe_says_running_while_a_turn_is_buffered(
+    emitter: SubscriptionEmitter,
+) -> None:
+    """A turn the emitter holds a replay for is reported as running.
+
+    Read after the registration, so the answer covers exactly the turn this
+    subscription is about to be handed.
+    """
+    await emitter.emit("tui:default", {"type": "message.start", "payload": {"content": "hi"}})
+
+    result = await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+
+    assert result["running"] is True
+
+
+async def test_turn_subscribe_says_not_running_on_a_quiet_session(
+    emitter: SubscriptionEmitter,
+) -> None:
+    """No turn has opened, so there is nothing for the subscription to receive."""
+    result = await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+
+    assert result["running"] is False
+
+
+async def test_turn_subscribe_says_not_running_once_the_turn_completed(
+    emitter: SubscriptionEmitter,
+) -> None:
+    """The completion drops the replay, and the answer follows it.
+
+    This is the case a client cannot get from ``session.resume``: a turn that
+    ended between the two calls leaves nothing to arrive on the subscription, so
+    a page armed by the resume has to be told here that it is over.
+    """
+    await emitter.emit("tui:default", {"type": "message.start", "payload": {"content": "hi"}})
+    await emitter.emit("tui:default", {"type": "message.complete", "payload": {}})
+
+    result = await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+
+    assert result["running"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +167,7 @@ async def test_turn_subscribe_dispatches_via_dispatcher(
         }
     )
     assert "error" not in resp
-    assert set(resp["result"]) == {"subscription_id"}
+    assert set(resp["result"]) == {"subscription_id", "running"}
 
 
 async def test_turn_unsubscribe_dispatches_via_dispatcher(

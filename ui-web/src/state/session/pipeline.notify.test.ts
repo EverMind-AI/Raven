@@ -241,6 +241,27 @@ describe('the stream envelope', () => {
     expect(pk.events).toHaveLength(4000)
   })
 
+  it('takes the server\'s run badge off the row when the visible turn ends', async () => {
+    /* The row of the conversation ON SCREEN, whose badge came off session.list
+       after a reload: this page did not start that turn, so no list answer is
+       coming for it -- the branch below refreshes for the conversations this
+       page parked -- and the end on its own stream is the only notice there
+       will ever be. Left alone, the reader sits under a finished answer beside
+       a row that says it is still running. */
+    for (const event of [
+      { type: 'message.complete' },
+      { type: 'error', payload: { reason: 'cancelled_by_client' } },
+    ]) {
+      const h = await harness({ rows: [{ id: 'tui:open', status: 'run' }] })
+      h.subSession['sub:open'] = 'tui:open'
+
+      h.pipeline.stream({ subscription_id: 'sub:open', event })
+
+      expect(h.rows[0]!.status, event.type).toBeNull()
+      expect(h.seen.events, event.type).toEqual([event])
+    }
+  })
+
   it('marks the row done or failed when a background turn ends', async () => {
     /* This branch only ever runs for a conversation the reader is not looking
        at, so a clean finish is news too -- and a cancel is a stop somebody

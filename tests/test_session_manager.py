@@ -317,6 +317,26 @@ def test_created_session_is_lazy_until_first_save(tmp_path: Path):
     assert [info["key"] for info in mgr.list_sessions()] == ["tui:lazy01"]
 
 
+def test_a_session_holding_only_its_open_question_is_a_complete_row(tmp_path: Path):
+    """A turn now files its question before it starts answering, so a session
+    whose first turn is still running is on disk with exactly one message. The
+    picker has to be able to draw that row -- a name, a count and a stamp --
+    rather than skip it as half-written."""
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("tui:opening")
+    session.add_message("user", "read the repo and summarise it")
+    mgr.save(session)
+
+    rows = [info for info in mgr.list_sessions() if info["key"] == "tui:opening"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["message_count"] == 1
+    assert row["first_user_message"] == "read the repo and summarise it"
+    assert row["metadata"]["title"] == "read the repo and summarise it"
+    assert row["metadata"]["title_auto"] is True
+    assert row["last_message_at"], "the row has no stamp to sort the picker by"
+
+
 def test_list_sessions_sees_nested_layout(tmp_path: Path):
     """list_sessions enumerates nested per-channel files."""
     mgr = SessionManager(tmp_path)

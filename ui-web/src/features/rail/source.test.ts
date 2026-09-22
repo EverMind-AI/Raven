@@ -15,7 +15,7 @@ import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harne
 import type { Sources } from '../../state/sources'
 
 
-interface Row { id: string; title?: string; at?: number; last?: string; when?: string }
+interface Row { id: string; title?: string; at?: number; last?: string; when?: string; status?: string | null }
 
 const label = (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key)
 
@@ -107,6 +107,16 @@ describe('a listed session as a row', () => {
       from: undefined,
       workdir: '/w/thesis',
     })
+  })
+
+  it('carries the turn the server says is still in flight', async () => {
+    const { part } = await harness()
+
+    /* The only source a page that has just loaded has: the running turn's
+       frames went to a socket this page did not have. */
+    expect(part.rowFrom({ id: 'tui:a', started_at: 1, running: true }).status).toBe('run')
+    expect(part.rowFrom({ id: 'tui:a', started_at: 1, running: false }).status).toBeNull()
+    expect(part.rowFrom({ id: 'tui:a', started_at: 1 }).status).toBeNull()
   })
 
   it('falls back through the preview, the id and the message count', async () => {

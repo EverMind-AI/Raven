@@ -14,7 +14,7 @@ import { t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
-import { switchTo } from '../../state/session/registry'
+import { switchTo, watchListedRunning } from '../../state/session/registry'
 import { replace as sessionReplace, rows as sessionRows, sess } from '../../state/session/rows'
 import { show as toast } from '../../state/toast'
 import { busy } from '../composer/turn'
@@ -71,6 +71,7 @@ interface ListedSession {
   started_at?: number
   updated_at?: number
   pinned?: boolean
+  running?: boolean
   workdir?: string | null
 }
 
@@ -98,6 +99,10 @@ export function rowFrom(it: ListedSession): SessRow {
       : t('gui.sess.n_messages', { n: it.message_count }),
     when, at, run: null, live: true, from: cron ? 'cron' : undefined,
     pin: !!it.pinned, persisted: true,
+    /* The server's answer to "is this one answering right now", which is the
+       only source a page that has just loaded has: the turn's own frames went
+       to a socket this page did not have. */
+    status: it.running ? 'run' : null,
     workdir: it.workdir || null,
   }
 }
@@ -136,6 +141,10 @@ export async function loadSessions(): Promise<void> {
      through here. At boot the rail is held, so this draw is inert until
      `releaseRail` paints. */
   sessionDraw()
+  /* The boot's own list is the first one that can carry a conversation another
+     client is answering, and nothing else on this page will hear that turn end
+     -- see watchListedRunning. */
+  watchListedRunning()
 }
 
 /* ── the two writes a row makes for itself ───────────────────────────────── */
