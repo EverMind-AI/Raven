@@ -6834,25 +6834,105 @@
     },
     {
       "name": "session.usage",
-      "summary": "Not supported in Raven v0.1.",
+      "summary": "What this conversation has spent, its delegations included.",
+      "description": "Read from the recorder's telemetry, over the days this session has existed: every call recorded under the session's root key is summed, so the calls a sub-agent made for it count here while a worker asking about itself sees zeros. Token counters are a flow over the whole session; context_* is a gauge, how full the window is now. cost_usd is null when no call reported a price (a plan-billed model), and cost_status says whether the sum is the whole bill (exact) or part of it (estimated).",
       "params": [
         {
           "name": "session_id",
-          "required": false,
+          "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "description": "Full session_key to report on."
           }
         }
       ],
       "result": {
-        "name": "StubResult",
+        "name": "SessionUsageResult",
         "schema": {
-          "$ref": "#/components/schemas/StubResult"
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "calls",
+            "model",
+            "input",
+            "output",
+            "cache_read",
+            "cache_write",
+            "total",
+            "cost_status",
+            "cost_missing_calls",
+            "context_max",
+            "context_used",
+            "context_percent",
+            "context_estimated"
+          ],
+          "properties": {
+            "calls": {
+              "type": "integer",
+              "description": "Recorded calls under this session's root."
+            },
+            "model": {
+              "type": "string",
+              "description": "The model this session runs on now."
+            },
+            "input": {
+              "type": "integer",
+              "description": "Fresh input tokens; cache excluded."
+            },
+            "output": {
+              "type": "integer",
+              "description": "Output tokens."
+            },
+            "cache_read": {
+              "type": "integer",
+              "description": "Cache-read tokens."
+            },
+            "cache_write": {
+              "type": "integer",
+              "description": "Cache-write tokens."
+            },
+            "total": {
+              "type": "integer",
+              "description": "input + output + cache_read + cache_write."
+            },
+            "cost_usd": {
+              "type": "number",
+              "description": "Sum of provider-reported USD; null when no call reported a price."
+            },
+            "cost_status": {
+              "type": "string",
+              "enum": [
+                "estimated",
+                "exact"
+              ],
+              "description": "exact when every call reported a price; estimated when some did not."
+            },
+            "cost_missing_calls": {
+              "type": "integer",
+              "description": "Calls with no reported price, left out of cost_usd."
+            },
+            "context_max": {
+              "type": "integer",
+              "description": "Context window of the session's model; 0 when unknown."
+            },
+            "context_used": {
+              "type": "integer",
+              "description": "Estimated tokens the next call would send."
+            },
+            "context_percent": {
+              "type": "integer",
+              "description": "context_used as a percentage of context_max."
+            },
+            "context_estimated": {
+              "type": "boolean",
+              "description": "True when context_used is a tiktoken estimate."
+            }
+          }
         }
       },
       "errors": [
         {
-          "$ref": "#/components/errors/NotSupportedInV01"
+          "$ref": "#/components/errors/ConfigValidationError"
         }
       ]
     },

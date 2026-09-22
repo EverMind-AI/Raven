@@ -1319,9 +1319,6 @@ export interface CliResult {
  * via the `definition` "SessionSteerResult".
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SessionUsageResult".
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SkillsReloadResult".
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5300,7 +5297,72 @@ export interface SessionSteerParams {
  * via the `definition` "SessionUsageParams".
  */
 export interface SessionUsageParams {
-  session_id?: string;
+  /**
+   * Full session_key to report on.
+   */
+  session_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionUsageResult".
+ */
+export interface SessionUsageResult {
+  /**
+   * Recorded calls under this session's root.
+   */
+  calls: number;
+  /**
+   * The model this session runs on now.
+   */
+  model: string;
+  /**
+   * Fresh input tokens; cache excluded.
+   */
+  input: number;
+  /**
+   * Output tokens.
+   */
+  output: number;
+  /**
+   * Cache-read tokens.
+   */
+  cache_read: number;
+  /**
+   * Cache-write tokens.
+   */
+  cache_write: number;
+  /**
+   * input + output + cache_read + cache_write.
+   */
+  total: number;
+  /**
+   * Sum of provider-reported USD; null when no call reported a price.
+   */
+  cost_usd?: number;
+  /**
+   * exact when every call reported a price; estimated when some did not.
+   */
+  cost_status: 'estimated' | 'exact';
+  /**
+   * Calls with no reported price, left out of cost_usd.
+   */
+  cost_missing_calls: number;
+  /**
+   * Context window of the session's model; 0 when unknown.
+   */
+  context_max: number;
+  /**
+   * Estimated tokens the next call would send.
+   */
+  context_used: number;
+  /**
+   * context_used as a percentage of context_max.
+   */
+  context_percent: number;
+  /**
+   * True when context_used is a tiktoken estimate.
+   */
+  context_estimated: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -6279,7 +6341,6 @@ export type RollbackRestoreResult = StubResult;
 export type SecretRespondResult = StubResult;
 export type SessionSaveResult = StubResult;
 export type SessionSteerResult = StubResult;
-export type SessionUsageResult = StubResult;
 export type SkillsReloadResult = StubResult;
 export type SpawnTreeListResult = StubResult;
 export type SpawnTreeLoadResult = StubResult;
