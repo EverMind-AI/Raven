@@ -97,6 +97,40 @@ describe('reading a sent message back', () => {
     expect(stripRuntimeNotes(stored)).toBe('read it')
   })
 
+  it('reads back a message whose only words were the pictures themselves', () => {
+    /* Sending a picture and typing nothing. The composer stores two text
+       parts -- the flattened marker, then the note -- and `session.resume`
+       joins them with a space, so the note arrives one space and one blank
+       line after the marker rather than after a body.
+
+       Taking the marker off then leaves the note at the very head of the
+       string, and the reader anchored its search on the blank line that
+       precedes a note, which no longer existed. It refused the message, and
+       the page drew the heading and the path where the picture belonged. */
+    const stored = '[image] \n\n[attachments, saved in the workspace]\n- uploads/shot.png\n\n'
+      + '[Image: shot.png (path: /w/uploads/shot.png) | 1312x732px]'
+    expect(splitAttachments(stored, NOTES)).toEqual({ body: '', atts: ['/w/uploads/shot.png'] })
+  })
+
+  it('reads a wordless message that carried several files', () => {
+    const stored = '[image] [image] \n\n[attachments, saved in the workspace]\n'
+      + '- uploads/a.png\n- uploads/notes.pdf\n\n'
+      + '[Image: a.png (path: /w/uploads/a.png) | 1x1px]\n'
+      + '[Attachment: notes.pdf (path: /w/uploads/notes.pdf)]'
+    expect(splitAttachments(stored, NOTES)).toEqual({
+      body: '',
+      atts: ['/w/uploads/a.png', '/w/uploads/notes.pdf'],
+    })
+  })
+
+  it('still lets a later note win over one at the head', () => {
+    /* The head is the fallback, not the preference: a message that quotes an
+       earlier note is read by its own, which is the last one. */
+    const stored = '[attachments, saved in the workspace]\n- old.png\n\n'
+      + 'and then\n\n[attachments, saved in the workspace]\n- new.png'
+    expect(splitAttachments(stored, NOTES).atts).toEqual(['new.png'])
+  })
+
   it('leaves alone the words a person wrote that only look like a marker', () => {
     /* `[image]` further down is a person typing, and a bracketed line that
        names no path is not one of the engine's. */

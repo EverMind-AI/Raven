@@ -63,11 +63,27 @@ const IMAGE_PART = /^(?:\[image\]\s*)+/
    picture, since the chip is a link to it. */
 const FILE_PATH = /^\[(?:Image|Attachment): .*?\(path: (.+?)\).*\]$/
 
+import { I18N } from '../i18n/t'
+
 export interface Attachments {
   /** The person's own words. */
   body: string
   /** The paths the note listed, in the order it listed them. */
   atts: string[]
+}
+
+/* Every spelling of the note's heading the catalogue carries, which is what
+   the reader has to be handed: a message sent under one language is read back
+   under whichever is in force. It lives here, beside the grammar that consumes
+   it, because it was written out twice at two call sites -- and two copies of
+   one grammar is how the bubble and the send came to disagree in the first
+   place, which is the whole argument of this file. */
+export const noteWords = (): string[] =>
+  Object.values((I18N.ui['gui.att.note'] ?? {}) as Record<string, string>).filter(Boolean)
+
+/** A sent message read back: the person's words and the files, in one call. */
+export function readMessage(text: string): Attachments {
+  return splitAttachments(text, noteWords())
 }
 
 /** The absolute path of every file the engine named, in the order named. */
@@ -121,9 +137,26 @@ export function splitAttachments(text: string, notes: readonly string[]): Attach
   const s = stripRuntimeNotes(raw)
   for (const note of notes) {
     if (!note) continue
-    const at = s.lastIndexOf(`\n\n${note}\n`)
+    /* A note sits after a blank line, or -- when the person typed nothing and
+       sent only files -- at the very head. The composer stores the flattened
+       marker and the note as two text parts, `session.resume` joins them with
+       a space, and taking the marker off takes that blank line with it, so a
+       wordless message reaches here with the note first. Anchoring on the
+       blank line alone refused exactly those messages, and the page drew the
+       heading and the paths where the pictures belonged.
+
+       The head is the fallback and not the preference: the blank-line anchor
+       is searched first and from the end, so a message that quotes an earlier
+       note is still read by its own. */
+    const lead = `\n\n${note}\n`
+    let at = s.lastIndexOf(lead)
+    let from = at + lead.length
+    if (at < 0 && s.startsWith(`${note}\n`)) {
+      at = 0
+      from = note.length + 1
+    }
     if (at < 0) continue
-    const tail = s.slice(at + note.length + 3).split('\n')
+    const tail = s.slice(from).split('\n')
     if (!tail.length || !tail.every((l) => !l.trim() || /^- /.test(l))) continue
     return {
       body: s.slice(0, at),
