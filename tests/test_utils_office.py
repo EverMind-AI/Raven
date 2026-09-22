@@ -228,3 +228,52 @@ def test_every_seat_that_reports_libreoffice_missing_asks_one_resolver() -> None
     assert engine_capabilities._find_soffice is office.find_soffice
     assert pdf_preview.find_soffice() == office.find_soffice()
     assert doctor_commands._gather_external_tools().soffice == office.find_soffice()
+
+
+def test_a_shutdown_can_reach_the_converters_this_process_started(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A conversion is waited for in a thread, so neither a cancelled task nor a
+    closing loop reaches the child; the interpreter would hold the process open
+    until LibreOffice finished on its own. ``stop_running`` is what a shutdown
+    has instead, and it says how many it stopped."""
+    stopped: list[object] = []
+    monkeypatch.setattr(office, "terminate", lambda process: stopped.append(process))
+    monkeypatch.setattr(office, "_LIVE", set())
+
+    assert office.stop_running() == 0, "nothing running, nothing stopped"
+
+    one, two = _Process(), _Process()
+    office._LIVE.update({one, two})
+    assert office.stop_running() == 2
+    assert {id(p) for p in stopped} == {id(one), id(two)}
+
+
+def test_a_finished_conversion_leaves_the_registry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Registered while it runs and gone when it returns, however it returns: a
+    set that only grows would have a shutdown signalling pids that are not there."""
+    monkeypatch.setattr(office, "_LIVE", set())
+    seen: list[int] = []
+
+    class _Done:
+        returncode = 0
+        pid = 99
+
+        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+            seen.append(len(office._LIVE))
+            return "", ""
+
+    monkeypatch.setattr(office.subprocess, "Popen", lambda *a, **k: _Done())
+    office._run(["soffice", "--version"], timeout_s=1.0)
+    assert seen == [1], "it is in the registry while it runs"
+    assert office._LIVE == set(), "and out of it afterwards"
+
+    class _Hangs(_Done):
+        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+            if timeout is not None:
+                raise office.subprocess.TimeoutExpired("soffice", timeout)
+            return "", ""
+
+    monkeypatch.setattr(office.subprocess, "Popen", lambda *a, **k: _Hangs())
+    monkeypatch.setattr(office, "terminate", lambda process: None)
+    with pytest.raises(TimeoutError):
+        office._run(["soffice", "--version"], timeout_s=0.01)
+    assert office._LIVE == set(), "a conversion that timed out leaves it too"

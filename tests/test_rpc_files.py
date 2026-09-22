@@ -385,10 +385,10 @@ async def test_a_pdf_tile_gets_its_first_page_without_libreoffice(
     still refuses it, since there is nothing to convert."""
     from raven.rpc import pdf_preview
 
-    drawn: list[tuple[Path, int]] = []
+    drawn: list[tuple[Path, int, float]] = []
 
-    def rasterise(source: Path, target: Path, width: int) -> None:
-        drawn.append((source, width))
+    def rasterise(source: Path, target: Path, width: int, timeout_s: float) -> None:
+        drawn.append((source, width, timeout_s))
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(FAKE_PNG)
 
@@ -402,7 +402,9 @@ async def test_a_pdf_tile_gets_its_first_page_without_libreoffice(
     assert thumb.status == again.status == 200
     assert thumb.headers["Content-Type"] == "image/png"
     assert await thumb.read() == FAKE_PNG
-    assert drawn == [(report, pdf_preview.THUMB_WIDTH_PX)], "drawn once, then read from the cache"
+    assert drawn == [(report, pdf_preview.THUMB_WIDTH_PX, pdf_preview.CONVERT_TIMEOUT_S)], (
+        "drawn once, with the route's budget, then read from the cache"
+    )
     assert soffice.calls() == [], "LibreOffice is not asked about a PDF"
     assert as_pdf.status == 400
 
@@ -424,6 +426,75 @@ def test_a_pdf_page_is_drawn_by_pymupdf_when_it_is_installed(tmp_path: Path, mon
     drawn = pymupdf.Pixmap(str(target))
     assert (drawn.width, drawn.height) == (640, 360)
     assert not list((tmp_path / "cache").glob("render-*")), "the scratch directory is gone"
+
+
+def test_a_tall_page_is_drawn_small_rather_than_expensively(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A page's height is a number inside the file, so a width alone bounds
+    nothing: a legal 519-byte PDF declaring a 72 x 14400 point page draws 328
+    megapixels at the tile width, which is 1.4 GB of memory for one thumbnail.
+    The whole page is scaled down past the ceiling instead."""
+    pymupdf = pytest.importorskip("pymupdf")
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    doc = pymupdf.open()
+    doc.new_page(width=72, height=14400)
+    source = tmp_path / "tall.pdf"
+    doc.save(source)
+    assert source.stat().st_size < 2000, "the cost is not in the file"
+
+    target = tmp_path / "cache" / "tall.png"
+    pdf_preview._rasterise_pdf_page(source, target, pdf_preview.THUMB_WIDTH_PX)
+
+    drawn = pymupdf.Pixmap(str(target))
+    # The ceiling is on the area the scale asks for; each drawn side is then
+    # rounded up to a whole pixel, which is the row and column of slack here.
+    assert drawn.width * drawn.height <= pdf_preview.THUMB_MAX_PIXELS + drawn.width + drawn.height
+    assert drawn.width * drawn.height < 5_000_000, "far under the 328 megapixels this page used to draw"
+    assert drawn.width < pdf_preview.THUMB_WIDTH_PX, "the width came down with the height"
+    # An ordinary page is untouched by the ceiling.
+    assert pdf_preview._thumb_zoom(612, 792, 1280) == pytest.approx(1280 / 612)
+
+
+def test_a_rasteriser_that_fails_its_own_way_is_still_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PyMuPDF refuses a page past its own limits with an exception of its own,
+    and the fallback can raise from the subprocess module. Neither is foreseeable
+    here by type; both must reach the route as the render error it answers for."""
+    pymupdf = pytest.importorskip("pymupdf")
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    doc = pymupdf.open()
+    doc.new_page(width=200, height=100)
+    source = tmp_path / "one.pdf"
+    doc.save(source)
+
+    class _MupdfLimit(Exception):
+        """Stands in for pymupdf.mupdf.FzErrorLimit, which is not an OSError."""
+
+    real_open = pymupdf.open
+
+    def refusing(path):
+        doc = real_open(path)
+
+        class _Refuses:
+            page_count = 1
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                doc.close()
+                return None
+
+            def __getitem__(self, n):
+                raise _MupdfLimit("integer out of range")
+
+        return _Refuses()
+
+    monkeypatch.setattr(pymupdf, "open", refusing)
+    with pytest.raises(pdf_preview.PdfPreviewError, match="could not be drawn"):
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "x.png", 640)
 
 
 def test_a_pdf_page_says_what_went_wrong_rather_than_leaking_the_failure(

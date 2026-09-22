@@ -488,6 +488,9 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     finally:
         logger.info("serve: shutting down")
         announcer.cancel()
+        from raven.rpc import deck_templates as _deck_templates  # pragma: no cover
+
+        _deck_templates.stop_warming()  # pragma: no cover
         SERVE.disarm()
         if state_path is not None:
             state_path.unlink(missing_ok=True)

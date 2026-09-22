@@ -315,3 +315,42 @@ def test_warming_is_a_no_op_without_an_engine_or_a_rasteriser(tmp_path: Path, mo
     monkeypatch.setattr(deck_templates, "templates_dir", lambda: root)
     monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: False)
     assert deck_templates.warm_covers_in_background(delay_s=0) is None
+
+
+async def test_a_shutdown_stops_the_warm_up_and_the_conversions_it_started(templates: Path, monkeypatch) -> None:
+    """Cancelling the tasks is half of it: a conversion is waited for in a thread
+    that no cancel reaches, and the interpreter's own thread-join then holds the
+    process open until LibreOffice finishes. The converters are stopped too."""
+    from raven.utils import office
+
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    stopped: list[int] = []
+    monkeypatch.setattr(office, "stop_running", lambda: stopped.append(1) or 1)
+    release = asyncio.Event()
+
+    async def slow(template):
+        await release.wait()
+        return None
+
+    monkeypatch.setattr(deck_templates, "cover_for", slow)
+
+    task = deck_templates.warm_covers_in_background(delay_s=0)
+    assert task is not None
+    await task
+    assert len(deck_templates._drawing) == 1
+
+    deck_templates.stop_warming()
+
+    assert stopped == [1], "the child LibreOffice is stopped, not only the task"
+    assert deck_templates._drawing == {}
+    assert deck_templates._warming is None
+    release.set()
+
+
+def test_a_shutdown_before_any_warm_up_is_harmless(monkeypatch) -> None:
+    from raven.utils import office
+
+    monkeypatch.setattr(deck_templates, "_warming", None)
+    monkeypatch.setattr(deck_templates, "_drawing", {})
+    monkeypatch.setattr(office, "stop_running", lambda: 0)
+    deck_templates.stop_warming()

@@ -1139,6 +1139,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 else:
                     raise
             finally:
+                # Before anything that waits: a cover still converting holds a
+                # LibreOffice child, and the thread waiting on it would hold the
+                # interpreter open past every teardown below.
+                from raven.rpc import deck_templates as _deck_templates  # pragma: no cover
+
+                _deck_templates.stop_warming()  # pragma: no cover
                 if health_server is not None:
                     health_server.close()
                 # Stop the proactive producers before tearing down the scheduler

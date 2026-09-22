@@ -127,6 +127,19 @@ def test_run_warms_the_deck_template_covers_once_the_page_is_mounted() -> None:
     assert "deck_templates.warm_covers_in_background()" in page_branch
 
 
+def test_run_stops_the_cover_warm_up_before_the_teardown_that_waits() -> None:
+    """A cover still converting holds a LibreOffice child, and the thread waiting
+    on it holds the interpreter open past every teardown below; the stop comes
+    first in the same `finally`."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    shutdown = src.split("            finally:\n", 1)[1]
+    assert "_deck_templates.stop_warming()" in shutdown.split("health_server.close()", 1)[0]
+
+
 def test_gateway_refuses_second_instance(tmp_config: Path, monkeypatch) -> None:
     """When the instance lock is already held, gateway exits 1 with a clear
     message and never builds the agent/channel stack."""

@@ -261,6 +261,9 @@ async def listing(*, with_covers: bool = True) -> tuple[list[dict], bool]:
 #: roster and the page come first; LibreOffice can have the machine afterwards.
 WARM_COVERS_AFTER_S = 15.0
 
+_warming: asyncio.Task | None = None
+"""The warm-up this process started, held so a shutdown can stop it."""
+
 
 def warm_covers_in_background(*, delay_s: float = WARM_COVERS_AFTER_S) -> asyncio.Task | None:
     """Draw every bundled template's missing cover once the gateway has settled.
@@ -275,6 +278,7 @@ def warm_covers_in_background(*, delay_s: float = WARM_COVERS_AFTER_S) -> asynci
     opened later finds its covers on disk. None where there is no engine or no
     rasteriser, and a no-op start to start once the cache is warm.
     """
+    global _warming
     try:
         if templates_dir() is None or not _rasteriser_available():
             return None
@@ -288,10 +292,39 @@ def warm_covers_in_background(*, delay_s: float = WARM_COVERS_AFTER_S) -> asynci
             for template in missing:
                 _draw_in_background(template)
 
-        return asyncio.ensure_future(warm())
+        _warming = asyncio.ensure_future(warm())
+        return _warming
     except Exception as exc:  # noqa: BLE001 - the gallery is optional, starting is not
         logger.debug("deck templates: covers not warmed ({})", exc)
         return None
+
+
+def stop_warming() -> None:
+    """Stop the warm-up and the conversions it started; for a shutdown.
+
+    Cancelling the tasks is half of it. A conversion is waited for in a thread,
+    and neither the cancel nor the loop closing reaches the child LibreOffice:
+    the interpreter's own thread-join then holds the process open until the
+    conversion ends by itself, which is why a gateway stopped during its first
+    cold warm used to sit there. The converters are stopped through the module
+    that owns them.
+    """
+    global _warming
+    from raven.utils import office
+
+    if _warming is not None:
+        _warming.cancel()
+        _warming = None
+    for task in list(_drawing.values()):
+        task.cancel()
+    _drawing.clear()
+    try:
+        stopped = office.stop_running()
+    except Exception as exc:  # noqa: BLE001 - a shutdown is not the place to raise
+        logger.debug("deck templates: converters not stopped ({})", exc)
+        return
+    if stopped:
+        logger.info("deck templates: stopped {} conversion(s) still running", stopped)
 
 
 def deposit(template: Template, uploads: Path) -> Path:
@@ -319,5 +352,6 @@ __all__ = [
     "listing",
     "pages_for",
     "templates_dir",
+    "stop_warming",
     "warm_covers_in_background",
 ]
