@@ -216,9 +216,11 @@ function statusCell(row: SubagentRow): string {
   return row.probe_detail
 }
 
-/** A leaf-rendered clock: its own interval, so a running test's elapsed
- *  seconds don't force the whole row list to re-render every tick. */
-function TestingCell({ startedAtMs, t }: { startedAtMs: number; t: Theme }) {
+/** A leaf-rendered clock: its own interval, so an elapsed count doesn't force
+ *  the whole row list to re-render every tick. Shown for the two waits that are
+ *  the agent's own and not this process's -- a test and a switch-on -- because
+ *  both spend one real prompt through the agent and can take a minute. */
+function ElapsedCell({ startedAtMs, t }: { startedAtMs: number; t: Theme }) {
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -234,26 +236,55 @@ function TestingCell({ startedAtMs, t }: { startedAtMs: number; t: Theme }) {
   )
 }
 
+/** The switch slot's label. Pure and exported because ink's cell diffing
+ *  re-emits only the characters that changed, so a rendered frame cannot be
+ *  searched for the whole `[...]` -- this is what a test can assert on.
+ *
+ *  A switch in flight replaces the state it is leaving rather than showing it:
+ *  the enable gate runs one real prompt through the agent, so the row would
+ *  otherwise read `[off]` for the minute it takes to come back on. */
+export function switchLabel(row: SubagentRow, switchingSince: number | undefined): string {
+  if (switchingSince != null) {
+    return '[...]'
+  }
+
+  // A built-in row has no switch to show: `enabled` on a seed row belongs to the
+  // package, not to config, so the slot carries a fixed marker of the same width
+  // instead -- a switch drawn next to a key that does nothing is a broken control.
+  if (row.kind === 'builtin') {
+    return '[core]'
+  }
+
+  // `[new]` means "not added yet", which a built-in row never is.
+  if (!row.configured) {
+    return '[new]'
+  }
+
+  return row.enabled ? '[on ]' : '[off]'
+}
+
 function SubagentRowLine({
   row,
   selected,
   startedAt,
+  switchingSince,
   t
 }: {
   row: SubagentRow
   selected: boolean
   startedAt: number | undefined
+  switchingSince: number | undefined
   t: Theme
 }) {
   // A built-in row is this very process, so it is never probed and its status is
   // always `unknown`. A `?` beside a loop that is running right now reads as a
   // fault, and its availability is not the question the roster is asking.
   const glyph = row.kind === 'builtin' ? STATUS_GLYPH.ready : (STATUS_GLYPH[row.probe_status] ?? '?')
-  // A built-in row has no switch to show: `enabled` on a seed row belongs to the
-  // package, not to config, so the slot carries a fixed marker of the same width
-  // instead -- a switch drawn next to a key that does nothing is a broken control.
-  // `[new]` means "not added yet", which a built-in row never is.
-  const toggleLabel = row.kind === 'builtin' ? '[core]' : row.configured ? (row.enabled ? '[on ]' : '[off]') : '[new]'
+  const toggleLabel = switchLabel(row, switchingSince)
+  // A test's clock wins if somehow both run: they are guarded separately, so one
+  // row can carry a test and a switch at once, and two clocks in one cell would
+  // not fit the column.
+  const busySince = startedAt ?? switchingSince
 
   // The gap between the two columns is a margin, never a `<Text> </Text>`
   // child. A text node is flex-shrinkable: once name + detail exceed the
@@ -270,8 +301,8 @@ function SubagentRowLine({
           {glyph} {row.name} · {row.preset ?? '-'} {toggleLabel}
         </Text>
       </Box>
-      {startedAt != null ? (
-        <TestingCell startedAtMs={startedAt} t={t} />
+      {busySince != null ? (
+        <ElapsedCell startedAtMs={busySince} t={t} />
       ) : (
         <Text color={t.color.muted} wrap="truncate-end">
           {statusCell(row)}
@@ -448,6 +479,13 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
   // name -> the ms timestamp the test started, so the elapsed counter is derived
   // rather than stored, and a finished test is removed instead of flagged.
   const [testing, setTesting] = useState<Map<string, number>>(new Map())
+  /* Names with a switch in flight, started when. The same shape as `testing`
+     and for the same reason: the server answers a switch-on by running one
+     prompt through the agent, so the row has to say it is working and refuse a
+     second press rather than sit unchanged for a minute. Unlike `testing` there
+     is no server-truth flag to reconcile against -- no row field reports a
+     switch in flight -- so this map is the whole of what the roster knows. */
+  const [switching, setSwitching] = useState<Map<string, number>>(new Map())
   const [formMode, setFormMode] = useState<FormMode>('add')
   const [nameInput, setNameInput] = useState('')
   const [descInput, setDescInput] = useState('')
@@ -568,12 +606,37 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
       return
     }
 
+    if (switching.has(row.name)) {
+      return
+    }
+
+    // Switching one ON asks the agent to answer a prompt; a row whose last
+    // handshake was refused over a credential cannot, so the press would spend
+    // the gate's whole timeout to fail. Switching OFF is not gated and stays
+    // available, or a row that expired its token could not be taken off the
+    // roster. The way back is the test key, which re-measures.
+    if (!row.enabled && row.needs_auth) {
+      setErr(`${row.name} asked to be signed in - sign in, then press t to re-test it`)
+
+      return
+    }
+
+    setSwitching(prev => new Map(prev).set(row.name, Date.now()))
+
     gw.request('subagents.toggle', { enabled: !row.enabled, name: row.name })
       .then(() => {
         setErr('')
         refresh()
       })
       .catch((e: unknown) => setErr(rpcErrorMessage(e)))
+      .finally(() => {
+        setSwitching(prev => {
+          const next = new Map(prev)
+          next.delete(row.name)
+
+          return next
+        })
+      })
   }
 
   const runTest = (row: SubagentRow) => {
@@ -1046,6 +1109,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
             row={line.item.row}
             selected={line.itemIndex === idx}
             startedAt={testing.get(line.item.row.name)}
+            switchingSince={switching.get(line.item.row.name)}
             t={t}
           />
         )
