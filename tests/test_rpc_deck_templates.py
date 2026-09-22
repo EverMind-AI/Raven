@@ -330,7 +330,7 @@ async def test_a_shutdown_stops_the_warm_up_and_the_conversions_it_started(templ
     monkeypatch.setattr(office, "stop_running", lambda: stopped.append(1) or 1)
     release = asyncio.Event()
 
-    async def slow(template):
+    async def slow(template, language=deck_templates.SOURCE_LANGUAGE):
         await release.wait()
         return None
 
