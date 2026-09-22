@@ -139,6 +139,8 @@ answer, generated files, and task evidence afterward. ACP readiness or a listed
 roster row proves that the process can be started; it does not prove that the
 task completed successfully.
 
+<span id="working-safely-with-raven-code"></span>
+
 ### Raven-Code: workspace and verification boundaries { #raven-code-workspace-and-verification }
 
 Raven-Code's `code-flow` adds product behavior beyond an identity prompt. Give

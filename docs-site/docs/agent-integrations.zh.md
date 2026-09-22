@@ -121,6 +121,8 @@ prompt 响应前处理权限或问题请求。完整生命周期和协商能力�
 对每个 Agent，都应在真实任务前检查 readiness，并在任务后检查最终回答、生成文件和执行证据。
 ACP readiness 或 roster 中列出条目，只能证明进程可以启动，不能证明任务已成功完成。
 
+<span id="working-safely-with-raven-code"></span>
+
 ### Raven-Code：工作区与验证边界 { #raven-code-workspace-and-verification }
 
 Raven-Code 的 `code-flow` 提供的不只是身份 prompt。每个任务都应绑定项目目录，明确文件所有权、
