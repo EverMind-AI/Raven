@@ -39,13 +39,17 @@ const kindText = (kind: string): string =>
    section the server's facts put the row in. */
 export type Shown = 'pending' | 'failed' | 'missing' | 'on' | 'off'
 
-/* The word a row wears while its own write is in flight. A switch-on is waiting
-   on the readiness ping, which is a test of the agent and says so; every other
-   write is bookkeeping and keeps the older word. One `pending` covers them all,
-   so the word has to come from the write rather than from the state. */
+/* The word a row wears while its own write is in flight. One `pending` covers
+   every write this page makes, so the word comes from the write rather than
+   from the state: a switch-on waits on the readiness ping and says it is
+   testing, a switch-off waits on its own write alone and says it is
+   disconnecting, and the rest -- a key, a model, a description -- keep the
+   older word, being neither. */
 export function pendingLabel(row: ExtAgentRow, s: ExtAgentsState): string {
   const write = s.joining[row.name]
-  return write && store.probes(write) ? 'gui.agent.testing' : 'gui.agent.setup_connecting'
+  if (!write) return 'gui.agent.setup_connecting'
+  if (store.probes(write)) return 'gui.agent.testing'
+  return store.disconnects(write) ? 'gui.agent.disconnecting' : 'gui.agent.setup_connecting'
 }
 
 export function shownOf(row: ExtAgentRow, s: ExtAgentsState): Shown {

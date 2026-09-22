@@ -799,6 +799,10 @@
       "en": "Connecting...",
       "zh": "连接中..."
     },
+    "gui.agent.disconnecting": {
+      "en": "Disconnecting",
+      "zh": "断开中"
+    },
     "gui.agent.disconnect": {
       "en": "Disconnect",
       "zh": "断开"

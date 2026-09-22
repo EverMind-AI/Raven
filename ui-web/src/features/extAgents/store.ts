@@ -38,6 +38,12 @@ export interface Pending {
 export const probes = (p: Pending): boolean =>
   p.op === 'connect' || p.op === 'migrate' || (p.op === 'toggle' && p.args.enabled === true)
 
+/* The other write that changes whether the agent is on the roster. It reaches no
+   gate -- the server pings on the way on and not on the way off -- so it waits
+   on its own write and nothing else, and it is the one write that must not
+   borrow the connect's word. */
+export const disconnects = (p: Pending): boolean => p.op === 'toggle' && p.args.enabled === false
+
 export interface ExtAgentsState {
   rows: ExtAgentRow[]
   /* The one flag only the page can answer: which card is open. It is about what

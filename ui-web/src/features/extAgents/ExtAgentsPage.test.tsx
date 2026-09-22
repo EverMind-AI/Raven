@@ -370,9 +370,10 @@ describe('connecting', () => {
   })
 
   /* The same `pending` covers every write this page makes, so the word has to
-     come from which write it is: a disconnect pings nothing and must not
-     claim to be testing the agent it is switching off. */
-  it('does not call a disconnect a test', async () => {
+     come from which write it is. A disconnect reaches no gate at all -- the
+     server pings only on the way on -- so it is neither testing the agent nor
+     connecting to it. */
+  it('says disconnecting while a disconnect is in flight', async () => {
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -387,7 +388,7 @@ describe('connecting', () => {
     })
     await mount()
     await click(buttonOf('on_one'))
-    expect(controlOf('on_one')).toBe('gui.agent.setup_connecting')
+    expect(controlOf('on_one')).toBe('gui.agent.disconnecting')
     await act(async () => {
       release()
       await gate
