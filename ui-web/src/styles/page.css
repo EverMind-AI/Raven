@@ -2166,11 +2166,13 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 :root[data-font="sf"] { --mono: "SF Mono", "SFMono-Regular", ui-monospace, monospace; }
 
 /* ── composer ──────────────────────────────────────────────────────── */
-/* A frosted card floating over the transcript, not a bar the page ends at.
-   The transcript scrolls underneath and stays legible through the glass --
-   that ghosting IS the transition, which is why the old fade band above the
-   composer is gone. Only the card takes pointer events; the gutter around it
-   still belongs to the page. */
+/* An opaque card floating over the transcript, not a bar the page ends at.
+   The transcript neither reads through it nor passes legibly behind it: the
+   scroller's alpha reaches zero at this card's top edge, so a line scrolled
+   up dissolves just above the card rather than sliding under it -- see the
+   mask on .scroll, which spends the same --lift that is measured from here.
+   Only the card takes pointer events; the gutter around it still belongs to
+   the page. */
 .dock { position: absolute; left: 0; right: 0; bottom: 22px; padding: 0 36px 0 36px;
   z-index: 5; pointer-events: none; }
 /* Below the card, not inside it: a legal-ish caption printed on the glass
