@@ -158,8 +158,16 @@ async def _replay_dropped(router: Any, session_id: str) -> AsyncIterator[None]:
 
 #: Workspace listings one turn holds for calls that have not settled. Each is a
 #: whole directory, and a call that never reports an end would otherwise keep
-#: its own copy for as long as the turn lasts.
+#: its own copy for as long as the turn lasts. At the ceiling the oldest listing
+#: goes rather than the newest being refused: a call still open after sixty-four
+#: others is the one least likely to ever report an end.
 _MAX_OPEN_LISTINGS = 64
+
+#: Call kinds a listing would learn nothing from. The pair of walks costs tens of
+#: milliseconds of the connection's read loop -- which every session sharing it
+#: waits behind -- and none of these can leave a file behind. A frame with no
+#: kind is listed: codebuddy announces a call before it knows the kind.
+_KINDS_THAT_WRITE_NOTHING = frozenset({"read", "search", "think", "fetch"})
 
 
 def _diff_blocks(content: Any) -> list[dict[str, Any]]:
@@ -179,6 +187,13 @@ def _diff_blocks(content: Any) -> list[dict[str, Any]]:
         and item["path"]
         and isinstance(item.get("newText"), str)
     ]
+
+
+def _block_kind(block: dict[str, Any]) -> str | None:
+    """What an adapter says its block did, where it says so at all."""
+    meta = block.get("_meta")
+    kind = meta.get("kind") if isinstance(meta, dict) else None
+    return kind if isinstance(kind, str) else None
 
 
 class _TurnCollector:
@@ -232,9 +247,10 @@ class _TurnCollector:
         # of its commands produced is only ever visible as a directory that
         # changed around the call, which is what the per-call listings are for.
         self._workspace = workspace
-        self._blocks: dict[str, dict[str, dict[str, Any]]] = {}
+        self._blocks: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._listings: dict[str, Any] = {}
         self._settled_calls: set[str] = set()
+        self._created: set[str] = set()
         self._removals = RemovalWatch()
         self.answer: list[str] = []
         self.thoughts: list[str] = []
@@ -346,7 +362,7 @@ class _TurnCollector:
                         }
                     )
                     self._backfill_subject(str(update.get("toolCallId") or ""), update)
-            self._note_files(update)
+            await self._note_files(update)
         elif kind == "plan":
             self._plan(update)
         elif kind == "usage_update":
@@ -363,7 +379,7 @@ class _TurnCollector:
         if kind in (*_BREAKING_UPDATES, "plan"):
             activity.set_tool_calls(self._run, self.tool_calls, self.failed_calls)
 
-    def _note_files(self, update: dict[str, Any]) -> None:
+    async def _note_files(self, update: dict[str, Any]) -> None:
         """Record what one tool call did to the files, once it has settled.
 
         The account is built from two sources, because neither sees the other's
@@ -380,14 +396,25 @@ class _TurnCollector:
         call_id = str(update.get("toolCallId") or "")
         if not call_id or call_id in self._settled_calls:
             return
-        if call_id not in self._listings and len(self._listings) < _MAX_OPEN_LISTINGS:
-            self._listings[call_id] = take_snapshot(self._workspace) if self._workspace is not None else None
-        for block in _diff_blocks(update.get("content")):
-            # Keyed by the resolved path, so one file revised twice in a call is
-            # one change and the newest block is the one that stands.
-            self._blocks.setdefault(call_id, {})[self._absolute(block["path"])] = block
         status = update.get("status")
-        if status not in ("completed", "failed"):
+        settling = status in ("completed", "failed")
+        # No listing for a call first seen already over: taken now it would be
+        # the state after the call, which is no baseline at all -- it would say
+        # every file the call created had been there all along.
+        if call_id not in self._listings and not settling and update.get("kind") not in _KINDS_THAT_WRITE_NOTHING:
+            while len(self._listings) >= _MAX_OPEN_LISTINGS:
+                self._listings.pop(next(iter(self._listings)))
+            self._listings[call_id] = await self._listing()
+        blocks_here: dict[str, list[dict[str, Any]]] = {}
+        for block in _diff_blocks(update.get("content")):
+            blocks_here.setdefault(self._absolute(block["path"]), []).append(block)
+        for path, group in blocks_here.items():
+            # Keyed by the resolved path, so one file revised twice in a call is
+            # one change and the newest frame's blocks for it are the ones that
+            # stand. Kept as a group: an adapter sends one block per hunk of a
+            # single edit, and only the whole frame describes what it did.
+            self._blocks.setdefault(call_id, {})[path] = group
+        if not settling:
             return
         self._settled_calls.add(call_id)
         before = self._listings.pop(call_id, None)
@@ -408,32 +435,77 @@ class _TurnCollector:
                 len((removal.before or "").splitlines()),
                 None,
             )
-        for path, block in blocks.items():
+        for path, group in blocks.items():
             accounted.append(path)
-            old_text = block.get("oldText")
-            # A block that carries no text for what was there is a creation,
-            # whether the field is absent, null, or a shape that is not text.
-            old_text = old_text if isinstance(old_text, str) else None
-            add, delete = activity.count_line_changes(old_text, block["newText"])
-            activity.record_file_change(
-                self._run,
-                activity.workspace_relative(path, self._workspace),
-                # No `oldText` is a file that was not there: the block is the
-                # whole of what the call put at the path.
-                "add" if old_text is None else "edit",
-                add,
-                delete,
-                len(block["newText"].encode("utf-8")),
-            )
-            self._removals.note_write(FileChange(path=path, after=block["newText"]))
+            self._record_blocks(path, group, before)
         if before is not None:
             activity.record_snapshot_changes(
                 before,
-                take_snapshot(self._workspace) if self._workspace is not None else None,
+                await self._listing(),
                 self._workspace,
                 already=accounted,
                 run=self._run,
+                seen_created=self._created,
             )
+
+    def _record_blocks(self, path: str, blocks: list[dict[str, Any]], before: Any) -> None:
+        """Record one path's blocks from one call as the single change they are.
+
+        Summed, because an adapter sends one block per hunk: keeping the last
+        one would report a two-hunk edit as whichever hunk arrived last.
+        """
+        add = delete = 0
+        edited = False
+        for block in blocks:
+            # A block that carries no text for what was there says nothing about
+            # the file having existed, whether the field is absent, null, or a
+            # shape that is not text.
+            old_text = block.get("oldText")
+            old_text = old_text if isinstance(old_text, str) else None
+            edited = edited or old_text is not None
+            block_add, block_delete = activity.count_line_changes(old_text, block["newText"])
+            add += block_add
+            delete += block_delete
+        newest = blocks[-1]["newText"]
+        try:
+            size: int | None = os.stat(path).st_size
+        except OSError:
+            size = None
+        relative = activity.workspace_relative(path, self._workspace)
+        if not newest and (size is None or _block_kind(blocks[-1]) == "delete"):
+            # codex reports a removal as a block holding the old content and no
+            # new one. Recorded as the deletion it is: an edit down to zero bytes
+            # would read as a file that is there and empty.
+            activity.record_file_change(self._run, relative, "delete", 0, delete, None)
+            return
+        if edited:
+            op = "edit"
+        elif before is not None and os.path.realpath(path) in before:
+            # A whole file with no `oldText` over a path the listing already had.
+            # claude-agent-acp announces every `Write` that way, existing file or
+            # not, so the listing is the only thing that tells a creation from a
+            # rewrite -- and a rewrite recorded as a creation would cancel itself
+            # away against a later removal of a file the user had.
+            op = "write"
+        else:
+            op = "add"
+        activity.record_file_change(
+            self._run, relative, op, add, delete, size if size is not None else len(newest.encode("utf-8"))
+        )
+        # Only when the block is the whole file: a hunk remembered as the file's
+        # text would count the hunk's lines as a later removal's.
+        if len(blocks) == 1 and (size is None or size == len(newest.encode("utf-8"))):
+            self._removals.note_write(FileChange(path=path, after=newest))
+
+    async def _listing(self) -> Any:
+        """A listing of the turn's workspace, taken off the read loop.
+
+        The walk is tens of milliseconds on a working tree, and every frame the
+        connection carries -- for every session sharing it -- waits behind it.
+        """
+        if self._workspace is None:
+            return None
+        return await asyncio.to_thread(take_snapshot, self._workspace)
 
     def _absolute(self, path: str) -> str:
         """A diff block's path as the filesystem knows it.

@@ -7,6 +7,7 @@ and ``_build_subagent_prompt``, extracted verbatim so a spawned sub-agent's
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from pathlib import Path
@@ -660,9 +661,13 @@ class RavenLoopBackend:
                     set_current_tool_call_id(tool_call.id)
                     # Only around a command: every other tool reports the file it
                     # touched, and walking the workspace twice per call would cost
-                    # a run far more than the one change it could find.
+                    # a run far more than the one change it could find. Off the
+                    # loop, because the walk is tens of milliseconds of it and
+                    # every other session on this process waits behind them.
                     before_files = (
-                        take_snapshot(workspace) if RAVEN_NAME.get(tool_call.name, tool_call.name) == "exec" else None
+                        await asyncio.to_thread(take_snapshot, workspace)
+                        if RAVEN_NAME.get(tool_call.name, tool_call.name) == "exec"
+                        else None
                     )
                     result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                     # What this call already accounted for by name, so the listing
@@ -702,7 +707,10 @@ class RavenLoopBackend:
                         )
                     if before_files is not None:
                         activity.record_snapshot_changes(
-                            before_files, take_snapshot(workspace), workspace, already=accounted
+                            before_files,
+                            await asyncio.to_thread(take_snapshot, workspace),
+                            workspace,
+                            already=accounted,
                         )
                     # Recorded beside the call, so the run's account says how
                     # its calls went and not only that it made them. Through the

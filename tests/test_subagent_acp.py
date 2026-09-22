@@ -993,7 +993,12 @@ async def test_one_call_settles_once_however_many_frames_repeat_it(tmp_path: Pat
     }
     with activity.collecting() as did:
         col = _TurnCollector(workspace=tmp_path)
-        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"}, done, dict(done))
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        # Really on disk: with nothing at the path, a second settling cancels the
+        # entry away as a removal and the block puts it straight back, landing on
+        # these same numbers whether or not the call settled twice.
+        (tmp_path / "notes.md").write_text("one\ntwo\n", encoding="utf-8")
+        await _feed(col, done, dict(done))
 
     assert did.files == [{"path": "notes.md", "op": "add", "add": 2, "del": 0, "size": 8}]
 
@@ -1087,6 +1092,200 @@ async def test_a_running_acp_node_shows_its_files_through_the_live_account(tmp_p
         _overlay_live(node, activity.live("acp-live"))
 
     assert node["files"] == did.files == [{"path": "deck.md", "op": "add", "add": 1, "del": 0, "size": 4}]
+
+
+async def test_a_whole_file_block_over_a_file_that_was_there_is_a_rewrite(tmp_path: Path) -> None:
+    """claude-agent-acp announces every ``Write`` with no ``oldText``, whether or
+    not the file existed, so the block alone cannot tell a creation from a
+    rewrite -- the listing taken when the call opened can."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    kept = tmp_path / "w.md"
+    kept.write_text("old\n", encoding="utf-8")
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        kept.write_text("new\n", encoding="utf-8")
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("w.md", "new\n")],
+            },
+        )
+
+    assert did.files == [{"path": "w.md", "op": "write", "add": 1, "del": 0, "size": 4}]
+
+
+async def test_a_rewritten_file_a_later_call_removes_still_reads_as_a_deletion(tmp_path: Path) -> None:
+    """The cost of reading a rewrite as a creation: created-then-deleted nets to
+    nothing, so a file the user had would vanish from the account that says the
+    run deleted it."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    doomed = tmp_path / "w.md"
+    doomed.write_text("old\n", encoding="utf-8")
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        doomed.write_text("new\n", encoding="utf-8")
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("w.md", "new\n")],
+            },
+        )
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c2", "kind": "execute"})
+        doomed.unlink()
+        await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "c2", "status": "completed"})
+
+    assert did.files == [{"path": "w.md", "op": "delete", "add": 0, "del": 1, "size": None}]
+
+
+async def test_a_removal_reported_as_a_diff_block_is_a_deletion(tmp_path: Path) -> None:
+    """codex-acp reports a removal as the old content against an empty new one.
+    Read as an edit it would say the file is there and empty, and the listing
+    that also saw it go is told to skip the path -- so as the turn's last call
+    nothing would correct it."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    gone = tmp_path / "gone.md"
+    gone.write_text("one\ntwo\n", encoding="utf-8")
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "delete"})
+        gone.unlink()
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "diff",
+                        "path": "gone.md",
+                        "oldText": "one\ntwo\n",
+                        "newText": "",
+                        "_meta": {"kind": "delete"},
+                    }
+                ],
+            },
+        )
+
+    assert did.files == [{"path": "gone.md", "op": "delete", "add": 0, "del": 2, "size": None}]
+
+
+async def test_the_hunks_of_one_edit_are_one_change(tmp_path: Path) -> None:
+    """An adapter sends one block per hunk of the same edit (claude-agent-acp
+    builds them from the patch's structure), so keeping the last block alone
+    would report whichever hunk arrived last as the whole change."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    edited = tmp_path / "m.py"
+    edited.write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        edited.write_text("A\nb\nc\nd\nE\n", encoding="utf-8")
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [
+                    _diff_block("m.py", "A\nb", old_text="a\nb"),
+                    _diff_block("m.py", "d\nE", old_text="d\ne"),
+                ],
+            },
+        )
+
+    # Size off the file, not off a hunk: the block is a fragment, the panel shows
+    # the file.
+    assert did.files == [{"path": "m.py", "op": "edit", "add": 2, "del": 2, "size": 10}]
+
+
+async def test_a_file_two_calls_in_flight_both_see_is_counted_once(tmp_path: Path) -> None:
+    """Claude Code runs tool calls in parallel, and a file written while two are
+    open is created inside both windows -- recorded from each listing, its lines
+    are counted twice."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "a", "kind": "execute"})
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "b", "kind": "execute"})
+        (tmp_path / "byA.txt").write_text("1\n2\n3\n", encoding="utf-8")
+        await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "a", "status": "completed"})
+        await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "b", "status": "completed"})
+
+    assert did.files == [{"path": "byA.txt", "op": "add", "add": 3, "del": 0, "size": 6}]
+
+
+async def test_at_the_listing_ceiling_the_oldest_open_call_gives_up_its_own(tmp_path: Path) -> None:
+    """A call that never reports an end holds its listing for the turn. Refusing
+    the newest instead of dropping the oldest would leave every later call with
+    no account of what it did at all."""
+    from raven.acp_client.acp_agent import _MAX_OPEN_LISTINGS, _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        for index in range(_MAX_OPEN_LISTINGS + 1):
+            await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": f"k{index}", "kind": "execute"})
+        (tmp_path / "late.txt").write_text("x\n", encoding="utf-8")
+        await _feed(
+            col,
+            {"sessionUpdate": "tool_call_update", "toolCallId": f"k{_MAX_OPEN_LISTINGS}", "status": "completed"},
+        )
+
+    assert did.files == [{"path": "late.txt", "op": "add", "add": 1, "del": 0, "size": 2}]
+
+
+async def test_a_call_that_cannot_write_a_file_is_not_listed_around(tmp_path: Path) -> None:
+    """Two walks of the working tree run on the connection's read loop, which
+    every session sharing it waits behind. A read leaves no file to find."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting():
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "r1", "kind": "read"})
+        assert col._listings == {}
+
+
+async def test_a_call_first_seen_already_over_is_read_from_its_blocks_alone(tmp_path: Path) -> None:
+    """A listing taken once the call is over is the state after it. Read as the
+    state before, it would say every file the call created had been there all
+    along -- so a call with no opening frame gets no listing at all."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        (tmp_path / "deck.md").write_text("one\n", encoding="utf-8")
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("deck.md", "one\n")],
+            },
+        )
+
+    assert did.files == [{"path": "deck.md", "op": "add", "add": 1, "del": 0, "size": 4}]
 
 
 # ---- the roster ------------------------------------------------------------

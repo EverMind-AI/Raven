@@ -529,6 +529,7 @@ def record_snapshot_changes(
     *,
     already: Collection[str] = (),
     run: "RunActivity | None" = None,
+    seen_created: set[str] | None = None,
 ) -> None:
     """Record what a command left behind, from two listings of its directory.
 
@@ -541,6 +542,13 @@ def record_snapshot_changes(
     are the absolute paths this same call accounted for from a tool result or a
     diff block -- the listing sees those too, and recording one again would
     count a single deletion twice.
+
+    ``seen_created``, when a lane keeps one across its calls, are the paths its
+    earlier listings already reported created. Two calls in flight at once are
+    two windows over the same tree, and a file written inside both reads as
+    created in both -- recorded twice, its lines are counted twice. A removal
+    takes the path back out, so a file created again after being removed counts
+    again.
     """
     created, modified, deleted = workdir_snapshot.diff(before, after)
     if not (created or modified or deleted):
@@ -548,8 +556,11 @@ def record_snapshot_changes(
     accounted = {os.path.realpath(path) for path in already}
     target = run if run is not None else _current.get()
     for path in created:
-        if os.path.realpath(path) in accounted:
+        real = os.path.realpath(path)
+        if real in accounted or (seen_created is not None and real in seen_created):
             continue
+        if seen_created is not None:
+            seen_created.add(real)
         size = (after or {})[path][0]
         record_file_change(target, workspace_relative(path, workspace), "add", _line_count(path, size), 0, size)
     for path in modified:
@@ -557,8 +568,11 @@ def record_snapshot_changes(
             continue
         record_file_change(target, workspace_relative(path, workspace), "write", 0, 0, (after or {})[path][0])
     for path in deleted:
-        if os.path.realpath(path) in accounted:
+        real = os.path.realpath(path)
+        if real in accounted:
             continue
+        if seen_created is not None:
+            seen_created.discard(real)
         record_file_change(target, workspace_relative(path, workspace), "delete", 0, 0, None)
 
 
