@@ -961,6 +961,32 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 #wdChip.chrome-wd-set { color: var(--text); }
 
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
+/* The transcript stops being painted before it reaches the composer instead of
+   sliding under it. The card is opaque (see .dock-in), so a line arriving at
+   its top edge was cut mid-glyph, and the 22px of gutter below the card left
+   the next line legible UNDER the thing the reader is typing in.
+
+   A mask, not the ground-coloured band this file used to carry above the
+   composer: a band is a rectangle painted OVER the transcript, so it has to
+   match whatever is behind it, and on a wash that is a gradient it reads as a
+   flat seam -- the exact fault that got the old one deleted. A mask takes the
+   alpha out of the transcript itself, so there is no ground to match.
+
+   Addressed to the scrollport's box rather than to the content: a mask is
+   painted over the element's own border box, which does not scroll, so the
+   ramp stays where the composer is while the text moves through it.
+
+   Clear from --lift upward, which is the top of the HIGHEST docked thing
+   (dockLift, features/composer/store.ts) -- a composer that has grown a line,
+   queued rows, a clarify sheet -- so the edge tracks all three rather than the
+   resting card's height. .col reserves that same --lift as bottom padding, so
+   at the tail there is nothing under the ramp: it bites only while the reader
+   is scrolled up, which is the only time the overlap existed. */
+.scroll {
+  --tail-fade: 40px;
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - var(--lift, 96px) - var(--tail-fade)), transparent calc(100% - var(--lift, 96px)));
+  mask-image: linear-gradient(180deg, #000 calc(100% - var(--lift, 96px) - var(--tail-fade)), transparent calc(100% - var(--lift, 96px)));
+}
 /* Bottom inset tracks the floating composer (--lift is the card's height plus
    its offset, published by dockLift), so the last message always clears the
    glass with room to spare -- growing exactly when the textarea does. */
