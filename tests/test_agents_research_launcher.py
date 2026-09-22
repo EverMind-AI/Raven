@@ -41,6 +41,7 @@ VENDORED_TOOL_FACE = {
     "web_fetch",
     "ask_user",
     "tool_call",
+    "tool_search",
 }
 
 REPO = Path(__file__).resolve().parent.parent

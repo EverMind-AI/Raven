@@ -309,6 +309,7 @@ VENDORED_TOOL_FACE = {
     "ops_tune_status",
     "read_file",
     "tool_call",
+    "tool_search",
     "web_fetch",
     "write_file",
 }

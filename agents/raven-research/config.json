@@ -123,9 +123,6 @@
         "maxResults": 5
       }
     },
-    "toolSearch": {
-      "enabled": false
-    },
     "disabledTools": [
       "exec",
       "spawn",

@@ -34,9 +34,6 @@
         "maxResults": 5
       }
     },
-    "toolSearch": {
-      "enabled": false
-    },
     "disabledTools": [
       "spawn",
       "cron",

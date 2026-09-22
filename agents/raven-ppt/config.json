@@ -80,9 +80,6 @@
         "maxResults": 10
       }
     },
-    "toolSearch": {
-      "enabled": false
-    },
     "disabledTools": [
       "create_playbook",
       "cron",

@@ -860,14 +860,16 @@ SKILL_LANE_TOOLS = {
     "use_skill",
 }
 
-#: The one trunk name this product cannot hold out. Raven reserves the
-#: tool-search meta-pair from ``tools.disabledTools``: the fold reads their
-#: absence from an array as "this request has no search route" and answers by
-#: shipping every schema, so an off switch there would unfold the array rather
-#: than slim it. ``tool_call`` registers whatever the fold is doing and joins
-#: the face; ``tool_search`` follows ``tools.toolSearch.enabled``, off here, so
-#: it does not.
-TRUNK_RESERVED = {"tool_call"}
+#: Two names this product's config no longer decides. ``tool_call`` is reserved
+#: from ``tools.disabledTools``: its absence from an array is how the fold reads
+#: "this request has no search route", so an off switch there would unfold the
+#: array rather than slim it. ``tool_search`` registers with the shipped default
+#: -- the fold is on, and this face sits far below the threshold, so the strategy
+#: drops it from every request; it is in the registry the fixture reads and in no
+#: request the model sees. Neither is pinned off here on purpose: an operator or
+#: a dispatcher can attach MCP servers to this product at runtime, and pinning
+#: the fold off would hold it open at exactly the size it exists for.
+TRUNK_RESERVED = {"tool_call", "tool_search"}
 
 #: The product's visible tool face, hermetically rebuilt from the render:
 #: the fork's config intent minus the ledgered pending waves, plus the
@@ -887,6 +889,7 @@ VENDORED_TOOL_FACE = {
     "read_skill",
     "todo",
     "tool_call",
+    "tool_search",
     "use_skill",
     "web_fetch",
     "write_file",
