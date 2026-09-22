@@ -278,6 +278,12 @@ class _TurnCollector:
             call_id = str(tool.get("toolCallId") or "") if isinstance(tool, dict) else ""
             if command and call_id:
                 self._backfill_permission_command(call_id, command)
+            # The earliest frame that names the call. An agent that asks first
+            # and announces the call as it runs it -- raven's own does -- leaves
+            # the announce too late for a listing to be a baseline: the file the
+            # call writes is already there by then.
+            if call_id and call_id not in self._settled_calls:
+                await self._open_listing(call_id, tool.get("kind") if isinstance(tool, dict) else None)
             return
         update = params.get("update")
         if not isinstance(update, dict):
@@ -401,10 +407,8 @@ class _TurnCollector:
         # No listing for a call first seen already over: taken now it would be
         # the state after the call, which is no baseline at all -- it would say
         # every file the call created had been there all along.
-        if call_id not in self._listings and not settling and update.get("kind") not in _KINDS_THAT_WRITE_NOTHING:
-            while len(self._listings) >= _MAX_OPEN_LISTINGS:
-                self._listings.pop(next(iter(self._listings)))
-            self._listings[call_id] = await self._listing()
+        if not settling:
+            await self._open_listing(call_id, update.get("kind"))
         blocks_here: dict[str, list[dict[str, Any]]] = {}
         for block in _diff_blocks(update.get("content")):
             blocks_here.setdefault(self._absolute(block["path"]), []).append(block)
@@ -448,6 +452,14 @@ class _TurnCollector:
                 seen_created=self._created,
             )
 
+    async def _open_listing(self, call_id: str, kind: Any) -> None:
+        """Take the call's baseline listing, once, unless its kind writes nothing."""
+        if call_id in self._listings or kind in _KINDS_THAT_WRITE_NOTHING:
+            return
+        while len(self._listings) >= _MAX_OPEN_LISTINGS:
+            self._listings.pop(next(iter(self._listings)))
+        self._listings[call_id] = await self._listing()
+
     def _record_blocks(self, path: str, blocks: list[dict[str, Any]], before: Any) -> None:
         """Record one path's blocks from one call as the single change they are.
 
@@ -480,12 +492,16 @@ class _TurnCollector:
             return
         if edited:
             op = "edit"
+        elif self._dialect.missing_old_text_is_creation:
+            # The spec's reading, and what codex and raven's own agent send: no
+            # `oldText` is a file that was not there.
+            op = "add"
         elif before is not None and os.path.realpath(path) in before:
-            # A whole file with no `oldText` over a path the listing already had.
-            # claude-agent-acp announces every `Write` that way, existing file or
-            # not, so the listing is the only thing that tells a creation from a
-            # rewrite -- and a rewrite recorded as a creation would cancel itself
-            # away against a later removal of a file the user had.
+            # claude-agent-acp announces every `Write` without `oldText`,
+            # existing file or not, so the listing is the only thing that tells
+            # a creation from a rewrite -- and a rewrite recorded as a creation
+            # would cancel itself away against a later removal of a file the
+            # user had.
             op = "write"
         else:
             op = "add"

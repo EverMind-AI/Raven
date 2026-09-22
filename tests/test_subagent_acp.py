@@ -1099,12 +1099,13 @@ async def test_a_whole_file_block_over_a_file_that_was_there_is_a_rewrite(tmp_pa
     not the file existed, so the block alone cannot tell a creation from a
     rewrite -- the listing taken when the call opened can."""
     from raven.acp_client.acp_agent import _TurnCollector
+    from raven.acp_client.acp_dialects import ClaudeCodeDialect
     from raven.agent.subagent import activity
 
     kept = tmp_path / "w.md"
     kept.write_text("old\n", encoding="utf-8")
     with activity.collecting() as did:
-        col = _TurnCollector(workspace=tmp_path)
+        col = _TurnCollector(dialect=ClaudeCodeDialect(), workspace=tmp_path)
         await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
         kept.write_text("new\n", encoding="utf-8")
         await _feed(
@@ -1125,12 +1126,13 @@ async def test_a_rewritten_file_a_later_call_removes_still_reads_as_a_deletion(t
     nothing, so a file the user had would vanish from the account that says the
     run deleted it."""
     from raven.acp_client.acp_agent import _TurnCollector
+    from raven.acp_client.acp_dialects import ClaudeCodeDialect
     from raven.agent.subagent import activity
 
     doomed = tmp_path / "w.md"
     doomed.write_text("old\n", encoding="utf-8")
     with activity.collecting() as did:
-        col = _TurnCollector(workspace=tmp_path)
+        col = _TurnCollector(dialect=ClaudeCodeDialect(), workspace=tmp_path)
         await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
         doomed.write_text("new\n", encoding="utf-8")
         await _feed(
@@ -5542,3 +5544,55 @@ async def test_a_dispatch_goes_to_the_backend_s_own_pool(tmp_path: Path) -> None
 
     with patch("raven.acp_client.acp_agent.get_pool", _never), pytest.raises(_Marker):
         await backend.run("hello", task_id="t1", workspace=tmp_path, executor=None)
+
+
+async def test_the_spec_reads_a_block_without_old_text_as_a_creation_whatever_the_listing_held(tmp_path: Path) -> None:
+    """codex and raven's own agent send ``oldText`` for every rewrite, so a block
+    without it is the creation the spec says it is -- even when the listing saw
+    the path, which happens when the agent asks permission first and announces
+    the call as it runs it, so the baseline is taken with the file already
+    there."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        (tmp_path / "w.md").write_text("new\n", encoding="utf-8")
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("w.md", "new\n")],
+            },
+        )
+
+    assert did.files == [{"path": "w.md", "op": "add", "add": 1, "del": 0, "size": 4}]
+
+
+async def test_a_permission_request_opens_the_listing_before_the_call_is_announced(tmp_path: Path) -> None:
+    """An agent that asks first and announces the call as it runs it leaves the
+    announce too late for a baseline; the permission frame names the call
+    earlier, and a listing taken there still predates the write."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.acp_client.acp_dialects import ClaudeCodeDialect
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(dialect=ClaudeCodeDialect(), workspace=tmp_path)
+        await col("session/request_permission", {"toolCall": {"toolCallId": "c1", "kind": "edit"}})
+        (tmp_path / "w.md").write_text("new\n", encoding="utf-8")
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("w.md", "new\n")],
+            },
+        )
+
+    assert did.files == [{"path": "w.md", "op": "add", "add": 1, "del": 0, "size": 4}]
