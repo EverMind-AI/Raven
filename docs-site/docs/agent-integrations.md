@@ -50,9 +50,10 @@ Set them up through `raven onboard` or the WebUI agent settings.
 
 From a TUI, WebUI, or configured channel, name the desired roster entry in the
 request and state the workspace, allowed side effects, and evidence you expect.
-For a DAG or Playbook, set each node's `subagent` to the advertised name or
-worker label. A display name that is not in the current roster does not select
-an agent.
+For a DAG node, set `subagent` to the currently advertised roster name; a
+generated worker label is valid only for the current `run_subagent_dag` call.
+Stored Playbooks must use a registered roster name, not a turn-local label. A
+display name that is not in the current roster does not select an agent.
 
 ### Calling the five native agents { #calling-the-five-native-agents }
 

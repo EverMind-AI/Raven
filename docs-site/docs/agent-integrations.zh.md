@@ -41,8 +41,9 @@ roster。不要假定修改显示名就创建了新身份。可通过 `raven onb
 完成配置。
 
 从 TUI、WebUI 或已配置的消息渠道发起任务时，在请求中写明目标 roster 条目，并说明工作目录、
-允许的副作用和预期证据。使用 DAG 或 Playbook 时，为每个节点设置当前工具实际公布的
-Agent 名称或 worker label。当前 roster 中不存在的显示名不会选择 Agent。
+允许的副作用和预期证据。DAG 节点应使用当前工具公布的 roster 名称；生成的 worker label
+只在当前 `run_subagent_dag` 调用中有效。存储的 Playbook 必须使用已注册的 roster 名称，
+不能使用当前轮次的 label。当前 roster 中不存在的显示名不会选择 Agent。
 
 ### 调用五个原生 Agent { #calling-the-five-native-agents }
 
