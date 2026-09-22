@@ -295,36 +295,6 @@
   font-size: 10.5px;
   color: var(--faint);
 }
-/* The reply dock: an input riding in a pill of its own, the way the
-   composer's own field does. */
-.tkdock {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--surface);
-  border-radius: 11px;
-  padding: 6px 6px 6px 13px;
-}
-.tkdock input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: none;
-  font-size: 13px;
-  color: var(--text);
-}
-.tkdock input::placeholder {
-  color: var(--faint);
-}
-/* The send action is the page-wide round `.go` button (the same glyph,
-   attribute for attribute, as the main composer's), sized down to the
-   dock's own scale rather than a dark word-width pill. */
-.tkdock .go {
-  flex: none;
-  width: 26px;
-  height: 26px;
-}
 
 /* The work-order tab: one row per field, the missing-agent warning, and the
    footer naming the call/run id. */

@@ -149,8 +149,7 @@ const SHARED = new Set([
   'salist', 'sarow', 'wsgrp', 'bd', 'wsempty',
   // The composer's own round send button, one rule in page.css: `SendGlyph`
   // (components/Ico.tsx) says outright that a sub-agent's own composer wears
-  // the same glyph so the two cannot drift apart, and a reply dock reading a
-  // running node's own conversation is the same shape of thing again.
+  // the same glyph so the two cannot drift apart.
   'go',
   // The dropdown's own chrome, one rule in styles/page.css: the caret replaces
   // the native arrow so a select reads as the same control as the boxes beside

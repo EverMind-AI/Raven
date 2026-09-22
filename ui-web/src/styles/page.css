@@ -6454,8 +6454,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    Fills the node area rather than sitting beside it: the docked pane is not
    wide enough for both, and closing the card brings the column back. The
    card is itself a column with one scrolling child (`.tkbody`): the header
-   stays put above it and, on the context tab, the reply dock stays pinned
-   below it -- neither rides off the top or the end of a long record. */
+   stays put above it rather than riding off the top of a long record. */
 .tkcard { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; height: 100%; min-height: 0; }
 .tkch { flex: none; display: flex; align-items: flex-start; gap: 8px; padding-bottom: 8px;
   border-bottom: 1px solid var(--line-soft); }

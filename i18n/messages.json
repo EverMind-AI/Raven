@@ -7679,10 +7679,6 @@
       "en": "An upstream step reached no conclusion, so this one was never dispatched.",
       "zh": "上游没有结论，这一步没派出去。"
     },
-    "gui.tasks.continue_with": {
-      "en": "Continue chatting with {name}",
-      "zh": "继续和 {name} 对话"
-    },
     "gui.tasks.assigned_to": {
       "en": "Assigned to",
       "zh": "派给"

@@ -11,13 +11,12 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { Glyph, SendGlyph } from '../../components/Ico'
+import { Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import { copy } from '../../lib/clipboard'
 import { formatDuration } from '../../lib/duration'
 import * as lang from '../../state/lang'
 import { show as showPage } from '../../state/page'
-import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { Board } from '../dag/Board'
 import { DagGraph } from '../dag/DagGraph'
@@ -522,38 +521,6 @@ function Process({ steps, node, nodeKey }: { steps: NodeStep[]; node: TaskNode; 
   )
 }
 
-/* "Continue with X" -- only when the agent keeps a session and this node has
-   one. #488 left the running conversation's own second input box out on
-   purpose; this is the primitive without committing to where a reply would
-   be read. */
-function ChatDock({ node, roster }: { node: TaskNode; roster: SubagentRow[] }): JSX.Element | null {
-  const [text, setText] = useState('')
-  const [busy, setBusy] = useState(false)
-  const agentRow = roster.find((r) => r.name === node.agent)
-  if (!agentRow?.stateful || !node.instance) return null
-  const instance = node.instance
-  const send = (): void => {
-    const value = text.trim()
-    if (!value || busy) return
-    setBusy(true)
-    Promise.resolve(ds('subagents').instanceSend?.(node.agent, instance, value))
-      .then(() => setText(''))
-      .finally(() => setBusy(false))
-  }
-  return (
-    <div className="tkdock">
-      <input
-        type="text" value={text} onChange={(e) => setText(e.target.value)}
-        placeholder={t('gui.tasks.continue_with', { name: node.agent })}
-        onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) send() }}
-      />
-      <button className="go" aria-label={t('gui.send')} disabled={!text.trim() || busy} onClick={send}>
-        <SendGlyph />
-      </button>
-    </div>
-  )
-}
-
 function ContextTab({ row, node, rec }: {
   row: TaskRow; node: TaskNode; rec: RecordLoad
 }): JSX.Element | null {
@@ -845,17 +812,13 @@ function NodePanel({ row, node, paneId, onClose, roster }: {
           ))}
         </div>
       </div>
-      {/* The one scrolling child: the header above stays put and, on the
-         context tab, the reply dock below stays pinned at the bottom --
-         neither rides off the top or the end of a long record. */}
+      {/* The one scrolling child: the header above stays put rather than
+         riding off the top of a long record. */}
       <div className="tkbody" ref={body}>
         {tab === 'context'
           ? <ContextTab row={row} node={node} rec={rec} />
           : <OrderTab row={row} node={node} roster={roster} rec={rec} />}
       </div>
-      {tab === 'context' && node.status !== 'pending' && node.status !== 'skipped'
-        ? <ChatDock node={node} roster={roster} />
-        : null}
     </div>
   )
 }
