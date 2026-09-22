@@ -1506,3 +1506,68 @@ class TestThePiecesTheChainIsMadeOf:
             )
 
         assert seen == [], "the chain itself reports nothing on cancellation; its caller does"
+
+
+class TestARootTheUserManagesIsNeverStopped:
+    """The restart chain asks about ownership before it stops anything.
+
+    `_require_owned` sits on the write primitives so a new caller cannot opt
+    out of it. The restart is a new caller and it is not a write primitive, so
+    it did: the embedding role is exempt from the ownership gate by design, and
+    a save of it on a user-managed root reached `stop_for_reload` and SIGTERMed
+    the server that root belongs to. `everos_owned`'s own docstring is the
+    rule -- "record the address, never touch the config, never start or stop
+    the process".
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_unowned_root_stops_nothing_and_says_so(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven_everos import server as everos_server
+
+        touched: list[str] = []
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: False)
+        monkeypatch.setattr(everos_server, "precheck_spawn", lambda: touched.append("precheck") or "")
+        monkeypatch.setattr(everos_server, "stop_for_reload", lambda _root: touched.append("stop"))
+
+        async def _never(*a, **k):
+            touched.append("ensure")
+
+        monkeypatch.setattr(everos_server, "ensure_everos_server", _never)
+        seen: list[tuple[bool, str | None]] = []
+
+        await everos_server.restart_for_config_change(
+            "/tmp/theirs", "http://127.0.0.1:18791", on_result=lambda ok, why: seen.append((ok, why))
+        )
+
+        assert touched == [], f"the chain touched the user's server: {touched}"
+        assert len(seen) == 1
+        ok, why = seen[0]
+        assert ok is False
+        assert why is not None and "never starts or stops it" in why
+
+    @pytest.mark.asyncio
+    async def test_an_owned_root_still_restarts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The control: the guard refuses the unowned root and nothing else."""
+        from raven_everos import server as everos_server
+
+        touched: list[str] = []
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
+        monkeypatch.setattr(everos_server, "precheck_spawn", lambda: touched.append("precheck") or "")
+        monkeypatch.setattr(
+            everos_server,
+            "stop_for_reload",
+            lambda _root: touched.append("stop") or everos_server.StopOutcome.STOPPED,
+        )
+
+        async def _ensure(*a, **k):
+            touched.append("ensure")
+
+        monkeypatch.setattr(everos_server, "ensure_everos_server", _ensure)
+        seen: list[tuple[bool, str | None]] = []
+
+        await everos_server.restart_for_config_change(
+            "/tmp/ours", "http://127.0.0.1:18791", on_result=lambda ok, why: seen.append((ok, why))
+        )
+
+        assert touched == ["precheck", "stop", "ensure"]
+        assert seen == [(True, None)]

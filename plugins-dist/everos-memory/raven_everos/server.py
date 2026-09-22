@@ -971,6 +971,22 @@ async def restart_for_config_change(
     """
     run_id = f"{os.getpid()}-{time.monotonic_ns():x}"
     logger.info("everos restart {} begin (root={}, base_url={})", run_id, root, base_url)
+    from raven_everos.config import everos_owned
+
+    if not everos_owned():
+        # `_require_owned` sits on the write primitives so a new caller cannot
+        # opt out of it. This is a new caller and it is not a write primitive,
+        # so it did: the embedding role is exempt from the ownership gate by
+        # design, which let a save on a user-managed root reach the stop and
+        # SIGTERM the server that root belongs to. `everos_owned`'s own
+        # docstring is the rule -- "never start or stop the process".
+        logger.info("everos restart {} end: the root is the user's, nothing stopped", run_id)
+        on_result(
+            False,
+            "the EverOS you manage was not restarted: raven records its address and "
+            "never starts or stops it. Restart it yourself to pick this up.",
+        )
+        return
     try:
         block = await asyncio.to_thread(precheck_spawn)
         if block:

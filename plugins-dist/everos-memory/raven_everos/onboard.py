@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import typer
 
 from raven.plugins import OnboardUI, PluginContext, StepOutcome
-from raven_everos.config import RERANK_PROTOCOLS, VENDORS, recorded_slice, vendors
+from raven_everos.config import REQUIRED_ROLES, RERANK_PROTOCOLS, VENDORS, recorded_slice, vendors
 
 # ponytail: module global; the wizard is one-shot and single-threaded. Thread
 # the parameter if a second concurrent wizard ever exists.
@@ -168,14 +168,14 @@ def _verify_rerank(
     model: Optional[str],
     api_key: Optional[str],
     base_url: Optional[str],
-    rerank_provider: Optional[str],
+    rerank_protocol: Optional[str],
     non_interactive: bool,
     warnings: list[str],
     continue_hint: Optional[str] = None,
 ) -> bool:
     """Probe a rerank endpoint with a provider-specific request, offering retry/continue on failure."""
     _UI.console.print(_UI.t("  [dim]⏳ Verifying {label}…[/dim]", label=label))
-    ok, detail = _probe_rerank(model, api_key=api_key, base_url=base_url, rerank_provider=rerank_provider)
+    ok, detail = _probe_rerank(model, api_key=api_key, base_url=base_url, rerank_protocol=rerank_protocol)
     if ok:
         _UI.console.print(_UI.t("  [green]✓ {label} connected.[/green]", label=label))
         return True
@@ -202,7 +202,7 @@ def _probe_rerank(
     *,
     api_key: Optional[str],
     base_url: Optional[str],
-    rerank_provider: Optional[str],
+    rerank_protocol: Optional[str],
 ) -> tuple[bool, str]:
     """Real capability probe for a rerank endpoint. Dispatches by provider
     protocol (vllm / deepinfra / dashscope). Never raises."""
@@ -214,10 +214,10 @@ def _probe_rerank(
     headers["Content-Type"] = "application/json"
 
     try:
-        if rerank_provider == "deepinfra":
+        if rerank_protocol == "deepinfra":
             url = f"{base_url.rstrip('/')}/{model}"
             body: dict = {"queries": ["ping"], "documents": ["pong"]}
-        elif rerank_provider == "dashscope":
+        elif rerank_protocol == "dashscope":
             url = f"{base_url.rstrip('/')}/api/v1/services/rerank/text-rerank/text-rerank"
             body = {
                 "model": model,
@@ -236,12 +236,12 @@ def _probe_rerank(
     except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
         return False, f"probe failed: {exc}"
 
-    if rerank_provider == "deepinfra":
+    if rerank_protocol == "deepinfra":
         scores = data.get("scores")
         if isinstance(scores, list) and scores:
             return True, "ok"
         return False, "endpoint returned no scores"
-    if rerank_provider == "dashscope":
+    if rerank_protocol == "dashscope":
         output = data.get("output")
         results = output.get("results") if isinstance(output, dict) else None
         if isinstance(results, list) and results:
@@ -809,15 +809,15 @@ def _everos_pick_creds_and_model(
         provider_base_url = base_url
 
         # rerank: resolve service type + override base_url when needed.
-        rerank_provider: Optional[str] = None
+        rerank_protocol: Optional[str] = None
         if section == "rerank":
             chosen_prov_dict = src[1]
-            if chosen_prov_dict.get("rerank_provider"):
-                rerank_provider = chosen_prov_dict["rerank_provider"]
+            if chosen_prov_dict.get("rerank_protocol"):
+                rerank_protocol = chosen_prov_dict["rerank_protocol"]
                 if chosen_prov_dict.get("rerank_base_url"):
                     base_url = chosen_prov_dict["rerank_base_url"]
             else:
-                rerank_provider = questionary.select(
+                rerank_protocol = questionary.select(
                     _UI.t("Rerank service type:"),
                     choices=[
                         *(questionary.Choice(name, value=name) for name in RERANK_PROTOCOLS),
@@ -826,9 +826,9 @@ def _everos_pick_creds_and_model(
                     style=_UI.style,
                     qmark=_UI.qmark,
                 ).ask()
-                if rerank_provider is None:
+                if rerank_protocol is None:
                     raise typer.Exit(1)
-                if rerank_provider is _UI.back:
+                if rerank_protocol is _UI.back:
                     continue
 
         model = _everos_pick_model(
@@ -859,8 +859,8 @@ def _everos_pick_creds_and_model(
         # is derived from the vendor table, so nothing has to carry it -- and the
         # probe below still gets it under its own name.
         result["provider"] = chosen_provider
-        if rerank_provider:
-            result["rerank_protocol"] = rerank_provider
+        if rerank_protocol:
+            result["rerank_protocol"] = rerank_protocol
         return result
 
 
@@ -910,7 +910,11 @@ def _config_everos_role(
                 questionary.Choice(_UI.t("Keep current: {current}", current=current), value="keep"),
                 questionary.Choice(_UI.t("Reconfigure"), value="redo"),
             ]
-            if optional:
+            # `optional` answers "may be left unset", which is not the
+            # question here: this branch erases a role that IS set, and
+            # REQUIRED_ROLES is the answer to that one. Offering Skip for
+            # embedding cleared the endpoint every knowledge base embeds with.
+            if optional and section not in REQUIRED_ROLES:
                 choices.append(questionary.Choice(_UI.t("Skip"), value="off"))
             action = questionary.select(
                 _UI.t("Already configured — what now?"),
@@ -1023,7 +1027,7 @@ def _config_everos_role(
                 model=result["model"],
                 api_key=result["api_key"],
                 base_url=result["base_url"],
-                rerank_provider=result.get("rerank_protocol"),
+                rerank_protocol=result.get("rerank_protocol"),
                 non_interactive=non_interactive,
                 warnings=warnings,
                 continue_hint=role.get("continue_hint"),

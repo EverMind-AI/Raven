@@ -11,7 +11,7 @@ New names this change introduces, to be added to `CONTEXT.md` in the same batch
 | Term | Means |
 |---|---|
 | **EverOS role** | One of the four models EverOS talks to: `llm` (memory extraction), `embedding`, `rerank`, `multimodal`. Not the "Memory role" of `CONTEXT.md` Window Shrink, which is a message role. |
-| **role block** | raven's record of one EverOS role: `{model, provider}`, no credential. Lives in `plugins.config['everos-memory']`, except the embedding pin. |
+| **role pin** | raven's record of one EverOS role: `{model, provider}`, no credential. Lives in `plugins.config['everos-memory']`, except the embedding pin. |
 | **embedding pin** | raven's top-level `embedding` block. Predates this change, serves knowledge bases too. _Avoid_: "pinned", which in `CONTEXT.md` is a Manifest marker. |
 | **role slot** | The settings page control that edits one role. |
 | **rerank protocol** | EverOS's `rerank.provider` -- which client implementation to build (`deepinfra` / `vllm` / `dashscope`), i.e. the request shape. Deliberately renamed here because it collides with raven's `provider`, which names a vendor. |
@@ -93,7 +93,7 @@ Referenced by number from the plan and the deviations log; numbers do not change
 | # | Constraint | How to check |
 |---|---|---|
 | C1 | Ownership stays the plugin's judgement. Nothing under `raven/` decides, or re-derives, whether raven owns the root. | `tests/test_rpc_settings.py` asserts `"everos_owned" not in Path("raven").rglob("*.py") read` and that `settings.everos` gets `owned` from the plugin's `describe_roles()` |
-| C2 | A role block names a model and a provider and holds no credential. | `raven-plugin.toml` declares `llm` / `rerank` / `multimodal` as `object` in `[plugin.config_schema]` (otherwise every key logs "not in its config_schema"); a test asserts the written slice has no `api_key` / `base_url` key. A7 checks the file |
+| C2 | A role pin names a model and a provider and holds no credential. | `raven-plugin.toml` declares `llm` / `rerank` / `multimodal` as `object` in `[plugin.config_schema]` (otherwise every key logs "not in its config_schema"); a test asserts the written slice has no `api_key` / `base_url` key. A7 checks the file |
 | C3 | No new runtime dependency, in the host or the plugin. | `git diff pyproject.toml plugins-dist/everos-memory/pyproject.toml uv.lock` adds nothing under `[project.dependencies]` |
 | C4 | The installed `everos` package is unchanged. | `uv pip show everos` reports the same version before and after; no file under `site-packages/everos/` is modified (it is outside the repo, so `git diff` cannot say) |
 | C5 | The host forwards; the plugin owns the keys. `console.py` holds no role field-name constants and does not assemble the slice. | `_EVEROS_FIELDS` and `_EVEROS_REQUIRED` are gone from `console.py`; it calls the plugin's `set_role()` / `describe_roles()` and nothing else |
@@ -141,7 +141,7 @@ document.
 | A7 | After a save, `everos.toml` holds no value raven wrote for the four sections, and its remaining content has no effect on them. | `diff` of the file before and after (unchanged), plus A9 |
 | A8 | After a model change the runtime knobs in `everos.toml` still apply. | A non-default `timeout_seconds` set by hand is still in force, read from the running server's settings |
 | A9 | Clearing a role really clears it: the section left in `everos.toml` does not revive. | The child's environment shows `EVEROS_<SECTION>__MODEL=`; the capability reports unavailable |
-| A10 | An install upgrading from the previous version keeps working with no user action. ★ | Before: values only in `everos.toml`. After first load: role blocks in raven's config, the same models in force, `everos.toml` byte-identical |
+| A10 | An install upgrading from the previous version keeps working with no user action. ★ | Before: values only in `everos.toml`. After first load: role pins in raven's config, the same models in force, `everos.toml` byte-identical |
 | A11 | A vendor raven has no provider row for is migrated by creating that row from the wizard's vendor table and moving the key into it. | `providers.deepinfra` exists afterwards and serves the role; the role is usable without the user adding anything |
 | A12 | When even that fails, the role reads as unset and is reported in all three of: the migration notice, `raven doctor`, and the role slot. Nothing is silent. | The three messages, captured |
 | A13 | `[api]` still decides the listen address: an inherited `EVEROS_API__PORT` does not move the server. | Exported variable plus the port the server actually binds |
@@ -149,7 +149,7 @@ document.
 | A15 | Rerank configured from the settings page against SiliconFlow issues `POST {base}/rerank`. | The everos server log or a local proxy showing the request line |
 | A16 | Rerank configured from the settings page against DeepInfra uses the inference base url, not the chat one. | The stored provider and the resolved base url in the child's environment |
 | A17 | The rerank slot does not offer providers that cannot rerank. | The slot's candidate list next to the vendor table's `supports` |
-| A18 | `settings.everos` reports `api_key_set` as "this provider has a usable credential", and no longer reports EverOS's rerank protocol as `provider`. | The RPC response against a provider with and without a key |
+| A18 | `settings.everos` reports `api_key_set` as "this provider has a usable credential", and the `provider` it reports for a role is the vendor, never the rerank protocol. (The protocol is still spelled `deepinfra` / `vllm` / `dashscope` where it belongs -- EverOS's own `rerank.provider` field and the `EVEROS_RERANK__PROVIDER` variable that sets it. What this item forbids is that word reaching the page as a role's vendor.) | The RPC response against a provider with and without a key |
 | A19 | Changing the provider for a role is one edit; the address and key follow at the next spawn. | The child's environment before and after |
 | A20 | Nothing under `raven/` calls or re-implements `everos_owned()`. | The C1 test |
 | A21 | Two saves in quick succession end at the final configuration and never overlap. | Each restart chain logs a start and an end with an id; the intervals do not overlap and the last configuration is in force |
@@ -165,7 +165,7 @@ document.
 | Deliver | Only embedding travels, as `EVEROS_EMBEDDING__*` built at spawn from raven's pin. | `everos_env()` resolves all four at spawn, emitting every role -- held ones with values, unheld ones empty. |
 | In-process | `understand_media` reads `[multimodal]` from `everos.toml` through everos's cached settings. | The plugin binds the same variables into raven's own environment at `start()`, as `configure_embedding_env` already does. Live changes need a raven restart (non-goal). |
 | Gate | `everos_role_configured(section)` reads `everos.toml` and asks for model AND api_key. **Eight call sites** (four direct, four through `onboard._everos_role_configured`). | Same function, reading raven's config, asking for model AND provider AND a resolving credential. All eight follow. |
-| Read | `settings.everos` reports the file's sections; `provider` there is EverOS's rerank protocol; the page reverse-looks-up a vendor from a base url. | Reports the role blocks plus `owned`; `provider` is the vendor, the rerank protocol is not returned at all. The page stops guessing. |
+| Read | `settings.everos` reports the file's sections; `provider` there is EverOS's rerank protocol; the page reverse-looks-up a vendor from a base url. | Reports the role pins plus `owned`; `provider` is the vendor, the rerank protocol is not returned at all. The page stops guessing. |
 | Write | `console.py` holds the field allowlist and writes through `set_everos_section`. | `console.py` forwards to the plugin's `set_role()`; the ownership guard stays inside it. |
 | Frontend | `Roles.tsx` reverse-looks-up a provider from `base_url` (:97-103), filters candidates by "has a key" only (:117), has no disabled state. | Reads the stored provider; filters by the vendor table's `supports`; disables the slots when `owned` is false. `generated.ts` regenerated. |
 | Apply | Nothing on the web path; the wizard stops and restarts its own server. | `restart_for_config_change()` in `server.py`; the wizard awaits it, the RPC backgrounds it. |
@@ -335,7 +335,7 @@ common case rather than an edge, and it is the step that actually achieves one c
 store. LiteLLM validates the name, so the row is a normal manageable provider. Rejected:
 recording the role unset (which on the author's machine loses embedding and rerank on upgrade,
 with no way to re-pick them because the vendor is not offered) and carrying the bare endpoint
-into the role block (a credential in a place the design says holds none).
+into the role pin (a credential in a place the design says holds none).
 
 **The restart is one function with two waits, and every exit reports.** The wizard awaits it
 because it has a flow to hold; the RPC backgrounds it because a save must not block for 35
