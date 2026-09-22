@@ -315,7 +315,7 @@ class WsGateway:
         """
         from raven.rpc import pdf_preview
 
-        if not pdf_preview.is_renderable(path):
+        if not (pdf_preview.has_thumb(path) if thumb else pdf_preview.is_renderable(path)):
             raise web.HTTPBadRequest(text=f"{path.suffix or path.name} cannot be rendered as a PDF")
         try:
             if thumb:

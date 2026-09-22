@@ -240,3 +240,132 @@ async def test_a_cover_on_its_way_is_not_started_twice(templates: Path, monkeypa
     release.set()
     await asyncio.gather(*deck_templates._drawing.values())
     assert deck_templates._drawing == {}, "a finished draw leaves the ledger"
+
+
+# --- the covers drawn at start, not on the click -----------------------------------
+
+
+async def test_warming_draws_only_the_covers_that_are_missing(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "tpl"
+    root.mkdir()
+    for name in ("one", "two", "three"):
+        (root / f"{name}.pptx").write_bytes(b"PK" + name.encode())
+    monkeypatch.setattr(deck_templates, "templates_dir", lambda: root)
+    monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "_failed", set())
+    monkeypatch.setattr(deck_templates, "_drawing", {})
+    two = deck_templates.find("two")
+    assert two is not None
+    (tmp_path / "covers").mkdir()
+    (tmp_path / "covers" / f"{deck_templates._cover_key(two.path)}.jpg").write_bytes(b"\xff\xd8")
+    drawn: list[str] = []
+
+    async def draw(template):
+        drawn.append(template.name)
+        return None
+
+    monkeypatch.setattr(deck_templates, "cover_for", draw)
+
+    task = deck_templates.warm_covers_in_background(delay_s=0)
+    assert task is not None
+    await task
+    await asyncio.gather(*deck_templates._drawing.values())
+    assert sorted(drawn) == ["one", "three"], "the cover already on disk is left alone"
+
+
+async def test_warming_draws_nothing_when_every_cover_is_on_disk(templates: Path, monkeypatch) -> None:
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    template = deck_templates.bundled()[0]
+    covers = deck_templates.cover_cache_dir()
+    covers.mkdir(parents=True, exist_ok=True)
+    (covers / f"{deck_templates._cover_key(template.path)}.jpg").write_bytes(b"\xff\xd8")
+    drawn: list[str] = []
+
+    async def draw(t):
+        drawn.append(t.name)
+        return None
+
+    monkeypatch.setattr(deck_templates, "cover_for", draw)
+
+    task = deck_templates.warm_covers_in_background(delay_s=0)
+    assert task is not None
+    await task
+    assert drawn == [] and deck_templates._drawing == {}
+
+
+def test_warming_never_raises_out_of_a_boot_path(monkeypatch) -> None:
+    """Its callers are the gateway's and the serve path's boot; a gallery that
+    cannot be drawn is smaller than a gateway that does not start."""
+
+    def broken() -> None:
+        raise RuntimeError("no engine here")
+
+    monkeypatch.setattr(deck_templates, "templates_dir", broken)
+    assert deck_templates.warm_covers_in_background(delay_s=0) is None
+
+
+def test_warming_is_a_no_op_without_an_engine_or_a_rasteriser(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(deck_templates, "templates_dir", lambda: None)
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    assert deck_templates.warm_covers_in_background(delay_s=0) is None
+
+    root = tmp_path / "tpl"
+    root.mkdir()
+    monkeypatch.setattr(deck_templates, "templates_dir", lambda: root)
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: False)
+    assert deck_templates.warm_covers_in_background(delay_s=0) is None
+
+
+async def test_a_shutdown_stops_the_warm_up_and_the_conversions_it_started(templates: Path, monkeypatch) -> None:
+    """Cancelling the tasks is half of it: a conversion is waited for in a thread
+    that no cancel reaches, and the interpreter's own thread-join then holds the
+    process open until LibreOffice finishes. The converters are stopped too."""
+    from raven.utils import office
+
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    stopped: list[int] = []
+    monkeypatch.setattr(office, "stop_running", lambda: stopped.append(1) or 1)
+    release = asyncio.Event()
+
+    async def slow(template):
+        await release.wait()
+        return None
+
+    monkeypatch.setattr(deck_templates, "cover_for", slow)
+
+    task = deck_templates.warm_covers_in_background(delay_s=0)
+    assert task is not None
+    await task
+    assert len(deck_templates._drawing) == 1
+
+    deck_templates.stop_warming()
+
+    assert stopped == [1], "the child LibreOffice is stopped, not only the task"
+    assert deck_templates._drawing == {}
+    assert deck_templates._warming is None
+    release.set()
+
+
+def test_a_shutdown_that_cannot_stop_the_converters_still_returns(monkeypatch) -> None:
+    """A shutdown is not the place to raise: whatever the converters do, the
+    teardown after this call has to run."""
+    from raven.utils import office
+
+    monkeypatch.setattr(deck_templates, "_warming", None)
+    monkeypatch.setattr(deck_templates, "_drawing", {})
+
+    def broken() -> int:
+        raise RuntimeError("the registry is gone")
+
+    monkeypatch.setattr(office, "stop_running", broken)
+    deck_templates.stop_warming()
+
+
+def test_a_shutdown_before_any_warm_up_is_harmless(monkeypatch) -> None:
+    from raven.utils import office
+
+    monkeypatch.setattr(deck_templates, "_warming", None)
+    monkeypatch.setattr(deck_templates, "_drawing", {})
+    monkeypatch.setattr(office, "stop_running", lambda: 0)
+    deck_templates.stop_warming()

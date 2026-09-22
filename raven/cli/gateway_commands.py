@@ -755,6 +755,13 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     except OSError as exc:
                         logger.warning("page mount failed ({}); gateway continues without the page", exc)
                 if page_mount is not None:
+                    # The page is what shows the deck template gallery, so its
+                    # covers are drawn now, in the background, rather than on
+                    # the click that opens it; a no-op without the engine or
+                    # once the cache is warm.
+                    from raven.rpc import deck_templates
+
+                    deck_templates.warm_covers_in_background()  # pragma: no cover
                     # One shared loop, two question surfaces. build_rpc_stack
                     # bound the page's broker over the channel broker wired
                     # above (AskUserTool._broker is process-wide, last write
@@ -1120,6 +1127,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 else:
                     raise
             finally:
+                # Before anything that waits: a cover still converting holds a
+                # LibreOffice child, and the thread waiting on it would hold the
+                # interpreter open past every teardown below.
+                from raven.rpc import deck_templates as _deck_templates  # pragma: no cover
+
+                _deck_templates.stop_warming()  # pragma: no cover
                 if health_server is not None:
                     health_server.close()
                 # Stop the proactive producers before tearing down the scheduler

@@ -961,6 +961,32 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 #wdChip.chrome-wd-set { color: var(--text); }
 
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
+/* The transcript stops being painted before it reaches the composer instead of
+   sliding under it. The card is opaque (see .dock-in), so a line arriving at
+   its top edge was cut mid-glyph, and the 22px of gutter below the card left
+   the next line legible UNDER the thing the reader is typing in.
+
+   A mask, not the ground-coloured band this file used to carry above the
+   composer: a band is a rectangle painted OVER the transcript, so it has to
+   match whatever is behind it, and on a wash that is a gradient it reads as a
+   flat seam -- the exact fault that got the old one deleted. A mask takes the
+   alpha out of the transcript itself, so there is no ground to match.
+
+   Addressed to the scrollport's box rather than to the content: a mask is
+   painted over the element's own border box, which does not scroll, so the
+   ramp stays where the composer is while the text moves through it.
+
+   Clear from --lift upward, which is the top of the HIGHEST docked thing
+   (dockLift, features/composer/store.ts) -- a composer that has grown a line,
+   queued rows, a clarify sheet -- so the edge tracks all three rather than the
+   resting card's height. .col reserves that same --lift as bottom padding, so
+   at the tail there is nothing under the ramp: it bites only while the reader
+   is scrolled up, which is the only time the overlap existed. */
+.scroll {
+  --tail-fade: 40px;
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - var(--lift, 96px) - var(--tail-fade)), transparent calc(100% - var(--lift, 96px)));
+  mask-image: linear-gradient(180deg, #000 calc(100% - var(--lift, 96px) - var(--tail-fade)), transparent calc(100% - var(--lift, 96px)));
+}
 /* Bottom inset tracks the floating composer (--lift is the card's height plus
    its offset, published by dockLift), so the last message always clears the
    glass with room to spare -- growing exactly when the textarea does. */
@@ -1043,12 +1069,12 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* Attachments stack above the bubble rather than inside it: a handed-over file
    is a thing, the sentence is what was said about it, and one bubble holding
    both made the picture look like punctuation. */
-/* One turn, two shapes. What the reader wrote is a bubble that ends where the
-   sentence ends, pulled to their side of the column; what the agent answered is
-   a card of constant width. The card does not track its own length on purpose:
-   a column of cards whose widths follow their word counts reads as a ragged
-   edge, and the rhythm of this column is meant to be one turn, not one
-   sentence. */
+/* Two shapes. What the reader wrote is a bubble that ends where the sentence
+   ends, pulled to their side of the column; what the agent answered is a card
+   of constant width holding everything it did until the reader spoke again.
+   The card does not track its own length on purpose: a column of cards whose
+   widths follow their word counts reads as a ragged edge, and the rhythm of
+   this column is meant to be the exchange, not the sentence. */
 .turn { display: flex; flex-direction: column; min-width: 0; }
 .turn.me { align-self: flex-end; align-items: flex-end; max-width: 70%; }
 .turn.ai { align-self: stretch; width: 100%; max-width: 760px; margin-right: auto; }
@@ -1498,6 +1524,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   width: auto; aspect-ratio: auto; margin: 12px 0 12px 12px; border-bottom: 0; border-radius: 7px;
   border: 1px solid var(--line-soft); height: 98px;
 }
+/* A rendered page or a photo keeps the tile's 16:10 ratio at that height, which
+   is wider than the 92px column the document face fits in -- left there, the
+   picture ran over the title beside it. The column follows the picture. */
+.atiles.single .atile:has(> .pic.shot) { grid-template-columns: auto minmax(0, 1fr); }
 .atiles.single .atile .cap { align-content: center; padding: 13px 16px; }
 /* No narrow-container type step. Every caption row is one ellipsised line now,
    so a narrow card already fits without shrinking anything -- and shrinking the
@@ -1858,8 +1888,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    the transparent rule outweighed the hover and the copy and branch buttons
    never came back. One element, and the reveal outranks the rest by its own
    pseudo-class. */
-.turn > .ansfoot { opacity: 0; transition: opacity .12s; }
-.turn:hover > .ansfoot, .turn:focus-within > .ansfoot { opacity: 1; }
+/* Both places a footer can sit: under the card, and -- when the card holds
+   more than one turn -- between two turns inside it. */
+.turn > .ansfoot, .msg.ai > .ansfoot { opacity: 0; transition: opacity .12s; }
+.turn:hover > .ansfoot, .turn:focus-within > .ansfoot,
+.turn:hover .msg.ai > .ansfoot, .turn:focus-within .msg.ai > .ansfoot { opacity: 1; }
 .answer .acts, .answer .turnmeta { opacity: 0; transition: opacity .12s; }
 .answer:hover .acts, .answer:hover .turnmeta,
 .answer:focus-within .acts, .answer:focus-within .turnmeta { opacity: 1; }
@@ -2141,11 +2174,13 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 :root[data-font="sf"] { --mono: "SF Mono", "SFMono-Regular", ui-monospace, monospace; }
 
 /* ── composer ──────────────────────────────────────────────────────── */
-/* A frosted card floating over the transcript, not a bar the page ends at.
-   The transcript scrolls underneath and stays legible through the glass --
-   that ghosting IS the transition, which is why the old fade band above the
-   composer is gone. Only the card takes pointer events; the gutter around it
-   still belongs to the page. */
+/* An opaque card floating over the transcript, not a bar the page ends at.
+   The transcript neither reads through it nor passes legibly behind it: the
+   scroller's alpha reaches zero at this card's top edge, so a line scrolled
+   up dissolves just above the card rather than sliding under it -- see the
+   mask on .scroll, which spends the same --lift that is measured from here.
+   Only the card takes pointer events; the gutter around it still belongs to
+   the page. */
 .dock { position: absolute; left: 0; right: 0; bottom: 22px; padding: 0 36px 0 36px;
   z-index: 5; pointer-events: none; }
 /* Below the card, not inside it: a legal-ish caption printed on the glass

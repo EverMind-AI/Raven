@@ -1397,6 +1397,23 @@ def test_serve_starts_the_litellm_warm_up_at_boot() -> None:
     assert "warm_up_in_background()" in inspect.getsource(serve_commands._serve_main)
 
 
+def test_serve_warms_the_deck_template_covers_at_boot() -> None:
+    """The template gallery's covers are drawn once the gateway is up, not on the
+    click that opens the gallery; pinned by source for the same reason as above."""
+    import inspect
+
+    assert "deck_templates.warm_covers_in_background()" in inspect.getsource(serve_commands._serve_main)
+
+
+def test_serve_stops_the_cover_warm_up_when_it_shuts_down() -> None:
+    """What the warm-up started outlives the loop unless something stops it, and
+    a conversion left running holds the process open; pinned by source."""
+    import inspect
+
+    src = inspect.getsource(serve_commands._serve_main)
+    assert "_deck_templates.stop_warming()" in src.split('logger.info("serve: shutting down")', 1)[1]
+
+
 # ---------------------------------------------------------------------------
 # _ServedStack -- the stack a loop-less start still owes
 # ---------------------------------------------------------------------------

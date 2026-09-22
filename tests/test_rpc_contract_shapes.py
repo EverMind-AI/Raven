@@ -421,6 +421,38 @@ async def test_session_compress_after_compacting(workspace: Path) -> None:
     assert out.info is not None and out.messages is not None and out.usage is not None
 
 
+async def test_session_usage(workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import date
+
+    from raven.rpc.methods import session as session_mod
+
+    # The telemetry dir hangs off HOME, not off the config path, so the fixture
+    # alone leaves this scanning the developer's real usage files.
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    # Nothing recorded: the unpriced shape, which a `cost_usd: float` that
+    # forgot its None would fail on.
+    unpriced = _check("session.usage", await session_mod.session_usage({"session_id": "tui:none"}))
+    assert unpriced.calls == 0 and unpriced.cost_usd is None
+
+    telemetry = home / ".raven" / "telemetry"
+    telemetry.mkdir(parents=True)
+    row = {
+        "schema_version": 2,
+        "session_key": "tui:20260922_101500_aabbcc",
+        "root_session_key": "tui:20260922_101500_aabbcc",
+        "input_tokens": 5,
+        "output_tokens": 2,
+        "cache_read_tokens": 1,
+        "cache_write_tokens": 1,
+        "cost_usd": 0.25,
+    }
+    (telemetry / f"usage-{date.today().isoformat()}.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    paid = _check("session.usage", await session_mod.session_usage({"session_id": row["session_key"]}))
+    assert paid.calls == 1 and paid.total == 9 and paid.cost_usd == 0.25
+
+
 async def test_session_status(workspace: Path) -> None:
     from raven.rpc.methods.slash_routing import session_status
 
@@ -486,7 +518,8 @@ STUBS = [
     "voice.record",
     "session.save",
     "session.steer",
-    "session.usage",
+    # session.usage was promoted to a real handler in methods/session.py; its
+    # result is checked by test_session_usage above.
     "skills.reload",
     "reload.env",
     "sudo.respond",

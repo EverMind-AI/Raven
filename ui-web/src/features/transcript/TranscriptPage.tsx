@@ -1482,10 +1482,11 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview }: {
       setShot('broken')
       void askIfGone(url).then((gone) => { if (gone) setState('missing') })
     }} />
-  ) : kind === 'pptx' && shot === 'draw' ? (
-    /* The first page, as the gateway renders it. A render the host cannot
-       make (no LibreOffice, a timeout) arrives as a failed <img>, and the
-       tile shows the document face: the file is there, only the picture
+  ) : (kind === 'pptx' || kind === 'pdf') && shot === 'draw' ? (
+    /* The first page, as the gateway renders it: a deck through LibreOffice,
+       a PDF straight from its own pages. A render the host cannot make (no
+       LibreOffice, no rasteriser, a timeout) arrives as a failed <img>, and
+       the tile shows the document face: the file is there, only the picture
        of it is not, so nothing is asked about the file itself. */
     <DeliveryShot row={row} src={thumbURL(row.path)} broken={() => setShot('broken')} />
   ) : preview?.head ? <ArtMini name={row.name} head={preview.head} />
@@ -1574,22 +1575,21 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
     <div className={'tfold' + (seg.open ? ' open' : '')}>
       <button ref={headRef} className="tfh" aria-label={t('gui.fold.aria')}
         aria-expanded={String(seg.open) as 'true' | 'false'} onClick={flip}>
-        {/* What the fold HOLDS, not a verdict on the task. "done" added
-            nothing and implied something false: a backgrounded graph outlives
-            the turn that dispatched it, so a reader saw `done` over a task
-            still running below. On a delegated lane it would be false outright
-            -- a text said on the way no longer closes the turn, so that pane
-            shows a fold with no answer under it for as long as the turn runs. */}
+        {/* The turn's verdict, not an inventory of the fold: the row is what
+            stays on screen once the steps fold away, so it reads as the turn's
+            closing line. It is the TURN that is done -- a backgrounded graph
+            dispatched from it may still be running below, and its own status
+            lives on the task rows, not here. */}
         <span className="lb">{t('gui.fold.steps')}</span>
         <span className="tm">{seg.time || ''}</span>
         <Chev />
       </button>
       {/* A shut body is not built, which is where the weight was: a forty-turn
           session built 7361 nodes of which 6400 sat in shut fold bodies. On the
-          conversation's lane at most one fold is open -- the turn the reader is
-          looking at, whether they just watched it finish (`collapse`) or just
-          reopened the conversation on it (`openLastFold`) -- so one body IS
-          built, and one is not a session's worth.
+          conversation's lane the runtime opens at most one fold -- the turn a
+          reopened conversation ends on (`openLastFold`); a turn that just
+          finished shuts its own (`collapse`) -- so at most one body IS built,
+          and one is not a session's worth.
 
           A delegated pane opens every turn's, and is a different size of thing:
           measured on the two largest instance records on hand, 55 messages in
@@ -1622,11 +1622,15 @@ function SegView({ lane, seg }: { lane: Lane; seg: Seg }): ReactElement | null {
   }
 }
 
-/* What one AI turn's card holds: the work it did, folded, and what it said.
-   Everything else is a row of its own -- the reader's own message, a delegation
-   coming back, and the page's annotations are not things this turn produced,
-   and a card drawn around them would claim they were. */
-const CARDED = new Set(['fold', 'step', 'answer', 'arts'])
+/* What a card holds: the work the agent did, folded, what it said, and the
+   delegated results that re-entered while it worked. One card spans everything
+   between two things the reader said, so it holds as many turns as the agent
+   took -- a result landing between them is a message inside the card, not a
+   seam across it.
+   The reader's own message and the page's annotations stay rows of their own:
+   the first carries its own shape, and the second is the page talking rather
+   than the agent. */
+const CARDED = new Set(['fold', 'step', 'answer', 'arts', 'sdlv'])
 
 function stageRows(lane: Lane): ReactElement[] {
   const rows: ReactElement[] = []
@@ -1645,17 +1649,34 @@ function stageRows(lane: Lane): ReactElement[] {
        what the first seconds of every turn looked like. */
     const group = lane.segs.slice(i, end).filter((part) => part.kind !== 'step' || !stepBlank(part))
     if (!group.length) { i = end; continue }
-    /* The footer belongs to the answer but sits under the whole card, so what
-       a turn delivered is above its own copy button rather than below it. */
-    const answer = group.find((part) => part.kind === 'answer') as AnswerData | undefined
+    /* The footer belongs to the answer but sits under whatever that turn
+       delivered, so a turn's products are above its own copy button rather
+       than below it. One per answer, not one per card: a card holds every turn
+       between two things the reader said, so a single footer would have copied
+       the first answer whichever one the reader clicked it beside, and left
+       every later answer without a button at all. The LAST answer keeps its
+       footer outside the card, which is where the one-turn card -- still the
+       ordinary case -- has always drawn it. */
+    const answers = group.filter((part) => part.kind === 'answer') as AnswerData[]
+    const last = answers.length ? answers[answers.length - 1] : undefined
+    const kids: ReactNode[] = []
+    group.forEach((part, idx) => {
+      kids.push(part.kind === 'answer'
+        ? <AnswerView key={`${lane.epoch}:${part.id}`} lane={lane} seg={part} showFoot={false} />
+        : <SegView key={`${lane.epoch}:${part.id}`} lane={lane} seg={part} />)
+      const before = group[idx - 1]
+      const owner = part.kind === 'answer' ? part
+        : part.kind === 'arts' && before?.kind === 'answer' ? before as AnswerData
+        : undefined
+      /* Held back one place when the answer's own products follow it, so the
+         footer still lands under them rather than between the two. */
+      if (!owner || owner === last || (part.kind === 'answer' && group[idx + 1]?.kind === 'arts')) return
+      kids.push(<AnswerFoot key={`${lane.epoch}:${owner.id}f`} lane={lane} seg={owner} />)
+    })
     rows.push(
       <div className="turn ai" key={`${lane.epoch}:${seg.id}`}>
-        <div className="msg ai">
-          {group.map((part) => (part.kind === 'answer'
-            ? <AnswerView key={`${lane.epoch}:${part.id}`} lane={lane} seg={part} showFoot={false} />
-            : <SegView key={`${lane.epoch}:${part.id}`} lane={lane} seg={part} />))}
-        </div>
-        {answer ? <AnswerFoot lane={lane} seg={answer} /> : null}
+        <div className="msg ai">{kids}</div>
+        {last ? <AnswerFoot lane={lane} seg={last} /> : null}
       </div>,
     )
     i = end

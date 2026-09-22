@@ -44,7 +44,9 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -171,6 +173,32 @@ def to_pdf(
     )
 
 
+_LIVE: set[subprocess.Popen] = set()
+"""Every converter this process has started and not yet reaped.
+
+A conversion is waited for in a thread, and cancelling the task that started
+that thread does not reach either the thread or the child: the interpreter
+then holds the whole process open at exit until the converter finishes on its
+own. :func:`stop_running` is what a shutdown has instead."""
+
+_LIVE_LOCK = threading.Lock()
+
+
+def stop_running() -> int:
+    """Stop every converter still running here, and say how many there were.
+
+    For a shutdown, and only for one: a conversion someone is waiting on dies
+    with it. The alternative is a gateway that cannot be stopped for as long as
+    the longest conversion it happens to have started.
+    """
+    with _LIVE_LOCK:
+        live = list(_LIVE)
+    for process in live:
+        with suppress(Exception):
+            terminate(process)
+    return len(live)
+
+
 def _run(command: Sequence[str], *, timeout_s: float) -> tuple[int, str, str]:
     windows = sys.platform == "win32"
     process = subprocess.Popen(  # noqa: S603 - fixed argv, never a shell string
@@ -183,6 +211,8 @@ def _run(command: Sequence[str], *, timeout_s: float) -> tuple[int, str, str]:
         start_new_session=not windows,
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if windows else 0,
     )
+    with _LIVE_LOCK:
+        _LIVE.add(process)
     try:
         stdout, stderr = process.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired as exc:
@@ -190,6 +220,9 @@ def _run(command: Sequence[str], *, timeout_s: float) -> tuple[int, str, str]:
         # Reaped here so the directory the run used can be removed after it.
         process.communicate()
         raise TimeoutError(f"the conversion exceeded {timeout_s:g}s and was stopped") from exc
+    finally:
+        with _LIVE_LOCK:
+            _LIVE.discard(process)
     return process.returncode, stdout or "", stderr or ""
 
 

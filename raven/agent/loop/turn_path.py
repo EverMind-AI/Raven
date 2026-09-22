@@ -88,6 +88,7 @@ from raven.contracts.loop_hooks import HookDecision
 from raven.permissions.turn import set_current_tool_call_id
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
+from raven.token_wise.turn_spend import TurnSpend
 
 if TYPE_CHECKING:
     from raven.agent.loop.checkpoint import CheckpointService
@@ -501,6 +502,7 @@ class TurnPathMixin:
         turn_started_at: float | None = None,
         attempt: int = 1,
         rerun_pending: "Callable[[str | None, list[dict], str], bool] | None" = None,
+        spend: TurnSpend | None = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -539,7 +541,13 @@ class TurnPathMixin:
         one the rerun discards, and the minutes spent making it come out of the
         turn's own clock. Omitted, the seam fires for every answerless turn,
         which is what every agent that budgets no rerun sees.
+
+        ``spend`` is the turn's cost, which outlives this loop the way the
+        clock above does: a rerun is a second attempt at one turn and bills
+        into the same scope. A caller that opened no scope gets one for this
+        loop alone, which bills its own calls and takes no delegated ones.
         """
+        spend = spend if spend is not None else TurnSpend(session_key)
         messages = initial_messages
         iteration = 0
         final_content = None
@@ -965,6 +973,7 @@ class TurnPathMixin:
                 },
                 usage_snapshot,
             )
+            spend.note(usage_snapshot.cost_usd)
             # The stream caller (turn.* handler) may want the
             # final-iteration usage to populate `message.complete.payload.usage`
             # on the wire. Use the wire-contract TurnUsage
@@ -1012,8 +1021,13 @@ class TurnPathMixin:
                 usage_sink["prompt_tokens"] = prompt_tokens
                 usage_sink["completion_tokens"] = completion_tokens
                 usage_sink["total_tokens"] = int(response.usage.get("total_tokens", 0) or 0)
-                usage_sink["cost_usd"] = usage_snapshot.cost_usd
-                usage_sink["cost_missing_calls"] = int(usage_snapshot.cost_usd is None)
+                # The counts above are this call's: what they feed is a gauge --
+                # how full the window is now. The cost is the turn's: it is a
+                # flow, so it sums every iteration this turn ran and every call
+                # its delegations made while it ran. Billing the final call
+                # alone reported a fifth of what a delegating turn spent.
+                usage_sink["cost_usd"] = spend.cost_usd
+                usage_sink["cost_missing_calls"] = spend.cost_missing_calls
                 usage_sink["context_max"] = context_max
                 usage_sink["context_used"] = context_used
                 usage_sink["context_percent"] = round(100 * context_used / context_max) if context_max else 0
@@ -2193,6 +2207,11 @@ class TurnPathMixin:
         from raven.agent.subagent.attachments import turn_attachments
         from raven.agent.subagent.mode_tiers import turn_tier
 
+        # The turn's cost, opened around the attempts rather than inside one:
+        # every attempt is this turn spending, and so is every sub-agent it
+        # dispatches, which bills in from its own session by this key.
+        spend = TurnSpend(key)
+
         async def _attempt(seed: list[dict], attempt: int):
             pending.update(rerun=False, reasons=[])
             # The list this attempt appends to, for the rescue paths below. A rerun
@@ -2220,6 +2239,7 @@ class TurnPathMixin:
                 turn_started_at=turn_t0,
                 attempt=attempt,
                 rerun_pending=_rerun_pending,
+                spend=spend,
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
@@ -2284,7 +2304,7 @@ class TurnPathMixin:
             # And its attachments, for the same reader: a dispatch that names a
             # file the user attached is handing it over, one that names any other
             # .pptx is not, and only the turn knows which is which.
-            with turn_tier(self.session_tier(key)), turn_attachments(req.media):
+            with turn_tier(self.session_tier(key)), turn_attachments(req.media), spend.collecting():
                 final_content, _, all_msgs, outcome = await _attempt(initial_messages, attempt_no)
                 # The conditional rerun. A dead turn has no answer to damage -- "empty
                 # implies wrong" is a scoring rule, so the count of right answers among

@@ -1,7 +1,6 @@
 import { t } from '../../i18n/t'
-import { I18N } from '../../i18n/t'
 import { argPath, firstErrLine, phraseOf, shortArg, splitMcp, verbIngOf, verbOf } from '../../lib/actVerbs'
-import { splitAttachments } from '../../lib/attachments'
+import { readMessage } from '../../lib/attachments'
 import { formatDuration } from '../../lib/duration'
 import * as hunks from '../../lib/hunks'
 import { md } from '../../lib/prose'
@@ -1297,35 +1296,16 @@ export function newStep(lane: Lane): StepHandle {
 const stepSolid = (s: StepData): boolean =>
   s.calls.length > 0 || (s.thinkShown && s.hasThink) || !!s.say.trim()
 
-/* Whether anything under this fold is still running.
+/* Every fold this lane opened by itself, shut. The reader's own are left
+ * alone: `toggleFold` clears `auto`, so a fold they have touched is no longer
+ * one of these.
  *
- * A backgrounded sub-agent outlives the turn that dispatched it -- by minutes,
- * and the card carries a live tail of what it is saying, which is the only
- * place a reader can see that at all. */
-function holdsALiveRun(fold: FoldData): boolean {
-  return fold.steps.some((step) => step.calls.some(spawnLive))
-}
-
-/* Every fold this lane opened by itself, shut. Two are left alone.
- *
- * The reader's own: `toggleFold` clears `auto`, so a fold they have touched is
- * no longer one of these.
- *
- * And any that still holds a running sub-agent. Shutting it takes the run's
- * live tail off the screen while the run is still going, and a shut body is
- * not built at all, so nothing is left to watch. Measured: a spawn dispatched
- * in one turn, the reader asks "how is it going" in the next, that next turn's
- * fold opens and shuts this one -- and the answer had to be fetched by reading
- * a file, because the page was no longer showing what the page already knew.
- *
- * The fold's own note already said half of this: "a backgrounded graph
- * outlives the turn that dispatched it, so a reader saw `done` over a task
- * still running below." That was answered by renaming the row. The row was
- * never the part that was hidden. */
+ * A running sub-agent under a fold does not hold it open. The run's own status
+ * lives on the task rows, which is where a reader follows it; the fold is the
+ * turn's, and the turn is over. */
 function shutAutoFolds(lane: Lane, except: FoldData | null): void {
   lane.segs.forEach((s) => {
     if (s.kind !== 'fold' || s === except || !s.auto) return
-    if (holdsALiveRun(s)) return
     s.auto = false
     s.open = false
     bump(lane, s)
@@ -1335,20 +1315,18 @@ function shutAutoFolds(lane: Lane, except: FoldData | null): void {
 /* Once the answer has landed, everything that led to it collapses behind one
    line. A turn gets ONE fold: work landing after an early fold joins it.
  *
- * `live` is the turn the reader just watched, and its fold opens. Shut, it
- * took a sequence they had been reading -- five rows, each naming what the
- * step did -- and replaced it with the word "steps", at the one moment they
- * were most likely to want it. Nothing on the row said five things were under
- * it, so there was not even a reason to click.
+ * `live` is the turn the reader just watched. Its steps were on screen, loose,
+ * the whole time the turn ran; once the answer lands they fold shut behind the
+ * one line, so what stays on screen is the answer and not the trail that led
+ * to it. The trail is one click away, and the row's clock says there is one.
+ * A sub-agent still running under it does not keep it open: that run is
+ * followed on the task rows, not here.
  *
- * One at a time, and the previous one shuts as the next opens, because the
- * weight is what a SESSION accumulates: a forty-turn session built 7361 nodes
- * and 6400 of them sat in shut fold bodies. One open fold is the turn on
- * screen, not a session's worth.
- *
- * Replay opens at most one too -- see :func:`openLastFold`, which is the same
- * rule reached from the other entry point -- so "shut unless the reader is
- * looking at it" is the whole of it, whichever way the turn arrived. */
+ * Replay opens at most one -- see :func:`openLastFold`, the turn a reopened
+ * conversation ends on -- and a live turn shuts any fold the runtime opened
+ * before it, so at most one runtime-opened body is ever built. The weight is
+ * what a SESSION accumulates: a forty-turn session built 7361 nodes and 6400 of
+ * them sat in shut fold bodies. */
 export function collapse(lane: Lane, time?: string | null, live = false): void {
   const segs = lane.segs
   const loose: StepData[] = []
@@ -1393,7 +1371,7 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
      `shutAutoFolds` stays on the live path, where a whole session's folds
      accumulate. Marked `auto` either way, so the reader's own collapse takes it
      over from the runtime (`toggleFold`) and survives the next poll. */
-  const born = live || !lane.main
+  const born = !lane.main
   const f: FoldData = {
     v: 0, id: nextId(), kind: 'fold', time: time || null, open: born, auto: born, steps: [],
   }
@@ -1953,8 +1931,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
 export function askText(
   lane: Lane, text: string, when?: string | null, opts?: { midTurn?: boolean } | null,
 ): AskData {
-  const notes = Object.values((I18N.ui['gui.att.note'] ?? {}) as Record<string, string>).filter(Boolean)
-  const { body, atts } = splitAttachments(String(text), notes)
+  const { body, atts } = readMessage(String(text))
   return ask(lane, body, atts, when, opts)
 }
 
