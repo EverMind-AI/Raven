@@ -424,8 +424,8 @@ function CallRow({ call, nodeKey, foldKey }: { call: ToolCall; nodeKey: string; 
   return (
     <div className={'tkwrow' + (!done ? ' tkbusy' : '') + (bad ? ' tkbad' : '') + (withDtl ? ' tktog' : '') + (withDtl && open ? ' tkopen' : '')}>
       {withDtl
-        ? <button type="button" aria-expanded={open} onClick={() => store.setFold(nodeKey, foldKey, !open)}>{inner}</button>
-        : <div>{inner}</div>}
+        ? <button type="button" className="tkwhd" aria-expanded={open} onClick={() => store.setFold(nodeKey, foldKey, !open)}>{inner}</button>
+        : <div className="tkwhd">{inner}</div>}
       {withDtl && open
         ? (kind === 'plain'
           ? <PlainDtl call={call} bare={bare} args={args} label={label} />

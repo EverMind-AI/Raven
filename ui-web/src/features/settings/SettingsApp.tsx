@@ -17,6 +17,7 @@ import { Provider } from './pages/Provider'
 import { Skills } from './pages/Skills'
 import { Tools } from './pages/Tools'
 import { Usage } from './pages/Usage'
+import { AddModelLayer } from './providers/AddModelPop'
 import * as store from './store'
 import { HOSTED, SECTIONS } from './store'
 import './styles.css'
@@ -111,6 +112,9 @@ export function SettingsApp(): JSX.Element {
           <InlineErr text={s.err} />
         </div>
       )}
+      {/* Beside the panel, not in it: the epoch key above replaces that box on
+          every write, and this popover has to outlive one. */}
+      <AddModelLayer />
     </>
   )
 }

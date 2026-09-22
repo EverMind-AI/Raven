@@ -100,9 +100,34 @@ const GTM_DELIVERY_FILES: DeliveryFile[] = [
   { path:'research/brief.docx', name:'brief.docx', title:'研究摘要', size:16820, media_type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
 ];
 
+/* The fix run's write-up, and the one file it delivers. A single delivery is
+   drawn as a headline row rather than as a tile, and that row is the shape a
+   long title and a long description have to survive -- so this one carries a
+   title and a sentence at the length a real write-up has, not a two-word
+   label that would fit any layout. */
+const FIX_REPORT = `## 登录接口偶发超时
+
+### 根因
+
+整点的批量同步任务和登录请求共用同一个连接池（\`max_open_conns=10\`）。任务一跑就占满
+连接，登录请求卡在获取连接处，一直等到网关 15s 超时。
+
+### 改动
+
+- 后台任务改用独立连接池（上限 4），与请求路径隔离。
+- 请求路径获取连接加 2s 上限，拿不到就快速失败并计入指标。
+- 主池上限 10 → 25（实测峰值并发 18）。
+
+### 验证
+
+\`go test ./internal/... -run TestLogin -count=3\` → 3 runs, 0 failures。
+`;
+
 const FIX_DELIVERY_FILES: DeliveryFile[] = [
-  { path:'internal/db/pool.go', name:'pool.go', title:'连接池修复',
-    description:'后台任务使用独立连接池，登录请求增加 2 秒超时。', size:3412, media_type:'text/x-go' },
+  { path:'notes/login-timeout.md', name:'login-timeout.md',
+    title:'登录接口偶发超时：根因、改动与验证',
+    description:'连接池被整点批量任务占满导致请求排队，含独立连接池与 2 秒获取上限两处改动，附三轮回归结果。',
+    size:2184, media_type:'text/markdown' },
 ];
 
 const GTM_FILE_EVENTS: ScriptEvent[] = [
@@ -306,8 +331,10 @@ const RUNS: Record<string, Run> = {
       { t:'t-', d:400, id:9, ok:true, r:'', ms:400 },
       { t:'ep', d:320 },
       { t:'think', d:700, s:4, x:'测试通过。把根因、改动、验证写清楚，并给出后续建议。' },
-      { t:'t+', d:120, id:10, n:'deliver_files', a:{ files:[{ path:'internal/db/pool.go' }] } },
-      { t:'t-', d:120, id:10, ok:true, r:'Delivered 1 file: pool.go', ms:120,
+      { t:'t+', d:200, id:10, n:'write_file', a:{ path:'notes/login-timeout.md', content: FIX_REPORT } },
+      { t:'t-', d:260, id:10, ok:true, r:'wrote notes/login-timeout.md (19 lines)', ms:260 },
+      { t:'t+', d:120, id:11, n:'deliver_files', a:{ files:[{ path:'notes/login-timeout.md' }] } },
+      { t:'t-', d:120, id:11, ok:true, r:'Delivered 1 file: login-timeout.md', ms:120,
         meta:{ raven_delivery:{ files:FIX_DELIVERY_FILES } } },
       { t:'answer', d:500, x:`## 根因
 

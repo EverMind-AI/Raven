@@ -9,7 +9,7 @@
  * flatter rendering of the same steps to fall out of step with the graph.
  */
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { Glyph, SendGlyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
@@ -749,12 +749,65 @@ function OrderTab({ row, node, roster, rec }: {
   )
 }
 
+/* How near the end still counts as being at it: about two lines, the same
+   slack the transcript's own thought box allows a reader. */
+const TAIL_SLACK_PX = 40
+
+/* Keeps a reader at the end of a record that is still being written.
+ *
+ * `useNodeRecord` re-reads a running node every second and the card re-renders
+ * whole, so every paint is a chance to move the reader -- and parked at the
+ * end, it did. The paint takes the box through a shorter height, the browser
+ * clamps `scrollTop` against it, and nothing hands it back when the content
+ * returns: measured on the page, one such paint left a reader parked at the
+ * end of a 5,090px record sitting at 0. What that looked like was dragging to
+ * the bottom of a running step and being thrown back up a block, once per
+ * trip down.
+ *
+ * So the box re-pins itself when a read lands, for a reader who asked to be at
+ * the end and only for them. A `scroll` event is the honest source for that:
+ * re-rendering the record does not fire one, so the flag holds whatever the
+ * reader last did. It starts false, because a record opens at its beginning,
+ * and `key` resets it -- another node, or the work order, is a different thing
+ * to read rather than a continuation of this one.
+ *
+ * `record` is the whole gate on when to pin, rather than every render: this
+ * panel reads the task store, and every fold in the record writes to it
+ * (`store.setFold`), so a pin on each render would answer a reader opening a
+ * step above with a jump to the end -- away from the thing they just opened.
+ * `useNodeRecord` hands back a fresh object per read and keeps the old one
+ * while the next read is in flight, so this fires on the reads that move the
+ * content and on nothing else, the settling read included. */
+function useTailFollow(key: string, record: NodeRecord | null) {
+  const box = useRef<HTMLDivElement>(null)
+  const wantsTail = useRef(false)
+  /* Declared before the pin below, because layout effects run in order and a
+     reset that landed after it would pin the new thing to its end first. */
+  useLayoutEffect(() => { wantsTail.current = false }, [key])
+  useEffect(() => {
+    const el = box.current
+    if (!el) return
+    const note = (): void => {
+      wantsTail.current = el.scrollHeight - el.scrollTop - el.clientHeight < TAIL_SLACK_PX
+    }
+    el.addEventListener('scroll', note, { passive: true })
+    return () => el.removeEventListener('scroll', note)
+  }, [])
+  /* In the layout phase, so the box is never painted at the clamped offset. */
+  useLayoutEffect(() => {
+    const el = box.current
+    if (el && wantsTail.current) el.scrollTop = el.scrollHeight
+  }, [record])
+  return box
+}
+
 function NodePanel({ row, node, paneId, onClose, roster }: {
   row: TaskRow; node: TaskNode; paneId: string; onClose: () => void; roster: SubagentRow[]
 }): JSX.Element {
   useSyncExternalStore(store.subscribe, store.get)
   const rec = useNodeRecord(row, node)
   const pinned = store.tabOf(paneId)
+  const body = useTailFollow(`${paneId}:${node.node_id}:${pinned ?? ''}`, rec.record)
   /* A skipped step opens on the context tab too -- it has no order to
      dispatch, but it does have a reason it never ran, and that reason is
      what the context tab reads first (`nodeWhyText`). Only a step still
@@ -786,7 +839,7 @@ function NodePanel({ row, node, paneId, onClose, roster }: {
       {/* The one scrolling child: the header above stays put and, on the
          context tab, the reply dock below stays pinned at the bottom --
          neither rides off the top or the end of a long record. */}
-      <div className="tkbody">
+      <div className="tkbody" ref={body}>
         {tab === 'context'
           ? <ContextTab row={row} node={node} rec={rec} />
           : <OrderTab row={row} node={node} roster={roster} rec={rec} />}

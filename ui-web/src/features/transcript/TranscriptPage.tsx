@@ -870,7 +870,17 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
 
 /* ── the step: thought, narration, work ────────────────────────────────── */
 
-const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepData }): ReactElement {
+/* A step whose every part is hidden. A turn opens its first step the moment it
+   is dispatched, and until a thought, a sentence or a call arrives that step
+   draws three hidden boxes and nothing else -- which is an empty card sitting
+   on the stage for as long as the model takes to answer.
+   Not `stepSolid` (store.ts): that one asks whether a step is worth keeping
+   when folding, and a step being THOUGHT about -- revealed, no text yet -- is
+   not solid but does draw its "thinking" row. */
+const stepBlank = (seg: StepData): boolean =>
+  !seg.thinkShown && !seg.say && seg.calls.length === 0
+
+const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepData }): ReactElement | null {
   useSeg(lane, seg)
   const thinkRef = useRef<HTMLDivElement | null>(null)
   const cotRef = useRef<HTMLDivElement | null>(null)
@@ -922,6 +932,7 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
   const inFlight = seg.calls.find((c) => !c.done)
   const sumElapsed = useTick(!!inFlight, inFlight ? inFlight.t0 : 0)
   const wkinHidden = seg.calls.length === 0 ? true : seg.calls.length === 1 ? false : !seg.wkOpen
+  if (stepBlank(seg)) return null
   return (
     <div className="step in">
       <div ref={thinkRef}
@@ -1628,7 +1639,11 @@ function stageRows(lane: Lane): ReactElement[] {
     }
     let end = i
     while (end < lane.segs.length && CARDED.has(lane.segs[end]!.kind)) end += 1
-    const group = lane.segs.slice(i, end)
+    /* A step that draws nothing yet takes the card down with it: the card is
+       the frame around what a turn produced, and a frame around nothing is
+       what the first seconds of every turn looked like. */
+    const group = lane.segs.slice(i, end).filter((part) => part.kind !== 'step' || !stepBlank(part))
+    if (!group.length) { i = end; continue }
     /* The footer belongs to the answer but sits under the whole card, so what
        a turn delivered is above its own copy button rather than below it. */
     const answer = group.find((part) => part.kind === 'answer') as AnswerData | undefined
