@@ -1024,9 +1024,10 @@ describe('transcript island, history', () => {
 
 /** Which fold is open, and who decided.
  *
- * Shut is right for a replayed conversation -- that is where the weight is --
- * and wrong for the turn the reader was just watching, whose sequence of steps
- * they were reading a second before it became the word "steps".
+ * Shut is the default, live and replayed alike: a finished turn's fold closes
+ * over the steps as the answer lands, and only the turn a reopened
+ * conversation ends on, or a fold still holding a running sub-agent, is
+ * opened by the runtime. What the reader opens or shuts is theirs.
  */
 /** Whether the thought box keeps up with the model, and whose choice that is.
  *
@@ -1149,11 +1150,12 @@ describe('a thought box while the model is still thinking', () => {
   })
 })
 
-/** A fold does not close over a sub-agent that is still working.
+/** A fold shuts over a sub-agent that is still working, like any other.
  *
- * The card inside carries a live tail of what the run is saying, and a shut
- * fold body is not built at all -- so shutting it is the difference between
- * watching a run and having to ask.
+ * The run goes on for minutes after the turn that dispatched it has answered;
+ * it is followed on the task rows, not by holding the turn's fold open. What
+ * is asserted here is that a spawn in flight buys the fold nothing: not at the
+ * turn's end, and not when the next turn shuts the folds before it.
  */
 describe('a fold holding a run that has not finished', () => {
   const RUNNING = {
@@ -1194,65 +1196,51 @@ describe('a fold holding a run that has not finished', () => {
     act(() => { mount.finishTurn(st, [st], '2s') })
   }
 
-  it('stays open when the next turn arrives', () => {
+  it('shuts at the end of its own turn', () => {
     dispatched('running')
-    expect(openFlags()).toEqual([true])
-
-    askAgain()
-
-    /* Both: the new turn's, because it is the one being watched, and the old
-       one's, because the run under it has not stopped. */
-    expect(openFlags()).toEqual([true, true])
-    expect($$('.tfold .tfb .dlgtail')).not.toHaveLength(0)
+    expect(openFlags()).toEqual([false])
   })
 
-  it('finds a run dispatched in a later step of the turn', () => {
-    /* The ordinary shape: the agent reads something, then dispatches. Looking
-       only at the turn's first step would miss every real dispatch. */
-    let a!: ReturnType<typeof mount.step>
-    let b!: ReturnType<typeof mount.step>
-    act(() => {
-      mount.ask('make me a poster')
-      a = mount.step()
-      a.setSay('let me look at the brief first')
-      a.tool('read_file', { path: '/w/brief.md' }, null).done(true, 'ok', 9)
-      a.seal()
-      b = mount.step()
-      b.setSay('dispatching it now')
-      b.tool('spawn', { task: 'draw the poster' }, null, 'call_7')
-      mount.spawnFeed(RUNNING)
-      b.seal()
+  it('finds no reason to stay open when the next turn arrives', () => {
+    dispatched('running')
+    askAgain()
+    expect(openFlags()).toEqual([false, false])
+  })
+
+  it('does not hold a replay-opened fold open either', async () => {
+    /* The fold a reopened conversation ends on is the runtime's, and the next
+       turn takes it back whether or not a run is still going under it. The
+       restored card learns its run is still going from `subagent.list`. */
+    wire({
+      spawnRecord: async () => ({ messages: [] }),
+      spawnList: async () => [{
+        id: '20260827T095926366482Z-78da7ea7', kind: 'spawn', agent: 'Raven',
+        instance: 'raven-9bc249', label: 'draw the poster', status: 'run',
+      }],
     })
-    act(() => { mount.finishTurn(b, [a, b], '11s') })
+    const t0 = Date.now() - 600000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make me a poster', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: '',
+          tool_calls: [{ id: 'call_7', name: 'spawn', arguments: JSON.stringify({ task: 'draw the poster' }) }],
+        },
+        { role: 'tool', tool_call_id: 'call_7', name: 'spawn', text: 'dispatched', spawn_task_id: '78da7ea7' },
+        { role: 'assistant', text: 'dispatching it now', timestamp: iso(t0 + 3000) },
+      ])
+    })
     expect(openFlags()).toEqual([true])
+    /* A restored card asks the roster only once the reader opens its row. */
+    act(() => { ($('.tfold.open .tfb .wkin .wrow') as HTMLElement).click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    /* The card now says the run is live -- what the old rule would have kept
+       the fold open for. */
+    expect($('.tfold.open .tfb .wrow.run')).toBeTruthy()
 
     askAgain()
 
-    expect(openFlags()).toEqual([true, true])
-  })
-
-  it('is shut by the next turn once the run has finished', () => {
-    /* The exemption is about a run in flight, not about spawns in general. */
-    dispatched('completed')
-    expect(openFlags()).toEqual([true])
-
-    askAgain()
-
-    expect(openFlags()).toEqual([false, true])
-  })
-
-  it('is shut once the run finishes and a later turn arrives', () => {
-    /* The run settles while the fold is being held open; the hold has to end
-       with it, or one long conversation accumulates every fold that ever had a
-       spawn in it. */
-    dispatched('running')
-    askAgain()
-    expect(openFlags()).toEqual([true, true])
-
-    act(() => { mount.spawnFeed({ ...RUNNING, status: 'completed' }) })
-    askAgain()
-
-    expect(openFlags()).toEqual([false, false, true])
+    expect(openFlags()).toEqual([false, false])
   })
 })
 
@@ -1284,16 +1272,19 @@ describe('the fold over a turn just finished', () => {
     act(() => { mount.finishTurn(last, [first, last], time) })
   }
 
-  it('leaves the steps on screen, without the reader opening anything', () => {
+  it('folds the steps away once the answer has landed', () => {
     liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
 
+    expect(openState()).toEqual([false])
+    /* Shut, and so not built: the answer is what stays on screen. */
+    expect($$('.tfold .tfb .step')).toHaveLength(0)
+    expect($('.tfold .tfh .tm')?.textContent).toBe('4s')
+    expect($('.answer .prose')?.textContent).toBe('the pool is the problem')
+    /* The trail is one click away, and it is the whole trail. */
+    clickFold(0)
     expect(openState()).toEqual([true])
-    /* Open, and actually holding the step -- a shut body is not built at all,
-       so the class alone would not say the sequence survived. */
     expect($$('.tfold.open .tfb .step')).toHaveLength(2)
     expect($('.tfold .tfb')?.textContent).toContain('let me check the log')
-    /* And the answer is out in the open, where a finished turn puts it. */
-    expect($('.answer .prose')?.textContent).toBe('the pool is the problem')
   })
 
   it('arrives shut for every replayed turn but the one the conversation ends on', () => {
@@ -1350,16 +1341,27 @@ describe('the fold over a turn just finished', () => {
     expect($$('.tfold .tfb .step')).toHaveLength(0)
   })
 
-  it('shuts the last turn own fold as the next turn opens one', () => {
-    /* One open fold is the turn on screen. Letting them accumulate would walk
-       back into the weight the shut default was for, a turn at a time. */
-    liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
+  it('shuts the replay-opened fold as a live turn lands', () => {
+    /* The fold a reopened conversation ends on is the runtime's, and the
+       runtime opens one body at most: the next turn takes it back. */
+    const t0 = Date.now() - 600000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'first', timestamp: iso(t0) },
+        {
+          role: 'assistant', reasoning_content: 'thinking', reasoning_ms: 500, text: '',
+          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'ok' },
+        { role: 'assistant', text: 'done one', timestamp: iso(t0 + 3000) },
+      ])
+    })
+    expect(openState()).toEqual([true])
+
     liveTurn('and the other one', 'now the other log', 'the disk is full', '3s')
 
-    expect(openState()).toEqual([false, true])
-    expect($$('.tfold.open .tfb .step')).toHaveLength(2)
-    expect($('.tfold.open .tfb')?.textContent).toContain('now the other log')
-    expect($('.tfold.open .tfb')?.textContent).not.toContain('let me check the log')
+    expect(openState()).toEqual([false, false])
+    expect($$('.tfold .tfb .step')).toHaveLength(0)
   })
 
   it('leaves a fold the reader opened open when the next turn arrives', () => {
@@ -1394,38 +1396,33 @@ describe('the fold over a turn just finished', () => {
     liveTurn('and now this', 'working on it', 'all set', '4s')
 
     /* The reader's stays. The replay's own -- still the runtime's -- shuts. */
-    expect(openState()).toEqual([true, false, true])
+    expect(openState()).toEqual([true, false, false])
   })
 
-  it('leaves a fold the reader shut shut, rather than opening it again', () => {
-    /* The other half of the same rule, and the half a fold that opens by
-       itself gets wrong: the reader shut THIS turn's fold, so the next turn
-       must not treat it as still the runtime's and must not reopen it. */
+  it('leaves a fold the reader opened themselves open when the next turn arrives', () => {
+    /* The reader reached for THIS turn's fold after it shut, so it is theirs
+       from then on: the next turn must not treat it as still the runtime's and
+       must not shut it again. */
     liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
+    clickFold(0)
+    expect(openState()).toEqual([true])
+
+    liveTurn('and the other one', 'now the other log', 'the disk is full', '3s')
+
+    expect(openState()).toEqual([true, false])
+  })
+
+  it('leaves a fold the reader changed their mind about', () => {
+    /* Opened and shut again: the reader put it back where the runtime left
+       it, and the runtime keeps its hands off it either way. */
+    liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
+    clickFold(0)
     clickFold(0)
     expect(openState()).toEqual([false])
 
     liveTurn('and the other one', 'now the other log', 'the disk is full', '3s')
 
-    expect(openState()).toEqual([false, true])
-  })
-
-  it('leaves an auto-opened fold the reader changed their mind about', () => {
-    /* The case the other two cannot see. A fold from replay is already not the
-       runtime's, and shutting an auto fold looks the same whoever did it -- so
-       neither notices if the toggle forgets to hand ownership over. Here the
-       reader shuts THIS turn's own fold and opens it again: the state they
-       leave it in is the state the runtime would not have left it in, and the
-       next turn must not take it back. */
-    liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
-    expect(openState()).toEqual([true])
-    clickFold(0)
-    clickFold(0)
-    expect(openState()).toEqual([true])
-
-    liveTurn('and the other one', 'now the other log', 'the disk is full', '3s')
-
-    expect(openState()).toEqual([true, true])
+    expect(openState()).toEqual([false, false])
   })
 })
 

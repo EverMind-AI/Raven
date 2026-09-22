@@ -1573,22 +1573,21 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
     <div className={'tfold' + (seg.open ? ' open' : '')}>
       <button ref={headRef} className="tfh" aria-label={t('gui.fold.aria')}
         aria-expanded={String(seg.open) as 'true' | 'false'} onClick={flip}>
-        {/* What the fold HOLDS, not a verdict on the task. "done" added
-            nothing and implied something false: a backgrounded graph outlives
-            the turn that dispatched it, so a reader saw `done` over a task
-            still running below. On a delegated lane it would be false outright
-            -- a text said on the way no longer closes the turn, so that pane
-            shows a fold with no answer under it for as long as the turn runs. */}
+        {/* The turn's verdict, not an inventory of the fold: the row is what
+            stays on screen once the steps fold away, so it reads as the turn's
+            closing line. It is the TURN that is done -- a backgrounded graph
+            dispatched from it may still be running below, and its own status
+            lives on the task rows, not here. */}
         <span className="lb">{t('gui.fold.steps')}</span>
         <span className="tm">{seg.time || ''}</span>
         <Chev />
       </button>
       {/* A shut body is not built, which is where the weight was: a forty-turn
           session built 7361 nodes of which 6400 sat in shut fold bodies. On the
-          conversation's lane at most one fold is open -- the turn the reader is
-          looking at, whether they just watched it finish (`collapse`) or just
-          reopened the conversation on it (`openLastFold`) -- so one body IS
-          built, and one is not a session's worth.
+          conversation's lane the runtime opens at most one fold -- the turn a
+          reopened conversation ends on (`openLastFold`); a turn that just
+          finished shuts its own (`collapse`) -- so at most one body IS built,
+          and one is not a session's worth.
 
           A delegated pane opens every turn's, and is a different size of thing:
           measured on the two largest instance records on hand, 55 messages in
