@@ -786,13 +786,12 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .top h1:hover { background: var(--surface); }
 /* The box is the name's width, not a fixed slot: a two-word conversation opened
-   a 420px field with most of it empty paper. `field-sizing: content` is what
-   makes an input measure its own value, so the width follows what is typed.
-   The cap is the heading's own (`.top h1`), which is what keeps a rename from
-   widening the header past where the title already sat, and the floor keeps a
-   field you have just emptied from collapsing to a sliver you cannot aim at.
-   Without `field-sizing` an input falls back to its default intrinsic width,
-   which is narrower than the slot this replaces rather than wider.
+   a 420px field with most of it empty paper. The width is written on the
+   element by whoever opens the editor (features/rail/store.ts), measured off
+   the heading it replaces, because nothing else keeps the row still: a field
+   that measures its own value comes out slightly wider than the name, and a
+   floor under it comes out wider still on a short one -- and every one of
+   those pixels shoved the workspace tag along.
 
    Everything else here is the heading's, to the pixel: same size and weight,
    and a border plus padding adding up to the heading's own padding over the
@@ -800,7 +799,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    shoving it right -- the frame lands exactly where the hover fill was, and
    the word does not move at all. */
 .top .titin {
-  field-sizing: content; min-width: 7ch; max-width: min(420px, 52%); background: var(--ink);
+  max-width: min(420px, 52%); background: var(--ink);
   border: 1px solid var(--faint); border-radius: 6px; margin: 0 0 0 -6px; padding: 1px 5px; outline: 0;
   font-size: 15px; font-weight: 500; color: var(--text); font-family: inherit;
 }
@@ -916,7 +915,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-anch { position: relative; display: inline-flex; align-items: center; }
 #plusPop, #wdPop, #permPop { left: 0; right: auto; bottom: calc(100% + 6px); padding: 4px; }
 #plusPop { width: 220px; }
-#wdPop { width: 232px; }
+#wdPop { width: 200px; }
 #wdPop[data-view="browse"] { width: 300px; }
 #permPop { width: 200px; }
 .pop .chrome-hr { height: 1px; background: var(--line-soft); margin: 4px 6px; }

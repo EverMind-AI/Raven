@@ -223,8 +223,9 @@ describe('the workspace a draft picks', () => {
     openFolders()
     expect(prows().map((r) => r.querySelector('.nm')?.textContent)).toEqual(['gui.wd.none', 'gui.wd.open'])
     act(() => byName('gui.wd.open').click())
-    /* The dialog is up: the row says so and takes no second press. */
-    expect(byName('gui.wd.picking').disabled).toBe(true)
+    /* The menu goes down with the click -- the dialog it opened is the
+       reader's window now -- and takes no second press while that one is up. */
+    expect(pop().dataset.open).toBe('false')
     expect(wd.isPicking()).toBe(true)
     await settle()
     expect(asked).toBe(1)
@@ -234,21 +235,24 @@ describe('the workspace a draft picks', () => {
     expect(wd.isPicking()).toBe(false)
   })
 
-  it('leaves the menu where it was when the dialog is dismissed', async () => {
+  it('leaves the folder alone when the dialog is dismissed, and says nothing', async () => {
     desktop(async () => ({ ok: false }))
     openFolders()
     act(() => byName('gui.wd.open').click())
     await settle()
     expect(wd.staged()).toBeNull()
-    expect(pop().dataset.open).toBe('true')
-    expect(byName('gui.wd.open')).toBeTruthy()
+    /* Nothing to report and nothing to go back to: a dismissal is an answer,
+       so the menu that went down with the click stays down. */
+    expect(pop().dataset.open).toBe('false')
+    expect(wd.isPicking()).toBe(false)
     expect(pop().querySelector('.chrome-wd-err')).toBeNull()
   })
 
-  it('declines a chosen folder the engine would refuse, and says so in place', async () => {
+  it('declines a chosen folder the engine would refuse, and brings the menu back to say so', async () => {
     desktop(async () => ({ path: '/home/me/raven-home', ok: false }))
     openFolders()
     act(() => byName('gui.wd.open').click())
+    expect(pop().dataset.open).toBe('false')
     await settle()
     expect(wd.staged()).toBeNull()
     expect(pop().dataset.open).toBe('true')

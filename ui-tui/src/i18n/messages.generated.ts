@@ -2170,8 +2170,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.tier.max': 'Max',
     'gui.picker.recent': 'Recent',
     'gui.picker.show_all': 'Show all {n}',
-    'gui.wd.open_remote': "Browse the host's folders...",
-    'gui.wd.picking': 'Choose the folder in the dialog that opened...'
+    'gui.wd.open_remote': "Browse the host's folders..."
   },
   zh: {
     'gui.act.ing.ask_user': '等待你回答',
@@ -4038,7 +4037,6 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.tier.max': '全力',
     'gui.picker.recent': '最近使用',
     'gui.picker.show_all': '显示全部 {n} 个',
-    'gui.wd.open_remote': '浏览主机上的文件夹…',
-    'gui.wd.picking': '在弹出的窗口里选择文件夹…'
+    'gui.wd.open_remote': '浏览主机上的文件夹…'
   }
 } as Record<Locale, Record<string, string>>
