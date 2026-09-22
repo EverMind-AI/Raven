@@ -616,6 +616,45 @@ async def test_run_dag_failure_cascades_to_skip() -> None:
     assert result.terminal_outputs == []
 
 
+async def test_a_node_whose_reply_is_the_providers_error_fails_instead_of_completing() -> None:
+    """The same rule as a spawn's: a child engine that ends its turn on a failed
+    model call hands the error text back as its reply, and a node that wrote
+    it as output read completed and fed the error to the step downstream."""
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [
+                {
+                    "id": "a",
+                    "subagent": "x",
+                    "node_summary": "the node whose model call failed",
+                    "prompt_template": "hi",
+                },
+                {
+                    "id": "b",
+                    "subagent": "x",
+                    "node_summary": "the node downstream",
+                    "prompt_template": "{{ a.output }}",
+                    "depends_on": ["a"],
+                },
+            ],
+        }
+    )
+    backend = _InMemBackend()
+    result = await run_dag(
+        spec,
+        resolve=_by_name({"x": _FakeExec(reply="Error calling LLM (unknown@openrouter): HTTP 401: User not found.")}),
+        backend=backend,
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+    )
+    assert result.summary["failed"] == 1
+    assert result.summary["skipped"] == 1
+    assert "/hist/nodes/a.out.md" not in backend.files, "the error is not the node's output"
+
+
 async def test_run_dag_writes_node_status_transitions_to_registry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -21,7 +21,7 @@ from raven.agent.subagent.backends import (
     SubagentActionAbortedError,
     SubagentBackend,
 )
-from raven.agent.subagent.backends.base import optional_keyword
+from raven.agent.subagent.backends.base import llm_error_reply, optional_keyword
 from raven.agent.subagent.backends.routing import TargetReady
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.dag_store import ensure_node_claimed, index_guard, record_node_outcome
@@ -51,6 +51,7 @@ from raven.config.paths import get_sandbox_dir
 from raven.config.schema import TIER_LADDER, ExecToolConfig
 from raven.context_engine.segments.render import dispatch_language_line
 from raven.contracts.llm_provider import LLMProvider
+from raven.contracts.subagent_backend import SubagentNoAnswerError
 from raven.observability import semconv
 from raven.providers.binding import ModelBinding, resolve
 from raven.providers.pool import ProviderPool, live_pin_resolver
@@ -1831,6 +1832,12 @@ class SubagentManager:
                             **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),
                             **state_kwargs,
                         )
+                if (failure := llm_error_reply(final_result)) is not None:
+                    # A child engine ends its turn normally on a failed model
+                    # call and hands the error text back as its reply. Written
+                    # as the answer it would read completed, wear a green dot
+                    # and be summarised for the parent as the work.
+                    raise SubagentNoAnswerError(failure)
                 await _write_spawn_status(session_key, agent, handle, "completed")
                 self._emit_status(
                     origin, task_id, task_summary, "completed", call_id=call_id, ended_at=int(time.time() * 1000)
