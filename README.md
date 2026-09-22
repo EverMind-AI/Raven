@@ -282,13 +282,13 @@ raven web
 The command opens the WebUI in your browser and keeps Raven running in the background. Use `raven web --stop` to stop the background service.
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/717ca81e-7b4d-4263-9c27-cfd47f3cf6af"><img src="https://github.com/user-attachments/assets/717ca81e-7b4d-4263-9c27-cfd47f3cf6af" alt="Raven WebUI new task page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/f666af06-1be4-439e-9839-d4a62d6a23da"><img src="https://github.com/user-attachments/assets/f666af06-1be4-439e-9839-d4a62d6a23da" alt="Raven WebUI new task page" width="90%"></a>
 </p>
 
 <p align="center"><em>New task: one composer, with skills, playbooks, knowledge and memory a click away.</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/bd262fe2-58d4-4c5c-a741-97a8396833f3"><img src="https://github.com/user-attachments/assets/bd262fe2-58d4-4c5c-a741-97a8396833f3" alt="Raven WebUI subagents page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/78e2968a-9801-46bf-9482-666c0cea2898"><img src="https://github.com/user-attachments/assets/78e2968a-9801-46bf-9482-666c0cea2898" alt="Raven WebUI subagents page" width="90%"></a>
 </p>
 
 <p align="center"><em>Subagents: every connected agent in one roster, built-in and third-party alike.</em></p>
