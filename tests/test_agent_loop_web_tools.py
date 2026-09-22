@@ -287,7 +287,9 @@ async def test_a_reader_key_set_after_a_refusal_reaches_the_next_call(workspace,
 
 
 @pytest.mark.asyncio
-async def test_a_reader_whose_key_is_cleared_in_the_file_reads_through_jina(workspace, tmp_path: Path, monkeypatch) -> None:
+async def test_a_reader_whose_key_is_cleared_in_the_file_reads_through_jina(
+    workspace, tmp_path: Path, monkeypatch
+) -> None:
     """Clearing ``tools.web.providers.<vendor>.apiKey`` is the edit the refusal
     text points the user at. The reader registered on that vendor then runs on
     Jina, keyless, from the next call, rather than sending an empty credential."""
