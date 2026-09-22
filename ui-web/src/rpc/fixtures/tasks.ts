@@ -184,14 +184,23 @@ function scenarioCompletedWithFiles(env: FixtureEnv): TaskRow[] {
       node_summary: 'Fix the missing null check on the webhook signature',
       started_at: started + 23 * SEC, ended_at: started + 96 * SEC, tokens_in: 1500, tokens_out: 610,
       tool_call_count: 3, tool_failure_count: 0, has_output: true,
-      files: [{ path: '/work/src/payments/callback.py', op: 'edit', add: 12, del: 4, size: 3120 }],
+      /* The four verdicts a folded touch can carry, one node apart: an edit in
+         place, a file the node removed (no size -- there is nothing left to
+         measure), and below, a file it created against one it rewrote. */
+      files: [
+        { path: '/work/src/payments/callback.py', op: 'edit', add: 12, del: 4, size: 3120 },
+        { path: '/work/src/payments/legacy_hook.py', op: 'delete', add: 0, del: 46, size: null },
+      ],
     }),
     node({
       node_id: 'verify', agent: 'Raven-Code', status: 'completed', depends_on: ['patch'],
       node_summary: 'Run the payments test suite',
       started_at: started + 97 * SEC, ended_at: started + 150 * SEC, tokens_in: 700, tokens_out: 90,
       tool_call_count: 1, tool_failure_count: 0, has_output: true,
-      files: [{ path: '/work/reports/payments-verify.md', op: 'write', add: 18, del: 0, size: 640 }],
+      files: [
+        { path: '/work/reports/payments-verify.md', op: 'add', add: 18, del: 0, size: 640 },
+        { path: '/work/reports/index.md', op: 'write', add: 6, del: 2, size: 210 },
+      ],
     }),
   ]
   return [row({

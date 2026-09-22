@@ -941,13 +941,16 @@ const DiffGlyph = (): JSX.Element => (
 /* Written files first, then changes -- every node's writes before any node's
    edits, regardless of which node produced which. The prototype walks the
    two lists separately (`taskFiles` then `taskDiffs`) rather than
-   interleaving them in node order. */
+   interleaving them in node order. Files the node removed come last, and go
+   with the changes rather than the writes: there is no file left to open, so
+   the chip opens the patch the way an edit's does. */
 function Chips({ row }: { row: TaskRow }): JSX.Element | null {
   const all: Array<{ node: TaskNode; file: TaskFile }> = []
   row.nodes.forEach((n) => n.files.forEach((f) => all.push({ node: n, file: f })))
   if (!all.length) return null
-  const writes = all.filter(({ file }) => file.op === 'write')
-  const edits = all.filter(({ file }) => file.op !== 'write')
+  const writes = all.filter(({ file }) => file.op === 'write' || file.op === 'add')
+  const edits = all.filter(({ file }) => file.op === 'edit')
+  const gone = all.filter(({ file }) => file.op === 'delete')
   return (
     <div className="tkchips">
       {writes.map(({ node, file }) => {
@@ -967,6 +970,19 @@ function Chips({ row }: { row: TaskRow }): JSX.Element | null {
             {name}
             <span className="tkdstat">
               <b className="add">+{file.add}</b> <b className="del">&minus;{file.del}</b>
+            </span>
+          </button>
+        )
+      })}
+      {gone.map(({ node, file }) => {
+        const name = file.path.split('/').pop() || file.path
+        return (
+          <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => void openNodeDiff(row, node, file)}>
+            <DiffGlyph />
+            {name}
+            {/* Nothing was added, so the `+0` half would only be noise. */}
+            <span className="tkdstat">
+              <b className="del">&minus;{file.del}</b>
             </span>
           </button>
         )

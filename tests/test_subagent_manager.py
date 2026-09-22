@@ -2403,7 +2403,11 @@ class _WriteFileProvider(LLMProvider):
 async def test_a_write_file_call_records_the_file_it_wrote(tmp_path) -> None:
     """G1: a node's own account of what it wrote, for the tasks panel's file
     and diff chips. Only the in-process lane sees the tool's own
-    ``diff`` / ``file_change``, so this is the one place it is captured."""
+    ``diff`` / ``file_change``, so this is the one place it is captured.
+
+    The op is ``add`` because the path did not exist: ``before is None`` is the
+    only record that the write created the file, and a panel draws a created
+    file differently from a rewritten one."""
     from raven.agent.subagent import activity
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
@@ -2415,7 +2419,7 @@ async def test_a_write_file_call_records_the_file_it_wrote(tmp_path) -> None:
     assert len(did.files) == 1
     recorded = did.files[0]
     assert recorded["path"].endswith("notes.md")
-    assert recorded["op"] == "write"
+    assert recorded["op"] == "add"
     assert recorded["add"] == 2
     assert recorded["del"] == 0
     assert recorded["size"] == len("line one\nline two\n".encode("utf-8"))
@@ -2496,8 +2500,8 @@ class _WriteTwiceProvider(LLMProvider):
 
 async def test_two_writes_of_one_path_are_one_file(tmp_path) -> None:
     """Two writes of the same path fold into the file's final state: the
-    counts sum and the op is the tool's (``write``), not two entries for one
-    file the panel would draw as two products."""
+    counts sum and the op stays the creation the first write was, not two
+    entries for one file the panel would draw as two rows."""
     from raven.agent.subagent import activity
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
@@ -2508,16 +2512,15 @@ async def test_two_writes_of_one_path_are_one_file(tmp_path) -> None:
 
     assert [f["path"] for f in did.files] == ["notes.md"]
     only = did.files[0]
-    assert only["op"] == "write"
+    assert only["op"] == "add"
     assert only["add"] == 4
     assert only["del"] == 2
     assert only["size"] == len(b"a\nz\n")
 
 
-async def test_a_write_then_edit_of_one_path_is_a_single_write_entry(tmp_path) -> None:
-    """``op`` prefers ``write`` even when the later touch is an edit: the node
-    produced the file's whole current content at some point, and that is a
-    true view of it in a way a patch against the pre-node baseline is not."""
+async def test_a_write_then_edit_of_one_path_is_a_single_created_entry(tmp_path) -> None:
+    """A later edit does not unmake a creation: the node produced the file, and
+    ``add`` is what the run did to that path however many patches followed."""
     from raven.agent.subagent import activity
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
@@ -2528,9 +2531,78 @@ async def test_a_write_then_edit_of_one_path_is_a_single_write_entry(tmp_path) -
 
     assert [f["path"] for f in did.files] == ["notes.md"]
     only = did.files[0]
-    assert only["op"] == "write"
+    assert only["op"] == "add"
     assert only["add"] == 4
     assert only["del"] == 1
+
+
+class _WriteThenRemoveProvider(LLMProvider):
+    """A ``write_file`` call, then an ``exec`` that removes what it wrote."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1", name="write_file", arguments={"path": "scratch.md", "content": "one\ntwo\nthree\n"}
+                    )
+                ],
+            )
+        if self.calls == 2:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[ToolCallRequest(id="c2", name="exec", arguments={"command": "rm scratch.md"})],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_a_file_written_then_removed_by_a_command_is_recorded_as_a_deletion(tmp_path) -> None:
+    """The one path that has no tool result of its own: ``exec`` produces no
+    file change, so without the run's own watch the panel would show a file the
+    node wrote and no sign that it then took it away.
+
+    The entry is a deletion rather than absent because the write is what created
+    the path for the run -- an ``add`` folded with a ``delete`` nets to nothing,
+    and a pre-existing file rewritten and then removed is a ``delete``."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    (tmp_path / "scratch.md").write_text("older\n")
+    backend = RavenLoopBackend(provider=_WriteThenRemoveProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("write then remove", task_id="n7", workspace=tmp_path, executor=None)
+
+    assert not (tmp_path / "scratch.md").exists()
+    assert [f["path"] for f in did.files] == ["scratch.md"]
+    assert did.files[0] == {"path": "scratch.md", "op": "delete", "add": 0, "del": 3, "size": None}
+
+
+async def test_a_file_the_run_created_and_then_removed_leaves_no_entry(tmp_path) -> None:
+    """Net nothing over the run, the way git shows nothing for a file born and
+    deleted inside one range."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_WriteThenRemoveProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("write then remove", task_id="n8", workspace=tmp_path, executor=None)
+
+    assert did.files == []
 
 
 class _EditExistingFileProvider(LLMProvider):

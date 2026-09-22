@@ -274,7 +274,7 @@ export interface ArtifactRow {
   head: string | null
   lines: number
   deleted: number
-  change: 'new' | 'edit'
+  change: 'new' | 'edit' | 'deleted'
 }
 
 export interface ArtsData {

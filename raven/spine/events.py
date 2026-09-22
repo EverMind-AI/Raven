@@ -125,6 +125,11 @@ class ToolEvent:
     # and therefore needs the contents, not a rendering of them. Carried as a
     # plain mapping so ``spine`` stays free of the tools package.
     file_change: dict[str, Any] | None = None
+    # COMPLETE only, and the other half of ``file_change``: the files this call
+    # made vanish, one ``{path, before?}`` mapping each. No tool deletes as its
+    # purpose, so this is reported from what was on disk either side of the call
+    # rather than from a tool's own result. Empty and None both mean none went.
+    file_removed: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)

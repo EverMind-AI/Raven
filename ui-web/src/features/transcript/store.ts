@@ -79,7 +79,7 @@ export function artifactsOf(lane: Lane, turn: number): ArtifactRow[] {
       deleted: c.del || 0,
       /* Only a write onto nothing is new: a whole-file write over a file that
          was already there replaced its contents, which is an edit. */
-      change: c.kind === 'add' ? 'new' : 'edit',
+      change: c.kind === 'add' ? 'new' : c.kind === 'delete' ? 'deleted' : 'edit',
     }
   })
 }

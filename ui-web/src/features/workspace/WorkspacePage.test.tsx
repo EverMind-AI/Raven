@@ -2,6 +2,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import catalogue from '../../../../i18n/messages.json'
 import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
@@ -152,6 +153,20 @@ describe('workspace island', () => {
     expect(screen.getByText('README.md')).toBeTruthy()
     expect(screen.getByText('+2')).toBeTruthy()
     expect(screen.getByText('−1')).toBeTruthy()
+  })
+
+  /* The chip takes its word by building the key out of the kind
+     (`gui.ws.chip.` + c.kind), and the catalogue gate reads literal keys only
+     -- so a kind with no pair of words of its own renders its own key at the
+     reader, untranslated and in both languages, with nothing red. Written as a
+     record of the union so a fifth kind fails to compile until it is listed. */
+  it('carries a catalogue word and tooltip for every kind a change row can be', () => {
+    const kinds: Record<WsChange['kind'], true> = { add: true, write: true, edit: true, delete: true }
+    const ui = (catalogue as { ui: Record<string, unknown> }).ui
+    const missing = Object.keys(kinds)
+      .flatMap((kind) => [`gui.ws.chip.${kind}`, `gui.ws.chip.${kind}_t`])
+      .filter((key) => !(key in ui))
+    expect(missing).toEqual([])
   })
 
   it('shows the empty note once a view was picked but nothing changed', async () => {

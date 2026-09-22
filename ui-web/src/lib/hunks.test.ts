@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { fromEdit, fromUnified, fromWrite, toUnified } from './hunks'
+import { applyEdit, fromDelete, fromEdit, fromUnified, fromWrite, toUnified } from './hunks'
 
 describe('diff hunk builders', () => {
   it('folds distant unchanged edit context around the changed lines', () => {
@@ -26,6 +26,34 @@ describe('diff hunk builders', () => {
     expect(hunk.del).toBe(0)
     expect(hunk.rows).toHaveLength(41)
     expect(hunk.rows[39]).toEqual(['add', 'line 40', null, 40])
+    expect(hunk.rows[40]).toEqual(['gap', ['line 41']])
+  })
+
+  /* The mirror of the write above: the file's own lines, all taken out, and
+     numbered on the old side because that is the side they were on. */
+  it('turns a deleted file into all-del rows numbered on the old side', () => {
+    const hunk = fromDelete('one\ntwo\nthree\n')
+    expect(hunk).toEqual({
+      add: 0,
+      del: 3,
+      rows: [['del', 'one', 1, null], ['del', 'two', 2, null], ['del', 'three', 3, null]],
+    })
+  })
+
+  /* The runtime stores a removed file's line count, not its body, and counts
+     an empty file as no lines at all -- so counting one here would make the
+     same deletion read as -1 live and -0 after a reload. */
+  it('counts an empty removed file as no lines rather than one', () => {
+    expect(fromDelete('')).toEqual({ add: 0, del: 0, rows: [] })
+  })
+
+  it('keeps forty deleted lines and folds the rest without counting a trailing split', () => {
+    const lines = Array.from({ length: 41 }, (_, i) => `line ${i + 1}`)
+    const hunk = fromDelete(lines.join('\n') + '\n')
+    expect(hunk.add).toBe(0)
+    expect(hunk.del).toBe(41)
+    expect(hunk.rows).toHaveLength(41)
+    expect(hunk.rows[39]).toEqual(['del', 'line 40', 40, null])
     expect(hunk.rows[40]).toEqual(['gap', ['line 41']])
   })
 
@@ -94,5 +122,15 @@ describe('toUnified', () => {
 
   it('is just the file header for a change with no hunks', () => {
     expect(toUnified('empty.txt', [])).toBe('diff --git a/empty.txt b/empty.txt')
+  })
+})
+
+describe('applyEdit', () => {
+  it('replaces the one occurrence, every occurrence with replace_all, and gives up otherwise', () => {
+    expect(applyEdit('a\nb\n', 'a', 'A', false)).toBe('A\nb\n')
+    expect(applyEdit('a\na\n', 'a', 'A', true)).toBe('A\nA\n')
+    expect(applyEdit('a\na\n', 'a', 'A', false)).toBeNull()
+    expect(applyEdit('a\nb\n', 'zzz', 'A', false)).toBeNull()
+    expect(applyEdit('a\nb\n', '', 'A', true)).toBeNull()
   })
 })

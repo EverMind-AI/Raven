@@ -1888,6 +1888,34 @@ async def test_session_resume_carries_a_stored_tool_diff(tmp_path: Path, monkeyp
     assert msgs[1]["diff"].startswith("@@ -1 +1 @@")
 
 
+async def test_session_resume_carries_the_files_a_stored_call_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing else in a stored transcript records a deletion: the command's
+    arguments are a string, and the file it names is gone by the time a reloaded
+    page looks. The line count travels, not the body -- what the page needs is
+    that the file went and how big the hole is."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_667788"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "clean it up")
+    session.add_message(
+        "tool",
+        "swept",
+        tool_call_id="c1",
+        name="exec",
+        file_removed=[{"path": "/w/gone.txt", "del": 2}],
+    )
+    mgr.save(session)
+
+    msgs = (await session_resume({"session_id": session_key}))["messages"]
+    assert msgs[1]["file_removed"] == [{"path": "/w/gone.txt", "del": 2}]
+
+
 async def test_session_resume_carries_the_broken_turn_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``turn_ended`` says why a transcript stops where it does; without it a
     reloaded page renders the marker's model-facing text as an answer."""

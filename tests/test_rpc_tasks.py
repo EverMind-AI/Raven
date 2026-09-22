@@ -691,6 +691,31 @@ async def test_a_nodes_files_pass_through_from_the_manifest(workspace: Path) -> 
     assert row["nodes"][0]["files"] == files
 
 
+async def test_a_created_and_a_removed_file_pass_through_from_the_manifest(workspace: Path) -> None:
+    """The two ops a node can record that name no file the reader can open.
+
+    A removal has no size -- the file is gone, and a zero there would read as a
+    file that is present and empty -- so the wire model has to accept a null one
+    for these rows to reach a client at all.
+    """
+    session_dir = _session_dir(workspace)
+    store = await _make_run(session_dir, RUN_ID, _GRAPH, ["n1", "n2"])
+    files = [
+        {"path": "new.md", "op": "add", "add": 4, "del": 0, "size": 18},
+        {"path": "gone.md", "op": "delete", "add": 0, "del": 6, "size": None},
+    ]
+    await store.write_manifest(
+        {
+            "n1": _manifest_entry(status="completed", files=files),
+            "n2": _manifest_entry(status="completed", depends_on=["n1"]),
+        }
+    )
+
+    result = await tasks_list({"session_key": SESSION})
+    TasksListResult.model_validate(result)
+    assert result["tasks"][0]["nodes"][0]["files"] == files
+
+
 async def test_a_legacy_records_duplicate_file_entries_fold_on_read(workspace: Path) -> None:
     """A record written before ``merge_file_change`` landed in the recorder
     still has one entry per call on disk; ``tasks.list`` folds it exactly as
@@ -917,6 +942,35 @@ async def test_a_running_spawn_reads_usage_and_counts_off_the_live_activity(work
 
     after = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]["nodes"][0]
     assert after["tokens_in"] is None and after["tool_call_count"] is None and after["files"] == []
+
+
+async def test_a_running_spawns_created_and_removed_files_reach_the_row(workspace: Path) -> None:
+    """The spawn lane carries the same two ops the manifest does, and a removal
+    reaches the row with no size at all -- the file is gone, and the reader has
+    to be told that rather than shown a zero-byte file."""
+    from raven.agent.subagent import activity as activity_mod
+
+    session_dir = _session_dir(workspace)
+    await _claim_spawn_node(session_dir, "cleaning")
+    SpawnRecord.open(
+        session_dir,
+        task_id="cleaning",
+        task="tidy up",
+        meta=_spawn_meta(agent="Raven", handle="cleaning", task_summary="Cleaning"),
+        node_id="cleaning",
+    )
+    loop = _loop_stub(live_spawn_handles=frozenset({("Raven", "cleaning")}))
+
+    with activity_mod.collecting(live_key=spawn_live_key(nodes_root(session_dir), "cleaning")):
+        activity_mod.note_file_change("notes/new.md", "add", 4, 0, 18)
+        activity_mod.note_file_change("notes/old.md", "delete", 0, 6, None)
+        result = await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop))
+
+    TasksListResult.model_validate(result)
+    assert result["tasks"][0]["nodes"][0]["files"] == [
+        {"path": "notes/new.md", "op": "add", "add": 4, "del": 0, "size": 18},
+        {"path": "notes/old.md", "op": "delete", "add": 0, "del": 6, "size": None},
+    ]
 
 
 async def test_a_lane_that_has_not_spoken_keeps_its_nulls_while_live(workspace: Path) -> None:

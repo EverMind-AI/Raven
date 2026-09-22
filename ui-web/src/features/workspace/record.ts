@@ -18,7 +18,7 @@ import { pane } from '../../state/wsPane'
 import { shortPath } from './source'
 import { shared as workspaceShared } from './store'
 
-import type { FileChange } from '../../rpc/generated'
+import type { FileChange, FileRemoval } from '../../rpc/generated'
 import type { WsChange, WsHunk, WsShared } from './types'
 
 const record = (): WsShared => workspaceShared()
@@ -36,29 +36,86 @@ export function wsArgs(name: string, args: unknown): Record<string, unknown> {
   return { path: s }
 }
 
+/* This turn's row for one path, made if the turn has not touched it yet. */
+function rowFor(key: string, kind: WsChange['kind']): WsChange {
+  const WS = record()
+  const found = WS.changes.find((x) => x.key === key && x.turn === WS.turn)
+  if (found) return found
+  const shown = shortPath(key)
+  const cut = shown.lastIndexOf('/')
+  /* The newest change is the one you came here to read, so it arrives
+     expanded. `auto` marks it as opened by us, so the next arrival folds it
+     back without touching a row the reader opened on purpose. */
+  WS.changes.forEach((x) => { if (x.auto) { x.open = false; x.auto = false } })
+  const made: WsChange = {
+    key, dir: cut < 0 ? '' : shown.slice(0, cut + 1), name: cut < 0 ? shown : shown.slice(cut + 1),
+    kind, add: 0, del: 0, hunks: [], turn: WS.turn, open: true, auto: true, seen: false,
+  }
+  WS.changes.unshift(made)
+  return made
+}
+
 /* One row per path, not per call: five edits to the same file is one changed
    file with five hunks, which is how a person thinks about it. */
 export function wsRecordChange(path: string, kind: WsChange['kind'], hunk: WsHunk): WsChange {
-  const WS = record()
-  const key = String(path)
-  let c = WS.changes.find((x) => x.key === key && x.turn === WS.turn)
-  if (!c) {
-    const shown = shortPath(key)
-    const cut = shown.lastIndexOf('/')
-    /* The newest change is the one you came here to read, so it arrives
-       expanded. `auto` marks it as opened by us, so the next arrival folds it
-       back without touching a row the reader opened on purpose. */
-    WS.changes.forEach((x) => { if (x.auto) { x.open = false; x.auto = false } })
-    c = { key, dir: cut < 0 ? '' : shown.slice(0, cut + 1), name: cut < 0 ? shown : shown.slice(cut + 1),
-      kind, add: 0, del: 0, hunks: [], turn: WS.turn, open: true, auto: true, seen: false }
-    WS.changes.unshift(c)
-  }
+  const c = rowFor(String(path), kind)
   /* A creation stays one for the rest of the turn: rewriting a file the turn
      itself made does not turn it into a file that was already there. */
   if (kind === 'write' && c.kind === 'edit') c.kind = 'write'
   c.add += hunk.add; c.del += hunk.del
   c.hunks.push(hunk)
   return c
+}
+
+/* Following the file's contents through the turn's own calls, so a removal
+   that arrives without them can still say what was lost. A whole-file write is
+   the file; an append adds to what was followed and is lost when nothing was.
+   An edit is applied the way the tool applies it (lib/hunks.ts's applyEdit),
+   and one that cannot be followed -- the file was never written whole this
+   turn, the tool matched loosely, or the call was ambiguous -- ends the
+   following: a body that might be wrong is worse than none. */
+function followWrite(c: WsChange, content: string, append: boolean): void {
+  c.body = append ? (c.body == null ? null : c.body + content) : content
+}
+
+function followEdit(c: WsChange, oldText: string, newText: string, replaceAll: boolean): void {
+  c.body = c.body == null ? null : hunks.applyEdit(c.body, oldText, newText, replaceAll)
+}
+
+/* Two spellings of one file. A change row is keyed by the path as the model
+   typed it, and `write_file` takes a relative one; a removal arrives under the
+   path the runtime resolved. Equality alone would leave the turn showing a row
+   for the file it created and a second one saying that file went. */
+function sameFile(rowKey: string, removed: string): boolean {
+  return rowKey === removed || rowKey.endsWith('/' + removed) || removed.endsWith('/' + rowKey)
+}
+
+/* A file that is gone is not a change to its contents, so the row is rebuilt
+   rather than added to: nothing added, every line it held deleted.
+
+   `before` is the contents the runtime captured as the file went, absent when
+   it could not (too large, not text, or nothing had read it) -- and then the
+   text this turn's own calls left in the file is the next best account of what
+   was lost. `lines` is the stored count a replay carries in place of any
+   contents at all.
+
+   A file the same turn created leaves no row: created and removed inside one
+   turn is the nothing git shows for it too. */
+function wsRecordRemoval(path: string, before?: string, lines?: number | null): void {
+  const WS = record()
+  const key = String(path)
+  const at = WS.changes.findIndex((x) => x.turn === WS.turn && sameFile(x.key, key))
+  const had = at < 0 ? null : WS.changes[at]!
+  if (had && had.kind === 'add') { WS.changes.splice(at, 1); return }
+  const text = before !== undefined ? before : (had && had.body != null ? had.body : null)
+  const hunk = text == null ? null : hunks.fromDelete(text)
+  const c = had || rowFor(key, 'delete')
+  c.kind = 'delete'
+  c.add = 0
+  /* An empty file leaves a hunk with no rows to draw; the stored count says
+     the same nothing and keeps a replay reading the same as the live row. */
+  c.hunks = hunk && hunk.rows.length ? [hunk] : []
+  c.del = c.hunks.length ? c.hunks[0]!.del : (lines == null ? 0 : lines)
 }
 
 /* ── tool-event hooks ──────────────────────────────────────────────────
@@ -70,8 +127,10 @@ export function wsOnTool(name: string, args: unknown, _silent?: boolean): void {
   let hit: WsChange | null = null
   if (name === 'edit_file' && path) {
     hit = wsRecordChange(path, 'edit', hunks.fromEdit(a.old_text as string, a.new_text as string))
+    followEdit(hit, String(a.old_text ?? ''), String(a.new_text ?? ''), a.replace_all === true)
   } else if (name === 'write_file' && path) {
     hit = wsRecordChange(path, 'write', hunks.fromWrite(a.content as string))
+    followWrite(hit, String(a.content == null ? '' : a.content), a.mode === 'append')
   } else if (name === 'web_fetch' && a.url) {
     WS.urls.unshift({ url: String(a.url), kind: 'fetch', at: t('gui.sess.just_now') })
   } else if (name === 'web_search' && a.query) {
@@ -101,7 +160,7 @@ function createdTheFile(fileChange: FileChange | undefined, diff: string | undef
 
 export function wsOnToolDone(
   name: string, args: unknown, _ok?: boolean, _preview?: string, _ms?: number | null, diff?: string,
-  fileChange?: FileChange,
+  fileChange?: FileChange, fileRemoved?: FileRemoval[],
 ): void {
   const WS = record()
   const a = wsArgs(name, args)
@@ -119,6 +178,9 @@ export function wsOnToolDone(
     }
     if (c && c.kind === 'write' && createdTheFile(fileChange, diff)) c.kind = 'add'
   }
+  /* Outside the write/edit branch: a file goes when whatever call made it go
+     returns, and that is an `exec` far more often than a file tool. */
+  ;(fileRemoved || []).forEach((r) => { if (r && r.path) wsRecordRemoval(String(r.path), r.before) })
   if (pane().showsTurn()) pane().draw()
   pane().bump()
 }
@@ -135,6 +197,7 @@ interface StoredMessage {
   mid_turn?: boolean
   tool_call_id?: string | number
   diff?: string
+  file_removed?: Array<{ path?: string; del?: number }>
   tool_calls?: Array<{ id?: string | number; name?: string; arguments?: string }>
 }
 
@@ -144,8 +207,15 @@ export function wsOnHistory(messages: StoredMessage[] | null | undefined): void 
      one; keyed here so each replayed call can swap its argument-guessed hunk
      for the numbered rows, exactly as the live completion event does. */
   const diffs = new Map<string, string>()
+  /* The stored removals carry a line count and no contents -- the runtime does
+     not keep a deleted file's text on disk -- so a replayed deletion draws the
+     row and the count, and the hunk only when this turn's own write is still
+     on the row to rebuild it from. */
+  const gone = new Map<string, Array<{ path?: string; del?: number }>>()
   ;(messages || []).forEach((m) => {
-    if (m && m.role === 'tool' && m.tool_call_id && m.diff) diffs.set(String(m.tool_call_id), m.diff)
+    if (!m || m.role !== 'tool' || !m.tool_call_id) return
+    if (m.diff) diffs.set(String(m.tool_call_id), m.diff)
+    if (Array.isArray(m.file_removed)) gone.set(String(m.tool_call_id), m.file_removed)
   })
   ;(messages || []).forEach((m) => {
     if (!m) return
@@ -171,6 +241,9 @@ export function wsOnHistory(messages: StoredMessage[] | null | undefined): void 
       wsOnTool(name, args, true)
       const diff = diffs.get(String(c.id || ''))
       if (diff) wsOnToolDone(name, args, true, '', null, diff)
+      ;(gone.get(String(c.id || '')) || []).forEach((r) => {
+        if (r && r.path) wsRecordRemoval(String(r.path), undefined, r.del == null ? null : Number(r.del))
+      })
     })
   })
   /* Restored rows have no completion event coming, and nothing counts as

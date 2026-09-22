@@ -263,13 +263,13 @@ export function onSubagentStatus(p: live.SubagentStatusPayload): void {
 export const taskChangeKey = (row: TaskRow, node: TaskNode, file: TaskFile): string =>
   `task:${row.kind}:${row.id}:${node.node_id}:${file.path}`
 
-/* `edit_file` can only touch a file that already exists, so an edit is never a
-   creation however few lines it deleted; a whole-file write that replaced
-   nothing is one. */
-export const taskChangeKind = (file: TaskFile): 'add' | 'write' | 'edit' =>
-  file.op === 'edit' ? 'edit' : file.del === 0 ? 'add' : 'write'
+/* The lane already folded every touch of this path into one verdict (add,
+   write, edit or delete), so the row draws what it was told. Deriving it from
+   the counts instead -- a write with no deleted lines read as a creation --
+   drew `+` on every append to a file that was already there. */
+export const taskChangeKind = (file: TaskFile): WsChange['kind'] => file.op
 
-/* A write/edit chip's diff pane, read from the node's own tool calls
+/* A file chip's diff pane, read from the node's own tool calls
    (diffs.ts) since the wire carries only the counts (`add` / `del` / `size`),
    never a patch body. Shared by every door that opens one of a task's
    files as a diff -- the pane's own file chips and the desk's diff tab --
@@ -281,7 +281,8 @@ export async function fileDiffChange(row: TaskRow, node: TaskNode, file: TaskFil
     key: taskChangeKey(row, node, file),
     dir: file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/') + 1) : '',
     name: file.path.split('/').pop() || file.path, kind: taskChangeKind(file),
-    add: file.add, del: file.del, hunks: rec ? hunksForFile(rec.steps, file.path) : [], turn: 0, open: false,
+    add: file.add, del: file.del,
+    hunks: rec ? hunksForFile(rec.steps, file.path, file.op) : [], turn: 0, open: false,
   }
 }
 

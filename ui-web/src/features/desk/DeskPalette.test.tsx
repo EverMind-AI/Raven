@@ -658,11 +658,11 @@ describe('a task\'s own files, in the diff tab and not on the shelf', () => {
      conversation handed over: only `deliver_files` decides the second, and a
      sub-agent has no such tool. */
   it('lists a file a node wrote in the diff tab, under the task heading', async () => {
-    taskRows = [taskWithFile('t1', { path: '/w/out.md', op: 'write', add: 5, del: 0, size: 120 })]
+    taskRows = [taskWithFile('t1', { path: '/w/out.md', op: 'add', add: 5, del: 0, size: 120 })]
     await diffTab()
 
     const row = document.querySelector('.desk-diff-row') as HTMLElement
-    expect(row.querySelector('.chgc')?.textContent).toBe('+')
+    expect(row.querySelector('.chgc')?.textContent).toBe('A')
     expect(row.querySelector('.desk-name')?.textContent).toBe('/w/out.md')
     expect([...document.querySelectorAll('.desk-grp')].map((n) => n.textContent))
       .toEqual(['gui.ws.task_changes'])
@@ -690,19 +690,49 @@ describe('a task\'s own files, in the diff tab and not on the shelf', () => {
      insertion is still a modification -- the prototype's own
      `d.diff.del ? "M" : "+"` drew a creation for every edit that happened to
      delete nothing. */
-  it('chips a deletion-free edit with M, not +', async () => {
+  it('chips a deletion-free edit with M, not A', async () => {
     taskRows = [taskWithFile('t1', { path: '/w/new.py', op: 'edit', add: 4, del: 0 })]
     await diffTab()
 
     expect(document.querySelector('.desk-diff-row .chgc')?.textContent).toBe('M')
   })
 
-  /* And a whole-file write that replaced lines is a rewrite, not a creation. */
-  it('chips a write that deleted lines with M, not +', async () => {
-    taskRows = [taskWithFile('t1', { path: '/w/old.py', op: 'write', add: 4, del: 3 })]
+  /* And a whole-file write is a rewrite whatever it deleted -- appending to a
+     file that was already there deletes nothing and is still not a creation.
+     Only the lane's own `add` says a file arrived. */
+  it('chips a write with M, not A, however few lines it deleted', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/old.py', op: 'write', add: 4, del: 0 })]
     await diffTab()
 
     expect(document.querySelector('.desk-diff-row .chgc')?.textContent).toBe('M')
+  })
+
+  /* Git's third letter. The neutral colour `.desk-diff-row .chgc` paints every
+     row in this list is overridden for this one alone, so a deletion reads as
+     one before the path is read. */
+  it('chips a file a node removed with D, in the delete colour', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/dead.py', op: 'delete', add: 0, del: 46, size: null })]
+    await diffTab()
+
+    const chip = document.querySelector('.desk-diff-row .chgc') as HTMLElement
+    expect(chip.textContent).toBe('D')
+    expect(chip.className).toContain('delete')
+    /* And only the count it took out: a "+0" beside the D reads as a file the
+       node added something to on its way out. */
+    expect(document.querySelector('.desk-diff-row .chgs')?.textContent).not.toContain('+')
+  })
+
+  /* The session's own half of the list reads its glyph off the same kind, so
+     one call from the conversation and one from a sub-agent draw the same
+     letter for the same thing. */
+  it('chips a file the conversation itself removed with D too', async () => {
+    taskRows = []
+    workspace.shared().changes.push({ ...change('/w/gone.py'), kind: 'delete', add: 0, del: 12 })
+    await diffTab()
+
+    const chip = document.querySelector('.desk-diff-row .chgc') as HTMLElement
+    expect(chip.textContent).toBe('D')
+    expect(chip.className).toContain('delete')
   })
 
   it('opens a task diff through the tasks source, the way the pane\'s own chip does', async () => {

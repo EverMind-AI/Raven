@@ -385,6 +385,9 @@ class RpcOutlet:
                             # file, so every payload the wire already carried keeps
                             # its shape.
                             **({"file_change": out.file_change} if out.file_change else {}),
+                            # Same rule, same reason: absent when the call
+                            # removed nothing, which is nearly every call.
+                            **({"file_removed": out.file_removed} if out.file_removed else {}),
                         },
                     },
                 )
