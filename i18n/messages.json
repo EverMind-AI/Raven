@@ -467,6 +467,10 @@
       "en": "State",
       "zh": "状态"
     },
+    "gui.deleg.d_nodes": {
+      "en": "Nodes",
+      "zh": "节点"
+    },
     "gui.deleg.d_cost": {
       "en": "Elapsed",
       "zh": "耗时"
@@ -576,8 +580,12 @@
       "zh": "{n} 个节点 · {m} 个 agent"
     },
     "gui.deleg.dag_done": {
-      "en": "{ok} done",
-      "zh": "完成 {ok}"
+      "en": "{ok}/{n} done",
+      "zh": "完成 {ok}/{n}"
+    },
+    "gui.deleg.dag_left": {
+      "en": "{n} to go",
+      "zh": "还剩 {n}"
     },
     "gui.deleg.dag_bad": {
       "en": "{n} failed",

@@ -244,6 +244,14 @@ export const DOT_OF: Record<string, string> = {
    `running` are the two that have not. */
 const NODE_SETTLED = new Set(['completed', 'failed', 'skipped', 'cancelled', 'interrupted'])
 
+/* Whether one node has stopped. Exported because the graph's own clock is not
+   the only reader: the transcript card's state word is about the graph rather
+   than about the call that dispatched it, and "has every node stopped" is the
+   question it asks (features/transcript/TranscriptPage.tsx). An absent status
+   is `pending`, which has not. */
+export const nodeSettled = (status?: string | null): boolean =>
+  NODE_SETTLED.has(String(status || 'pending'))
+
 /* How long the GRAPH has been going, which is not how long the call took.
    `run_subagent_dag` is backgrounded by default, so the call returns as soon as
    the run is submitted: `c.ms` is that submit, a number near zero that never
@@ -1036,6 +1044,12 @@ export function dagFeed(type: string, p: DagFeedPayload | null): void {
     bump(lane, call)
   } else if (type === 'dag.run_completed') {
     ;(p.files || []).forEach((x) => { call.nodes = dagNodes.applyUpdate(call.nodes, x) })
+    /* Before the files, not because of them: the event closes the run whether or
+       not it brought a row per node, and a run closed by a backend error or a
+       cancel brings none. The card reads this rather than the nodes to decide
+       the run is over, so a graph whose last node never reported would otherwise
+       be drawn as running for as long as the page stayed open. */
+    call.graphClosed = true
     dagLive.delete(String(p.run_id))
     if (call.callId) dagByCall.delete(call.callId)
     bump(lane, call)
