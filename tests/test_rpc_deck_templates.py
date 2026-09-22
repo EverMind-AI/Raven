@@ -347,6 +347,21 @@ async def test_a_shutdown_stops_the_warm_up_and_the_conversions_it_started(templ
     release.set()
 
 
+def test_a_shutdown_that_cannot_stop_the_converters_still_returns(monkeypatch) -> None:
+    """A shutdown is not the place to raise: whatever the converters do, the
+    teardown after this call has to run."""
+    from raven.utils import office
+
+    monkeypatch.setattr(deck_templates, "_warming", None)
+    monkeypatch.setattr(deck_templates, "_drawing", {})
+
+    def broken() -> int:
+        raise RuntimeError("the registry is gone")
+
+    monkeypatch.setattr(office, "stop_running", broken)
+    deck_templates.stop_warming()
+
+
 def test_a_shutdown_before_any_warm_up_is_harmless(monkeypatch) -> None:
     from raven.utils import office
 

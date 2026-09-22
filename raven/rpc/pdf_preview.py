@@ -311,24 +311,8 @@ def _rasterise_pdf_page(source: Path, target: Path, width: int, timeout_s: float
             import subprocess
 
             prefix = scratch / "p"
-            subprocess.run(
-                [
-                    pdftoppm,
-                    "-f",
-                    "1",
-                    "-l",
-                    "1",
-                    # The long side, not the width: with the width pinned and the
-                    # height left to follow, the fallback draws the same 1280 x
-                    # 256000 the budget above exists to refuse, only in a child
-                    # process where this one cannot see it. One number bounds
-                    # both sides, and a page shaped like a page is unaffected.
-                    "-scale-to",
-                    str(width),
-                    "-png",
-                    str(source),
-                    str(prefix),
-                ],
+            subprocess.run(  # noqa: S603 - resolved above, argv is literals plus this file's path
+                [pdftoppm, "-f", "1", "-l", "1", *_scale_argv(source, width), "-png", str(source), str(prefix)],
                 check=True,
                 capture_output=True,
                 timeout=timeout_s,
@@ -394,6 +378,61 @@ def _render(source: Path, target: Path, timeout_s: float, fmt: str = "pdf") -> N
         os.replace(done.produced[0], target)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+#: The side of the box the fallback fits a page into when it cannot learn the
+#: page's size: an area bound that needs nothing but the flag, since poppler's
+#: ``-scale-to`` keeps the ratio inside a square.
+THUMB_BOX_PX = int(math.sqrt(THUMB_MAX_PIXELS))
+
+
+def _pdf_page_size(source: Path) -> tuple[float, float] | None:
+    """The first page's size in points, read with poppler's ``pdfinfo``, or None.
+
+    It ships beside ``pdftoppm``, so the host that has the fallback usually has
+    this too; None is for the one that does not, and for anything unparseable.
+    """
+    import re
+    import subprocess
+
+    pdfinfo = shutil.which("pdfinfo")
+    if pdfinfo is None:
+        return None
+    try:
+        done = subprocess.run(  # noqa: S603 - resolved above, argv is literals plus this file's path
+            [pdfinfo, "-f", "1", "-l", "1", str(source)], capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = re.search(r"size:\s*([0-9.]+)\s*x\s*([0-9.]+)\s*pts", done.stdout or "")
+    if not found:
+        return None
+    try:
+        return float(found.group(1)), float(found.group(2))
+    except ValueError:
+        return None
+
+
+def _scale_argv(source: Path, width: int) -> list[str]:
+    """How the fallback is told to size the page, bounded the same way the
+    rasteriser above is.
+
+    ``-scale-to-x W -scale-to-y -1`` is what a thumbnail wants and what the page
+    can abuse: the height it leaves to the ratio is a number inside the file.
+    Given the page's size the two sides are computed here instead, from the same
+    scale, so the ratio is kept and the area is bounded; without it the page is
+    fitted into a square, which bounds the area with the ratio left to poppler.
+    """
+    size = _pdf_page_size(source)
+    if size is None:
+        return ["-scale-to", str(THUMB_BOX_PX)]
+    zoom = _thumb_zoom(size[0], size[1], width)
+    return [
+        "-scale-to-x",
+        str(max(1, round(size[0] * zoom))),
+        "-scale-to-y",
+        str(max(1, round(size[1] * zoom))),
+    ]
 
 
 def _thumb_zoom(page_width: float, page_height: float, width: int) -> float:

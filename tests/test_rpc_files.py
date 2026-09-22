@@ -535,13 +535,11 @@ def test_a_pdf_page_says_what_went_wrong_rather_than_leaking_the_failure(
     assert not list((tmp_path / "cache").glob("render-*")), "the scratch directory is gone either way"
 
 
-def test_a_pdf_page_fallback_that_writes_nothing_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _without_pymupdf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The supported host shape the fallback exists for: poppler, no PyMuPDF."""
     import builtins
     import sys
 
-    from raven.rpc import pdf_preview
-
-    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
     real_import = builtins.__import__
 
     def no_pymupdf(name, *args, **kwargs):
@@ -552,6 +550,113 @@ def test_a_pdf_page_fallback_that_writes_nothing_is_named(tmp_path: Path, monkey
     monkeypatch.setattr(builtins, "__import__", no_pymupdf)
     monkeypatch.delitem(sys.modules, "pymupdf", raising=False)
     monkeypatch.delitem(sys.modules, "fitz", raising=False)
+
+
+def test_the_fallback_is_bounded_by_the_same_ceiling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`-scale-to-x W -scale-to-y -1` is the flag pair a tall page abuses: the
+    height it leaves to the ratio is a number inside the file. Given the page's
+    size both sides are computed from the bounded scale; without it the page is
+    fitted into a square, which bounds the area either way."""
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    tall = tmp_path / "tall.pdf"
+    tall.write_bytes(FAKE_PDF)
+
+    monkeypatch.setattr(pdf_preview, "_pdf_page_size", lambda source: (72.0, 14400.0))
+    argv = pdf_preview._scale_argv(tall, pdf_preview.THUMB_WIDTH_PX)
+    assert argv[0::2] == ["-scale-to-x", "-scale-to-y"], "both sides are stated, none left to the page"
+    drawn = int(argv[1]) * int(argv[3])
+    assert drawn <= pdf_preview.THUMB_MAX_PIXELS + int(argv[1]) + int(argv[3])
+    assert "-1" not in argv, "nothing is left for the file to decide"
+
+    monkeypatch.setattr(pdf_preview, "_pdf_page_size", lambda source: (612.0, 792.0))
+    letter = pdf_preview._scale_argv(tall, pdf_preview.THUMB_WIDTH_PX)
+    assert letter[1] == str(pdf_preview.THUMB_WIDTH_PX), "an ordinary page still gets the tile width"
+
+    monkeypatch.setattr(pdf_preview, "_pdf_page_size", lambda source: None)
+    boxed = pdf_preview._scale_argv(tall, pdf_preview.THUMB_WIDTH_PX)
+    assert boxed == ["-scale-to", str(pdf_preview.THUMB_BOX_PX)]
+    assert pdf_preview.THUMB_BOX_PX**2 <= pdf_preview.THUMB_MAX_PIXELS
+
+
+def test_the_page_size_is_read_from_poppler_or_answered_as_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every way the reading can fail answers None, which is the square: a host
+    without pdfinfo, a run that cannot start, and output that says nothing."""
+    import subprocess
+
+    from raven.rpc import pdf_preview
+
+    source = tmp_path / "one.pdf"
+    source.write_bytes(FAKE_PDF)
+
+    monkeypatch.setattr(pdf_preview.shutil, "which", lambda name: None)
+    assert pdf_preview._pdf_page_size(source) is None
+
+    monkeypatch.setattr(pdf_preview.shutil, "which", lambda name: "/usr/bin/pdfinfo")
+
+    class _Out:
+        def __init__(self, text: str) -> None:
+            self.stdout = text
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Out("Page    1 size:  72 x 14400 pts\n"))
+    assert pdf_preview._pdf_page_size(source) == (72.0, 14400.0)
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Out("Page size:       612 x 792 pts (letter)\n"))
+    assert pdf_preview._pdf_page_size(source) == (612.0, 792.0)
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Out("Encrypted: yes\n"))
+    assert pdf_preview._pdf_page_size(source) is None
+
+    def cannot_start(*a, **k):
+        raise OSError("pdfinfo is not executable")
+
+    monkeypatch.setattr(subprocess, "run", cannot_start)
+    assert pdf_preview._pdf_page_size(source) is None
+
+
+def test_the_fallback_runs_with_that_argv_on_a_host_without_pymupdf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole path, on the host shape it is written for: what the child is
+    asked to draw is what the bound above computed, not what the page said."""
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    _without_pymupdf(monkeypatch)
+    monkeypatch.setattr(pdf_preview, "_pdf_page_size", lambda source: (72.0, 14400.0))
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    seen = tmp_path / "argv"
+    script = fake_bin / "pdftoppm"
+    script.write_text(
+        '#!/bin/bash\nout="${@: -1}"\nprintf "PNGfake" > "$out-1.png"\nprintf "%s\\n" "$@" > "$RAVEN_ARGV_LOG"\n'
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin))
+    monkeypatch.setenv("RAVEN_ARGV_LOG", str(seen))
+    source = tmp_path / "one.pdf"
+    source.write_bytes(FAKE_PDF)
+
+    target = tmp_path / "cache" / "one.png"
+    pdf_preview._rasterise_pdf_page(source, target, pdf_preview.THUMB_WIDTH_PX, 12.0)
+
+    assert target.read_bytes() == b"PNGfake"
+    assert not list((tmp_path / "cache").glob("render-*")), "the scratch directory is gone"
+    argv = seen.read_text().split()
+    assert "-1" not in argv, "the child is told both sides"
+    drawn = int(argv[argv.index("-scale-to-x") + 1]) * int(argv[argv.index("-scale-to-y") + 1])
+    assert drawn <= pdf_preview.THUMB_MAX_PIXELS * 1.01
+
+
+def test_a_pdf_page_fallback_that_writes_nothing_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    _without_pymupdf(monkeypatch)
 
     fake_bin = tmp_path / "quiet"
     fake_bin.mkdir()
@@ -569,22 +674,10 @@ def test_a_pdf_page_fallback_that_writes_nothing_is_named(tmp_path: Path, monkey
 def test_a_pdf_page_falls_back_to_pdftoppm_and_then_says_what_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import builtins
-    import sys
-
     from raven.rpc import pdf_preview
 
     monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
-    real_import = builtins.__import__
-
-    def no_pymupdf(name, *args, **kwargs):
-        if name in ("pymupdf", "fitz"):
-            raise ImportError(name)
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", no_pymupdf)
-    monkeypatch.delitem(sys.modules, "pymupdf", raising=False)
-    monkeypatch.delitem(sys.modules, "fitz", raising=False)
+    _without_pymupdf(monkeypatch)
     source = tmp_path / "one.pdf"
     source.write_bytes(FAKE_PDF)
 
