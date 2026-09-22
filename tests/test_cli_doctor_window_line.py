@@ -36,5 +36,5 @@ def test_a_catalogued_window_names_the_catalogue(monkeypatch):
 def test_an_unknown_model_shows_the_default_it_fell_back_to(monkeypatch):
     _blind(monkeypatch)
     line = _describe_window(SimpleNamespace(context_window_tokens=None, model="nobody/unmapped-model"))
-    assert line.startswith("auto -> 65,536 default")
+    assert line.startswith(f"auto -> {rates.DEFAULT_CONTEXT_WINDOW_TOKENS:,} default")
     assert "no catalogue knows this model" in line
