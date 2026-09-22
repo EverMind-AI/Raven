@@ -352,7 +352,16 @@ function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft;
 
 /* Writing a draft the reader has finished with. The validation is the same one
    the create sheet runs, so a name or an instruction left empty is refused
-   here too rather than written as a blank job. */
+   here too rather than written as a blank job.
+
+   The answer is not allowed to move the reader or rebuild their form. A blur
+   is what starts this, so by the time it lands the reader has already gone
+   somewhere -- the next box, or another job they picked out of the list -- and
+   selecting the saved row would undo that. The draft it carries is the
+   request's own, too, so putting it back drops whatever was typed after the
+   blur, and the epoch that replaces a draft remounts the whole detail. The
+   rows are enough: the head, the list and the next-run line all read from
+   them, and whichever job is open now keeps the draft it has. */
 function commitDraft(draft: CronDraft): void {
   if (!draft.name.trim() || !draft.what.trim()) {
     draft.blank = true
@@ -362,8 +371,8 @@ function commitDraft(draft: CronDraft): void {
   store
     .source()
     .save(draft)
-    .then((saved) => {
-      store.viewSaved(saved)
+    .then(() => {
+      void store.refresh()
       toast(t('gui.cron.saved'))
     })
     .catch((e: unknown) => jobRefuse(draft, e))

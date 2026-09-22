@@ -281,6 +281,68 @@ describe('cron island', () => {
     expect(nameBox()).toBeTruthy()
   })
 
+  /* A blur starts the save and the answer lands later, so the reader is free
+     to be somewhere else by then. Both of these are the answer overwriting a
+     choice made after the request went out. */
+  function delayedSave(): { land: () => void; source: Partial<CronSource> } {
+    const box: { land: () => void } = { land: () => {} }
+    return {
+      land: () => box.land(),
+      source: {
+        save: async (d) => {
+          /* Snapshotted at the call, the way a server answers the request it
+             was given rather than the reader's later keystrokes. */
+          const answer = { ...job(), ...d }
+          return new Promise<CronJob>((res) => {
+            box.land = () => res(answer)
+          })
+        },
+      },
+    }
+  }
+
+  const settle = async (land: () => void): Promise<void> => {
+    await act(async () => {
+      land()
+      await new Promise((r) => setTimeout(r, 0))
+    })
+  }
+
+  it('leaves the reader on the job they picked while another job was saving', async () => {
+    const { land, source } = delayedSave()
+    install([job(), job({ id: 'j2', name: 'weekly report' })], source)
+    await mount()
+    await act(async () => {
+      rowText('morning digest').click()
+    })
+    await retype('renamed')
+    await act(async () => {
+      rowText('weekly report').click()
+    })
+    expect(store.get().viewId).toBe('j2')
+    await settle(land)
+    expect(store.get().viewId).toBe('j2')
+    expect(nameBox().value).toBe('weekly report')
+  })
+
+  it('keeps what was typed after the blur while that save was still in flight', async () => {
+    const { land, source } = delayedSave()
+    install([job()], source)
+    await mount()
+    await act(async () => {
+      rowText('morning digest').click()
+    })
+    await retype('renamed')
+    const say = (): HTMLTextAreaElement =>
+      document.querySelector<HTMLTextAreaElement>('textarea.cronsay')!
+    await act(async () => {
+      say().value = 'and the morning news'
+      say().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await settle(land)
+    expect(say().value).toBe('and the morning news')
+  })
+
   /* A frequency is picked, not typed, so it commits the moment it is picked. */
   it('writes a frequency the moment it is picked', async () => {
     const saved: Array<{ freq: string; every_ms?: number }> = []
