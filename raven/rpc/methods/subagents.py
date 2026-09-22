@@ -769,12 +769,23 @@ def _discovered_entry(name: str) -> dict | None:
     return None
 
 
-_PINGED_KINDS = ("cli", "acp")
-"""Kinds whose readiness can only be settled by running them.
+_PINGED_KINDS = ("cli", "acp", "openai")
+"""Kinds whose readiness is settled by running them, which is every kind but one.
 
-`openai` is an endpoint, and the free `/models` probe already answers whether its
-credential works, so charging a completion for the switch would buy nothing.
-`builtin` is this process. Neither can fail the way these two do.
+`builtin` is the only name absent, because it is this process: no command to
+launch, no endpoint to reach, and no connect to gate. Every other kind is asked
+the same question in the same way -- one prompt, and an answer required -- since
+nothing short of that separates an agent that is configured from one that works.
+
+`openai` was exempt on the grounds that the free `/models` probe had already
+settled its credential. That probe runs on the listing and on an explicit test,
+never on this path, so the key an add carries has not been probed: it did not
+exist when the listing last ran. The exemption was reasoning about a check that
+happens somewhere else.
+
+The cost is bounded by who reaches the gate: only a write that leaves the row
+enabled, which for an endpoint means one that came with a key. A keyless openai
+add lands disabled and is never asked.
 """
 
 

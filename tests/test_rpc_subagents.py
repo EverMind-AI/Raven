@@ -370,6 +370,28 @@ async def test_add_preserves_empty_mcps_and_false_secret_policy(
     assert entry["allowMcpSecrets"] is False
 
 
+def _gate_answers(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Let the enable gate pass without reaching the agent, and say who it asked.
+
+    Every kind is pinged now, so a test about what a write *stores* has to stand
+    in for the agent or it reaches a real process or a real endpoint -- the
+    openai rows in this file point at a live base URL, and one of them answered
+    a unit test with HTTP 401 before this existed. A test about the gate itself
+    installs its own stub instead.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    asked: list = []
+
+    async def _ok(cfg):
+        asked.append(cfg)
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _ok)
+    return asked
+
+
 async def test_add_disables_an_openai_preset_that_has_no_key(config_path: Path) -> None:
     # mirothinker ships an empty apiKey. Added enabled, it would be advertised to
     # the model and fail on first dispatch.
@@ -378,7 +400,10 @@ async def test_add_disables_an_openai_preset_that_has_no_key(config_path: Path) 
     assert entry["enabled"] is False
 
 
-async def test_add_keeps_an_openai_preset_enabled_when_a_key_is_supplied(config_path: Path) -> None:
+async def test_add_keeps_an_openai_preset_enabled_when_a_key_is_supplied(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _gate_answers(monkeypatch)
     await subagents_add({"preset": "mirothinker", "name": "Deep", "api_key": "sk-live"})
     entry = next(e for e in _stored(config_path) if e["name"] == "Deep")
     assert entry["enabled"] is True
@@ -620,11 +645,17 @@ async def test_a_truthy_non_boolean_force_does_not_skip_the_add_gate(
     assert [e for e in _stored(config_path) if e["name"] == "OpenCode"] == []
 
 
-async def test_add_never_pings_an_openai_preset(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An endpoint's credential is already settled by the free models probe, so
-    charging a completion for the add would buy nothing -- the gate must never
-    even ask, keyed or keyless. And the keyless rule is unchanged: that row is
-    the one kind of add that still lands disabled, waiting for its key."""
+async def test_add_pings_an_openai_preset_it_is_about_to_enable(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An endpoint answers the same question every other kind does, by answering.
+
+    The free models probe settles whether the endpoint knows the credential, and
+    it runs nowhere near this call -- the key being added here has never been
+    probed, because it did not exist when the listing last ran. So the gate asks
+    the endpoint, like every other kind. The keyless rule is unchanged and is
+    what keeps this affordable: that row lands disabled, and a row that is not
+    being enabled is never pinged."""
     import raven.rpc.methods.subagents as subagents_mod
     from raven.agent.subagent.probe import PingResult
 
@@ -642,7 +673,7 @@ async def test_add_never_pings_an_openai_preset(config_path: Path, monkeypatch: 
     stored = {e["name"]: e for e in _stored(config_path)}
     assert stored["Keyed"]["enabled"] is True
     assert stored["Keyless"]["enabled"] is False
-    assert seen == [], "an openai row is not a pinged kind, so the gate must not run"
+    assert [c.name for c in seen] == ["Keyed"], "the keyed add is gated; the keyless one lands disabled unasked"
 
 
 async def test_a_write_that_lands_during_an_adds_ping_is_not_reverted(
@@ -656,7 +687,6 @@ async def test_a_write_that_lands_during_an_adds_ping_is_not_reverted(
     import raven.rpc.methods.subagents as subagents_mod
     from raven.agent.subagent.probe import PingResult
 
-    await subagents_toggle({"name": "Researcher", "enabled": False})
     in_flight = asyncio.Event()
     release = asyncio.Event()
 
@@ -669,17 +699,24 @@ async def test_a_write_that_lands_during_an_adds_ping_is_not_reverted(
 
     adding = asyncio.ensure_future(subagents_add({"preset": "opencode"}))
     await in_flight.wait()
-    # Another client, on the ordinary path: Researcher is `openai`, so its own
-    # switch is exempt from the gate and this write does not wait on anything.
-    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
-    assert {e["name"]: e.get("enabled") for e in _stored(config_path)}["Researcher"] is True
+    # Another client, on the ordinary path. It has to be a write that cannot
+    # reach the gate itself, or it would block on the very stub this test is
+    # holding open: a description changes nothing the agent could answer, so it
+    # is never asked. A switch-on would be, now that every kind is.
+    assert await subagents_update({"name": "Researcher", "description": "mid-flight"}) == {
+        "updated": True,
+        "name": "Researcher",
+    }
+    assert {e["name"]: e.get("description") for e in _stored(config_path)}["Researcher"] == "mid-flight"
 
     release.set()
     assert await adding == {"added": True, "name": "OpenCode"}
 
-    after = {e["name"]: e.get("enabled") for e in _stored(config_path)}
-    assert after["OpenCode"] is True, "the added row must survive"
-    assert after["Researcher"] is True, "the write made during the ping must survive the add's write"
+    after = {e["name"]: e for e in _stored(config_path)}
+    assert after["OpenCode"].get("enabled") is True, "the added row must survive"
+    assert after["Researcher"].get("description") == "mid-flight", (
+        "the write made during the ping must survive the add's write"
+    )
 
 
 async def test_add_rejects_a_duplicate_name_without_writing_or_pinging(
@@ -1480,13 +1517,15 @@ async def test_enabling_a_local_agent_succeeds_when_the_ping_answers(
     assert entry["enabled"] is True
 
 
-async def test_an_openai_agent_still_switches_on_without_a_prompt(
+async def test_an_openai_agent_is_asked_to_answer_before_it_switches_on(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An endpoint's credential is already settled by the free models probe, so
-    charging a completion for the switch would buy nothing -- the gate must
-    never even ask. The fixture's Researcher row is `kind: "openai"`, which is
-    what this exemption keys on."""
+    """An endpoint is asked the same question every other kind is, by answering.
+
+    It was exempt once, on the grounds that the free models probe had settled
+    its credential; that probe runs on the listing and on an explicit test, and
+    never on this path, so the key a switch is about to put to work may never
+    have been tried. The fixture's Researcher row is `kind: "openai"`."""
     import raven.rpc.methods.subagents as subagents_mod
     from raven.agent.subagent.probe import PingResult
 
@@ -1501,7 +1540,7 @@ async def test_an_openai_agent_still_switches_on_without_a_prompt(
     assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
     entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
     assert entry["enabled"] is True
-    assert seen == [], "an openai row is not a pinged kind, so the gate must not run"
+    assert [c.name for c in seen] == ["Researcher"], "switching an endpoint on asks it to answer, like every other kind"
 
 
 async def test_force_switches_a_local_agent_on_despite_no_test(
@@ -1598,18 +1637,25 @@ async def test_a_write_that_lands_during_the_ping_window_is_not_reverted(
 
     pinged = asyncio.ensure_future(subagents_toggle({"name": "Coder", "enabled": True}))
     await in_flight.wait()
-    # Another client, on the ordinary path: Researcher is `openai`, so its own
-    # switch is exempt from the gate and this write does not wait on anything.
-    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
-    mid = {e["name"]: e.get("enabled") for e in _stored(config_path)}
-    assert mid["Researcher"] is True, "the concurrent write must reach disk"
+    # Another client, on the ordinary path. It has to be a write that cannot
+    # reach the gate itself, or it would block on the very stub this test is
+    # holding open: a description changes nothing the agent could answer, so it
+    # is never asked. A switch-on would be, now that every kind is.
+    assert await subagents_update({"name": "Researcher", "description": "mid-flight"}) == {
+        "updated": True,
+        "name": "Researcher",
+    }
+    mid = {e["name"]: e.get("description") for e in _stored(config_path)}
+    assert mid["Researcher"] == "mid-flight", "the concurrent write must reach disk"
 
     release.set()
     assert await pinged == {"enabled": True}
 
-    after = {e["name"]: e.get("enabled") for e in _stored(config_path)}
-    assert after["Coder"] is True, "the pinged toggle's own write must survive"
-    assert after["Researcher"] is True, "the write made during the ping must survive the toggle's write"
+    after = {e["name"]: e for e in _stored(config_path)}
+    assert after["Coder"].get("enabled") is True, "the pinged toggle's own write must survive"
+    assert after["Researcher"].get("description") == "mid-flight", (
+        "the write made during the ping must survive the toggle's write"
+    )
 
 
 async def test_toggle_still_refuses_a_name_nothing_knows(config_path: Path) -> None:
@@ -1627,7 +1673,8 @@ async def test_remove_reports_false_for_an_unknown_name(config_path: Path) -> No
     assert await subagents_remove({"name": "nope"}) == {"removed": False}
 
 
-async def test_a_mutation_hot_applies_to_the_live_loop(config_path: Path) -> None:
+async def test_a_mutation_hot_applies_to_the_live_loop(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _gate_answers(monkeypatch)
     applied: list[list] = []
 
     class _Loop:
@@ -1639,7 +1686,8 @@ async def test_a_mutation_hot_applies_to_the_live_loop(config_path: Path) -> Non
     assert [c.name for c in applied[0]] == ["Coder", "Researcher"]
 
 
-async def test_a_mutation_without_a_live_loop_still_writes(config_path: Path) -> None:
+async def test_a_mutation_without_a_live_loop_still_writes(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _gate_answers(monkeypatch)
     # The demo runner has no loop; a missing loop is not an error.
     await subagents_toggle({"name": "Researcher", "enabled": True}, agent_loop_factory=lambda: None)
     entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")

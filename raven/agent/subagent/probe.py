@@ -108,8 +108,9 @@ class TestResult:
     """One subagent's explicit verdict.
 
     ``kind`` is ``None`` only for the unknown-name failure, which has no config
-    to read a kind from. ``reply`` is the agent's own answer for a cli test and
-    always ``None`` for openai, which sends no completion.
+    to read a kind from. ``reply`` is the agent's own answer for a cli test, the
+    model menu its handshake advertised for acp, and ``None`` for openai, whose
+    prompt is sent but whose answer is not carried back.
     """
 
     name: str
@@ -397,8 +398,10 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
     refuse first. **Also spends the agent's own quota** -- see `_test_acp` for
     why the handshake alone could not stand in for it.
 
-    openai: runs the same free ``/models`` probe and sends no completion, so
-    nothing is billed.
+    openai: the same bar, after the free ``/models`` probe, which refuses on its
+    own when the endpoint does not know the credential -- so nothing is spent on
+    one that cannot answer. **Otherwise spends the endpoint's own quota**, like
+    the two above.
 
     The verdict is "exited 0 and returned something", not "the reply contains
     PONG": asserting content would flake on an agent that answers with a
@@ -432,7 +435,14 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
         return await _test_acp(cfg, source=source, elapsed=elapsed)
     probe = await probe_one(cfg, source=source)
     if kind == "openai":
-        return TestResult(cfg.name, source, "openai", probe.status == "ready", probe.detail, None, elapsed())
+        # The free probe first, and alone when it refuses: an endpoint that has
+        # already rejected the credential cannot answer a prompt, so there is
+        # nothing to spend and its own words are the better report.
+        if probe.status != "ready":
+            return TestResult(cfg.name, source, "openai", False, probe.detail, None, elapsed())
+        answered = await ping_agent(cfg)
+        detail = probe.detail if answered.ok else f"{answered.detail}; {probe.detail}"
+        return TestResult(cfg.name, source, "openai", answered.ok, detail, None, elapsed())
     if probe.status != "ready":
         return TestResult(cfg.name, source, "cli", False, probe.detail, None, elapsed())
 
