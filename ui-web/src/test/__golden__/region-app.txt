@@ -106,6 +106,10 @@ div.app
                 svg.pico
                   path
                 span#permName
+              button#wdChip.chip
+                svg.pico
+                  path
+                span#wdName
               span#envChip.chip
                 span.led
                 span#envName
@@ -136,6 +140,9 @@ div.app
                 span#tierPopLab.lab
               div#tierList
               div.note
+            div#wdPop.pop[data-open=false][data-view=menu]
+              div.hd
+                span.lab
       aside#ws.ws
         div.ws-top
           div#wsTabs.wseg

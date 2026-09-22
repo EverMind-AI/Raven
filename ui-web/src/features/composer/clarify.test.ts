@@ -8,7 +8,7 @@ import * as pageStore from '../../state/page'
 import { _resetForTests as draftsReset, read, slot } from '../../state/sheetDrafts'
 import { _resetForTests, forget, sync } from '../../state/sheetRack'
 import { mountPageRoot } from '../../test/pageRoot'
-import { open as approveOpen } from './approve'
+import { open as approveOpen, openApproval } from './approve'
 import { close, open } from './clarify'
 
 
@@ -276,6 +276,26 @@ describe('the clarify sheet', () => {
     expect(submit().disabled).toBe(false)
   })
 
+  /* A pending approval has no deadline behind it: taken down unanswered, its
+     call waits until somebody presses stop. So a question docks above it
+     rather than over it, and a landed approval -- answered, only saying so --
+     goes the way any other sheet does. */
+  it('leaves a pending approval standing and sweeps only what is not waiting', () => {
+    const said: string[] = []
+    openApproval({ approvalId: 'ap-1', command: 'rm file.txt', description: 'Delete' }, { onChoice: (c) => { said.push(c) } })
+    open({ question: 'q1' }, () => {})
+    expect(sheets().length).toBe(2)
+    expect(sheets().map((el) => el.classList.contains('perm'))).toEqual([false, true])
+    expect(said).toEqual([])
+
+    /* Answered, the approval is a landed line, which the next question does replace. */
+    sheets()[1]!.querySelector<HTMLButtonElement>('.cp-acts .opt:last-child')!.click()
+    expect(said).toEqual(['allow'])
+    open({ question: 'q2' }, () => {})
+    expect(sheets().length).toBe(1)
+    expect(sheets()[0]!.classList.contains('perm')).toBe(false)
+  })
+
   /* A question that replaces the pending one starts empty: the draft belonged to
      the question the reader was answering, not to the conversation. */
   it('does not hand a new question the retired one\'s draft', () => {
@@ -299,15 +319,17 @@ describe('the clarify sheet', () => {
     expect(sheet.dataset.fold).toBe('false')
   })
 
-  /* One pending question per conversation, and the sweep is by class: an
-     approval wears `.csheet` too, and two sheets stacked over the composer is
-     two things to answer for one blocked turn. */
-  it('replaces whatever was pending in its conversation, approval included', () => {
+  /* One pending question per conversation -- but an approval waiting beside it
+     is not its to take down: nothing behind an approval ends it if nobody
+     answers, so the question docks above and the approval keeps its place. The
+     preview variant wears the same mark and gets the same treatment. */
+  it('docks above a pending approval rather than replacing it, the preview variant too', () => {
     approveOpen('rm -rf build/', () => {}, () => {})
     expect(sheets().length).toBe(1)
     open({ question: 'q' }, () => {})
-    expect(sheets().length).toBe(1)
+    expect(sheets().length).toBe(2)
     expect(sheets()[0]!.querySelector('.hd .q')!.textContent).toBe('q')
+    expect(sheets()[1]!.querySelector('.what')!.textContent).toBe('rm -rf build/')
   })
 
   /* The takedown the rack runs. Every exit has to reach it, including the one

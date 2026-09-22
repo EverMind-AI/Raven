@@ -10,7 +10,7 @@ import type { Theme } from '../theme.js'
 import type { ApprovalReq, ClarifyReq, ConfirmReq } from '../types.js'
 
 import { t as tr } from '../i18n/index.js'
-import { approvalOptionsFor, approvalRemainingSeconds } from '../lib/approval.js'
+import { approvalOptionsFor } from '../lib/approval.js'
 import { CONFIRM_COUNTDOWN_SECONDS, tickCountdown } from '../lib/confirmCountdown.js'
 import { isMac } from '../lib/platform.js'
 import { TextInput } from './textInput.js'
@@ -33,8 +33,8 @@ const clarifyRemainingText = (secs: number): string => {
 
 export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptProps) {
   const options = approvalOptionsFor(req.suggestedPattern)
-  // Deny-and-continue is the default: it matches what a timeout does, and an
-  // accidental Enter must never grant authority or kill the turn.
+  // Deny-and-continue is the default: an accidental Enter must never grant
+  // authority or kill the turn.
   const [sel, setSel] = useState(() => options.findIndex(o => o.choice === 'deny'))
   // The deny choice a note is being attached to, or null when not typing one.
   const [noting, setNoting] = useState<null | string>(null)
@@ -55,42 +55,10 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
     setNote('')
     setPattern(null)
   }
-  const [remainingSeconds, setRemainingSeconds] = useState(() => approvalRemainingSeconds(req.expiresAt))
 
-  useEffect(() => {
-    // The runtime sends an absolute wall-clock deadline rather than a duration.
-    // Recomputing from that value matters when rendering is delayed or the
-    // terminal process is briefly suspended: mounting the component must not
-    // accidentally grant a fresh approval window.
-    //
-    // The countdown reaching zero answers nothing. It used to send `deny`, and
-    // that was the one place a lapse became a refusal: the runtime's own hard
-    // ceiling sits a few seconds past this deadline precisely so it can be the
-    // party that decides, and answering first took the decision away from it and
-    // spelled "nobody was here" as "the user said no". The runtime closes this
-    // overlay with `approval.closed` when its ceiling fires; until then a key
-    // pressed inside that window is still a real answer and still lands.
-    const update = () => setRemainingSeconds(approvalRemainingSeconds(req.expiresAt))
-
-    update()
-    const timer = setInterval(update, 250)
-
-    return () => clearInterval(timer)
-  }, [req.expiresAt])
-
-  // Zero seconds is not a shorter deadline, it IS the deadline. The runtime's
-  // ceiling sits a few seconds past it so that a choice made BEFORE it survives
-  // event-loop and RPC lag -- transport tolerance, not five more seconds of
-  // authority. `resolve` cannot tell the two apart (measured: an `allow` sent
-  // after the visible deadline is accepted and runs), so the prompt is what has
-  // to stop offering. It answers nothing either way; the runtime closes it.
-  const expired = remainingSeconds === 0
-
+  // The request has no deadline of its own: it stays until a person answers it
+  // or the runtime retires it with `approval.closed`.
   useInput((ch, key) => {
-    if (expired) {
-      return
-    }
-
     if (noting !== null || pattern !== null) {
       if (key.escape) {
         setNoting(null)
@@ -180,18 +148,12 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
               onChange={setPattern}
               /* An emptied box saves nothing and sends nothing; Esc is the way
                  back to the list, and a stray Enter must not grant. */
-              onSubmit={v =>
-                expired || !v.trim() ? undefined : onChoice('allow_always', '', req.approvalId, v.trim())
-              }
+              onSubmit={v => (v.trim() ? onChoice('allow_always', '', req.approvalId, v.trim()) : undefined)}
               value={pattern}
             />
           </Box>
 
-          <Text color={t.color.muted}>
-            {tr('gui.confirm.pattern_keys', 'Enter save · Esc back · expires in {n}s', {
-              n: String(remainingSeconds)
-            })}
-          </Text>
+          <Text color={t.color.muted}>{tr('gui.confirm.pattern_keys', 'Enter save · Esc back')}</Text>
         </>
       ) : noting !== null ? (
         <>
@@ -208,18 +170,12 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
             <TextInput
               columns={Math.max(20, cols - 6)}
               onChange={setNote}
-              /* Its own guard: `TextInput` submits on Enter through ink's own
-                 handler, which `useInput` above never sees. */
-              onSubmit={v => (expired ? undefined : onChoice(noting, v.trim(), req.approvalId))}
+              onSubmit={v => onChoice(noting, v.trim(), req.approvalId)}
               value={note}
             />
           </Box>
 
-          <Text color={t.color.muted}>
-            {tr('gui.confirm.note_keys', 'Enter send · Esc back · expires in {n}s', {
-              n: String(remainingSeconds)
-            })}
-          </Text>
+          <Text color={t.color.muted}>{tr('gui.confirm.note_keys', 'Enter send · Esc back')}</Text>
         </>
       ) : (
         <>
@@ -235,8 +191,10 @@ export function ApprovalPrompt({ cols = 80, onChoice, req, t }: ApprovalPromptPr
           <Text color={t.color.muted}>
             {tr(
               'gui.confirm.keys',
-              'up/down select · Enter confirm · 1-{count} quick pick · Tab add note · Ctrl+C deny · expires in {n}s',
-              { count: String(options.length), n: String(remainingSeconds) }
+              'up/down select · Enter confirm · 1-{count} quick pick · Tab add note · Ctrl+C deny',
+              {
+                count: String(options.length)
+              }
             )}
           </Text>
         </>

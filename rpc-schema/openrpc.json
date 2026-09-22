@@ -6349,6 +6349,76 @@
       }
     },
     {
+      "name": "approval.revoke",
+      "summary": "Take back the exec allow rule one approval answer wrote.",
+      "params": [
+        {
+          "name": "approval_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "The answered request whose grant to take back."
+          }
+        }
+      ],
+      "result": {
+        "name": "ApprovalRevokeResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "description": "False when that answer wrote no rule of its own, the undo came twice, or the file could not be written.",
+              "type": "boolean"
+            }
+          },
+          "required": ["ok"],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "approval.pending",
+      "summary": "The approval requests still waiting for an answer, for a page that lost its sheets.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "One conversation's requests; every conversation's when absent."
+          }
+        },
+        {
+          "name": "conversation_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Compatibility spelling of session_id."
+          }
+        }
+      ],
+      "result": {
+        "name": "ApprovalPendingResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "requests": {
+              "description": "Each open request's approval.request params, exactly as they were first sent.",
+              "items": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": ["requests"],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "clarify.respond",
       "summary": "Answer a pending ask-user question.",
       "params": [

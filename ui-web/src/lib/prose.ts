@@ -19,9 +19,10 @@ export interface ProseTarget {
 }
 
 export interface ProseSource {
-  /* A workspace-relative path, or null when the string is not one that can be
-     opened. A path that merely looks like one must answer null: a dead link is
-     worse than no link. */
+  /* The path a string names, as written, or null when it is not one that can
+     be opened. A path that merely looks like one must answer null: a dead link
+     is worse than no link -- and so is one that opens onto the wrong root,
+     which is why this is not shortened on the way through. */
   pathOf(s: string): string | null
   /* What a markdown link's local target resolves to, or null. */
   linkTargetOf(u: string): ProseTarget | null

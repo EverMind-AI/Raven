@@ -568,6 +568,14 @@ export function fireSend(): void {
   goPaint()
 }
 
+/* A sentence sent on the reader's behalf from outside the field -- the note
+   typed after a refused approval. Same door the field's Enter uses, so a busy
+   turn queues it and an idle one sends it. */
+export function say(text: string): void {
+  const v = text.trim()
+  if (v) source().send(v)
+}
+
 export function goClick(): void {
   if (turn.busy() && turn.cancellable()) source().stop()
   /* A busy turn that cannot be cancelled is still a live turn: the Send

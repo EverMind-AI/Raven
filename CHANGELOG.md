@@ -92,6 +92,57 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- `web_fetch`, `web_search` and `image_search` stop asking a vendor that has
+  refused the key. A 401 or 402 from a reader, or a 401, 402 or 403 from a
+  search vendor, is about the key or the account, not the page or the query,
+  and every later call met the same answer: on 2026-09-20 Jina answered 402
+  on every fetch of a session and the tool returned one identical error
+  envelope per call. The refusal is now remembered per tool: later calls are
+  answered without a request, with the same `error` (so the loop's failure
+  streak reads them as one cause), what the status means, and what the user
+  has to do (`tools.web.providers.<vendor>.apiKey`, the env var, the sign-up
+  page, or another vendor under `tools.web.<search|fetch>.provider`; the
+  slot and the vendor are read from the file without a restart, the env
+  var on restart). All three tools read their vendor and key live, in
+  both the main loop and the sub-agent lane, and resolve the pair once
+  per call, so the vendor and key a request carried are what its refusal
+  is recorded against and a refusal by one vendor pauses no other; a key
+  set at that slot reaches the next call and lifts the pause without a
+  restart, and otherwise one real request is sent again after ten minutes
+  and re-arms it if refused.
+  A request that carried no key is
+  never paused, and a reader's 403 pauses nothing: the default reader, Jina
+  without a key, answers a domain it has blocked with 403, and Firecrawl
+  answers 403 for a site its policy does not scrape, so through a reader
+  that status is about the page and is reported per URL as before.
+
+- The `find`, `list_dir` (recursive) and pure-Python `grep` tools can no
+  longer freeze the gateway on a large tree. One `find` over a home
+  directory held the event loop for 2h21m: the walk ran synchronously on
+  the loop, filtered the noise directories only after entering them, and had
+  no deadline, so the registry's 300s ceiling could not preempt it and every
+  session stopped with it. The three tools now share one walk that prunes
+  `node_modules`, `.git` and the other noise directories before entering
+  them, checks a 20s wall-clock budget before every entry it yields (so one
+  large or slow directory cannot run past it either) and ends with a
+  `PARTIAL result` trailer that says absence of a match is not conclusive,
+  and runs in a worker thread. `find` starts at a pattern's literal prefix
+  (`src/**/*.py` never enters a sibling of `src`), answers what `Path.glob`
+  answered for the same pattern, keeps a trailing slash's directory-only
+  meaning, refuses a pattern with `..` or a leading `/`, and lists files as
+  well as directories under a trailing `**`. A symbolic link to a directory
+  is entered where a single pattern component names or matches it
+  (`*/util/helper.py` reaches through a linked `vendor`) and never under
+  `**`, which is how `Path.glob` read it and what keeps a link cycle
+  finite. A noise directory inside a pattern's literal prefix
+  (`node_modules/*.js`, `src/node_modules/*.js`) is walked, since the
+  pattern asked for it, where `Path.glob` filtered it out; one met below
+  the prefix is pruned as before, and `list_dir` on such a path lists it.
+  Both tool descriptions say so. Recursive `list_dir` also used to filter on the components of the
+  absolute path, so a workspace beneath a directory named `build`, `dist`,
+  `venv` or another noise name listed as empty; it prunes below the listed
+  path only now.
+
 - A sub-agent run that is stopped now tells the conversation that started
   it, and says why: `[Subagent '...' was cancelled]` with the reason (`the
   gateway stopped`, `the user sent /stop`, `a user stopped this run`, ...),

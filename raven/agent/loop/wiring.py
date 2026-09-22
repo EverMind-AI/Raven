@@ -232,21 +232,7 @@ class WiringMixin:
         until the next process. The leaf is Serper's alone, hence consulted
         only when Serper is the selection.
         """
-        from raven.config.live import web_provider_key, web_search_key
-
-        vendor = self.web_search_provider
-        slot = web_provider_key(self._live_config, vendor)
-        if slot:
-            return slot
-        if vendor == "serper":
-            leaf = web_search_key(self._live_config)
-            if leaf is not None:
-                return leaf
-        # An empty-but-present slot is a revocation, not a miss: fall through to
-        # the boot value only when the file answered nothing at all.
-        if slot == "":
-            return ""
-        return self._web_key(vendor) or ""
+        return self._live_vendor_key(self.web_search_provider)
 
     def _media_config_reader(self, kind: str, fallback) -> "Callable[[], Any]":
         def read():
@@ -362,18 +348,9 @@ class WiringMixin:
         same order: the canonical vendor slot, then the pre-vendor leaf that is
         Serper's alone, then the boot value.
         """
-        from raven.config.live import web_provider_key, web_search_key
+        from raven.config.live import live_vendor_key
 
-        slot = web_provider_key(self._live_config, vendor)
-        if slot:
-            return slot
-        if vendor == "serper":
-            leaf = web_search_key(self._live_config)
-            if leaf is not None:
-                return leaf
-        if slot == "":
-            return ""
-        return self._web_key(vendor) or ""
+        return live_vendor_key(self._live_config, vendor, boot=self._web_key(vendor))
 
     @property
     def provider(self) -> LLMProvider:

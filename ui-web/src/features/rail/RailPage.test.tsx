@@ -259,8 +259,9 @@ describe('rail island', () => {
 
   /* A conversation that is asking something says so from the same slot, and says
      it even while its turn is busy. Its sheet only mounts on its own screen, so
-     the row is the only place the reader can learn a request is waiting -- and an
-     approval expires 35s after it was raised. */
+     the row is one of the two places the reader can learn a request is waiting
+     (the other is the line above the composer), and the turn behind it waits
+     for the person rather than expiring. */
   it('shows the asking tail, and it outranks a busy turn', () => {
     const h = install({ rows: [row({ status: 'ask' })], busy: true })
     const host = mount()

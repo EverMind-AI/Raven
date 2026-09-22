@@ -193,6 +193,30 @@ async def test_user_turn_receives_tui_approval_capability(tmp_path):
 
     assert executor.commands == ["rm file.txt"]
     assert responder.requests[0]["turn_id"] == "turn-a"
+    assert (responder.requests[0]["origin"], responder.requests[0]["origin_name"]) == ("user", "")
+
+
+async def test_a_direct_chat_names_the_instance_on_the_prompt(tmp_path):
+    # The person typed it, but the instance's tools are the ones that will ask,
+    # so the prompt says which sub-agent wants to act.
+    executor = _DirectRecordingExecutor()
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    loop = _ApprovalRunLoop(tool)
+    responder = _ApprovalResponder(True)
+    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {}, approval_responder=responder)
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=_src(),
+        text="delete",
+        conversation="tui:c1#raven-code/h1",
+        turn_id="turn-d",
+        direct_target=("raven-code", "h1"),
+    )
+    _events, emit = _collect()
+
+    await runner.run(req, emit, lambda: [])
+
+    assert (responder.requests[0]["origin"], responder.requests[0]["origin_name"]) == ("subagent", "raven-code")
 
 
 async def test_a_subagent_relay_in_a_watched_conversation_receives_the_approval_capability(tmp_path):
@@ -214,6 +238,7 @@ async def test_a_subagent_relay_in_a_watched_conversation_receives_the_approval_
 
     assert executor.commands == ["rm file.txt"]
     assert responder.requests[0]["turn_id"] == "turn-s"
+    assert responder.requests[0]["origin"] == "subagent"
 
 
 async def test_a_subagent_relay_nobody_watches_does_not_receive_the_approval_capability(tmp_path):

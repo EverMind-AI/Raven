@@ -1112,6 +1112,7 @@ class TestAutomaticSnapshotVerification:
             "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         task = schedule_snapshot_verification(_FakeManager([row]))
@@ -1155,6 +1156,7 @@ class TestAutomaticSnapshotVerification:
                 },
             )(),
         )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         task = schedule_snapshot_verification(_FakeManager([row]))

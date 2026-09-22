@@ -38,8 +38,10 @@ afterEach(() => {
   localStorage.clear()
 })
 
-const draw = (st: ImportStatus | null): void => {
-  store.set({ status: st })
+/* Drawn as a run this page followed, which is what every case below is about;
+   the one case about a run it did not follow clears `followed` itself. */
+const draw = (st: ImportStatus | null, patch: Partial<store.ImportSyncState> = {}): void => {
+  store.set({ status: st, followed: st ? store.signature(st) : '', ...patch })
   render(<ImportSyncApp />)
 }
 const row = (): HTMLElement | null => document.querySelector<HTMLElement>('.importSync')
@@ -111,6 +113,13 @@ describe('the import row', () => {
     expect(main().disabled).toBe(true)
     expect(main().getAttribute('aria-label')).toBeNull()
     expect(x()).toBeNull()
+  })
+
+  /* An import somebody ran from the CLI weeks ago is still in the importer's
+     file. It is not this reader's news and its count has no retry behind it. */
+  it('draws nothing for a finished run this page never followed', () => {
+    draw(status({ total: 2, submitted: 1, failed: 1, platforms: ['claude_code'] }), { followed: '' })
+    expect(row()).toBeNull()
   })
 
   it('counts a failed phase among what did not make it', () => {

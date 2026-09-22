@@ -1064,13 +1064,12 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
       // Read live rather than from this render's closure. One turn can hold two
       // approvals back to back -- a sub-agent's first command lands a second
       // after the spawn that created it was allowed -- and a closure a render
-      // behind answers nothing, leaving the live request to expire unanswered.
+      // behind answers nothing, leaving the live request waiting unanswered.
       //
       // ``approvalId`` is what the prompt rendered, and it is the answer's real
-      // subject: a keypress belongs to the request the human was reading and an
-      // expiry to the one its countdown was armed for. Without it a callback
-      // queued against the outgoing request would resolve the incoming one --
-      // granting or refusing something nobody was shown.
+      // subject: a keypress belongs to the request the human was reading.
+      // Without it a callback queued against the outgoing request would resolve
+      // the incoming one -- granting or refusing something nobody was shown.
       const approval = getOverlayState().approval
 
       if (!approval || (approvalId !== undefined && approvalId !== approval.approvalId)) {

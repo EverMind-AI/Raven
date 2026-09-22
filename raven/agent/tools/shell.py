@@ -48,6 +48,7 @@ class ExecTool(Tool):
     # Backstop above the 600s internal exec cap (``_MAX_TIMEOUT``); the
     # executor's own timeout fires first, this only catches a wedged executor.
     timeout_seconds = 660.0
+    approval_kind = "shell.exec"
 
     def __init__(
         self,
@@ -211,8 +212,7 @@ class ExecTool(Tool):
 
             return await run_on_machine(command, connection=machine, cwd=working_dir)
 
-        bound = str(workdir.current() or "") if self.follow_binding else ""
-        cwd = working_dir or bound or self.working_dir or os.getcwd()
+        cwd = self._cwd_for(working_dir)
 
         if not self._executor.is_sandboxed:
             guard_error = self._guard_command(command, cwd)
@@ -290,6 +290,18 @@ class ExecTool(Tool):
             continuation=Continuation.CONTINUE,
             ok=False,
         )
+
+    def _cwd_for(self, working_dir: str | None) -> str:
+        bound = str(workdir.current() or "") if self.follow_binding else ""
+        return working_dir or bound or self.working_dir or os.getcwd()
+
+    def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any]:
+        """The command and where it would run, resolved the way ``execute`` will."""
+        command = str(params.get("command") or "")
+        machine = str(params.get("machine") or "").strip()
+        if machine:
+            return {"command": command, "machine": machine}
+        return {"command": command, "cwd": self._cwd_for(params.get("working_dir") or None)}
 
     def _guard_command(self, command: str, cwd: str) -> str | None:
         """The tool's own boundary: the operator's allowlist and the workspace fence.

@@ -33,6 +33,7 @@ import { draw as drawBanner } from '../banner'
 import { set as setCtx } from '../ctxChip'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
+import { clearStaged as clearStagedWorkdir } from '../workdir'
 import { reset as wsReset, setOpen as setWs } from '../ws'
 import { pitch, unpitch } from './conversation'
 import { dropAll as dropHeldHosts } from './hosts'
@@ -239,10 +240,11 @@ export function switchToDraft(): void {
   const gen = nextToken()
   park()
   parkDraft(); loadDraft('new')
-  /* A fresh draft, so the model, tier and permission mode a previous one staged
-     and never sent go with it: an invisible choice must not cross from one
-     conversation to another. */
+  /* A fresh draft, so the model, tier, permission mode and working directory
+     a previous one staged and never sent go with it: an invisible choice must
+     not cross from one conversation to another. */
   draftRt = null
+  clearStagedWorkdir()
   const rt = draft()
   adoptRuntime(rt)
   resetView(rt)

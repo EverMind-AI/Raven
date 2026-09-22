@@ -212,6 +212,11 @@ async def test_direct_delete_executes_once_after_approval(tmp_path) -> None:
             "command": "rm file.txt",
             "description": "Approve this action: rm file.txt",
             "suggested_pattern": "",
+            "kind": "shell.exec",
+            "family": "",
+            "origin": "",
+            "origin_name": "",
+            "evidence": {"command": "rm file.txt", "cwd": str(tmp_path)},
         }
     ]
 
@@ -923,3 +928,12 @@ class TestSandboxingDoesNotRelaxClassification:
     @pytest.mark.parametrize("command", ["rm -rf /", "shutdown now", "mkfs.ext4 /dev/sda1"])
     def test_the_deny_list_holds(self, command: str) -> None:
         assert self._asking().evaluate(command) is CommandDecision.HARD_DENY
+
+
+def test_the_exec_prompt_shows_the_command_where_it_would_run(tmp_path) -> None:
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    assert tool.approval_kind == "shell.exec"
+    assert tool.approval_evidence({"command": "rm a"}) == {"command": "rm a", "cwd": str(tmp_path)}
+    assert tool.approval_evidence({"command": "rm a", "working_dir": "/srv"}) == {"command": "rm a", "cwd": "/srv"}
+    assert tool.approval_evidence({"command": "rm a", "machine": "prod"}) == {"command": "rm a", "machine": "prod"}

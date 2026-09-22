@@ -70,3 +70,10 @@ async def test_a_generic_failure_reports_failure() -> None:
     result = await _wrapper(session).execute(arguments={})
 
     assert isinstance(result, ToolResult) and result.ok is False
+
+
+def test_the_wrapper_shows_a_call_as_its_server_tool_and_input() -> None:
+    wrapper = _wrapper(_Session(None))
+
+    assert wrapper.approval_kind == "mcp.call"
+    assert wrapper.approval_evidence({"page": 3}) == {"server": "server-x", "tool": "read", "input": {"page": 3}}

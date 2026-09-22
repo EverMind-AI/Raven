@@ -71,7 +71,10 @@ export function open(req: ClarifyRequest, answered: (text: string) => void): voi
   /* Read before the sweep, written on every keystroke: the answer being typed
      has to outlive the element it is typed into. */
   const draft = drafts.slot(owner, id)
-  dropClass('csheet', owner)
+  /* Every pending ask stays -- the gate's and the confirm preview's alike: the
+     question docks above and hands the keyboard back when it is answered. A
+     landed line carries no `data-asks` and goes. */
+  dropClass('csheet', owner, (el) => el.classList.contains('perm') && el.dataset.asks === '1')
 
   const sheet = document.createElement('div')
   sheet.className = 'csheet'

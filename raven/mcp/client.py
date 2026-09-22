@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 class MCPToolWrapper(Tool):
     """Wraps a single MCP server tool as an Raven Tool."""
 
+    approval_kind = "mcp.call"
+
     def __init__(
         self,
         session,
@@ -41,6 +43,9 @@ class MCPToolWrapper(Tool):
     @property
     def name(self) -> str:
         return self._name
+
+    def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any]:
+        return {"server": self._server_name, "tool": self._original_name, "input": params}
 
     @property
     def ref(self) -> MCPToolRef:

@@ -1,12 +1,13 @@
 /* What the reader has typed into a sheet that is still waiting for them.
  *
- * Three fields on three inputs: the clarify question's free-text answer, and
- * the approval sheet's note and its prefix rule. All three used to live only in
- * the DOM, kept alive by the rack detaching a parked sheet rather than
- * destroying it -- the half-typed answer survived a conversation switch because
- * the input element itself did. Rendering a sheet from a component takes that
- * away: the interior is unmounted while another conversation is open, so the
- * text has to be somewhere that is not the document.
+ * One field on one input: the clarify question's free-text answer. It used to
+ * live only in the DOM, kept alive by the rack detaching a parked sheet rather
+ * than destroying it -- the half-typed answer survived a conversation switch
+ * because the input element itself did. Rendering a sheet from a component
+ * takes that away: the interior is unmounted while another conversation is
+ * open, so the text has to be somewhere that is not the document. (The
+ * approval sheet kept a note and a prefix here once; it answers at once now
+ * and types nothing before the answer.)
  *
  * Keyed by the conversation AND the question, not by the conversation alone. At
  * most one of these sheets is pending per conversation (the class sweep on the
@@ -26,10 +27,6 @@
 export interface SheetDraft {
   /** The clarify question's free-text row. */
   text?: string
-  /** The approval sheet's note, which rides a refusal to the model. */
-  note?: string
-  /** The prefix rule offered with a persisted grant, as the reader left it. */
-  pattern?: string
 }
 
 const DRAFTS = new Map<string, SheetDraft>()

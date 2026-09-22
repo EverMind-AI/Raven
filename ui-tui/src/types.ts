@@ -105,8 +105,6 @@ export interface ApprovalReq {
   command: string
   conversationId: string
   description: string
-  // Absolute Unix deadline in milliseconds; the gateway wire value is seconds.
-  expiresAt: number
   // The prefix rule the runtime found safe to offer for persisting; absent
   // when there is none, and then the prompt offers no such choice.
   suggestedPattern?: string

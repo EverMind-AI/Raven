@@ -3762,6 +3762,34 @@ class ApprovalRespondResult(_Strict):
     ok: bool = Field(..., description="False for an unknown, expired or mis-bound request; the caller fails closed.")
 
 
+class ApprovalRevokeParams(_Strict):
+    """Take back the exec allow rule one approval answer wrote."""
+
+    approval_id: str = Field(..., description="The answered request whose grant to take back.")
+
+
+class ApprovalRevokeResult(_Strict):
+    ok: bool = Field(
+        ...,
+        description="False when that answer wrote no rule of its own, the undo came twice, or the file could not be written.",
+    )
+
+
+class ApprovalPendingParams(_Strict):
+    """The approval requests still waiting for an answer, for a page that lost its sheets."""
+
+    session_id: str | None = Field(
+        default=None, description="One conversation's requests; every conversation's when absent."
+    )
+    conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
+
+
+class ApprovalPendingResult(_Strict):
+    requests: list[dict[str, Any]] = Field(
+        ..., description="Each open request's approval.request params, exactly as they were first sent."
+    )
+
+
 class ClarifyRespondParams(_Strict):
     answer: str
     request_id: str | None = None
@@ -4889,6 +4917,8 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "memory.list": (MemoryListParams, MemoryListResult),
     # the round-trip answer sinks
     "approval.respond": (ApprovalRespondParams, ApprovalRespondResult),
+    "approval.revoke": (ApprovalRevokeParams, ApprovalRevokeResult),
+    "approval.pending": (ApprovalPendingParams, ApprovalPendingResult),
     "clarify.respond": (ClarifyRespondParams, ClarifyRespondResult),
     "confirm.respond": (ConfirmRespondParams, ConfirmRespondResult),
     # slash routing and completion

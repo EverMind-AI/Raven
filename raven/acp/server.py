@@ -174,11 +174,9 @@ def _ask_before_external_effects() -> None:
     sub-agent's task inherits -- so ``git push`` from a sub-agent reaches the
     editor's permission request exactly as the main agent's does.
     """
-    from raven.permissions.shell_policy import DELETE_MATCHERS, EXTERNAL_EFFECT_MATCHERS, set_surface_approval_families
+    from raven.permissions.shell_policy import declare_default_families
 
-    families = DELETE_MATCHERS + EXTERNAL_EFFECT_MATCHERS
-    set_surface_approval_families(families)
-    logger.info("acp: {} command families will ask before running", len(families))
+    logger.info("acp: {} command families will ask before running", len(declare_default_families()))
 
 
 async def _answer(methods: AcpMethods, frame: dict[str, Any], emit: Any) -> None:
