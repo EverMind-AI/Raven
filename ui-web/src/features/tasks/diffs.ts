@@ -51,26 +51,30 @@ function samePath(a: string | undefined, b: string): boolean {
    slice. Summing these hunks' counts gives the chip's own numbers back.
 
    A file the node then removed ends on one more hunk, every line of it taken
-   back out. The contents can only be the node's own last write of that path --
+   back out. The contents can only be what the node's own calls left there --
    the wire carries no deleted file's body for a task, and the removal itself
-   reaches the lane as a count. Without such a write the deletion has no body
-   to show, and the chip's own counts still say what went. */
+   reaches the lane as a count -- so the body is followed call by call: a write
+   is the whole file, an edit is applied to it. An edit that does not fit what
+   is being followed (the tool matched loosely, or the node never wrote the
+   file whole) ends the following, and the deletion then has no body to show;
+   the chip's own counts still say what went. */
 export function hunksForFile(
   steps: readonly NodeStep[], path: string, op?: TaskFile['op'],
 ): WsHunk[] {
   const out: WsHunk[] = []
-  let written: string | null = null
+  let body: string | null = null
   steps.forEach((step) => {
     if (step.kind !== 'tool' || (!isWrite(step.name) && !isEdit(step.name))) return
     const args = parseArgs(step.args)
     if (!samePath(args.path, path)) return
     if (isEdit(step.name) && args.old_text !== undefined && args.new_text !== undefined) {
       out.push(fromEdit(args.old_text, args.new_text))
+      body = body != null && body.includes(args.old_text) ? body.replace(args.old_text, args.new_text) : null
     } else if (args.content !== undefined) {
-      written = args.content
+      body = args.content
       out.push(fromWrite(args.content))
     }
   })
-  if (op === 'delete' && written != null) out.push(fromDelete(written))
+  if (op === 'delete' && body != null) out.push(fromDelete(body))
   return out
 }

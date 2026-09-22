@@ -61,6 +61,30 @@ describe('hunksForFile', () => {
     expect(hunks[2]?.rows.map((r) => r[1])).toEqual(['one', 'two', 'three'])
   })
 
+  /* The body a deletion closes on is the file as the node LEFT it: a write
+     followed by an edit is the edited text, not the text the write put down. */
+  it('closes a removed file on the text its later edits left, not on the last write', () => {
+    const hunks = hunksForFile([
+      tool('write_file', { path: '/w/a.md', content: 'old\n' }),
+      tool('edit_file', { path: '/w/a.md', old_text: 'old', new_text: 'new' }),
+    ], '/w/a.md', 'delete')
+
+    expect(hunks).toHaveLength(3)
+    expect(hunks[2]?.rows.map((r) => r[1])).toEqual(['new'])
+  })
+
+  /* An edit the followed body cannot take -- the tool matched loosely, or the
+     text was never there -- means the final contents are not known; a body that
+     might be wrong is worse than none. */
+  it('closes with no body when an edit cannot be applied to what was followed', () => {
+    const hunks = hunksForFile([
+      tool('write_file', { path: '/w/a.md', content: 'old\n' }),
+      tool('edit_file', { path: '/w/a.md', old_text: 'elsewhere', new_text: 'new' }),
+    ], '/w/a.md', 'delete')
+
+    expect(hunks).toHaveLength(2)
+  })
+
   it('leaves a removed file the node never wrote with no hunk to close', () => {
     const hunks = hunksForFile(
       [tool('edit_file', { path: '/w/a.py', old_text: 'a\n', new_text: 'b\n' })], '/w/a.py', 'delete',

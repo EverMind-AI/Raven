@@ -200,6 +200,37 @@ describe('recording a file the turn removed', () => {
     expect(row?.del).toBe(0)
   })
 
+  /* What the turn LEFT in the file, not what its last write put down: an edit
+     after the write is part of what was lost. */
+  it('rebuilds the lost contents as the turn\'s later edits left them', () => {
+    const wrote = { path: '/w/notes.md', content: 'old\nkept\n' }
+    wsOnTool('write_file', wrote)
+    wsOnToolDone('write_file', wrote, true, '', null, undefined, { path: '/w/notes.md', after: 'old\nkept\n', before: 'was' })
+    const edited = { path: '/w/notes.md', old_text: 'old', new_text: 'new' }
+    wsOnTool('edit_file', edited)
+
+    wsOnToolDone('exec', { command: 'rm /w/notes.md' }, true, '', null, undefined, undefined,
+      [{ path: '/w/notes.md' }])
+
+    expect(rowFor('/w/notes.md')?.hunks[0]?.rows.map((r) => r[1])).toEqual(['new', 'kept'])
+  })
+
+  /* An edit the followed text cannot take means the final contents are not
+     known, and a body that might be wrong is worse than none. */
+  it('gives up the rebuilt contents when an edit does not fit what was followed', () => {
+    const wrote = { path: '/w/notes.md', content: 'old\n' }
+    wsOnTool('write_file', wrote)
+    wsOnToolDone('write_file', wrote, true, '', null, undefined, { path: '/w/notes.md', after: 'old\n', before: 'was' })
+    wsOnTool('edit_file', { path: '/w/notes.md', old_text: 'elsewhere', new_text: 'new' })
+
+    wsOnToolDone('exec', { command: 'rm /w/notes.md' }, true, '', null, undefined, undefined,
+      [{ path: '/w/notes.md' }])
+
+    const row = rowFor('/w/notes.md')
+    expect(row?.kind).toBe('delete')
+    expect(row?.hunks).toEqual([])
+  })
+
   /* An edit's hunk is the slice it touched, so reading it back would draw two
      changed lines as the whole of a file that had two hundred. */
   it('does not mistake an edited row\'s slice for the file that was lost', () => {

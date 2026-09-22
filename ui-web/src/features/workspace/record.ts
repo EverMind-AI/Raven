@@ -67,25 +67,18 @@ export function wsRecordChange(path: string, kind: WsChange['kind'], hunk: WsHun
   return c
 }
 
-/* The file as this turn last wrote it, read back out of the row's own last
-   hunk -- its added lines, the way the transcript's artifact preview rebuilds
-   a write's miniature (features/transcript/store.ts's artifactHead).
+/* Following the file's contents through the turn's own calls, so a removal
+   that arrives without them can still say what was lost. A whole-file write is
+   the file; an append adds to what was followed and is lost when nothing was.
+   An edit is applied to the followed text, and one that does not fit it -- the
+   tool matched loosely, or the file was never written whole this turn -- ends
+   the following: a body that might be wrong is worse than none. */
+function followWrite(c: WsChange, content: string, append: boolean): void {
+  c.body = append ? (c.body == null ? null : c.body + content) : content
+}
 
-   Only off a row that IS a whole-file write: the added lines are the file
-   itself when the write created it, and the closest account there is when it
-   replaced one -- the tool's own diff keeps only the lines around what it
-   changed. An edit's hunk is a slice of a file this turn never wrote whole, so
-   reading it back would draw the few lines it touched as everything. */
-function writtenText(c: WsChange): string | null {
-  if (c.kind !== 'write' && c.kind !== 'add') return null
-  const last = c.hunks[c.hunks.length - 1]
-  if (!last) return null
-  const out: string[] = []
-  last.rows.forEach((r) => {
-    if (r[0] === 'add') out.push(String(r[1] == null ? '' : r[1]))
-    else if (r[0] === 'gap' && Array.isArray(r[1])) r[1].forEach((line) => out.push(String(line)))
-  })
-  return out.length ? out.join('\n') : null
+function followEdit(c: WsChange, oldText: string, newText: string): void {
+  c.body = c.body != null && c.body.includes(oldText) ? c.body.replace(oldText, newText) : null
 }
 
 /* Two spellings of one file. A change row is keyed by the path as the model
@@ -100,9 +93,10 @@ function sameFile(rowKey: string, removed: string): boolean {
    rather than added to: nothing added, every line it held deleted.
 
    `before` is the contents the runtime captured as the file went, absent when
-   it could not (too large, not text, or nothing had read it) -- and then what
-   this turn itself wrote is the next best account of what was lost. `lines` is
-   the stored count a replay carries in place of any contents at all.
+   it could not (too large, not text, or nothing had read it) -- and then the
+   text this turn's own calls left in the file is the next best account of what
+   was lost. `lines` is the stored count a replay carries in place of any
+   contents at all.
 
    A file the same turn created leaves no row: created and removed inside one
    turn is the nothing git shows for it too. */
@@ -112,7 +106,7 @@ function wsRecordRemoval(path: string, before?: string, lines?: number | null): 
   const at = WS.changes.findIndex((x) => x.turn === WS.turn && sameFile(x.key, key))
   const had = at < 0 ? null : WS.changes[at]!
   if (had && had.kind === 'add') { WS.changes.splice(at, 1); return }
-  const text = before !== undefined ? before : (had ? writtenText(had) : null)
+  const text = before !== undefined ? before : (had && had.body != null ? had.body : null)
   const hunk = text == null ? null : hunks.fromDelete(text)
   const c = had || rowFor(key, 'delete')
   c.kind = 'delete'
@@ -132,8 +126,10 @@ export function wsOnTool(name: string, args: unknown, _silent?: boolean): void {
   let hit: WsChange | null = null
   if (name === 'edit_file' && path) {
     hit = wsRecordChange(path, 'edit', hunks.fromEdit(a.old_text as string, a.new_text as string))
+    followEdit(hit, String(a.old_text ?? ''), String(a.new_text ?? ''))
   } else if (name === 'write_file' && path) {
     hit = wsRecordChange(path, 'write', hunks.fromWrite(a.content as string))
+    followWrite(hit, String(a.content == null ? '' : a.content), a.mode === 'append')
   } else if (name === 'web_fetch' && a.url) {
     WS.urls.unshift({ url: String(a.url), kind: 'fetch', at: t('gui.sess.just_now') })
   } else if (name === 'web_search' && a.query) {

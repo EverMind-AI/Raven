@@ -16,6 +16,12 @@ export interface WsChange {
   add: number
   del: number
   hunks: WsHunk[]
+  /* The file as this turn last left it, followed call by call: a whole-file
+     write is the file, an edit is applied to it. Null once an edit could not be
+     applied to what was being followed, and absent on a row the turn only
+     edited -- either way nothing here can say what the file holds. Read only
+     when the file is removed and the runtime caught none of its contents. */
+  body?: string | null
   turn: number
   open: boolean
   auto?: boolean
