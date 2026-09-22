@@ -10,7 +10,7 @@ stint*`). The `feat/playbook_rounds_extension` worktree is a separate
 implementation under `mode: rounds` and none of this applies to it unchanged.
 
 **On the name.** There is no `game-stint`. The shipped builtin is `rounds`
-(`raven/playbook/builtin/rounds/playbook.md`), whose `mode` is `stint`. The
+(`raven/playbook/builtin/long-horizon-dev-stint/playbook.md`), whose `mode` is `stint`. The
 acceptance doc already owns the rename question; everything below says
 `rounds`, and if the builtin is renamed the fixture name is the only thing
 that moves.
@@ -94,7 +94,7 @@ can see, and -- where it matters -- what today does **not** do.
    the project: `_stint_workspace` resolves the stint's project through the
    session's workdir (`raven/agent/loop/wiring.py:1523`).
 2. Person: "run rounds" (or the Chinese equivalent).
-3. Model calls `load_playbook(name="rounds")`, optionally with
+3. Model calls `load_playbook(name="long-horizon-dev-stint")`, optionally with
    `max_rounds`.
 4. Approval question appears, answered "Run it".
 
@@ -104,7 +104,7 @@ can see, and -- where it matters -- what today does **not** do.
 |---|---|---|
 | 1.1 | the repo | `.stint/` now holds `HUMAN_DECISIONS.md`, `AGENT_DECISIONS.md`, `FIXLOG.md`, `PLAYBOOK.md`, `planner.md`, `builder.md`, `verifier.md`, and `SPEC.md` as a symlink to the picked document |
 | 1.2 | `git status` | all of it **untracked**; nothing committed to the person's branch (acceptance 32) |
-| 1.3 | the approval | `Start "rounds" on <repo>?`, `up to 30 round(s) of: planner -> builder -> verifier`, `on branch stint/<id>, in a checkout of its own -- your working tree is untouched`, the literal `python3 -m compileall -q src`, one `writes` line per role, `it stops early only if the last role writes NOTHING-LEFT`, then `it has just written N file(s) here, untracked -- ...`, `the roles stint from docs/PRD.md`, `N task(s) in the backlog` |
+| 1.3 | the approval | `Start "long-horizon-dev-stint" on <repo>?`, `up to 30 round(s) of: planner -> builder -> verifier`, `on branch stint/<id>, in a checkout of its own -- your working tree is untouched`, the literal `python3 -m compileall -q src`, one `writes` line per role, `it stops early only if the last role writes NOTHING-LEFT`, then `it has just written N file(s) here, untracked -- ...`, `the roles stint from docs/PRD.md`, `N task(s) in the backlog` |
 | 1.4 | the transcript | the tool returns a receipt at once; the conversation is free (acceptance end-to-end 1) |
 | 1.5 | git | a worktree at `<run root>/stints/<id>/tree` on branch `stint/<id>`, carrying a copy of what setup wrote |
 | 1.6 | the record | `<run root>/stints/<id>.json`: status `running`, `round_index` 1, `project` = the repo, `workdir` = the tree |

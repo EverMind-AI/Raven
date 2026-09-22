@@ -3179,7 +3179,7 @@ def test_the_shipped_example_is_a_playbook_that_would_actually_run() -> None:
     from raven.agent.subagent.builtin_agents import BUILTIN_AGENT_NAMES
     from raven.playbook.validate import validate_structure
 
-    text = Path("raven/playbook/builtin/rounds/playbook.md").read_text(encoding="utf-8")
+    text = Path("raven/playbook/builtin/long-horizon-dev-stint/playbook.md").read_text(encoding="utf-8")
     front = yaml.safe_load(re.match(r"\A---\n(.*?)\n---\n", text, re.DOTALL).group(1))
     block = yaml.safe_load(re.search(r"```yaml playbook-spec\n(.*?)```", text, re.DOTALL).group(1))
 
@@ -3198,9 +3198,9 @@ def test_the_shipped_example_is_a_playbook_that_would_actually_run() -> None:
 
     nodes = compile_round(spec, 1)
     assert [node["id"] for node in nodes] == [
-        "rounds-r01-planner",
-        "rounds-r01-builder",
-        "rounds-r01-verifier",
+        "long-horizon-dev-stint-r01-planner",
+        "long-horizon-dev-stint-r01-builder",
+        "long-horizon-dev-stint-r01-verifier",
     ]
     # The standing orders are referenced, not pasted: a round that inlined every
     # rule into every prompt is how the reply ceiling was reached the first time.

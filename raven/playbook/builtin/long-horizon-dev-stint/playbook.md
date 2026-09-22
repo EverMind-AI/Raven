@@ -1,11 +1,12 @@
 ---
-name: rounds
+name: long-horizon-dev-stint
 description: push a project forward one round at a time, with a planner, a builder and a verifier
 ---
 
 A planner, a builder and a verifier, pushing one project forward a round at
-a time. Ships with Raven: say "run rounds" in the project, or
-`raven playbook run rounds` from it.
+a time. Ships with Raven: say "run rounds" in the project -- the keywords below
+are what brings it to mind, and the name is what runs it -- or
+`raven playbook run long-horizon-dev-stint` from it.
 
 What it needs from the project, and what happens when it is not there:
 
@@ -49,7 +50,7 @@ memory:
 
 # Declared by what it proves, not by a command: this file travels, and the
 # command that builds a Godot project is nothing on a Node one. The project
-# answers once -- `raven playbook stint check set rounds build --run "..."`
+# answers once -- `raven playbook stint check set long-horizon-dev-stint build --run "..."`
 # -- and the answer is kept in `.stint/checks.json`. A project the tree plainly
 # affords a build for is answered for you; a fresh one is asked before the run.
 verify:
@@ -128,6 +129,9 @@ roles:
       - "tools/**"
       - "scripts/**"
       - "assets/**"
+      - "tests/**"
+      - "test/**"
+      - "spec/**"
     reads:
       - "reports/brief_{NN}.md"
       - .stint/SPEC.md

@@ -388,8 +388,8 @@ def test_the_packaged_library_ships_only_what_cannot_be_generated(tmp_path):
     from raven.playbook.store import BUILTIN_ROOT
 
     store = PlaybookStore(tmp_path / "empty-user", builtin_root=BUILTIN_ROOT)
-    assert store.list_ids() == ["rounds"]
-    assert store.load("rounds").mode == "stint"
+    assert store.list_ids() == ["long-horizon-dev-stint"]
+    assert store.load("long-horizon-dev-stint").mode == "stint"
 
 
 def test_every_packaged_playbook_names_an_agent_raven_ships(tmp_path):

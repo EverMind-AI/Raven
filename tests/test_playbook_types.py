@@ -263,7 +263,7 @@ def test_the_shipped_developer_is_judged_by_every_directory_its_guard_may_grant(
     from raven.playbook.store import BUILTIN_ROOT, PlaybookStore
     from raven.stint.bootstrap import GREENFIELD_DIRS, SOURCE_DIRS
 
-    spec = PlaybookStore(BUILTIN_ROOT.parent / "nowhere", builtin_root=BUILTIN_ROOT).load("rounds")
+    spec = PlaybookStore(BUILTIN_ROOT.parent / "nowhere", builtin_root=BUILTIN_ROOT).load("long-horizon-dev-stint")
     builder = next(role for role in spec.roles or [] if role.label == "builder")
     granted = {f"{name}/**" for name in SOURCE_DIRS} | set(GREENFIELD_DIRS)
     missing = sorted(granted - set(builder.owns))
@@ -284,7 +284,7 @@ def test_the_shipped_playbook_grades_by_the_same_artifacts_its_guards_name() -> 
     from raven.playbook.store import BUILTIN_ROOT, PlaybookStore
     from raven.stint.bootstrap import OUTPUT_DIRS
 
-    spec = PlaybookStore(BUILTIN_ROOT.parent / "nowhere", builtin_root=BUILTIN_ROOT).load("rounds")
+    spec = PlaybookStore(BUILTIN_ROOT.parent / "nowhere", builtin_root=BUILTIN_ROOT).load("long-horizon-dev-stint")
 
     for role in spec.roles or []:
         missing = [f"{name}/**" for name in OUTPUT_DIRS if f"{name}/**" not in role.artifacts]
