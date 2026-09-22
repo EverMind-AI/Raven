@@ -2016,8 +2016,8 @@
       "zh": "展开这次回答之前的过程"
     },
     "gui.fold.steps": {
-      "en": "steps",
-      "zh": "过程"
+      "en": "Done",
+      "zh": "已完成"
     },
     "gui.freq.cron": {
       "en": "Custom",
