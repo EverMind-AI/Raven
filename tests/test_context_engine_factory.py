@@ -642,7 +642,12 @@ class TestOwnershipReachesTheIdentityPrompt:
         assert "## Delegation" in await self._text(agent)
 
         self._disable(*every)
-        assert agent.tools.get_definitions() == []
+        # Not empty any more: raven reserves the tool-search meta-pair from the
+        # off switch, so what an operator can withhold is everything else. Zero
+        # live delegation paths is what retires the section, and that is reached.
+        from raven.agent.tools.tool_search import META_TOOL_NAMES
+
+        assert {d["function"]["name"] for d in agent.tools.get_definitions()} == set(META_TOOL_NAMES)
         assert "## Delegation" not in await self._text(agent)
 
     async def test_withholding_one_path_keeps_the_other_named(self, tmp_path: Path) -> None:

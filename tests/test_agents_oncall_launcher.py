@@ -278,6 +278,13 @@ def test_a_preexisting_own_registry_stays(grounded, tmp_path):
 #: step was removed on 2026-09-06, so the instance that needs the machine now
 #: writes the row itself. Listed explicitly, not folded in: a tool reaching this
 #: face without a line saying why is the drift this guard exists to catch.
+#:
+#: tool_call is the one name this face carries that no config row put there:
+#: raven reserves the tool-search meta-pair from tools.disabledTools, because
+#: the fold reads their absence from an array as "this request has no search
+#: route" and answers by shipping every schema. tool_call registers whatever
+#: the fold is doing; tool_search follows tools.toolSearch.enabled, off in this
+#: product's config, so it stays out.
 VENDORED_TOOL_FACE = {
     "ask_user",
     "edit_file",
@@ -301,6 +308,8 @@ VENDORED_TOOL_FACE = {
     "ops_submit",
     "ops_tune_status",
     "read_file",
+    "tool_call",
+    "tool_search",
     "web_fetch",
     "write_file",
 }

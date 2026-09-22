@@ -22,6 +22,19 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- Progressive tool disclosure ships on (`tools.toolSearch.enabled`). Below
+  `compactionThreshold` (50) nothing changes: the strategy drops `tool_search`
+  from every request while the catalog fits. Above it, most tool schemas are
+  withheld and reached through `tool_search` / `tool_call`, so context stops
+  scaling with tool count and an MCP connect no longer moves the cached prompt
+  prefix. Set `enabled: false` to keep the old shape.
+
+- `tools.disabledTools` can no longer take `tool_search` or `tool_call` away.
+  Their absence from a request is how the fold reads "no search route", so an
+  entry there did not slim a folded request, it unfolded it. An entry naming
+  either is reported once at startup and ignored; `tools.toolSearch.enabled` is
+  the switch that speaks for the pair.
+
 - `ppt_generate_image` no longer answers a repeat ask from the file the last
   ask wrote. The tool exists for "that picture is not what I wanted, do it
   again", and that ask carries the same words as the first one, so the cache

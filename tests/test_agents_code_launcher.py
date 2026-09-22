@@ -860,12 +860,23 @@ SKILL_LANE_TOOLS = {
     "use_skill",
 }
 
+#: Two names this product's config no longer decides. ``tool_call`` is reserved
+#: from ``tools.disabledTools``: its absence from an array is how the fold reads
+#: "this request has no search route", so an off switch there would unfold the
+#: array rather than slim it. ``tool_search`` registers with the shipped default
+#: -- the fold is on, and this face sits far below the threshold, so the strategy
+#: drops it from every request; it is in the registry the fixture reads and in no
+#: request the model sees. Neither is pinned off here on purpose: an operator or
+#: a dispatcher can attach MCP servers to this product at runtime, and pinning
+#: the fold off would hold it open at exactly the size it exists for.
+TRUNK_RESERVED = {"tool_call", "tool_search"}
+
 #: The product's visible tool face, hermetically rebuilt from the render:
 #: the fork's config intent minus the ledgered pending waves, plus the
-#: opened skill lane. Trunk also grew tools the fork never had; the withheld
-#: ones must be disabled by the product config, not by luck -- the two
-#: playbook tools only register outside this hermetic fixture, so their
-#: disable rows are the pin.
+#: opened skill lane and the reserved name above. Trunk also grew tools the
+#: fork never had; the withheld ones must be disabled by the product config,
+#: not by luck -- the two playbook tools only register outside this hermetic
+#: fixture, so their disable rows are the pin.
 VENDORED_TOOL_FACE = {
     "ask_user",
     "edit_file",
@@ -877,6 +888,8 @@ VENDORED_TOOL_FACE = {
     "read_file",
     "read_skill",
     "todo",
+    "tool_call",
+    "tool_search",
     "use_skill",
     "web_fetch",
     "write_file",
@@ -911,7 +924,12 @@ def test_the_face_arithmetic_is_the_ledger():
     """The literal above is not free-standing: it is the measured fork intent
     minus the ledgered pending waves, respelled -- so a tool can only leave
     or join the face by moving on this ledger."""
-    expected = (FORK_CONFIG_INTENT - PENDING_WAVE_TOOLS - set(RESPELLED)) | set(RESPELLED.values()) | SKILL_LANE_TOOLS
+    expected = (
+        (FORK_CONFIG_INTENT - PENDING_WAVE_TOOLS - set(RESPELLED))
+        | set(RESPELLED.values())
+        | SKILL_LANE_TOOLS
+        | TRUNK_RESERVED
+    )
     assert VENDORED_TOOL_FACE == expected
 
 

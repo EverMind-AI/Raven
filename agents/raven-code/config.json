@@ -39,8 +39,6 @@
       "spawn",
       "message",
       "hub",
-      "tool_search",
-      "tool_call",
       "deep_research",
       "image_generate",
       "text_to_speech",

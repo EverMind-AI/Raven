@@ -144,9 +144,9 @@ def test_the_roster_row_is_the_vendored_twins_modulo_the_ledgered_deltas():
 
 #: Trunk tools the fork loop never registered under this product's config;
 #: every one is held out of the face by a config row, not by luck (the code
-#: family's ledger discipline). tool_call/tool_search additionally keep the
-#: fork's face: its meta-pair registers only under tools.toolSearch.enabled,
-#: default False and never set by this config (the threshold only folds).
+#: family's ledger discipline). The meta-pair left this set: raven reserves
+#: tool_call/tool_search from tools.disabledTools, so the rows that used to
+#: hold them out are gone and tool_call joins the face (see TRUNK_RESERVED).
 TRUNK_HELD_OUT = {
     "browser_click",
     "browser_navigate",
@@ -169,8 +169,6 @@ TRUNK_HELD_OUT = {
     "read_skill",
     "run_subagent_dag",
     "spawn",
-    "tool_call",
-    "tool_search",
 }
 
 
@@ -1027,13 +1025,17 @@ DECK_TOOLS = {
     "ppt_review",
 }
 
-#: The product's visible tool face, hermetically rebuilt from the render: the
-#: fork's config intent plus the deck tools as plugin contributions. The
-#: key-gated pair (web_search from the merged tools.web slot, ppt_image_search
-#: from the rendered slice key) joins only when a Serper key is present -- the
-#: fork's own refusal to register keyless search. Every trunk-new name is held
-#: out by the TRUNK_HELD_OUT config rows pinned above.
-VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | DECK_TOOLS
+#: Two names this product's config no longer decides. ``tool_call`` is reserved
+#: from ``tools.disabledTools``: its absence from an array is how the fold reads
+#: "this request has no search route", so an off switch there would unfold the
+#: array rather than slim it. ``tool_search`` registers with the shipped default
+#: -- the fold is on, and this face sits far below the threshold, so the strategy
+#: drops it from every request; it is in the registry the fixture reads and in no
+#: request the model sees. Neither is pinned off here on purpose: an operator or
+#: a dispatcher can attach MCP servers to this product at runtime, and pinning
+#: the fold off would hold it open at exactly the size it exists for.
+TRUNK_RESERVED = {"tool_call", "tool_search"}
+VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | DECK_TOOLS | TRUNK_RESERVED
 KEY_GATED = {"web_search", "ppt_image_search"}
 
 

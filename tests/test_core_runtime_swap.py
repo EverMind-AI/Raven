@@ -263,8 +263,11 @@ def test_the_token_wise_socket_takes_the_strategy_the_config_names(tmp_path: Pat
     """token_wise is substitutable by configuration, not by instance: the door has
     no ``strategies=`` parameter and ``token_wise_stack.install_from_config`` is
     the only builder, so what a caller can do is name the strategies. A config
-    with cache optimisation on and usage tracking off yields a registry holding
-    exactly one CacheOptimizer, and the loop runs on that registry, not a copy."""
+    with cache optimisation on and usage tracking off yields a registry whose only
+    token_wise member is a CacheOptimizer, and the loop runs on that registry, not a
+    copy. The fold ahead of it is not token_wise's to name: the loop inserts it first
+    so it filters the array before the breakpoint is marked on the last tool."""
+    from raven.agent.tools.tool_search import ToolSearchStrategy
     from raven.core import runtime
     from raven.token_wise.cache_optimizer import CacheOptimizer
 
@@ -276,7 +279,7 @@ def test_the_token_wise_socket_takes_the_strategy_the_config_names(tmp_path: Pat
     rt = runtime.build_runtime(config, ec_config, provider=_Provider())
 
     assert rt.loop.strategies is rt.strategies
-    assert [type(s) for s in rt.loop.strategies.strategies] == [CacheOptimizer]
+    assert [type(s) for s in rt.loop.strategies.strategies] == [ToolSearchStrategy, CacheOptimizer]
 
 
 @pytest.mark.asyncio
