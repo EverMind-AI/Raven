@@ -132,14 +132,18 @@ export function loadDraft(id: string | null): void {
   goPaint()
 }
 
-export function dropDraft(id: string | null): void {
-  const key = id || 'new'
+function dropDraftText(key: string): void {
   const all = draftsRead()
   delete all[key]
   draftsWrite(all)
-  /* Through the writer rather than the map: a slash command drops the draft it
-     owns without leaving the conversation, so the chips on screen have to go
-     with the tray behind them. */
+}
+
+/* The conversation itself is gone -- this is the rail's delete -- so its tray
+   goes with its text. Through the writer rather than the map, because the one
+   deleted may be the conversation on screen. */
+export function dropDraft(id: string | null): void {
+  const key = id || 'new'
+  dropDraftText(key)
   traySet(key, [])
 }
 
@@ -159,10 +163,15 @@ export function touchDraft(): void {
   draftTick = setTimeout(parkDraft, 250)
 }
 
+/* Consuming the draft this conversation owns -- a send, a slash command -- takes
+   the text only: what is staged has not been handed to anyone yet, and a command
+   that compresses or clears the history is not the reader saying to throw the
+   files away. `fireSend` empties the tray itself, through `takeAtts`, because
+   the message it builds is where those files went. */
 export function dropOwnedDraft(): void {
   if (draftTick) clearTimeout(draftTick)
   draftTick = null
-  dropDraft(draftOwner)
+  dropDraftText(draftOwner || 'new')
 }
 
 /* A file on its own is a message -- "look at this" is what dropping it already
@@ -438,6 +447,15 @@ const failDetail = (e: unknown): string => {
   return (o && o.data && o.data.detail) || (o && o.message) || String(e)
 }
 
+/* Where a failed upload is reported: the transcript of the conversation it was
+   staged in, or a toast once the reader has moved on -- a note written then
+   would land in whatever conversation is open instead of that one. */
+function sayFailed(owner: string, label: string, e: unknown): void {
+  const detail = failDetail(e)
+  if (owner === ownerKey()) transcriptNote(label, detail)
+  else toast(`${label} · ${detail}`)
+}
+
 /* Whether files can be staged at all. False on the demo canvas, which has
    nowhere to put the bytes -- so it does not offer a drop target either. */
 export function canAttach(): boolean {
@@ -483,7 +501,7 @@ export function addTemplate(row: TemplateRow): void {
     .catch((e: unknown) => {
       traySet(owner, trayOf(owner).filter((a) => a !== entry))
       goPaint()
-      transcriptNote(t('gui.tpl.fail', { name: row.label }), failDetail(e))
+      sayFailed(owner, t('gui.tpl.fail', { name: row.label }), e)
     })
 }
 
@@ -524,7 +542,7 @@ export function addFiles(files: ArrayLike<File>): void {
         })
         .catch((e: unknown) => {
           drop()
-          transcriptNote(t('gui.att.fail', { name: file.name }), failDetail(e))
+          sayFailed(owner, t('gui.att.fail', { name: file.name }), e)
         })
     }
     reader.onerror = drop

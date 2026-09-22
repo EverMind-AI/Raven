@@ -394,7 +394,8 @@ describe('composer drafts', () => {
       fail({ data: { detail: 'disk full' } })
       await flush()
     })
-    expect(calls.notes.length).toBe(1)
+    expect(calls.notes).toEqual([])
+    expect(calls.toasts).toEqual(['big.bin 上传失败 · disk full'])
     expect(paths()).toEqual(['uploads/b.txt'])
 
     act(() => { store.loadDraft('a') })
@@ -449,23 +450,27 @@ describe('composer drafts', () => {
     expect(paths()).toEqual(['uploads/b.txt'])
   })
 
-  /* A slash command drops the draft it owns without leaving the conversation:
-     the one path that empties a tray with no switch behind it to repaint. */
-  it('clears the open tray when a slash command drops its draft', async () => {
+  /* A slash command takes the text it owns and nothing else: compressing the
+     context is not a reset, and /clear asks before it destroys anything. */
+  it('leaves the staged files where they are when a slash command runs', async () => {
     const cmd: SlashCmd = { id: 'gui.clear', fn: vi.fn() }
     wire({ ...uploader(), slash: [cmd] })
     const box = mountTray()
     store.loadDraft('a')
+    ta().value = 'typed'
     await stage('a.txt')
 
     act(() => { store.runSlash(cmd) })
     expect(cmd.fn).toHaveBeenCalledTimes(1)
-    expect(store.get().atts).toEqual([])
-    expect(box.hidden).toBe(true)
-    expect(go().disabled).toBe(true)
+    expect(ta().value).toBe('')
+    expect(paths()).toEqual(['uploads/a.txt'])
+    expect(box.querySelectorAll('.att').length).toBe(1)
+    expect(go().disabled).toBe(false)
 
-    await stage('later.txt')
-    expect(paths()).toEqual(['uploads/later.txt'])
+    act(() => { store.loadDraft('b') })
+    expect(store.get().atts).toEqual([])
+    act(() => { store.loadDraft('a') })
+    expect(paths()).toEqual(['uploads/a.txt'])
   })
 })
 
@@ -720,6 +725,28 @@ describe('the attachment tray', () => {
     })
     expect(box.querySelectorAll('.att').length).toBe(0)
     expect(calls.notes).toEqual([['big.bin 上传失败', 'disk full']])
+    expect(calls.toasts).toEqual([])
+  })
+
+  /* The note is written into a transcript, so it can only be written while the
+     conversation it belongs to is the one on screen. */
+  it('says a late failure in a toast rather than another session\'s transcript', async () => {
+    let fail: (e: unknown) => void = () => {}
+    const { calls } = wire({ upload: () => new Promise((_r, rej) => { fail = rej }) })
+    mountTray()
+    store.loadDraft('a')
+    await act(async () => {
+      store.addFiles([new File(['x'], 'big.bin', { type: '' })])
+      await flush()
+    })
+
+    act(() => { store.loadDraft('b') })
+    await act(async () => {
+      fail({ data: { detail: 'disk full' } })
+      await flush()
+    })
+    expect(calls.notes).toEqual([])
+    expect(calls.toasts).toEqual(['big.bin 上传失败 · disk full'])
   })
 
   it('hands the staged paths over and empties the tray when the message leaves', async () => {
