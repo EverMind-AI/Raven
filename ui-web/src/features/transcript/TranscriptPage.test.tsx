@@ -155,6 +155,24 @@ describe('transcript island, history', () => {
     expect($('.turn.me .achip')).toBeNull()
   })
 
+  it('gives the pictures and the files a row each', () => {
+    /* One row for both put a file chip on the pictures' baseline, where it read
+       as a caption on the thumbnail beside it, and pushed whatever did not fit
+       onto a line of its own. */
+    act(() => {
+      mount.history([{
+        role: 'user',
+        text: `look\n\n${ATT_NOTE}\n- uploads/a.png\n- uploads/b.png\n- uploads/deck.pptx\n- uploads/page.html`,
+      }])
+    })
+    const rows = [...document.querySelectorAll('.turn.me .abox > .transcript-arow')]
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.querySelectorAll('.shot')).toHaveLength(2)
+    expect(rows[0]!.querySelectorAll('.achip')).toHaveLength(0)
+    expect(rows[1]!.querySelectorAll('.achip')).toHaveLength(2)
+    expect(rows[1]!.querySelectorAll('.shot')).toHaveLength(0)
+  })
+
   it('keeps a file that is not a picture as a chip', () => {
     act(() => {
       mount.history([{ role: 'user', text: `read it\n\n${ATT_NOTE}\n- uploads/notes.pdf` }])

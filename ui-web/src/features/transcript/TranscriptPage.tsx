@@ -970,27 +970,42 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
   const showClip = seg.clipped && !seg.clipOpen
   return (
     <div className="turn me in">
+      {/* Pictures and files each on their own row, because they are two
+          different things to look at and one row made them one: the files
+          packed in after the last thumbnail, bottom-aligned against it, so the
+          first chip read as a caption on the picture beside it and whatever
+          did not fit wrapped alone underneath -- a staircase of ragged left
+          edges under a tidy row of squares. Each row right-aligns and wraps
+          within itself now, so the files read as a list of files. */}
       {seg.atts.length ? (
         <div className={'abox' + (imgs.length > 1 ? ' set' : '')}>
-          {imgs.length && (seg.expanded || imgs.length <= 3)
-            ? imgs.map((p) => thumb(p, true))
-            : imgs.length ? (
-              <button className="pile" title={t('gui.att.show_all')} onClick={openAll}>
-                {thumb(imgs[0] as string, false)}
-                <span className="cnt">{`${imgs.length}`}</span>
-              </button>
-            ) : null}
-          {docs.length && (seg.expanded || docs.length <= 2)
-            ? docs.map((p) => (
-              <button key={p} className="achip" title={p} onClick={() => wsOpenPath(p)}>
-                <span className="nm">{String(p).split('/').pop()}</span>
-              </button>
-            ))
-            : docs.length ? (
-              <button className="achip more" title={t('gui.att.show_all')} onClick={openAll}>
-                <span className="nm">{t('gui.att.n_files', { n: docs.length })}</span>
-              </button>
-            ) : null}
+          {imgs.length ? (
+            <div className="transcript-arow">
+              {seg.expanded || imgs.length <= 3
+                ? imgs.map((p) => thumb(p, true))
+                : (
+                  <button className="pile" title={t('gui.att.show_all')} onClick={openAll}>
+                    {thumb(imgs[0] as string, false)}
+                    <span className="cnt">{`${imgs.length}`}</span>
+                  </button>
+                )}
+            </div>
+          ) : null}
+          {docs.length ? (
+            <div className="transcript-arow">
+              {seg.expanded || docs.length <= 2
+                ? docs.map((p) => (
+                  <button key={p} className="achip" title={p} onClick={() => wsOpenPath(p)}>
+                    <span className="nm">{String(p).split('/').pop()}</span>
+                  </button>
+                ))
+                : (
+                  <button className="achip more" title={t('gui.att.show_all')} onClick={openAll}>
+                    <span className="nm">{t('gui.att.n_files', { n: docs.length })}</span>
+                  </button>
+                )}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {/* A turn nothing typed is the reader's own side of the conversation --

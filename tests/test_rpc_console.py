@@ -2341,9 +2341,7 @@ def test_viewer_root_finds_an_upload_a_pinned_session_cannot_see(
     assert console_module.viewer_root(session, Path("uploads/shot.png")) == home
 
 
-def test_viewer_root_leaves_every_other_path_with_the_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_viewer_root_leaves_every_other_path_with_the_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Only an upload may come from the other root.
 
     A file the session does not have stays the session's question: answering it
