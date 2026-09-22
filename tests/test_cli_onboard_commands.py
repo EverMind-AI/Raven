@@ -8175,3 +8175,171 @@ def test_the_lent_writer_merges_rather_than_replaces(tmp_env: Path) -> None:
 
     block = json.loads(tmp_env.read_text(encoding="utf-8"))["embedding"]
     assert block["model"] == "m-2" and block["provider"] == "siliconflow"
+
+
+class TestTheRerankProtocolDecidesTheRequestShape:
+    """Each protocol posts to a different path, and reads a different reply.
+
+    This is the fact the whole rerank half of the role change exists for:
+    EverOS's `rerank.provider` selects a client implementation, and borrowing
+    the chat address or the wrong shape is why reranking configured from the
+    settings page never worked against DeepInfra. Observed on the wire during
+    acceptance -- `vllm` reached `POST /v1/rerank`, `deepinfra` reached
+    `POST /v1/<model>` -- and pinned here so the dispatch cannot drift back.
+    """
+
+    @staticmethod
+    def _capture(monkeypatch: pytest.MonkeyPatch, payload: dict, status: int = 200):
+        import httpx
+
+        seen: dict = {}
+
+        class _Resp:
+            status_code = status
+            text = ""
+
+            @staticmethod
+            def json() -> dict:
+                return payload
+
+        class _Client:
+            def __init__(self, *a, **kw) -> None: ...
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a) -> None: ...
+            def post(self, url, json, headers):  # noqa: A002 - httpx's own name
+                seen["url"] = url
+                seen["body"] = json
+                seen["headers"] = headers
+                return _Resp()
+
+        monkeypatch.setattr(httpx, "Client", _Client)
+        return seen
+
+    def test_deepinfra_posts_to_base_slash_model_and_reads_scores(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen = self._capture(monkeypatch, {"scores": [0.9]})
+
+        ok, detail = onboard_everos._probe_rerank(
+            "Qwen/Qwen3-Reranker-4B",
+            api_key="k",
+            base_url="https://api.deepinfra.com/v1/inference/",
+            rerank_protocol="deepinfra",
+        )
+
+        assert ok, detail
+        assert seen["url"] == "https://api.deepinfra.com/v1/inference/Qwen/Qwen3-Reranker-4B"
+        assert set(seen["body"]) == {"queries", "documents"}
+
+    def test_deepinfra_without_scores_is_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._capture(monkeypatch, {"scores": []})
+
+        ok, detail = onboard_everos._probe_rerank(
+            "m", api_key="k", base_url="https://d/v1/inference", rerank_protocol="deepinfra"
+        )
+
+        assert not ok
+        assert "no scores" in detail
+
+    def test_dashscope_posts_to_its_own_service_path_and_reads_results(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen = self._capture(monkeypatch, {"output": {"results": [{"index": 0}]}})
+
+        ok, detail = onboard_everos._probe_rerank(
+            "gte-rerank",
+            api_key="k",
+            base_url="https://dashscope.aliyuncs.com",
+            rerank_protocol="dashscope",
+        )
+
+        assert ok, detail
+        assert seen["url"].endswith("/api/v1/services/rerank/text-rerank/text-rerank")
+        assert seen["body"]["model"] == "gte-rerank"
+
+    def test_dashscope_without_results_is_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._capture(monkeypatch, {"output": {}})
+
+        ok, detail = onboard_everos._probe_rerank(
+            "m", api_key="k", base_url="https://dashscope.aliyuncs.com", rerank_protocol="dashscope"
+        )
+
+        assert not ok
+        assert "no results" in detail
+
+    def test_anything_else_is_the_openai_compatible_rerank_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The control: `vllm` and an unnamed protocol share one shape."""
+        seen = self._capture(monkeypatch, {"results": [{"index": 0}]})
+
+        ok, detail = onboard_everos._probe_rerank(
+            "bge-reranker-v2-m3",
+            api_key="k",
+            base_url="https://api.siliconflow.cn/v1/",
+            rerank_protocol="vllm",
+        )
+
+        assert ok, detail
+        assert seen["url"] == "https://api.siliconflow.cn/v1/rerank"
+        assert seen["body"]["query"] == "ping"
+
+
+def test_a_self_hosted_rerank_source_asks_the_operator_for_the_shape(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A vendor the table cannot answer for gets its request shape from the
+    person who deployed it.
+
+    The table answers for the vendors it knows -- that branch is covered by
+    `test_memory_rerank_reuse_llm_provider`. A self-hosted box is the case no
+    table can answer: reranking against it needs `deepinfra` / `vllm` /
+    `dashscope`, and guessing is what posted to the wrong path. This is also
+    the branch the settings page has no room for (D9), so the wizard is the
+    only door that asks.
+    """
+    _seed_everos_role("llm", model="m", provider="openrouter", api_key="k-llm", base_url="https://openrouter.ai/api/v1")
+
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    from raven_everos.config import vendors
+
+    custom = next(v for v in vendors() if v["name"] == "custom")
+    assert not custom.get("rerank_protocol"), "this case needs a vendor the table cannot answer for"
+
+    asked: list[str] = []
+
+    def _select(message, *a, **kw):
+        m = str(message)
+        asked.append(m)
+        if "Rerank service type" in m:
+            return _FQ("vllm")
+        if "Already configured" in m or "what now" in m:
+            return _FQ("redo")
+        return _FQ(("provider", custom))
+
+    monkeypatch.setattr(questionary, "select", _select)
+    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("http://127.0.0.1:9000/v1"))
+    from dataclasses import replace as _replace
+
+    monkeypatch.setattr(onboard_everos, "_UI", _replace(onboard_everos._UI, prompt_api_key=lambda *a, **kw: "k-local"))
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_everos, "_probe_rerank", lambda *a, **kw: (True, "ok"))
+
+    onboard_everos._config_everos_role(
+        section="rerank",
+        main_model="openrouter/anthropic/claude-sonnet-4-5",
+        non_interactive=False,
+        warnings=[],
+    )
+
+    assert any("Rerank service type" in m for m in asked), f"the operator was never asked: {asked}"
+
+    from raven_everos.config import rerank_protocol_for_role, role_pin
+
+    assert role_pin("rerank") is not None
+    # Recorded on the role, because the table is silent exactly here.
+    assert rerank_protocol_for_role() == "vllm"
