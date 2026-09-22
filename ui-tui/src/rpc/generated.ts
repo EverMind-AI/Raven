@@ -5338,7 +5338,7 @@ export interface SessionUsageResult {
   /**
    * Sum of provider-reported USD; null when no call reported a price.
    */
-  cost_usd?: number;
+  cost_usd?: number | null;
   /**
    * exact when every call reported a price; estimated when some did not.
    */

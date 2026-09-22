@@ -110,6 +110,7 @@ def _enumerate_skills(agent_loop: "AgentLoop | None") -> dict[str, list[str]]:
 async def _baseline_usage(
     agent_loop: "AgentLoop | None",
     config: "Config",
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Banner ``info.usage`` subfield — boot baseline (no turn has run yet).
 
@@ -130,10 +131,18 @@ async def _baseline_usage(
     OpenRouter model can reach for a synchronous 10s HTTP call; this handler
     runs on the event loop (an RPC method), so that call is pushed to a
     thread rather than blocking every other session in flight.
+
+    ``model`` is whose window this is, and a caller that has a session passes
+    that session's own (:func:`_session_model`): a percentage is only a
+    percentage of the window the model being reported actually has. Read off
+    the default binding instead, a session switched from a 100k model to a 200k
+    one was reported on the model it switched to and measured against the
+    window it left. Omitted -- a session being created, which has not switched
+    anything yet -- the loop's own binding stands, as it always did.
     """
     from raven.providers.rates import is_plan_billed
 
-    model = getattr(agent_loop, "model", None)
+    model = model or getattr(agent_loop, "model", None)
     configured = config.agents.defaults.context_window_tokens
     if configured:
         context_max = configured
@@ -203,7 +212,11 @@ async def _default_session_info(
     default: see :func:`_session_model`.
     """
     model_id = _session_model(agent_loop, config, session_key)
-    usage = await _baseline_usage(agent_loop, config)
+    # Only for a session that exists: created, this bundle reports the
+    # configured default while the turn will run on the loop's binding, and
+    # sizing the window off the report would be a second change to a path this
+    # is not about.
+    usage = await _baseline_usage(agent_loop, config, model_id if session_key else None)
     info: dict[str, Any] = {
         "model": model_id,
         "model_id": model_id,
@@ -1206,7 +1219,7 @@ async def session_usage(
     session = manager_for(agent_loop, config).peek(session_key)
     result = _scan_usage(session_key, _usage_days(session))
     result["model"] = _session_model(agent_loop, config, session_key)
-    baseline = await _baseline_usage(agent_loop, config)
+    baseline = await _baseline_usage(agent_loop, config, result["model"])
     result["context_max"] = baseline["context_max"]
     result["context_used"] = 0
     result["context_percent"] = 0

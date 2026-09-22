@@ -6896,7 +6896,10 @@
               "description": "input + output + cache_read + cache_write."
             },
             "cost_usd": {
-              "type": "number",
+              "type": [
+                "number",
+                "null"
+              ],
               "description": "Sum of provider-reported USD; null when no call reported a price."
             },
             "cost_status": {
