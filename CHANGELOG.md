@@ -92,6 +92,33 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- The `find`, `list_dir` (recursive) and pure-Python `grep` tools can no
+  longer freeze the gateway on a large tree. One `find` over a home
+  directory held the event loop for 2h21m: the walk ran synchronously on
+  the loop, filtered the noise directories only after entering them, and had
+  no deadline, so the registry's 300s ceiling could not preempt it and every
+  session stopped with it. The three tools now share one walk that prunes
+  `node_modules`, `.git` and the other noise directories before entering
+  them, checks a 20s wall-clock budget before every entry it yields (so one
+  large or slow directory cannot run past it either) and ends with a
+  `PARTIAL result` trailer that says absence of a match is not conclusive,
+  and runs in a worker thread. `find` starts at a pattern's literal prefix
+  (`src/**/*.py` never enters a sibling of `src`), answers what `Path.glob`
+  answered for the same pattern, keeps a trailing slash's directory-only
+  meaning, refuses a pattern with `..` or a leading `/`, and lists files as
+  well as directories under a trailing `**`. A symbolic link to a directory
+  is entered where a single pattern component names or matches it
+  (`*/util/helper.py` reaches through a linked `vendor`) and never under
+  `**`, which is how `Path.glob` read it and what keeps a link cycle
+  finite. A noise directory inside a pattern's literal prefix
+  (`node_modules/*.js`, `src/node_modules/*.js`) is walked, since the
+  pattern asked for it, where `Path.glob` filtered it out; one met below
+  the prefix is pruned as before, and `list_dir` on such a path lists it.
+  Both tool descriptions say so. Recursive `list_dir` also used to filter on the components of the
+  absolute path, so a workspace beneath a directory named `build`, `dist`,
+  `venv` or another noise name listed as empty; it prunes below the listed
+  path only now.
+
 - A sub-agent run that is stopped now tells the conversation that started
   it, and says why: `[Subagent '...' was cancelled]` with the reason (`the
   gateway stopped`, `the user sent /stop`, `a user stopped this run`, ...),
