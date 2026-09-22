@@ -328,8 +328,6 @@ export function rename(): void {
   inp.className = 'titin'
   inp.value = s.title
   h.replaceWith(inp)
-  const rb = document.getElementById('renameBtn') as HTMLButtonElement | null
-  if (rb) rb.hidden = true
   inp.focus()
   inp.select()
   const was = s.title
@@ -356,7 +354,6 @@ export function rename(): void {
     nh.textContent = plainTitle(next)
     nh.id = 'title'
     inp.replaceWith(nh)
-    if (rb) rb.hidden = false
     draw()
   }
   finishOpen = finish

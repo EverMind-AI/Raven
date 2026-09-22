@@ -5247,6 +5247,31 @@
       }
     },
     {
+      "name": "fs.pick_dir",
+      "summary": "Ask the gateway host's desktop for a folder through its native folder dialog, for pinning a session's working directory.",
+      "params": [],
+      "result": {
+        "name": "FsPickDirResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "The folder chosen, absolute and resolved; absent when the dialog was dismissed."
+            },
+            "ok": {
+              "type": "boolean",
+              "description": "Whether a session may be pinned to the chosen folder (see raven.agent.workdir); false with no path."
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "fs.read",
       "summary": "Read one working-directory file, capped.",
       "params": [

@@ -134,6 +134,19 @@ export function setLiveAnchor(ms: number): void {
 
 let picker: HTMLInputElement | null = null
 
+/* The two verbs the "+" menu runs (src/chrome/PlusMenu.tsx): the file input
+   and the template sheet are this island's, so the menu asks rather than
+   reaching for either. */
+export function pickFiles(): void {
+  ensure()
+  store.pickFiles(openPicker)
+}
+
+export function pickTemplate(): void {
+  ensure()
+  openTemplates()
+}
+
 function openPicker(): void {
   if (!picker) {
     picker = document.createElement('input')
@@ -183,23 +196,6 @@ export function install(): void {
       store.goClick()
     }
   }
-  const attBtn = document.getElementById('attBtn')
-  if (attBtn) {
-    attBtn.onclick = () => {
-      ensure()
-      store.pickFiles(openPicker)
-    }
-  }
-  /* Shown or hidden by store.goPaint, which runs once the source exists;
-     here the source does not yet, so only the click is wired. */
-  const tplBtn = document.getElementById('tplBtn')
-  if (tplBtn) {
-    tplBtn.onclick = () => {
-      ensure()
-      openTemplates()
-    }
-  }
-
   /* The drop target exists only where a dropped file has somewhere to go: the
      demo canvas offers no upload, so it must not light up the field either. */
   const fieldBox = ta.closest('.field')

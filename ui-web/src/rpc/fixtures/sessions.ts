@@ -30,6 +30,10 @@ interface Fixture {
   run: string | null
   pin?: boolean
   from?: string
+  /** The folder it was pinned to, absent for one running where the policy
+      default puts it -- which is what the rail groups by and what the tag
+      beside the title says. */
+  workdir?: string
 }
 
 const MIN = 60000
@@ -45,9 +49,12 @@ const D4 = 4 * DAY
 const D9 = 9 * DAY
 
 const SESSION_FIXTURES: Fixture[] = [
-  { id:'a', ago: H2, title:'GTM agent 市场调研', last:'抓取了三家代表产品的官网，出了对比表', run:'gtm', pin:false },
-  { id:'b', ago: H4, title:'修复登录偶发超时',   last:'3 runs, 0 failures · 已改连接池隔离',   run:'fix', pin:true },
-  { id:'g', ago: H5, title:'重构支付回调',       last:'出错：找不到模块 stripe',              run:null },
+  { id:'a', ago: H2, title:'GTM agent 市场调研', last:'抓取了三家代表产品的官网，出了对比表', run:'gtm', pin:false,
+    workdir:'/Users/me/work/gtm' },
+  { id:'b', ago: H4, title:'修复登录偶发超时',   last:'3 runs, 0 failures · 已改连接池隔离',   run:'fix', pin:true,
+    workdir:'/Users/me/code/raven' },
+  { id:'g', ago: H5, title:'重构支付回调',       last:'出错：找不到模块 stripe',              run:null,
+    workdir:'/Users/me/code/raven' },
   { id:'c', ago: D1, title:'整理本周迭代进度',   last:'还没开始',                            run:null },
   { id:'h', ago: D1, title:'扫一遍依赖安全告警', last:'运行中 · 已查 12 个包',               run:null },
   { id:'d', ago: D4, title:'把 CSV 导入 Notion', last:'还没开始',                            run:null },
@@ -177,6 +184,7 @@ export function createSessions(env: FixtureEnv, turn: () => TurnFixture): Sessio
     started_at: Math.floor((env.now() - s.ago - HOUR) / 1000),
     updated_at: Math.floor((env.now() - s.ago) / 1000),
     ...(s.from ? { source: s.from } : {}),
+    ...(s.workdir ? { workdir: s.workdir } : {}),
     pinned: !!s.pin,
     /* A scripted turn plays out from the send that starts it, so nothing is
        ever in flight at the moment this canvas answers a list. */

@@ -140,6 +140,9 @@ export const workspaceSource: WorkspaceSource = {
   /* Where a new conversation may be pinned. `path` omitted is the reader's home
      directory, which is where the picker starts (state/workdir.ts). */
   dirs: (path) => gateway().call('fs.dirs', path ? { path } : {}),
+  /* The host's own folder dialog, which the picker offers instead of the walk
+     while the host is this desktop (state/workdir.ts). */
+  pickDir: () => gateway().call('fs.pick_dir', {}),
 }
 
 /* Test seam only: the workspace root and the two injected helpers are the

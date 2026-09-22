@@ -3718,6 +3718,20 @@ class FsDirsResult(_Strict):
     )
 
 
+class FsPickDirParams(_Strict):
+    pass
+
+
+class FsPickDirResult(_Strict):
+    path: str | None = Field(
+        None, description="The folder chosen, absolute and resolved; absent when the dialog was dismissed."
+    )
+    ok: bool = Field(
+        ...,
+        description="Whether a session may be pinned to the chosen folder (see raven.agent.workdir); false with no path.",
+    )
+
+
 class FsReadParams(_Strict):
     path: str
     max_bytes: int | None = None
@@ -5066,6 +5080,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "channels.qr": (ChannelsQrParams, ChannelsQrResult),
     "fs.list": (FsListParams, FsListResult),
     "fs.dirs": (FsDirsParams, FsDirsResult),
+    "fs.pick_dir": (FsPickDirParams, FsPickDirResult),
     "fs.read": (FsReadParams, FsReadResult),
     "fs.upload": (FsUploadParams, FsUploadResult),
     "deck.templates.list": (DeckTemplatesListParams, DeckTemplatesListResult),

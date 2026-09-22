@@ -1,28 +1,35 @@
 /* The composer dock: the shell src/page.html used to carry as markup -- the two
  * raven bands, the sheet rack, the card with the field and the bar under it, and
- * the three popovers that hang off that bar.
+ * the popovers that hang off that bar.
  *
- * Every element below is a transcription -- tag, id, class, data-*, role, aria,
- * the svg path data and the text exactly as page.html spelled them, attributes
- * in the same order -- and src/test/__golden__/region-app.txt is what says so.
- * The band itself is here too now: src/App.tsx renders div.chat and this is its
- * sixth and last child. It has to
- * stay one stable node for a second reason too: the composer hangs a
- * ResizeObserver and a MutationObserver on it (features/composer/mount.tsx), and
- * a node rebuilt per render would lose both.
+ * The bar is four things: the "+" (a file or a deck template, behind one
+ * button), the workspace chip (a draft's, gone once a conversation starts),
+ * the permission chip and the model chip, then the send button -- plus the
+ * environment chip the page is served hidden, the meter and the context ring.
+ * The sub-agent tier is a row of the picker the model chip opens, not a chip
+ * of its own. The element order, the ids and the classes are what
+ * src/test/__golden__/region-app.txt records. The band has to stay one stable
+ * node: the composer hangs a ResizeObserver and a MutationObserver on it
+ * (features/composer/mount.tsx), and a node rebuilt per render would lose both.
  *
- * Words go through t(key) where the markup carries a key;
- * the four that carry none (#permName, #envName, #tierName, #modelName) carry
- * none because each is the property of whoever fills it. Two of the four are
- * their owner's store now (./PermChip.tsx, ./TierChip.tsx, each falling back to
- * the served word until that store's first paint); the other two are rendered
- * as the page serves them and written over by hand.
+ * Each of the three small popovers is a child of an anchor wrapper (`.chrome-anch`)
+ * around its own chip, and the stylesheet hangs it off that chip's top edge:
+ * nothing measures an element, nothing leaves the card, and every row keeps a
+ * plain onClick because the tree never leaves the container React delegates
+ * from. The model picker is the exception -- it is a body-level layer
+ * (features/model/ModelPicker.tsx) and measures the chip itself.
  *
- * Five of the children are files of their own, because each renders the whole
- * of a store: the context ring (./CtxChip.tsx) and the three chips with the
- * popovers they open (./PermChip.tsx, ./PermPopover.tsx, ./TierChip.tsx,
- * ./TierPopover.tsx, ./WorkdirChip.tsx, ./WorkdirPopover.tsx). Their place in the two child lists below is the page's,
- * which is the one thing about them this file still decides.
+ * Words go through t(key) where the markup carries a key; #permName, #envName
+ * and #modelName carry none because each is the property of whoever fills it
+ * (./PermChip.tsx, state/envChip.ts, ./ModelChip.tsx).
+ *
+ * Six of the children are files of their own, because each renders the whole
+ * of a store: the "+" and its menu (./PlusMenu.tsx), the workspace chip and
+ * its popover (./WorkdirChip.tsx, ./WorkdirPopover.tsx), the permission chip
+ * and its popover (./PermChip.tsx, ./PermPopover.tsx), the context ring
+ * (./CtxChip.tsx) and the model chip (./ModelChip.tsx). Their place in the bar
+ * below is the page's, which is the one thing about them this file still
+ * decides.
  *
  * What this does NOT own, though it renders the elements:
  *   - textarea#ta. It stays uncontrolled and its four listeners stay native
@@ -30,8 +37,9 @@
  *     the page's root commits before that runs): a component owning the field
  *     would re-render a text area the reader is typing into, and React's own
  *     onKeyDown could not see an IME composition the way the native handler
- *     does. The three writes to .value are the composer store's for the same
- *     reason (its drafts, its send, its slash commands).
+ *     does. The writes to .value and .placeholder are the composer store's for
+ *     the same reason (its drafts, its send, its slash commands, its two-state
+ *     placeholder).
  *   - div#atts, which is not in the markup: it exists only once something is
  *     staged and the composer inserts it before .field. React never re-orders
  *     these children -- none of them is conditional -- so a node put between
@@ -40,15 +48,8 @@
  *     ground: the sheet rack and the composer's own roots fill them, and
  *     page.css reads `.dock .sheets:has(>*)` off the rack, so it renders with
  *     no children at all rather than a placeholder.
- *   - #go's icon and disabled state, #meter's text, #attBtn's click and
- *     #tplBtn's click and hidden flag (the composer store), #modelName and #modelChip's title
- *     (features/model/chip.ts), #envName's label (state/envChip.ts), and
- *     #slashPop's data-open.
- *   - where #permPop and #tierPop stand. Both stores move the node to the body
- *     the first time it opens, because the card's entrance animation makes the
- *     card a containing block and re-bases the popover's fixed coordinates. A
- *     child moved out from under a portal is safe as long as React never
- *     reconciles that child list, which it does not: see above.
+ *   - #go's icon and disabled state, #meter's text (the composer store),
+ *     #envName's label (state/envChip.ts), and #slashPop's data-open.
  * Each of those is still exactly one writer of the value it writes, and React
  * cannot undo any of them: it renders each as the constant the page was served
  * with, and it diffs against the props it rendered last rather than against the
@@ -61,12 +62,11 @@ import { TaskRuns } from '../features/tasks/TasksPage'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import { CtxChip } from './CtxChip'
+import { ModelChip } from './ModelChip'
 import { PermChip } from './PermChip'
 import { PermPopover } from './PermPopover'
-import { TierChip } from './TierChip'
-import { TierPopover } from './TierPopover'
+import { Plus } from './PlusMenu'
 import { WorkdirChip } from './WorkdirChip'
-import { WorkdirPopover } from './WorkdirPopover'
 
 import type { JSX } from 'react'
 
@@ -84,38 +84,21 @@ function DockIn(): JSX.Element {
            the left, session state and the send button on the right --
            nothing shares the row the reader types in. */}
       <div className="under">
-        {/* A button is neither a flex nor a grid parent here and its one child
-            is inline, so the whitespace page.html had around the icon is
-            reproduced: it collapses at both line edges either way, but the rule
-            that makes it harmless is the line edge, not the parent (.tool-btn,
-            src/styles/page.css:2135). */}
-        <button className="tool-btn" id="attBtn" data-tip={lang.attr('gui.attach')} aria-label={lang.attr('gui.attach')}>
-          {' '}
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-            <path d="M15 7l-6.2 6.2a2.6 2.6 0 0 0 3.7 3.7L19 10a4.4 4.4 0 0 0-6.2-6.2L6 10.5a6.2 6.2 0 0 0 8.8 8.8l3.4-3.4" />
-          </svg>
-          {' '}
-        </button>
-        {/* Hidden until the composer says a template can be picked here
-            (features/composer/mount.tsx): the demo canvas has no server to
-            list them from. */}
-        <button className="tool-btn" id="tplBtn" hidden data-tip={lang.attr('gui.tpl.pick')} aria-label={lang.attr('gui.tpl.pick')}>
-          {' '}
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-            <rect x="3" y="4.5" width="18" height="12" rx="2" />
-            <path d="M8 20.5h8M12 16.5v4M7 9h6M7 12.5h10" />
-          </svg>
-          {' '}
-        </button>
-        <PermChip />
-        {/* Where the conversation will run. Live on a draft, a report once the
-            conversation exists (src/chrome/WorkdirChip.tsx). */}
+        {/* A file or a deck template, behind one button (src/chrome/PlusMenu.tsx);
+            then the folder a draft runs in (src/chrome/WorkdirChip.tsx), which
+            a conversation says beside its title instead. */}
+        <Plus />
         <WorkdirChip />
+        <span className="chrome-anch">
+          <PermChip />
+          <PermPopover />
+        </span>
         <span className="chip" id="envChip" hidden><span className="led" /><span id="envName">本机</span></span>
         <span className="meter" id="meter" />
         <CtxChip />
-        <TierChip />
-        <button className="chip" id="modelChip"><span id="modelName">minimax-m3</span></button>
+        {/* The sub-agent tier is a row of the picker this chip opens
+            (features/model/ModelPicker.tsx), not a chip of its own. */}
+        <ModelChip />
         <button className="go" id="go" disabled aria-label={lang.attr('gui.send')} />
       </div>
 
@@ -123,17 +106,13 @@ function DockIn(): JSX.Element {
         <div className="hd"><span className="lab">{t('gui.session_commands')}</span></div>
         <div id="slashList" />
       </div>
-
-      <PermPopover />
-      <TierPopover />
-      <WorkdirPopover />
     </div>
   )
 }
 
-/* The band and its four children, in the order page.html had them. It has to
-   stay one node: the composer watches it for every reason its height changes.
-   The rack is handed over empty, which is load-bearing: `.dock .sheets:has(> *)`
+/* The band and its children, in the order page.html had them. It has to stay
+   one node: the composer watches it for every reason its height changes. The
+   rack is handed over empty, which is load-bearing: `.dock .sheets:has(> *)`
    is what gives the stack its frost, so an empty rack has to be an element with
    no children rather than a wrapper around none. */
 export function Dock(): JSX.Element {

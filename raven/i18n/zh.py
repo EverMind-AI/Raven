@@ -7,9 +7,9 @@ boundary test keeps every other module free of CJK text.
 MESSAGES: dict[str, str] = {
     "Saved. Applies after the next gateway reload or restart.": "已保存。下次网关重载或重启后生效。",
     "OpenRouter (recommended - one key, many models)": "OpenRouter(推荐 · 一个 Key 调用多家模型)",
-    "The least effort a sub-agent is asked for.": "子代理被要求付出的最少努力。",
-    "The middle amount of effort, between the other two.": "居中的投入，介于另外两档之间。",
-    "The most effort a sub-agent is asked for.": "子代理被要求付出的最多努力。",
+    "Faster and cheaper, for small, well-defined tasks.": "更快更省，适合目标明确的小任务。",
+    "A balance of speed and quality.": "速度与质量兼顾。",
+    "Deepest reasoning and full sub-agent effort, for complex or open-ended work.": "思考最深、子智能体全力投入，适合复杂或开放的任务。",
     "MiniMax (Global, open-source partner)": "MiniMax Global(开源合作伙伴)",
     "MiniMax (CN)": "MiniMax 中国",
     "Z.ai (Zhipu)": "Z.ai(智谱)",

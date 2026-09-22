@@ -8,6 +8,7 @@ those, so the property it pins is one somebody already proved was unguarded.
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1795,6 +1796,114 @@ async def test_fs_dirs_marks_the_listed_directory_itself(tmp_path: Path, monkeyp
     assert above["ok"] is False
     beside = await console_module.fs_dirs({"path": str(tmp_path / "proj")})
     assert beside["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# fs.pick_dir -- the host's own folder dialog
+# ---------------------------------------------------------------------------
+
+
+def _dialog_answers(monkeypatch, answer: str | None) -> list[list[str]]:
+    """Stand in for the dialog: record the command, answer with a folder or a dismissal.
+
+    The command itself is stood in for as well, because which one a host has is
+    not what these cases are about: a headless runner has neither zenity nor
+    kdialog, and without this they failed at `_pick_dir_argv` before reaching
+    the answer they were written to pin.
+    """
+    asked: list[list[str]] = []
+
+    async def run(argv: list[str]) -> str | None:
+        asked.append(argv)
+        return answer
+
+    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: ["dialog"])
+    monkeypatch.setattr(console_module, "_run_pick_dir", run)
+    return asked
+
+
+async def test_fs_pick_dir_hands_back_the_chosen_folder_resolved_and_judged(tmp_path: Path, monkeypatch) -> None:
+    """The folder comes back absolute and resolved, with the same `ok` fs.dirs
+    puts on an entry, so the page needs no second call to know the create
+    would take it. macOS prints the path with a trailing slash; it is gone."""
+    (tmp_path / "proj").mkdir()
+    _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
+    asked = _dialog_answers(monkeypatch, str(tmp_path / "proj") + "/")
+
+    r = await console_module.fs_pick_dir({})
+    assert r == {"path": str((tmp_path / "proj").resolve()), "ok": True}
+    assert len(asked) == 1
+
+
+async def test_fs_pick_dir_marks_the_agents_own_data_not_ok(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / ".raven" / "workspace"
+    (home / "skills").mkdir(parents=True)
+    _agent_home(monkeypatch, home)
+    _dialog_answers(monkeypatch, str(home / "skills"))
+
+    r = await console_module.fs_pick_dir({})
+    assert r["ok"] is False
+    assert r["path"] == str((home / "skills").resolve())
+
+
+async def test_fs_pick_dir_reads_a_dismissed_dialog_as_no_folder(monkeypatch) -> None:
+    """Cancel is not an error: the answer carries no path, and the page leaves
+    the menu where it was."""
+    _dialog_answers(monkeypatch, None)
+    assert await console_module.fs_pick_dir({}) == {"ok": False}
+
+
+async def test_fs_pick_dir_refuses_a_host_with_no_dialog(monkeypatch) -> None:
+    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: None)
+    with pytest.raises(ConfigValidationError, match="no folder dialog"):
+        await console_module.fs_pick_dir({})
+
+
+async def test_fs_pick_dir_refuses_a_path_that_is_not_a_directory(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "notes.md").write_text("x")
+    _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
+    _dialog_answers(monkeypatch, str(tmp_path / "notes.md"))
+    with pytest.raises(ConfigValidationError, match="not a directory"):
+        await console_module.fs_pick_dir({})
+
+
+async def test_run_pick_dir_reads_what_the_dialog_printed_and_nothing_else() -> None:
+    """The runner is the one piece a stub cannot stand in for: it is where a
+    dialog's stdout becomes a path, and where silence becomes no path. A
+    python that prints and one that does not stand in for the two answers,
+    with no dialog and no desktop needed to ask.
+    """
+    said = await console_module._run_pick_dir([sys.executable, "-c", "print('  /tmp/picked  ')"])
+    assert said == "/tmp/picked"
+    assert await console_module._run_pick_dir([sys.executable, "-c", "pass"]) is None
+
+
+async def test_fs_pick_dir_reports_a_dialog_that_would_not_start(monkeypatch) -> None:
+    """A dialog that cannot be launched at all fails the call rather than
+    reading as a dismissal: nobody was asked, so answering "no folder" would
+    leave the menu looking as though they had said no.
+    """
+
+    async def boom(argv: list[str]) -> str | None:
+        raise OSError("dialog: not executable")
+
+    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: ["dialog"])
+    monkeypatch.setattr(console_module, "_run_pick_dir", boom)
+    with pytest.raises(ConfigValidationError, match="folder dialog failed"):
+        await console_module.fs_pick_dir({})
+
+
+def test_fs_pick_dir_knows_a_dialog_for_each_desktop(monkeypatch) -> None:
+    """One command per platform, the Linux one only where a tool is on PATH."""
+    monkeypatch.setattr(console_module.sys, "platform", "darwin")
+    assert console_module._pick_dir_argv()[0] == "osascript"
+    monkeypatch.setattr(console_module.sys, "platform", "win32")
+    assert console_module._pick_dir_argv()[0] == "powershell"
+    monkeypatch.setattr(console_module.sys, "platform", "linux")
+    monkeypatch.setattr(console_module.shutil, "which", lambda name: name == "kdialog")
+    assert console_module._pick_dir_argv()[0] == "kdialog"
+    monkeypatch.setattr(console_module.shutil, "which", lambda name: False)
+    assert console_module._pick_dir_argv() is None
 
 
 async def test_fs_dirs_refuses_a_relative_path_and_a_file(tmp_path: Path, monkeypatch) -> None:

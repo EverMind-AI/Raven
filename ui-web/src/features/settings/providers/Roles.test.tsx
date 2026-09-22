@@ -27,17 +27,16 @@ const role = (id: string) => ROLES.find((r) => r.id === id)!
 const pill = (roleName: string): HTMLElement => screen.getByLabelText(`gui.settings.roles.change {"role":"${roleName}"}`)
 /* One picker for the whole page since 2026-09-20: the composer's, at the body. */
 const picker = (): HTMLElement => document.querySelector('.mpick') as HTMLElement
-/* The provider row's hit area is a button beside the name, not around it, so a
-   click on the name selects nothing. */
-const selectProvider = (name: string): void => {
-  const row = [...picker().querySelectorAll<HTMLElement>('.provs .row')]
-    .find((r) => r.querySelector('.nm')?.textContent?.includes(name))!
-  fireEvent.click(row.querySelector('.model-provider-action')!)
-}
+/* The picker is one list grouped by provider, so a model is reached through
+   its group: the named provider's where one is given, the first group listing
+   it otherwise. */
+const group = (name: string): HTMLElement =>
+  [...picker().querySelectorAll<HTMLElement>('.model-group')]
+    .find((g) => g.querySelector('.model-group-hd .nm')?.textContent?.includes(name))!
 const pick = async (roleName: string, model: string, providerName?: string): Promise<void> => {
   await act(async () => { fireEvent.click(pill(roleName)) })
-  if (providerName) await act(async () => { selectProvider(providerName) })
-  await act(async () => { fireEvent.click(within(picker()).getByText(model)) })
+  const scope = providerName ? group(providerName) : picker()
+  await act(async () => { fireEvent.click(within(scope).getAllByText(model)[0]!) })
 }
 const sets = (calls: Array<[string, unknown]>) => calls.filter(([m]) => m === 'set').map(([, a]) => a)
 

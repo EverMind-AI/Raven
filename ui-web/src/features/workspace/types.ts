@@ -94,6 +94,12 @@ export interface WorkspaceSnapshot extends WsShared {
   deliveries: DeliveryRow[]
 }
 
+/* What the host's folder dialog answered (`fs.pick_dir`). */
+export interface DirPick {
+  path?: string | null
+  ok: boolean
+}
+
 /* One directory as `fs.dirs` lists it: where the browser stands, one level up
    (null at the filesystem root), where it started, whether a conversation may
    be pinned here, and the subdirectories -- each with the same yes-or-no. */
@@ -140,4 +146,10 @@ export interface WorkspaceSource {
      (state/workdir.ts). Optional like `reveal`: a page with no gateway behind
      it says so on the menu instead of offering a browser over nothing. */
   dirs?(path?: string): Promise<DirListing>
+  /* A folder chosen in the gateway host's own folder dialog -- Finder, the
+     Explorer dialog, zenity -- for the same picker. `path` is absent when the
+     dialog was dismissed; `ok` is `fs.dirs`'s judgement of the folder. Only
+     worth offering while `hostIsLocal`, since the dialog opens where the
+     gateway runs. */
+  pickDir?(): Promise<DirPick>
 }

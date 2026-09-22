@@ -31,14 +31,14 @@ type Json = ResultOf<'config.get'>['config'][string]
    itself, so the canvas can only show the Chinese lines by carrying them. */
 const TIER_SUB: Record<string, Record<string, string>> = {
   en: {
-    medium: 'The least effort a sub-agent is asked for.',
-    high: 'The middle amount of effort, between the other two.',
-    max: 'The most effort a sub-agent is asked for.',
+    medium: 'Faster and cheaper, for small, well-defined tasks.',
+    high: 'A balance of speed and quality.',
+    max: 'Deepest reasoning and full sub-agent effort, for complex or open-ended work.',
   },
   zh: {
-    medium: '子代理被要求付出的最少努力。',
-    high: '居中的投入，介于另外两档之间。',
-    max: '子代理被要求付出的最多努力。',
+    medium: '子智能体投入最少。',
+    high: '居中的投入。',
+    max: '子智能体投入最多。',
   },
 }
 const tierMenu = (): Rung[] => ['medium', 'high', 'max'].map((id) => ({

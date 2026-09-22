@@ -4576,6 +4576,25 @@ export interface FsDirsResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsPickDirParams".
+ */
+export interface FsPickDirParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsPickDirResult".
+ */
+export interface FsPickDirResult {
+  /**
+   * The folder chosen, absolute and resolved; absent when the dialog was dismissed.
+   */
+  path?: string;
+  /**
+   * Whether a session may be pinned to the chosen folder (see raven.agent.workdir); false with no path.
+   */
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "FsReadParams".
  */
 export interface FsReadParams {

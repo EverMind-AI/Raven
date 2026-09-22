@@ -1,9 +1,10 @@
-/* The sub-agent effort tier: the chip on the composer (#tierChip) and the popover
- * it opens (#tierPop).
+/* The sub-agent effort tier: the row of the model picker that offers it
+ * (features/model/ModelPicker.tsx, its TierRow), and everything that decides
+ * behind that row.
  *
  * A store rather than a writer, for the reasons `perm.ts` gives next door:
- * <TierChip/> and <TierPopover/> render both nodes from it (src/chrome/TierChip.tsx,
- * src/chrome/TierPopover.tsx), the chip's four values and the popover's two headings
+ * the picker's tier row renders from it -- `offered`, `options`, `label`,
+ * `isRanked`, `scopeNote` -- and the chip paint and the popover's two headings
  * included. The popover is still moved to the body by hand, because that is the
  * only way it can be positioned at all; what stays here is what decides. The
  * two chips sit side by side and are built the same way on purpose -- a reader
@@ -84,7 +85,7 @@ export interface TierRow {
   readonly ticked: boolean
 }
 
-/* The chip, as <TierChip/> renders it. `off` is the whole of it for a chip with
+/* The chip's paint, kept for the two callers held to `draw` by literal. `off` is the whole of it for a chip with
    nothing honest to show -- no reply yet, or a build with no catalogue -- and
    the three words are not carried at all there, because the hidden chip goes on
    showing the shape the page was served with rather than a tier this side
@@ -126,7 +127,7 @@ export interface TierPopoverState {
 const shut: TierPopoverState = { open: false, listed: null, opened: 0, paint: null, head: null }
 const store = makeStore<TierPopoverState>(shut)
 
-/** The popover's state, for <TierPopover/> and <TierChip/>. */
+/** The store's state: the paint, and the popover fields the tier row no longer draws. */
 export const { get, subscribe } = store
 
 /* Field by field, for the reason perm.ts's samePaint gives: a fresh object per
@@ -180,8 +181,6 @@ function told(): void {
 
 export const current = (): string => mode
 
-const el = <T extends HTMLElement>(id: string): T | null => document.getElementById(id) as T | null
-
 /* `TIER_LADDER` (`raven/config/schema.py`), cheapest first. Held here because
    the reply cannot say whether a rung is one: it carries ids and names, and
    which of them the clamp ranks is a fact about the ladder, not about the
@@ -223,7 +222,14 @@ const FALLBACK = '<circle cx="12" cy="12" r="7.4"/>'
 /** The tick, which wears its stroke on the element rather than on the sheet. */
 export const CHECK = 'M5 12.5 10 17.5 19 7'
 
-function label(id: string): string {
+/* The built-in rungs' names, in the reader's language. The server names them
+   by capitalising the id (raven/config/schema.py, _builtin_modes), which is
+   English whatever the page speaks; these are the same three words looked up. */
+const NAME: Record<string, string> = { medium: 'gui.tier.medium', high: 'gui.tier.high', max: 'gui.tier.max' }
+
+export function label(id: string): string {
+  const key = NAME[id]
+  if (key && LADDER.includes(id)) return t(key)
   const found = menu.find((m) => m.id === id)
   /* The catalogue's own name, because a deployment that replaces it names its
      own rungs and this control is not entitled to rename them. Capitalised id
@@ -231,7 +237,19 @@ function label(id: string): string {
   return found?.name || (id ? id.charAt(0).toUpperCase() + id.slice(1) : '')
 }
 
-/* The chip, as the four values <TierChip/> renders, for the reason perm.ts's
+/** Whether there is a catalogue to draw: a reply landed and it offered rungs. */
+export const offered = (): boolean => loaded && menu.length > 0
+
+/** Every rung on offer, as the picker's tier row draws them. */
+export const options = (): readonly TierRow[] => rows()
+
+/** Whether every rung on offer is one of the built-in ladder (a Session Tier). */
+export const isRanked = (): boolean => ranked()
+
+/** Where the rung in force goes, as one sentence for the row that draws it. */
+export const scopeNote = (): string => t(inForceReaches() ? 'gui.tier.scope' : 'gui.tier.mode_scope')
+
+/* The paint, as four values, for the reason perm.ts's
    draw gives. Nothing here reads the document.
 
    Hidden until the first reply, and hidden again for a build with no catalogue.
@@ -258,7 +276,7 @@ export function draw(): void {
 
 /* The popover's heading and footer, chosen on open because both depend on the
    catalogue that answered, and then held in the store until the next one.
-   Neither can be rendered from a key: <TierPopover/> is built before anything is
+   Neither can be rendered from a key: the row is built before anything is
    asked, and a key there would have the lang store paint the tier wording back
    over a mode catalogue's. */
 const headings = (): TierHeadings => ({
@@ -322,15 +340,6 @@ const rows = (): readonly TierRow[] =>
   }))
 
 export function open(): void {
-  const pop = el('tierPop')
-  const chip = el('tierChip')
-  if (!pop || !chip) return
-  /* Positioned off the chip, raised clear of the card, and moved to the body --
-     all three for the reasons `perm.ts` records next door, its open included.
-     Before the commit, because the placement <TierPopover/> makes in its layout
-     effect measures the popover where it now stands, at the size the headings and
-     the rows of this same commit gave it. */
-  if (pop.parentElement !== document.body) document.body.appendChild(pop)
   set({ ...get(), open: true, listed: rows(), opened: get().opened + 1, head: headings() })
 }
 

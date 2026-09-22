@@ -263,8 +263,9 @@ const LEGACY_LOCAL = {
      row classes and the shared drawer's head went with the two-pane frame
      (src/components/TwoPane.tsx owns those names now). */
   memory: 8,
-  /* Up from 6 with the playbooks page gone: `.empty` was shared with it. */
-  model: 7,
+  /* `.empty` and the row's `.ct`, `.nm`, `.tick`: the picker's own list
+     vocabulary, shared with the popovers beside it. */
+  model: 4,
   onboard: 0,
   rail: 11,
   settings: 0,
@@ -322,7 +323,7 @@ const LEGACY_EXPR = {
   importSync: 0,
   installed: 0,
   memory: 1,
-  model: 2,
+  model: 0,
   onboard: 0,
   rail: 2,
   settings: 0,
@@ -353,7 +354,7 @@ const LEGACY_CHROME = {
      with the schedules island's new-job sheet, which is gone -- so the frame's
      own use of the name is counted here rather than borrowed from the shared
      tally. */
-  chrome: 93,
+  chrome: 92,
   components: 36,
 }
 
