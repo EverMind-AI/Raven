@@ -504,7 +504,7 @@ function Process({ steps, node, nodeKey }: { steps: NodeStep[]; node: TaskNode; 
         className="tkprock" aria-expanded={open} aria-label={t('gui.tasks.rec_process_aria')}
         onClick={() => store.setFold(nodeKey, 'proc', !open)}
       >
-        <span>{t(node.status === 'running' ? 'gui.tasks.rec_process' : 'gui.tasks.st_completed')}</span>
+        <span>{node.status === 'running' ? t('gui.tasks.rec_process') : nodeStatusWord(node.status)}</span>
         {dur ? <span className="tkprocn">{dur}</span> : null}
         <Glyph d="M9.5 6.5 15 12l-5.5 5.5" cls="tkchev" />
       </button>
