@@ -124,7 +124,8 @@ def test_run_warms_the_deck_template_covers_once_the_page_is_mounted() -> None:
 
     src = inspect.getsource(gateway_commands.register)
     page_branch = src.split("if page_mount is not None:", 1)[1]
-    assert "deck_templates.warm_covers_in_background()" in page_branch
+    assert "deck_templates.warm_covers_in_background(" in page_branch
+    assert "language=config.language" in page_branch, "in the language the page is in"
 
 
 def test_run_stops_the_cover_warm_up_before_the_teardown_that_waits() -> None:

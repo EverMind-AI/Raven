@@ -75,6 +75,13 @@ dependencies = [
     # ours, not an incidental one -- declared for the same reason as numpy and
     # idna above, and range-matched to what a2a-sdk itself allows.
     "protobuf>=5.29.5,<7",
+    # OOXML surgery behind the deck template picker (rpc/deck_templates.py): a
+    # copy of a template in the reader's language is made by rewriting the slide
+    # XML in place, and lxml is what keeps the namespace prefixes the file was
+    # authored with. Named directly: it used to arrive only through the tools
+    # extra (readability-lxml) and the ppt-engine plugin, and a picker in the
+    # core is not theirs to keep working. Range-matched to the engine's own pin.
+    "lxml>=5.0,<7",
 ]
 
 [project.optional-dependencies]

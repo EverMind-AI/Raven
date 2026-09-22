@@ -2104,7 +2104,7 @@ async def test_deck_templates_list_answers_at_once_and_draws_the_covers_behind_i
     monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
     drawn: list[str] = []
 
-    async def draw(template):
+    async def draw(template, *_):
         drawn.append(template.name)
         target = deck_templates.cover_cache_dir() / f"{deck_templates._cover_key(template.path)}.jpg"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -2237,7 +2237,7 @@ async def test_deck_templates_pick_says_why_when_the_copy_cannot_land(tmp_path: 
     _agent_home(monkeypatch, home)
     _bundled_templates(monkeypatch, tmp_path / "tpl", ("mint_memphis_thesis_defense",))
 
-    def full_disk(template, uploads):
+    def full_disk(template, uploads, *_):
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(deck_templates, "deposit", full_disk)

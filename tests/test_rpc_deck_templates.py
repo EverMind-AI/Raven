@@ -5,8 +5,10 @@ draw. The console handlers that list, page and pick are tested with the console.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import types
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -225,7 +227,7 @@ async def test_a_cover_on_its_way_is_not_started_twice(templates: Path, monkeypa
     release = asyncio.Event()
     starts = 0
 
-    async def slow_cover(t):
+    async def slow_cover(t, *_):
         nonlocal starts
         starts += 1
         await release.wait()
@@ -261,7 +263,7 @@ async def test_warming_draws_only_the_covers_that_are_missing(tmp_path: Path, mo
     (tmp_path / "covers" / f"{deck_templates._cover_key(two.path)}.jpg").write_bytes(b"\xff\xd8")
     drawn: list[str] = []
 
-    async def draw(template):
+    async def draw(template, *_):
         drawn.append(template.name)
         return None
 
@@ -282,7 +284,7 @@ async def test_warming_draws_nothing_when_every_cover_is_on_disk(templates: Path
     (covers / f"{deck_templates._cover_key(template.path)}.jpg").write_bytes(b"\xff\xd8")
     drawn: list[str] = []
 
-    async def draw(t):
+    async def draw(t, *_):
         drawn.append(t.name)
         return None
 
@@ -328,7 +330,7 @@ async def test_a_shutdown_stops_the_warm_up_and_the_conversions_it_started(templ
     monkeypatch.setattr(office, "stop_running", lambda: stopped.append(1) or 1)
     release = asyncio.Event()
 
-    async def slow(template):
+    async def slow(template, language=deck_templates.SOURCE_LANGUAGE):
         await release.wait()
         return None
 
@@ -369,3 +371,195 @@ def test_a_shutdown_before_any_warm_up_is_harmless(monkeypatch) -> None:
     monkeypatch.setattr(deck_templates, "_drawing", {})
     monkeypatch.setattr(office, "stop_running", lambda: 0)
     deck_templates.stop_warming()
+
+
+# --- the reader's own copy of a template ------------------------------------------
+
+
+def _pptx_with(text: str, path: Path) -> Path:
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
+    para = box.text_frame.paragraphs[0]
+    # Two runs for one line, as a designer's formatting leaves it: the swap has to
+    # read the line, not the fragments.
+    half = len(text) // 2
+    for piece in (text[:half], text[half:]):
+        para.add_run().text = piece
+    prs.save(str(path))
+    return path
+
+
+def _phrasebook(monkeypatch, tmp_path: Path, table: dict) -> Path:
+    root = tmp_path / "tpl"
+    (root / "i18n").mkdir(parents=True, exist_ok=True)
+    (root / "i18n" / "en.json").write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(deck_templates, "templates_dir", lambda: root)
+    monkeypatch.setattr(deck_templates, "translated_dir", lambda: tmp_path / "copies")
+    monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
+    return root
+
+
+def test_a_phrasebook_is_the_templates_own_and_the_source_language_has_none(tmp_path: Path, monkeypatch) -> None:
+    root = _phrasebook(monkeypatch, tmp_path, {"\u76ee\u5f55": "Contents"})
+    assert deck_templates.phrasebook("en") == {"\u76ee\u5f55": "Contents"}
+    assert deck_templates.phrasebook(deck_templates.SOURCE_LANGUAGE) == {}, "the templates already speak it"
+    assert deck_templates.phrasebook("de") == {}, "no book, no translation, no error"
+
+    (root / "i18n" / "en.json").write_text("not json", encoding="utf-8")
+    assert deck_templates.phrasebook("en") == {}
+    monkeypatch.setattr(deck_templates, "templates_dir", lambda: None)
+    assert deck_templates.phrasebook("en") == {}
+
+
+def test_the_readers_copy_is_built_once_and_says_the_line_not_the_fragments(tmp_path: Path, monkeypatch) -> None:
+    from pptx import Presentation
+
+    root = _phrasebook(monkeypatch, tmp_path, {"\u5b63\u5ea6\u603b\u7ed3": "Quarterly Summary"})
+    _pptx_with("\u5b63\u5ea6\u603b\u7ed3", root / "amber.pptx")
+    template = deck_templates.bundled()[0]
+
+    english = deck_templates.source_for(template, "en")
+    assert english != template.path and english.is_file()
+    assert "Quarterly Summary" in Presentation(str(english)).slides[0].shapes[0].text_frame.text
+    assert "\u5b63\u5ea6" in Presentation(str(template.path)).slides[0].shapes[0].text_frame.text, (
+        "the shipped file is untouched"
+    )
+
+    stamp = english.stat().st_mtime_ns
+    assert deck_templates.source_for(template, "en") == english
+    assert english.stat().st_mtime_ns == stamp, "the second ask reads the copy it already made"
+    assert deck_templates.source_for(template, deck_templates.SOURCE_LANGUAGE) == template.path
+    assert not list((tmp_path / "copies").glob("*.part")), "the staged copy is renamed, not left"
+
+
+def test_a_copy_that_cannot_be_built_falls_back_to_the_shipped_template(tmp_path: Path, monkeypatch) -> None:
+    root = _phrasebook(monkeypatch, tmp_path, {"\u76ee\u5f55": "Contents"})
+    _pptx_with("\u76ee\u5f55", root / "amber.pptx")
+    template = deck_templates.bundled()[0]
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("no lxml here")
+
+    monkeypatch.setattr(deck_templates, "_swap_text", broken)
+    assert deck_templates.source_for(template, "en") == template.path
+
+
+def test_a_charts_categories_are_swapped_too(tmp_path: Path, monkeypatch) -> None:
+    from pptx import Presentation
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches
+
+    root = _phrasebook(monkeypatch, tmp_path, {"\u7c7b\u522b1": "Category 1", "\u7cfb\u5217 1": "Series 1"})
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    data = CategoryChartData()
+    data.categories = ["\u7c7b\u522b1"]
+    data.add_series("\u7cfb\u5217 1", (1.0,))
+    slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(1), Inches(1), Inches(4), Inches(3), data)
+    prs.save(str(root / "amber.pptx"))
+
+    english = deck_templates.source_for(deck_templates.bundled()[0], "en")
+    with zipfile.ZipFile(english) as z:
+        charts = "".join(z.read(n).decode("utf8") for n in z.namelist() if "/charts/" in n)
+    assert "Category 1" in charts and "Series 1" in charts
+    assert "\u7c7b\u522b1" not in charts, "a chart still reading in the source language is not translated"
+
+
+async def test_a_pick_hands_over_the_readers_copy(tmp_path: Path, monkeypatch) -> None:
+    from pptx import Presentation
+
+    root = _phrasebook(monkeypatch, tmp_path, {"\u76ee\u5f55": "Contents"})
+    _pptx_with("\u76ee\u5f55", root / "amber.pptx")
+    template = deck_templates.bundled()[0]
+
+    landed = deck_templates.deposit(template, tmp_path / "uploads", "en")
+    assert landed.name == "amber.pptx"
+    assert "Contents" in Presentation(str(landed)).slides[0].shapes[0].text_frame.text
+
+    shipped = deck_templates.deposit(template, tmp_path / "uploads", deck_templates.SOURCE_LANGUAGE)
+    assert shipped.name == "amber-1.pptx", "a second pick never overwrites the first"
+    assert "\u76ee\u5f55" in Presentation(str(shipped)).slides[0].shapes[0].text_frame.text
+
+
+async def test_each_language_has_its_own_cover_and_neither_answers_for_the_other(tmp_path: Path, monkeypatch) -> None:
+    root = _phrasebook(monkeypatch, tmp_path, {"\u76ee\u5f55": "Contents"})
+    _pptx_with("\u76ee\u5f55", root / "amber.pptx")
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "_failed", set())
+    monkeypatch.setattr(deck_templates, "_drawing", {})
+    template = deck_templates.bundled()[0]
+    drawn: list[str] = []
+
+    async def draw(source, **_):
+        drawn.append(source.name)
+        return source.with_suffix(".pdf")
+
+    def rasterise(pdf: Path, target: Path) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"\xff\xd8cover")
+
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "pdf_for", draw)
+    monkeypatch.setattr(deck_templates, "_rasterise_first_page", rasterise)
+
+    assert deck_templates.cached_cover(template, "en") is None
+    zh_cover = await deck_templates.cover_for(template, deck_templates.SOURCE_LANGUAGE)
+    en_cover = await deck_templates.cover_for(template, "en")
+    assert zh_cover is not None and en_cover is not None and zh_cover != en_cover
+    assert deck_templates.cached_cover(template, "en") == en_cover
+    assert len(drawn) == 2, "one render each, not one shared between them"
+
+
+def _scale_of(path: Path, index: int = 0) -> float | None:
+    """What the shape's box tells its text to do about its own size."""
+    from pptx import Presentation
+
+    body = Presentation(str(path)).slides[0].shapes[index].text_frame._txBody.bodyPr
+    fit = body.find("{http://schemas.openxmlformats.org/drawingml/2006/main}normAutofit")
+    return None if fit is None else int(fit.get("fontScale")) / 100000
+
+
+def test_a_label_that_grew_is_told_to_scale_down_and_one_that_did_not_is_left_alone(
+    tmp_path: Path, monkeypatch
+) -> None:
+    grew = "\u5e74\u5ea6\u611f\u609f\u4e0e\u611f\u8c22"
+    fits = "\u76ee\u5f55"
+    root = _phrasebook(monkeypatch, tmp_path, {grew: "Annual Reflections And Thanks", fits: "TOC"})
+    _pptx_with(grew, root / "amber.pptx")
+    _pptx_with(fits, root / "beige.pptx")
+
+    wide, narrow = deck_templates.bundled()
+    scale = _scale_of(deck_templates.source_for(wide, "en"))
+    assert scale is not None, "seven glyphs of Chinese do not hold twenty-eight characters of English"
+    assert scale == deck_templates.FIT_FLOOR, "what it asks for is past the floor, so the floor is what it gets"
+    assert _scale_of(deck_templates.source_for(narrow, "en")) is None, "'TOC' is narrower than what it replaced"
+
+
+def test_boxes_cut_to_one_size_are_scaled_to_one_size(tmp_path: Path, monkeypatch) -> None:
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    short, long = "\u56e2\u961f", "\u516c\u53f8\u5e73\u53f0"
+    root = _phrasebook(monkeypatch, tmp_path, {short: "Team", long: "Thanks To The Company"})
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    for n, text in enumerate((short, long)):
+        box = slide.shapes.add_textbox(Inches(1), Inches(1 + n), Inches(3), Inches(1))
+        box.text_frame.paragraphs[0].add_run().text = text
+    prs.save(str(root / "cards.pptx"))
+
+    english = deck_templates.source_for(deck_templates.bundled()[0], "en")
+    assert _scale_of(english, 0) == _scale_of(english, 1), "a row of cards comes back at one size"
+    assert _scale_of(english, 0) is not None and _scale_of(english, 0) < 1
+
+
+def test_a_width_is_read_in_ems_whatever_the_writing(tmp_path: Path, monkeypatch) -> None:
+    assert deck_templates._width("\u76ee\u5f55") == 2
+    assert deck_templates._width("Contents") == pytest.approx(8 * deck_templates.LATIN_WIDTH)
+    assert deck_templates._width("") == 0

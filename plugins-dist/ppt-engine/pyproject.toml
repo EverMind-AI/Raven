@@ -72,6 +72,10 @@ include = [
     "raven_ppt/raven-plugin.toml",
     "raven_ppt/prompts/*.md",
     "raven_ppt/assets/templates/*.pptx",
+    # What each template's stand-in copy says in a language other than the one it
+    # ships in. Kilobytes beside fifty megabytes of pptx: a second set of files
+    # would be the same pictures again for the sake of the words on top of them.
+    "raven_ppt/assets/templates/i18n/*.json",
     "raven_ppt/services/assets/data/*.json",
     "raven_ppt/services/assets/fonts/*.ttf",
     "raven_ppt/services/assets/fonts/*.txt",
