@@ -1485,10 +1485,17 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   transition: grid-template-columns .2s ease, border-color .14s, box-shadow .14s, transform .14s;
 }
 /* `width: auto`, not the 100% the grid tile needs: this preview carries
-   margins inside a fixed 116px column, so a stated full width put it 22px past
-   the column and over the title beside it. */
+   margins inside a fixed column, so a stated full width put it 22px past the
+   column and over the title beside it.
+   And `aspect-ratio: auto`, which is the other half of the same fault. The
+   grid tile's 16:10 is a ratio for a preview drawn ABOVE its caption; here the
+   preview stands beside one, in a 92px column, at a stated 98px tall -- and a
+   ratio plus a definite height resolves the auto width from the ratio rather
+   than from the column, so the box came out 157px wide and lay across the
+   title it stands next to. A page beside a caption is portrait: the column
+   gives the width, the 98px gives the height. */
 .atiles.single .atile .pic {
-  width: auto; margin: 12px 0 12px 12px; border-bottom: 0; border-radius: 7px;
+  width: auto; aspect-ratio: auto; margin: 12px 0 12px 12px; border-bottom: 0; border-radius: 7px;
   border: 1px solid var(--line-soft); height: 98px;
 }
 .atiles.single .atile .cap { align-content: center; padding: 13px 16px; }

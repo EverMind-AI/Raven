@@ -8,7 +8,6 @@ import { ProviderIcon } from '../../../components/ProviderMark'
 import { t } from '../../../i18n/t'
 import { Fold, IconBtn, Rov, Sec } from '../Fields'
 import * as store from '../store'
-import { AddModelPop } from './AddModelPop'
 import { AZURE, OauthNote, kindOf, needsKey, takesBase, takesKey } from './Providers'
 import { roleName, rolesUsing } from './Roles'
 
@@ -198,7 +197,6 @@ function Models({ p }: { p: ProviderRow }): JSX.Element {
         ))}
         {!listed.length && <span className="settings-tp-empty">{t('gui.settings.providers.no_models_yet')}</span>}
       </span>
-      {open && <AddModelPop p={p} />}
     </Sec>
   )
 }

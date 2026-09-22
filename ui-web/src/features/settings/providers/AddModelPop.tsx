@@ -116,6 +116,21 @@ function KindChip({ value, onCycle }: { value: Kind; onCycle(next: Kind): void }
   )
 }
 
+/* Where the popover is rendered from, and it is not the row that opens it.
+   Every write this page makes bumps the store's epoch, and the section panel is
+   keyed by that epoch (SettingsApp.tsx) so the forms seeded from a snapshot are
+   reseeded by the redraw. A popover rendered from inside that panel is torn
+   down and rebuilt by the same key -- so ticking one model scrolled its list
+   back to the top and took the caret out of the search box. It portals to the
+   body already; this hangs it off a box the epoch does not replace, and the
+   sheet in the store is what decides whether it stands. */
+export function AddModelLayer(): JSX.Element | null {
+  const sheet = store.get().sheet
+  if (!sheet) return null
+  const p = store.get().snap.providers.find((row) => row.id === sheet.slug)
+  return p ? <AddModelPop p={p} /> : null
+}
+
 export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
   const sheet = store.get().sheet!
   const box = useRef<HTMLDivElement>(null)
