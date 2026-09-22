@@ -3134,18 +3134,16 @@ details[open] summary { margin-bottom: 8px; }
 .page[data-open="true"] { display: flex; }
 @keyframes pgin { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .page[data-open="true"] { animation: none; } }
-/* Same header treatment as the chat: no rule, a short fade over the scroller,
-   so page headers and the chat header read as one idiom. */
+/* Same header treatment as the chat: no rule and no fade, so page headers and
+   the chat header read as one idiom. A fade over this strip has to be drawn
+   from --page rather than the chat's --ink: the two off-whites differ, and the
+   seam between them reads as a band across the top of the page. */
 .page > header {
   flex: none; height: 54px; display: flex; align-items: center; gap: 12px;
   padding: 0 20px; position: relative; z-index: 2;
 }
-.page > header::after {
-  content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 24px;
-  background: linear-gradient(to bottom, var(--ink), transparent); pointer-events: none;
-}
-/* The strip stays for breathing room and the scroll fade, but its title is
-   gone: the hero right below already says it bigger. */
+/* The strip stays for breathing room, but its title is gone: the hero right
+   below already says it bigger. */
 .page > header { height: 30px; }
 .page > header h2 { display: none; }
 .back { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 13px;
