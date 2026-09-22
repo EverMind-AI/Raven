@@ -1442,6 +1442,20 @@ async def _write_node_transcript(store: DagRunStore, node_id: str, did: Any, att
                 logger.warning("DAG node {} transcript could not be written to {}: {}", node_id, path, exc)
 
 
+async def _write_node_closing(store: DagRunStore, node_id: str, did: Any) -> None:
+    """Persist what the node said after its last step, for the answer row.
+
+    An empty file when the lane reported none, rather than no write: the id is
+    reused across attempts (``DagRunStore.closing_path``). Failing to write it
+    must not fail the node, for the reason the transcript's writer gives.
+    """
+    closing = getattr(did, "closing", None)
+    try:
+        await store.write_text(store.closing_path(node_id), closing if isinstance(closing, str) else "")
+    except Exception as exc:  # noqa: BLE001 - an audit trail may not break the run
+        logger.warning("DAG node {} closing could not be written: {}", node_id, exc)
+
+
 async def _previous_output(store: DagRunStore, node_id: str) -> str:
     """The last attempt's answer, for a stateless node's follow-up prompt."""
     try:
@@ -1716,6 +1730,7 @@ async def _run_node(
             persisted = activity.persisted_output(did, result) or ""
             await store.write_text(output_path, persisted)
             await store.write_text(store.attempt_output_path(node.id, attempt), persisted)
+            await _write_node_closing(store, node.id, did)
             node_output = result
             status[node.id] = "completed"
             output_paths[node.id] = output_path

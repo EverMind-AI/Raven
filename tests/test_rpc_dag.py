@@ -450,6 +450,58 @@ async def test_dag_node_draws_what_the_node_did_between_the_two_messages() -> No
     model.model_validate(answer)
 
 
+async def test_a_dag_nodes_answer_row_is_its_closing_message_when_the_lane_left_one() -> None:
+    """Same rule as subagent.context: the whole output repeats the narration
+    already on the steps, so the answer row is what the node said after its
+    last call. The field itself stays off the wire -- `output` is what the
+    contract declares, and it stays whole."""
+
+    class _Closing(_TranscribedDagTool):
+        async def read_node(
+            self, run_id: str, node_id: str, *, max_output_chars: int = 20000, session_key: str | None = None
+        ) -> dict:
+            node = await super().read_node(run_id, node_id, max_output_chars=max_output_chars, session_key=session_key)
+            return {**node, "closing": "the report"}
+
+    tool = _Closing(
+        [{"role": "assistant", "content": "looking first", "tool_calls": [{"id": "c1", "function": {"name": "read"}}]}]
+    )
+
+    answer = await dag_node({"run_id": RUN_ID, "node": "node-a"}, agent_loop_factory=_factory(tool))
+
+    assert answer["node"]["messages"][-1]["text"] == "the report"
+    assert answer["node"]["output"] and answer["node"]["output"] != "the report", "output stays the whole reply"
+    assert "closing" not in answer["node"]
+    _, model = METHOD_MODELS["dag.node"]
+    model.model_validate(answer)
+
+
+async def test_the_fallback_reads_the_closing_beside_the_output(one_run_on_disk) -> None:
+    (one_run_on_disk.nodes / "survey.closing.md").write_text("yes", encoding="utf-8")
+
+    answer = await dag_node(
+        {"run_id": RUN_ID, "node": "survey", "session_key": "tui:live"},
+        agent_loop_factory=_factory(None),
+    )
+
+    assert answer["node"]["messages"][-1]["text"] == "yes"
+    assert answer["node"]["output"] == "the notes say yes"
+    assert "closing" not in answer["node"]
+
+
+async def test_the_fallback_ignores_a_blank_closing(one_run_on_disk) -> None:
+    """A dag node's closing file is written on every attempt, empty when the
+    lane reported none -- and empty means the whole output is the answer."""
+    (one_run_on_disk.nodes / "survey.closing.md").write_text("", encoding="utf-8")
+
+    answer = await dag_node(
+        {"run_id": RUN_ID, "node": "survey", "session_key": "tui:live"},
+        agent_loop_factory=_factory(None),
+    )
+
+    assert answer["node"]["messages"][-1]["text"] == "the notes say yes"
+
+
 async def test_a_dag_nodes_stored_call_reaches_the_panel_in_ravens_vocabulary() -> None:
     """One renderer draws a node and a spawned call, and its verb table is keyed
     by raven's names -- so a node whose rows kept the transport's would draw the

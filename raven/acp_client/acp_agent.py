@@ -316,6 +316,12 @@ class _TurnCollector:
         # exists after the answer is not a live view of anything.
         if kind in (*_ANSWER_UPDATES, *_THOUGHT_UPDATES, *_USER_UPDATES, "tool_call", "tool_call_update", "plan"):
             activity.set_transcript(self._run, self.messages(in_flight=True))
+        # The count beside it, on the same beat: `tasks.list` draws a running
+        # node's tool count off the live account, and a tally published only
+        # at the end of the turn left the chip blank while the transcript
+        # already listed the calls.
+        if kind in (*_BREAKING_UPDATES, "plan"):
+            activity.set_tool_calls(self._run, self.tool_calls, self.failed_calls)
 
     def _revise_call(self, update: dict[str, Any]) -> None:
         """Re-read a call's arguments from a later frame.
@@ -1750,11 +1756,10 @@ class AcpAgentBackend:
         )
         # The same facts to the run's own record, so a reader sees what the agent
         # did without opening a trace viewer. Once, not per notification: an ACP
-        # agent's `usage_update` is cumulative for the turn.
-        for title in collector.tool_calls:
-            activity.note_tool_call(title)
-        for title in collector.failed_calls:
-            activity.note_tool_failure(title)
+        # agent's `usage_update` is cumulative for the turn. The calls were
+        # already published as they landed; this is the settled list, with the
+        # labels every later frame corrected, written over it rather than added.
+        activity.set_tool_calls(activity.current(), collector.tool_calls, collector.failed_calls)
         activity.note_usage(collector.usage)
         activity.note_steps(counts)
         activity.note_thoughts(thought_chars)

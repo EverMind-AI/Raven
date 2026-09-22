@@ -547,6 +547,20 @@
   color: var(--clay);
   background: color-mix(in oklab, var(--clay) 12%, transparent);
 }
+.tkwrow.tknotrun .tkic,
+.tkwrow.tknotrun .tkvb,
+.tkwrow.tknotrun .tkar {
+  color: var(--faint);
+}
+.tknotrunchip {
+  flex: none;
+  font-size: 10.5px;
+  padding: 0 6px;
+  border-radius: 8px;
+  line-height: 16px;
+  color: var(--faint);
+  background: color-mix(in oklab, var(--faint) 12%, transparent);
+}
 
 /* One expanded call's own card: a head naming it (plus a diff count and a
    copy button), and a body shaped by which tool it was -- proto.js's

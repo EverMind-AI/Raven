@@ -112,10 +112,15 @@ function hunkOfCall(name: string, args: Record<string, unknown>): { add: number;
 }
 
 /* ── grouping: a thought, what it said, and the calls it led to ──────────
-   Mirrors proto.js's `toSteps`: a new group opens on a thought that arrives
-   after the current one already has calls or something said, so a run of
-   "think, call, call, think, call" reads as two steps rather than five flat
-   rows. */
+   proto.js's `toSteps`, with one more boundary: a new group opens on a
+   thought that arrives after the current one already has calls or something
+   said, so a run of "think, call, call, think, call" reads as two steps
+   rather than five flat rows -- and on narration that arrives after calls,
+   so a run whose model returns no reasoning text (a lane that bills thinking
+   but does not hand it back) still reads as one step per thing it said
+   before calling, rather than one fold with every call in it and the
+   narration piled above them. Narration after a thought stays in that
+   thought's step: "think, say, call" is one step, as it was. */
 
 type ToolCall = Extract<NodeStep, { kind: 'tool' }>
 interface Group { key: number; kind: 'group'; think: string | null; say: string | null; calls: ToolCall[] }
@@ -129,6 +134,7 @@ export function groupSteps(steps: NodeStep[]): GroupOrConsole[] {
   steps.forEach((s) => {
     if (s.kind === 'console') { out.push({ key: key++, kind: 'console', text: s.text }); cur = null; return }
     if (s.kind === 'think' && cur && (cur.calls.length || cur.say)) cur = null
+    if (s.kind === 'say' && cur && cur.calls.length) cur = null
     if (!cur) { cur = { key: key++, kind: 'group', think: null, say: null, calls: [] }; out.push(cur) }
     if (s.kind === 'think') cur.think = cur.think ? `${cur.think}\n${s.text}` : s.text
     else if (s.kind === 'say') cur.say = cur.say ? `${cur.say}\n\n${s.text}` : s.text
@@ -385,9 +391,17 @@ function DelegDtl({ call, kind, name, label, done, bad }: {
 
 /* ── one call's own row ───────────────────────────────────────────────── */
 
-function CallRow({ call, nodeKey, foldKey }: { call: ToolCall; nodeKey: string; foldKey: string }): JSX.Element {
+function CallRow({ call, nodeKey, foldKey, running }: {
+  call: ToolCall; nodeKey: string; foldKey: string; running: boolean
+}): JSX.Element {
   const { srv, bare } = splitMcp(call.name)
   const done = call.result != null
+  /* A call with no result is in flight only while the node is. A run that
+     was cancelled or aborted mid-round leaves a record that still advertises
+     every call of that round, and drawing the ones it never reached as
+     breathing beside a settled status claims work that is not coming back. */
+  const busy = !done && running
+  const notRun = !done && !running
   const bad = call.ok === false
   const kind: 'deleg' | 'dag' | 'plain' = bare === 'spawn'
     ? 'deleg'
@@ -397,13 +411,13 @@ function CallRow({ call, nodeKey, foldKey }: { call: ToolCall; nodeKey: string; 
   const touched = useSyncExternalStore(store.subscribe, () => store.foldOf(nodeKey, foldKey))
   const open = touched ?? false
   const hunk = kind === 'plain' ? hunkOfCall(bare, args) : null
-  const withDtl = kind !== 'plain' || done
+  const withDtl = done || (kind !== 'plain' && !notRun)
   const inner = (
     <>
       <Glyph d={bad ? ACT_ICO.bad as string : actIco(bare)} cls="tkic" />
       <span className="tkvb">
         {srv ? <span className="tksrv">{`[${srv}] `}</span> : null}
-        {done ? verbOf(bare) : verbIngOf(bare)}
+        {busy ? verbIngOf(bare) : verbOf(bare)}
       </span>
       {kind !== 'plain' ? <span className="tkar">{label}</span> : null}
       {/* Only once the call has returned: the counts come off its own
@@ -418,11 +432,12 @@ function CallRow({ call, nodeKey, foldKey }: { call: ToolCall; nodeKey: string; 
         )
         : null}
       {kind === 'plain' && bad ? <span className="err">{firstErrLine(call.result)}</span> : null}
+      {notRun ? <span className="tknotrunchip">{t('gui.tasks.call_not_run')}</span> : null}
       {withDtl ? <Glyph d={ACT_ICO.chev as string} cls="tkcv" /> : null}
     </>
   )
   return (
-    <div className={'tkwrow' + (!done ? ' tkbusy' : '') + (bad ? ' tkbad' : '') + (withDtl ? ' tktog' : '') + (withDtl && open ? ' tkopen' : '')}>
+    <div className={'tkwrow' + (busy ? ' tkbusy' : '') + (notRun ? ' tknotrun' : '') + (bad ? ' tkbad' : '') + (withDtl ? ' tktog' : '') + (withDtl && open ? ' tkopen' : '')}>
       {withDtl
         ? <button type="button" className="tkwhd" aria-expanded={open} onClick={() => store.setFold(nodeKey, foldKey, !open)}>{inner}</button>
         : <div className="tkwhd">{inner}</div>}
@@ -440,15 +455,20 @@ function CallRow({ call, nodeKey, foldKey }: { call: ToolCall; nodeKey: string; 
    the kind of work and how many failed; a single call is just its own row,
    always open. */
 
-function CallsBlock({ calls, nodeKey, foldKey }: { calls: ToolCall[]; nodeKey: string; foldKey: string }): JSX.Element {
+function CallsBlock({ calls, nodeKey, foldKey, running }: {
+  calls: ToolCall[]; nodeKey: string; foldKey: string; running: boolean
+}): JSX.Element {
   const many = calls.length > 1
   const touched = useSyncExternalStore(store.subscribe, () => store.foldOf(nodeKey, foldKey))
   const open = touched ?? false
   const bad = calls.filter((c) => c.ok === false).length
   /* Any call in the fold still out -- the same reason a single un-returned
      call's own row breathes, carried onto the summary that stands in for
-     every row folded behind it. */
-  const flying = calls.some((c) => c.result == null)
+     every row folded behind it. Once the node has settled, the same calls
+     are the ones it never reached, and the summary counts them instead. */
+  const unanswered = calls.filter((c) => c.result == null).length
+  const flying = running && unanswered > 0
+  const notRun = running ? 0 : unanswered
   const bareNames = calls.map((c) => splitMcp(c.name).bare)
   const oneKind = new Set(bareNames).size === 1
   return (
@@ -462,13 +482,14 @@ function CallsBlock({ calls, nodeKey, foldKey }: { calls: ToolCall[]; nodeKey: s
             <Glyph d={oneKind ? actIco(bareNames[0] as string) : ACT_ICO.dot as string} cls="tkic" />
             <span className="tkar">{phraseOf(bareNames.map((name) => ({ name })))}</span>
             {bad ? <span className="tkbadchip">{t('gui.tasks.call_failed_n', { n: bad })}</span> : null}
+            {notRun ? <span className="tknotrunchip">{t('gui.tasks.call_not_run_n', { n: notRun })}</span> : null}
             <Glyph d={ACT_ICO.chev as string} cls="tkcv" />
           </button>
         )
         : null}
       <div className="tkwkin" hidden={many && !open}>
         {calls.map((c, i) => (
-          <CallRow call={c} key={c.id || i} nodeKey={nodeKey} foldKey={`${foldKey}:${i}`} />
+          <CallRow call={c} key={c.id || i} nodeKey={nodeKey} foldKey={`${foldKey}:${i}`} running={running} />
         ))}
       </div>
     </div>
@@ -490,7 +511,7 @@ function StepGroupView({ group, live, nodeKey }: { group: Group; live: boolean; 
         : null}
       {group.say ? <Prose text={group.say} cls="tkans" /> : null}
       {group.calls.length
-        ? <CallsBlock calls={group.calls} nodeKey={nodeKey} foldKey={`wk:${group.key}`} />
+        ? <CallsBlock calls={group.calls} nodeKey={nodeKey} foldKey={`wk:${group.key}`} running={live} />
         : null}
     </div>
   )

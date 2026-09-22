@@ -2773,6 +2773,65 @@ async def test_one_runs_steps_do_not_land_on_another_runs_record() -> None:
             await reader
 
 
+_TOOL_CALL_UPDATE = {
+    "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "t1",
+        "title": "read src/a.py",
+        "kind": "read",
+        "rawInput": {"path": "src/a.py"},
+    }
+}
+_TOOL_FAILED_UPDATE = {
+    "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "t1",
+        "status": "failed",
+        "content": [{"type": "content", "content": {"type": "text", "text": "no such file"}}],
+    }
+}
+
+
+async def test_a_running_turns_tool_count_is_published_as_the_calls_land() -> None:
+    """`tasks.list` draws a running node's tool count off the live account, and
+    the count used to be published once, when the turn ended -- so the board
+    chip stayed blank while the live transcript already listed the calls."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting("run") as run:
+        col = _TurnCollector()
+        await col("session/update", _TOOL_CALL_UPDATE)
+        assert len(run.tool_calls) == 1, "the call is counted the moment it is announced"
+        assert run.tool_failures == []
+        await col("session/update", _TOOL_FAILED_UPDATE)
+        assert len(run.tool_calls) == 1
+        assert len(run.tool_failures) == 1, "and its failure the moment the result lands"
+
+
+async def test_the_end_of_turn_record_does_not_count_the_calls_a_second_time() -> None:
+    import time
+
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    class _Span:
+        def set(self, **_attrs) -> None:
+            pass
+
+        def event(self, _name: str) -> None:
+            pass
+
+    backend = build_third_party_backend(stub_config("a"))
+    with activity.collecting("run") as run:
+        col = _TurnCollector()
+        await col("session/update", _TOOL_CALL_UPDATE)
+        await col("session/update", _TOOL_FAILED_UPDATE)
+        backend._record(_Span(), col, stop_reason="end_turn", started=time.monotonic(), frames={})
+        assert len(run.tool_calls) == 1, "the settled list replaces the live one rather than doubling it"
+        assert len(run.tool_failures) == 1
+
+
 class TestBackendDispatchSignature:
     """Every backend must accept what ``SubagentManager`` unconditionally sends.
 

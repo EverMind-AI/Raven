@@ -133,7 +133,11 @@ def _with_messages(node: dict, run_id: str, node_id: str) -> dict:
     if live_run is not None and live_run.console:
         stored.append({"role": "console", "content": live_run.console})
     if node.get("output"):
-        stored.append({"role": "assistant", "content": node["output"]})
+        # The closing message when the lane left one -- what the node said
+        # after its last step -- rather than the whole reply, which repeats the
+        # narration already on the steps above (CONTEXT.md, Closing Message).
+        # `output` itself stays whole for every other reader of the node.
+        stored.append({"role": "assistant", "content": node.get("closing") or node["output"]})
     elif node.get("error"):
         # A failed node's account of itself. It has no output by definition, so
         # without this the panel showed the prompt and stopped -- the reader saw
@@ -143,7 +147,7 @@ def _with_messages(node: dict, run_id: str, node_id: str) -> dict:
     # The reader's raw provider-shaped turns do not go on the wire: a client
     # draws `messages`, and declaring the unmapped shape beside it would put a
     # second, undrawn representation of the same run in the contract.
-    detail = {k: v for k, v in node.items() if k != "transcript"}
+    detail = {k: v for k, v in node.items() if k not in ("transcript", "closing")}
     return {**detail, "messages": _map_to_wire(stored, f"dag:{run_id}:{node_id}")}
 
 

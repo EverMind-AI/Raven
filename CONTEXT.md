@@ -2422,7 +2422,9 @@ which is right for the caller receiving it and wrong for a transcript, where eac
 belongs on the step it preceded. So the Instance Log carries narration on the calling rows
 and closes with this. `""` (the turn ended on a step and said nothing after) is deliberately
 different from `None` (this lane cannot tell the two apart), which falls back to the whole
-output.
+output. The record keeps it as `<node_id>.closing.md` beside `out.md` (a spawn's
+`SpawnRecord.finish`, a dag node's runner), and the two context reads (`subagent.context`,
+`dag.node`) draw it as the answer row when it is there, the whole output when it is not.
 _Avoid_: calling it the answer - the answer is what the run returns, and for a narrating
 agent the two differ.
 
