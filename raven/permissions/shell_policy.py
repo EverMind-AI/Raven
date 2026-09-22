@@ -1004,10 +1004,19 @@ _FETCH_SEND_FLAGS = frozenset(
 # means missing the next one; the cost is that ``gh pr view`` was asked about in
 # the words of a push ("others will see it"), which is not what it does. A verb
 # that only reads leaves the family: the prompt then words it as the plain
-# command it is. ``secret`` keeps no relief -- naming an organisation's secrets
+# command it is.
+#
+# Scoped to these executable/group pairs rather than to every publisher, because
+# the word after a publishing verb is usually an operand and not a verb at all:
+# ``docker push status`` pushes an image called status, ``git push view`` pushes
+# to a remote called view. Relief written for a forge group must not reach them.
+# ``gh secret`` is absent for its own reason -- naming an organisation's secrets
 # is itself the thing worth asking about.
+_FORGE_READ_GROUPS: dict[str, frozenset[str]] = {
+    "gh": frozenset({"pr", "repo", "release", "workflow"}),
+    "glab": frozenset({"mr", "repo", "release"}),
+}
 _READ_ONLY_VERBS = frozenset({"list", "view", "status", "diff", "checks"})
-_NO_READ_RELIEF = frozenset({"secret"})
 
 
 def _matches_publish_command(command: str) -> bool:
@@ -1020,12 +1029,13 @@ def _matches_publish_command(command: str) -> bool:
         allowed = _PUBLISH_SUBCOMMANDS.get(executable)
         if not allowed:
             continue
+        groups = _FORGE_READ_GROUPS.get(executable, frozenset())
         words = _subcommands(argv)
         for i, word in enumerate(words):
             if word not in allowed:
                 continue
             after = words[i + 1] if i + 1 < len(words) else ""
-            if word not in _NO_READ_RELIEF and after in _READ_ONLY_VERBS:
+            if word in groups and after in _READ_ONLY_VERBS:
                 continue
             return True
     return False

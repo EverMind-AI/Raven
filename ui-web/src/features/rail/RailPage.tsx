@@ -5,7 +5,7 @@ import { current, setCurrent } from '../../lib/session'
 import { term as findTerm } from '../../state/find'
 import * as lang from '../../state/lang'
 import * as page from '../../state/page'
-import { askingIn } from '../../state/sheetRack'
+import { askingIn, askingVersion, watchAsking } from '../../state/sheetRack'
 import { show as toast } from '../../state/toast'
 import { open as openCron } from '../cron/store'
 import * as store from './store'
@@ -324,6 +324,10 @@ function Group({
 
 export function RailApp(): JSX.Element | null {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The rows read `askingIn` below, and the rack is the only one who knows when
+     that moves -- the close paths repaint through `notify` while the sheet is
+     still docked and take it down after. */
+  useSyncExternalStore(watchAsking, askingVersion)
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). */
   useSyncExternalStore(lang.subscribe, lang.get)

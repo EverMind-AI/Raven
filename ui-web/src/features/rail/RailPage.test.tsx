@@ -272,20 +272,27 @@ describe('rail island', () => {
     expect(h).toBeTruthy()
   })
 
-  it('shows it for a standing question even when no mark was stored', () => {
+  it('shows it for a standing question even when no mark was stored, and clears it when the question goes', () => {
     /* The stored mark is cleared by opening the row and overwritten by leaving
        it, so a reader who watched the question appear and then walked away
        would have been left with a row reading like any other running turn. What
-       the rack is holding answers that without a mark to defend. */
+       the rack is holding answers that without a mark to defend -- but only if
+       the rail hears the rack move: `approval.closed` resumes the turn first,
+       which repaints while the sheet is still docked, and removes the sheet
+       after, so a rail sampling on its own schedule would keep showing a
+       question that is over. */
     const h = install({ rows: [row()], busy: true })
     const sheet = document.createElement('div')
     sheet.dataset.asks = '1'
     rackAdd(sheet, 'a')
 
     const host = mount()
+    const sig = () => rowByTitle(host, 'GTM research').querySelector('.w')!.getAttribute('data-sig')
+    expect(sig()).toBe('ask')
 
-    expect(rowByTitle(host, 'GTM research').querySelector('.w')!.getAttribute('data-sig')).toBe('ask')
-    rackRemove(sheet)
+    act(() => { rackRemove(sheet) })
+
+    expect(sig()).toBe('run')
     expect(h).toBeTruthy()
   })
 

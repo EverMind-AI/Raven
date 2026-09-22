@@ -67,6 +67,34 @@ const TEARDOWN = new WeakMap<HTMLElement, () => void>()
 export const askingIn = (key: string): number =>
   [...(SHEETS.get(key) || [])].filter((el) => el.dataset.asks === '1').length
 
+/* And a reader of that count has to be told when it moves, or it is only as
+   fresh as whatever else happened to repaint. The close paths are what make
+   that sharp: `approval.closed` resumes the turn first, which repaints while
+   the sheet is still docked, and takes the sheet down after -- so a rail
+   sampling the count on its own schedule would go on showing a question that is
+   over. A version rather than the count itself: who is asking is the count's
+   job, this only says it changed. */
+let asked = 0
+const ASKED = new Set<() => void>()
+
+export const askingVersion = (): number => asked
+
+export function watchAsking(fn: () => void): () => void {
+  ASKED.add(fn)
+  return () => ASKED.delete(fn)
+}
+
+function told(): void {
+  asked += 1
+  ASKED.forEach((fn) => {
+    try {
+      fn()
+    } catch {
+      /* A watcher is a courtesy; one that throws must not take the rack down. */
+    }
+  })
+}
+
 /* Who is waiting on the reader, per conversation.
  *
  * A sheet that ASKS something -- an approval, a clarification -- interrupts:
@@ -160,6 +188,7 @@ export function add(el: HTMLElement, key?: string, teardown?: () => void, view?:
     if (el.parentElement !== dock) dock.insertBefore(el, dock.firstChild)
   }
   dockLift()
+  told()
 }
 
 export function remove(el: HTMLElement): void {
@@ -180,6 +209,7 @@ export function remove(el: HTMLElement): void {
     down()
   }
   dockLift()
+  told()
 }
 
 /* Retire the sheets of one class in one session's bucket, and only there: a new
