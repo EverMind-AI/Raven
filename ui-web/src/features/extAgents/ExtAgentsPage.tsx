@@ -173,6 +173,23 @@ function shownModel(row: ExtAgentRow): { id: string; by: string; provider: strin
 
 const slugOf = (name: string): string => name.toLowerCase().replace(/-/g, '_')
 
+/* The row as the pill should draw it while a model write is in flight: what the
+   write is asking for, rather than what the row still holds. The server proves a
+   new model by running it now, so that write can take a minute, and a row
+   reading "Testing" beside the model it is leaving reads as though the old one
+   is the one under test.
+
+   No rollback is needed and none is written: the pending entry goes when the
+   write does, so a refusal puts the row's own value back on screen by itself.
+   Handing the patched row to `shownModel` rather than reimplementing it keeps
+   the choice lookup and the provider split in one place. */
+function asAsked(row: ExtAgentRow, s: ExtAgentsState): ExtAgentRow {
+  const write = s.joining[row.name]
+  if (!write || write.op !== 'model') return row
+  if (write.args.clear_model) return { ...row, model: null }
+  return write.args.model ? { ...row, model: write.args.model } : row
+}
+
 /* The model a row answers with, and the picker that changes it. Unset reads by
    ownership: one of Raven's own follows the main Raven, a third party runs on
    its own default. A row with no menu wears the pill disabled: an openai or
@@ -412,7 +429,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
               row={row}
               saved={(!row.configured && !row.vendored && store.draftOf(row.name)) || row.description || ''}
             />
-            <ModelPill busy={shown === 'pending'} row={row} />
+            <ModelPill busy={shown === 'pending'} row={asAsked(row, s)} />
             {needsKey ? (
               <label className="extAgents-fld">
                 <span className="extAgents-k">{t('gui.agent.key')}</span>

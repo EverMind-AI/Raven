@@ -647,6 +647,62 @@ describe('the model pill', () => {
       ...over,
     })
   const pill = (): HTMLButtonElement | null => sheet()?.querySelector('.extAgents-pm') ?? null
+
+  /* The write can take a minute now that the server proves a new model, and a
+     row reading "Testing" beside the model it is leaving reads as though the
+     old one is what is being tested. */
+  it('shows the model it is switching to while the write is in flight', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const r = row({ name: 'Coded', kind: 'acp', model_source: 'agent', model: 'v/opus', model_choices: choices })
+    const rows = [r]
+    install(rows, {
+      act: async (op) => {
+        if (op === 'model') await gate
+        return rows
+      },
+    })
+    await mount()
+    await openSheet('Coded')
+    expect(pill()!.textContent).toContain('Opus')
+
+    await click(pill())
+    await click(modelButton('Sonnet'))
+
+    expect(pill()!.textContent).toContain('Sonnet')
+    await act(async () => {
+      release()
+      await gate
+    })
+  })
+
+  it('shows the model cleared while the clear is in flight', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const r = row({ name: 'Coded', kind: 'acp', model_source: 'agent', model: 'v/opus', model_choices: choices })
+    const rows = [r]
+    install(rows, {
+      act: async (op) => {
+        if (op === 'model') await gate
+        return rows
+      },
+    })
+    await mount()
+    await openSheet('Coded')
+
+    await click(sheet()!.querySelector('.extAgents-pill button[aria-label="gui.agent.model_clear"]'))
+
+    expect(pill()!.textContent).not.toContain('Opus')
+    expect(pill()!.textContent).toContain('gui.agent.model_own_default')
+    await act(async () => {
+      release()
+      await gate
+    })
+  })
   const picker = (): HTMLElement | null => sheet()?.querySelector('.model-picker') ?? null
   const modelButton = (label: string): HTMLButtonElement | undefined =>
     [...(picker()?.querySelectorAll<HTMLButtonElement>('.model-picker-model') ?? [])].find((b) => b.textContent!.includes(label))
