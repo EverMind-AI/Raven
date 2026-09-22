@@ -282,7 +282,12 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
       </div>
     )
   }
-  if (shown === 'on' && row.last_test_ok === false) {
+  /* Not only when connected: the sheet offers Test from the unauthorized state
+     too, and a test pressed there can now fail on the agent's own answer while
+     the handshake passes -- which clears the label and leaves nothing saying the
+     test failed. `missing` keeps its own line, since "not found" outranks a
+     verdict measured before the executable went away. */
+  if (row.last_test_ok === false && shown !== 'missing') {
     return (
       <div className="extAgents-by extAgents-by-bad">
         <span className="extAgents-led extAgents-led-bad" />

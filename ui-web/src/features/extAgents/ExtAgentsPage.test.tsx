@@ -600,6 +600,31 @@ describe('the sheet', () => {
     await openSheet('claude_code')
     expect(domSnapshot(document.getElementById('dBody')!)).toMatchSnapshot()
   })
+
+  /* A test that failed has to say so wherever it was pressed. The sheet offers
+     Test from two states, and only one of them used to render the verdict: an
+     unauthorized row whose handshake now passes but whose agent still cannot
+     answer would drop the label, offer a plain Connect, and say nothing about
+     the test that had just failed. */
+  it('says a failed test failed on a row that is not connected', async () => {
+    const r = row({ name: 'ua', configured: false, enabled: false, needs_auth: true, probe_status: 'attention' })
+    const rows = [r]
+    install(rows, {
+      act: async (op) => {
+        if (op === 'test') {
+          r.needs_auth = false
+          r.probe_status = 'ready'
+          r.last_test_ok = false
+          r.last_test_detail = 'it connected and then answered nothing'
+        }
+        return rows
+      },
+    })
+    await mount()
+    await openSheet('ua')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.test_label'))
+    expect(sheetStatus()).toBe('gui.agent.hd_test_bad {"detail":"it connected and then answered nothing"}')
+  })
 })
 
 describe('the model pill', () => {
