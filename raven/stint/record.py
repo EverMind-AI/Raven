@@ -222,6 +222,19 @@ class RoundRecord:
     summary: str = ""
     verify: list[dict[str, Any]] = field(default_factory=list)
     violations: list[str] = field(default_factory=list)
+    heads: dict[str, str] = field(default_factory=dict)
+    """Where each role left the tree, by role label.
+
+    What `git log --author` was meant to answer, kept where a role cannot spoil
+    it. A role that runs `git commit` in its own shell -- which nothing stops,
+    and which a coding agent does by habit -- makes a commit under whatever
+    identity the host's git carries, so the author says the person and not the
+    role, and "what did the verifier change" stops being a question git can
+    answer. The pair of heads around a role still is one: `git diff` between the
+    role before it and this is what that role changed, however its work got
+    committed.
+    """
+
     finished: dict[str, str] = field(default_factory=dict)
     """Each role that was judged and committed this round, by the node id it ran as.
 

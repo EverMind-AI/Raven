@@ -97,6 +97,8 @@ class RoundContext:
     artifacts_dir: Path
 
     _bases: dict[str, str] = field(default_factory=dict)
+    _heads: dict[str, str] = field(default_factory=dict)
+    _self_committed: bool = False
     _spent: dict[str, int] = field(default_factory=dict)
     _results: dict[str, CheckResult] = field(default_factory=dict)
     _git: ProjectGit | None = None
@@ -185,6 +187,7 @@ class RoundContext:
         spent = self._spent.get(node.id, 0)
         if (failures or (report is not None and not report.clean)) and spent < role.max_handbacks:
             self._spent[node.id] = spent + 1
+            self._note_handback(role.label, report, failures)
             return Verdict(
                 accomplished=False,
                 category="checks",
@@ -393,11 +396,47 @@ class RoundContext:
         if not self.enforcing or (repository := self.git()) is None:
             return
         try:
+            base = self._bases.get(node_id, "")
+            # Read before the commit: after it the head has moved for a reason
+            # this cannot tell apart from the role's own.
+            self._self_committed = base and repository.head() != base and not repository.dirty()
             if repository.dirty():
                 repository.commit(f"round({self.index:02d}): {role.label}", author=role.label)
-            self._bases[node_id] = repository.head()
+            head = repository.head()
+            self._bases[node_id] = head
+            self._heads[role.label] = head
         except (HistoryError, OSError) as exc:
             logger.warning("stint {} could not commit {}'s work: {}", self.record.stint_id, role.label, exc)
+
+    def _note_handback(self, role: str, report: "EnforceReport | None", failures: Sequence[CheckResult]) -> None:
+        """Write down why a role was handed back, while the reason still exists.
+
+        The retry is what gets recorded otherwise: a handback returns before
+        `_record` runs, and the attempt that succeeds reports a clean boundary
+        and passing checks, so the round keeps a count of handbacks and not one
+        word about what any of them were for. Six handbacks in a row read as six
+        identical facts -- measured on a live run, where every role of two rounds
+        was handed back once and the record could not say whether it was the same
+        cause each time.
+
+        The count stays where it is. This is the sentence beside it, in the terms
+        the round already uses: what the boundary found, or which checks failed.
+        """
+        said: list[str] = []
+        if report is not None and not report.clean:
+            said.extend(report.violations)
+        if failures:
+            said.append("checks failed: " + ", ".join(result.name for result in failures))
+        if not said:
+            return
+        note = f"{role} was handed back: " + "; ".join(said)
+
+        def apply(record: StintRecord) -> None:
+            existing = record.round(self.index)
+            entry = record.open_round(self.index, existing.run_id if existing is not None else "")
+            entry.violations.append(note)
+
+        self._persist(apply)
 
     def _persist(self, mutate: Callable[[StintRecord], None]) -> None:
         """Apply a round's own finding to the stint as it stands on disk.
@@ -452,6 +491,17 @@ class RoundContext:
             entry = record.open_round(self.index, existing.run_id if existing is not None else "")
             if node_id and role:
                 entry.finished[role] = node_id
+            if role and (head := self._heads.get(role)):
+                entry.heads[role] = head
+            if role and self._self_committed:
+                # Said rather than corrected: the commit is already made, under
+                # the host's identity, and rewriting it would rewrite history
+                # under a round that is still running. The heads above are what
+                # answers the question anyway.
+                entry.violations.append(
+                    f"{role} committed its own work, so git names the host and not the role; "
+                    f"the round records where it left the tree instead"
+                )
             if handbacks:
                 record.handbacks[f"r{self.index:02d}-{role}"] = handbacks
                 entry.violations.append(f"{role} was handed back {handbacks} time(s) before this attempt")

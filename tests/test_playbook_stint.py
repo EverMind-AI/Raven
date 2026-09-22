@@ -1122,6 +1122,67 @@ class TestBoundaries:
         after = context.store.read(context.record.stint_id)
         assert [q["answer"] for q in after.questions] == ["this one"]
 
+    async def test_a_handback_says_what_it_was_for_and_not_only_that_it_happened(self, tmp_path: Path) -> None:
+        """The retry is what gets recorded otherwise: a handback returns before
+        `_record` runs, and the attempt that succeeds reports a clean boundary,
+        so the round kept a count and not one word about the cause. Measured on
+        a live run where every role of two rounds was handed back once and the
+        record could not say whether it was the same cause each time."""
+        spec = _spec(
+            roles=[
+                {"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 1},
+                {"as": "verifier", "name": "echo", "promptTemplate": "check", "owns": ["reports/**"]},
+            ]
+        )
+        context = self._context(tmp_path, spec)
+        node = self._node("game-dev-r01-dev")
+        await context.node_started(node.id)
+
+        (context.workdir / "reports").mkdir()
+        (context.workdir / "reports" / "verifier.md").write_text("not mine\n", encoding="utf-8")
+        verdict = await context.judge(node=node)
+
+        assert not verdict.accomplished, "the budget allows one handback"
+        violations = context.store.read(context.record.stint_id).round(1).violations
+        assert any("was handed back:" in note and "may not write" in note for note in violations), violations
+
+    async def test_a_role_that_commits_its_own_work_is_recorded_where_git_cannot_say(self, tmp_path: Path) -> None:
+        """`git log --author` was the answer to "what did this role change", and
+        a role that runs `git commit` in its own shell -- which nothing stops --
+        makes the commit under the host's identity instead. The heads around a
+        role still answer it, so they are what the round keeps."""
+        spec = _spec(
+            roles=[{"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0}]
+        )
+        context = self._context(tmp_path, spec)
+        repository = context.git()
+        node = self._node("game-dev-r01-dev")
+        await context.node_started(node.id)
+
+        (context.workdir / "src" / "main.py").write_text("print('mine')\n", encoding="utf-8")
+        repository.commit("the role's own commit", author="")
+
+        await context.judge(node=node)
+
+        entry = context.store.read(context.record.stint_id).round(1)
+        assert entry.heads.get("dev"), "the round records where the role left the tree"
+        assert any("committed its own work" in note for note in entry.violations), entry.violations
+
+    async def test_a_role_the_stint_commits_for_is_not_accused_of_committing(self, tmp_path: Path) -> None:
+        spec = _spec(
+            roles=[{"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0}]
+        )
+        context = self._context(tmp_path, spec)
+        node = self._node("game-dev-r01-dev")
+        await context.node_started(node.id)
+        (context.workdir / "src" / "main.py").write_text("print('mine')\n", encoding="utf-8")
+
+        await context.judge(node=node)
+
+        entry = context.store.read(context.record.stint_id).round(1)
+        assert entry.heads.get("dev")
+        assert not any("committed its own work" in note for note in entry.violations), entry.violations
+
     async def test_a_failing_check_is_handed_back_to_the_role_not_to_a_person(self, tmp_path: Path) -> None:
         """There is nobody to ask on an unattended run, and the judge already
         holds the output that says what went wrong."""
