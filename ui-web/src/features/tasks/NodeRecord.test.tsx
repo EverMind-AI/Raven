@@ -501,6 +501,50 @@ describe('the folded summary row', () => {
     )
     expect(container.querySelector('.tkwrow.tksum')?.className).not.toContain('tkbusy')
   })
+
+  it('reads a result-less call in a settled node as not run, and does not breathe', () => {
+    /* A run cancelled mid-round leaves a record advertising every call of
+       that round; the ones it never reached are not in flight any more. */
+    const { container } = render(
+      <StepList
+        steps={[tool({ name: 'exec', id: 'c1', args: JSON.stringify({ command: 'sleep 15' }), result: null, ok: null })]}
+        running={false}
+      />,
+    )
+    const cls = container.querySelector('.tkwrow')?.className.split(' ') ?? []
+    expect(cls).toContain('tknotrun')
+    expect(cls).not.toContain('tkbusy')
+    expect(container.querySelector('.tknotrunchip')?.textContent).toBe('not run')
+  })
+
+  it('still breathes for the same call while the node runs', () => {
+    const { container } = render(
+      <StepList
+        steps={[tool({ name: 'exec', id: 'c1', args: JSON.stringify({ command: 'sleep 15' }), result: null, ok: null })]}
+        running
+      />,
+    )
+    const cls = container.querySelector('.tkwrow')?.className.split(' ') ?? []
+    expect(cls).toContain('tkbusy')
+    expect(cls).not.toContain('tknotrun')
+    expect(container.querySelector('.tknotrunchip')).toBeNull()
+  })
+
+  it('counts the calls a settled node never reached on the folded summary', () => {
+    const { container } = render(
+      <StepList
+        steps={[
+          tool({ name: 'exec', id: 'c1', args: JSON.stringify({ command: 'a' }) }),
+          tool({ name: 'exec', id: 'c2', args: JSON.stringify({ command: 'b' }), result: null, ok: null }),
+          tool({ name: 'exec', id: 'c3', args: JSON.stringify({ command: 'c' }), result: null, ok: null }),
+        ]}
+        running={false}
+      />,
+    )
+    const sum = container.querySelector('.tkwrow.tksum')
+    expect(sum?.className).not.toContain('tkbusy')
+    expect(sum?.querySelector('.tknotrunchip')?.textContent).toBe('2 not run')
+  })
 })
 
 describe('fold memory', () => {

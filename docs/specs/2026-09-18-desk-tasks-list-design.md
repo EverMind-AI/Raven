@@ -129,7 +129,11 @@ record is re-read on every status transition and, for a dag node, on each `dag.n
 frame; a spawn gets no per-step frame, so its record is re-read on a one-second beat while it
 runs (a beat is skipped while a read is still out), the cadence the transcript's spawn card
 already reads on. Each such read of a running node also re-reads its row through
-`tasks.list(kind, id)`, which is how the panel's token total moves during the run.
+`tasks.list(kind, id)`, which is how the panel's token total moves during the run. The answer
+row is the run's closing message when the lane left one (`<node_id>.closing.md`), the whole
+output otherwise, so a narrating agent's progress notes are read once, on the steps they
+preceded. A call with no result is drawn in flight only while the node runs; on a settled node
+it reads as not run, and a folded step counts those calls beside its failures.
 
 ### 5. Live updates
 
