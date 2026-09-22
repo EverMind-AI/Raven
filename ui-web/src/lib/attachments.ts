@@ -36,8 +36,11 @@
    ends the sentence with an em dash the person's own keyboard may well not. */
 const IMAGE_NOTE = /^\[Image: .*\(path: .+?\).*\]$/
 
-/** The flattening of an image part, left at the head of a multimodal message. */
-const IMAGE_PART = /^\[image\]\s*/
+/* The flattening of the image parts, left at the head of a multimodal message.
+   One per picture: the runtime writes a text part per inlined image and the
+   resume joins them with spaces, so a message that carried two reaches this
+   reader as `[image] [image] ...`. The whole run goes, not the first of it. */
+const IMAGE_PART = /^(?:\[image\]\s*)+/
 
 /* The absolute path each of those lines names, which is the one thing in them
    worth keeping. The note lists what the composer uploaded -- a path relative
@@ -73,8 +76,8 @@ export function stripRuntimeNotes(text: string): string {
     if (IMAGE_NOTE.test(line.trim())) continue
     kept.push(line)
   }
-  /* Only at the head, and only once: `[image]` is a word a person may well
-     type further down, and the flattening writes exactly one. */
+  /* Only at the head: `[image]` is a word a person may well type further down,
+     and the flattening only ever writes it in front of the message. */
   return kept.join('\n').replace(IMAGE_PART, '').replace(/\n+$/, '')
 }
 
@@ -84,13 +87,27 @@ export function stripRuntimeNotes(text: string): string {
  * wins, so a message quoting an earlier note is read by its own.
  */
 export function splitAttachments(text: string, notes: readonly string[]): Attachments {
-  const absolute = runtimePaths(text)
+  const raw = String(text)
+  const absolute = runtimePaths(raw)
+  const carried = notes.some((note) => !!note && raw.includes(`\n\n${note}\n`))
+  /* Nothing the runtime wrote, so nothing to take off. Without this the reader
+     rewrote a message that carried no files at all: a person who begins a
+     sentence with the word in brackets meant to write it, and this helper
+     promises such a message back unchanged. */
+  if (!absolute.length && !carried) return { body: raw, atts: [] }
   /* The same file, named twice: the note's path as the composer uploaded it,
      and the engine's as it stands on disk. The second is preferred wherever
-     both exist, because it resolves whatever the session is rooted at. */
-  const resolve = (att: string): string =>
-    absolute.find((abs) => abs === att || abs.endsWith(`/${att}`)) ?? att
-  const s = stripRuntimeNotes(text)
+     both exist, because it resolves whatever the session is rooted at.
+     Compared with one separator, because the two spellings differ on Windows:
+     `fs.upload` answers `uploads/shot.png` and the engine interpolates a path
+     object, which prints `C:\\...\\uploads\\shot.png` there, so a literal
+     comparison never matched and the recovery this is for never happened. */
+  const slashed = (v: string): string => v.replace(/\\/g, '/')
+  const resolve = (att: string): string => {
+    const want = slashed(att)
+    return absolute.find((abs) => slashed(abs) === want || slashed(abs).endsWith(`/${want}`)) ?? att
+  }
+  const s = stripRuntimeNotes(raw)
   for (const note of notes) {
     if (!note) continue
     const at = s.lastIndexOf(`\n\n${note}\n`)

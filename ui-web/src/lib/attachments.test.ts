@@ -77,6 +77,38 @@ describe('reading a sent message back', () => {
     expect(splitAttachments(sent, NOTES).body).toBe('the word [image] appears here\n\n[Image: not a real marker]')
   })
 
+  it('takes every marker a message with several pictures carries', () => {
+    /* The runtime writes one text part per inlined picture and the resume joins
+       them with spaces, so two pictures arrive as two markers. Taking the first
+       left the second standing in front of the question. */
+    const stored = '[image] [image] compare these two\n\n[attachments, saved in the workspace]\n'
+      + '- uploads/a.png\n- uploads/b.png\n\n'
+      + '[Image: a.png (path: /w/uploads/a.png) | 1x1px]\n[Image: b.png (path: /w/uploads/b.png) | 2x2px]'
+    expect(splitAttachments(stored, NOTES)).toEqual({
+      body: 'compare these two',
+      atts: ['/w/uploads/a.png', '/w/uploads/b.png'],
+    })
+  })
+
+  it('matches the two spellings of one path, so a windows message recovers too', () => {
+    /* `fs.upload` answers with forward slashes whatever the host is, and the
+       engine interpolates a path object, which prints backslashes on Windows.
+       Compared literally the two never met, so the recovery never happened
+       there and the picture fell back to its name. */
+    const stored = '[image] look\n\n[attachments, saved in the workspace]\n- uploads/shot.png\n\n'
+      + '[Image: shot.png (path: C:\\Users\\me\\.raven\\workspace\\uploads\\shot.png) | 4x4px]'
+    expect(splitAttachments(stored, NOTES).atts).toEqual(['C:\\Users\\me\\.raven\\workspace\\uploads\\shot.png'])
+  })
+
+  it('leaves a message that carried nothing alone, marker-shaped or not', () => {
+    /* The stripping is for a replay that carried pictures. A person who opens a
+       sentence with the word in brackets meant to write it, and this helper
+       promises such a message back unchanged. */
+    expect(splitAttachments('[image] explain this token', NOTES))
+      .toEqual({ body: '[image] explain this token', atts: [] })
+    expect(splitAttachments('what does [image] mean here', NOTES).body).toBe('what does [image] mean here')
+  })
+
   it('strips the runtime lines on their own, for a message with no files', () => {
     const stored = '[image] look at this\n\n[Image: a.png (path: /w/a.png) | 10x10px]'
     expect(stripRuntimeNotes(stored)).toBe('look at this')
