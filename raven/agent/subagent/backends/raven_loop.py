@@ -577,6 +577,19 @@ class RavenLoopBackend:
                     tools=tools.get_definitions(),
                     model=model,
                 )
+                if response.finish_reason == "error" and not response.has_tool_calls:
+                    # The ladder was chat_with_retry's own, so an error here is
+                    # one it already gave up on. Raised rather than returned: the
+                    # error text would otherwise be the run's answer and the
+                    # record would read completed (see SubagentNoAnswerError).
+                    activity.note_usage(response.usage)
+                    verdict = response.error_classification
+                    raise SubagentNoAnswerError(
+                        "sub-agent's model call failed"
+                        + (f" ({verdict.category})" if verdict is not None else "")
+                        + ": "
+                        + (response.content or "")[:200]
+                    )
             else:
                 # A spawned run keeps the retry ladder; only a caller that asked
                 # to watch the reply form gives it up (a stream that already
@@ -754,6 +767,9 @@ class RavenLoopBackend:
                 ],
                 model=model,
             )
+            if wrap_up.finish_reason == "error":
+                activity.note_usage(wrap_up.usage)
+                raise SubagentNoAnswerError("sub-agent's wrap-up model call failed: " + (wrap_up.content or "")[:200])
             final_result = (wrap_up.content or "").strip() or None
             activity.note_usage(wrap_up.usage)
             cut_at_ceiling = wrap_up.truncated

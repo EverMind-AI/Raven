@@ -1111,6 +1111,16 @@ describe('the node panel', () => {
       })
       expect(document.querySelector('.tkprock')?.getAttribute('aria-expanded')).toBe('false')
     })
+
+    it('is headed by the node\'s own status word once settled, not always "completed"', async () => {
+      record = { dispatch: 'go', steps: [{ kind: 'say', text: 'partial' }], answer: null, outputTruncated: false }
+      pick(task({
+        id: 'a', kind: 'spawn', status: 'failed',
+        nodes: [node({ node_id: 'n1', status: 'failed', started_at: 1000, ended_at: 56000 })],
+      }))
+      await act(async () => {})
+      expect(document.querySelector('.tkprock span')?.textContent).toBe('gui.tasks.node_st_failed')
+    })
   })
 
   describe('the reply dock\'s send control', () => {

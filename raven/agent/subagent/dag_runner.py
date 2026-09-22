@@ -22,7 +22,7 @@ from typing import Any, Protocol
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent.backends.base import optional_keyword
+from raven.agent.subagent.backends.base import llm_error_reply, optional_keyword
 from raven.agent.subagent.dag_adjudication import (
     CONTINUE,
     REPLAN,
@@ -52,6 +52,7 @@ from raven.agent.subagent_memory import (
     trace_session_id,
 )
 from raven.context_engine.segments.render import dispatch_language_line
+from raven.contracts.subagent_backend import SubagentNoAnswerError
 
 # In-context cap for terminal outputs returned to the main agent; the on-disk
 # .out.md always holds the full text.
@@ -1714,6 +1715,12 @@ async def _run_node(
                             **optional_keyword(agent_backend, "session_model", node_session_model),
                             **state_kwargs,
                         )
+                        if (failure := llm_error_reply(result)) is not None:
+                            # The same rule as a spawn's (manager.py): a reply
+                            # that is nothing but the provider's error is not
+                            # this node's output, and a node that read it as
+                            # one fed the error to the step downstream.
+                            raise SubagentNoAnswerError(failure)
                     finally:
                         stall_watch.cancel()
                         node_activity[node.id] = did.as_meta()

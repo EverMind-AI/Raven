@@ -2670,6 +2670,88 @@ async def test_a_run_with_nothing_to_say_fails_instead_of_reading_as_done(tmp_pa
         await backend.run("research it", task_id="n2", workspace=tmp_path, executor=None)
 
 
+_LLM_ERROR_REPLY = "Error calling LLM (unknown@openrouter): HTTP 401: User not found."
+
+
+class _ErrorReplyProvider(LLMProvider):
+    """A provider whose every call fails the way providers fail: a reply whose
+    content is the canonical error text, not an exception."""
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.contracts.llm_provider import ErrorClassification
+
+        return LLMResponse(
+            content=_LLM_ERROR_REPLY,
+            finish_reason="error",
+            error_classification=ErrorClassification("unknown", retryable=False),
+        )
+
+
+async def test_a_failed_model_call_fails_the_run_instead_of_becoming_its_answer(tmp_path) -> None:
+    """The streaming branch already raised on an error reply; the waited-for
+    branch handed the error text back as the answer, so a spawn whose key was
+    refused was recorded completed and drawn with a green dot."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.subagent_backend import SubagentNoAnswerError
+
+    backend = RavenLoopBackend(provider=_ErrorReplyProvider(), model="stub", agent_home=tmp_path)
+
+    with pytest.raises(SubagentNoAnswerError, match="model call failed \\(unknown\\): Error calling LLM"):
+        await backend.run("research it", task_id="n3", workspace=tmp_path, executor=None)
+
+
+class _ErrorReplyBackend:
+    """A lane that hands the provider's error reply back as its answer, the way
+    a child engine does after its own model call failed."""
+
+    streams = False
+
+    async def run(self, task: str, **kwargs: Any) -> str:
+        return _LLM_ERROR_REPLY
+
+
+async def test_a_lane_that_returns_the_error_reply_is_recorded_failed(tmp_path, monkeypatch) -> None:
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1)
+    mgr.registry = _HoldingRegistry(_ErrorReplyBackend())
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    submitted: list[Any] = []
+    mgr.set_submit(lambda req: submitted.append(req))
+
+    receipt = await mgr.spawn(
+        task="check the release notes",
+        task_summary="release check",
+        agent="Coder",
+        session_key="tui:s1",
+        origin_channel="tui",
+        origin_chat_id="default",
+    )
+    assert "started" in receipt
+    await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+    (meta_path,) = list(mgr.session_dir_for("tui:s1").rglob("*.meta.json"))
+    assert json.loads(meta_path.read_text(encoding="utf-8"))["status"] == "failed"
+    (error_path,) = list(mgr.session_dir_for("tui:s1").rglob("*.error.md"))
+    assert _LLM_ERROR_REPLY in error_path.read_text(encoding="utf-8")
+    assert not list(mgr.session_dir_for("tui:s1").rglob("*.out.md")), "the error is not the run's output"
+    (req,) = submitted
+    assert "[Subagent 'release check' failed]" in req.text
+    assert _LLM_ERROR_REPLY in req.text
+
+
+def test_llm_error_reply_matches_the_whole_canonical_shape_only() -> None:
+    from raven.agent.subagent.backends.base import llm_error_reply
+
+    assert llm_error_reply(_LLM_ERROR_REPLY) == _LLM_ERROR_REPLY
+    assert llm_error_reply("  " + _LLM_ERROR_REPLY + "\n") == _LLM_ERROR_REPLY
+    assert llm_error_reply("The upstream said: " + _LLM_ERROR_REPLY) is None, "an answer that quotes one is an answer"
+    assert llm_error_reply(_LLM_ERROR_REPLY + "\n\nSo I fell back to the cached copy.") is None
+    assert llm_error_reply("") is None
+    assert llm_error_reply(None) is None
+
+
 # --- a spawn's memory record has to be findable ------------------------------
 
 
