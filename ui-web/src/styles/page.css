@@ -1069,12 +1069,12 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* Attachments stack above the bubble rather than inside it: a handed-over file
    is a thing, the sentence is what was said about it, and one bubble holding
    both made the picture look like punctuation. */
-/* One turn, two shapes. What the reader wrote is a bubble that ends where the
-   sentence ends, pulled to their side of the column; what the agent answered is
-   a card of constant width. The card does not track its own length on purpose:
-   a column of cards whose widths follow their word counts reads as a ragged
-   edge, and the rhythm of this column is meant to be one turn, not one
-   sentence. */
+/* Two shapes. What the reader wrote is a bubble that ends where the sentence
+   ends, pulled to their side of the column; what the agent answered is a card
+   of constant width holding everything it did until the reader spoke again.
+   The card does not track its own length on purpose: a column of cards whose
+   widths follow their word counts reads as a ragged edge, and the rhythm of
+   this column is meant to be the exchange, not the sentence. */
 .turn { display: flex; flex-direction: column; min-width: 0; }
 .turn.me { align-self: flex-end; align-items: flex-end; max-width: 70%; }
 .turn.ai { align-self: stretch; width: 100%; max-width: 760px; margin-right: auto; }
@@ -1887,8 +1887,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    the transparent rule outweighed the hover and the copy and branch buttons
    never came back. One element, and the reveal outranks the rest by its own
    pseudo-class. */
-.turn > .ansfoot { opacity: 0; transition: opacity .12s; }
-.turn:hover > .ansfoot, .turn:focus-within > .ansfoot { opacity: 1; }
+/* Both places a footer can sit: under the card, and -- when the card holds
+   more than one turn -- between two turns inside it. */
+.turn > .ansfoot, .msg.ai > .ansfoot { opacity: 0; transition: opacity .12s; }
+.turn:hover > .ansfoot, .turn:focus-within > .ansfoot,
+.turn:hover .msg.ai > .ansfoot, .turn:focus-within .msg.ai > .ansfoot { opacity: 1; }
 .answer .acts, .answer .turnmeta { opacity: 0; transition: opacity .12s; }
 .answer:hover .acts, .answer:hover .turnmeta,
 .answer:focus-within .acts, .answer:focus-within .turnmeta { opacity: 1; }

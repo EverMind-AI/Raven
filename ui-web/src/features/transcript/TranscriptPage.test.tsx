@@ -1681,6 +1681,66 @@ describe('a delegated result coming back', () => {
     expect(order).toEqual(['turn', 'answer', 'arts', 'sdlv', 'answer', 'arts'])
   })
 
+  /* Every message the turn holds, in the order it arrived, inside one card:
+     a delivery is a message like any other, so it neither sits loose on the
+     page nor cuts the card in two where it lands. */
+  it('draws a delivery inside the card, without breaking the card in two', () => {
+    wireDelivery()
+    const t0 = Date.now() - 20000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'run the graph', timestamp: iso(t0) },
+        { role: 'assistant', text: 'dispatching it', timestamp: iso(t0 + 1000) },
+        {
+          role: 'user', text: fenced('3 completed, 0 failed'), timestamp: iso(t0 + 9000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'ok', run_id: 'run-7' },
+        },
+        { role: 'assistant', text: 'the graph came back clean', timestamp: iso(t0 + 11000) },
+      ])
+    })
+    const card = $('.sdlv')?.closest('.msg.ai')
+    expect(card).toBeTruthy()
+    expect($$('.msg.ai').length).toBe(1)
+    expect(card?.textContent).toContain('dispatching it')
+    expect(card?.textContent).toContain('the graph came back clean')
+    /* Arrival order, not grouped by kind. */
+    const order = [...(card as HTMLElement).querySelectorAll('.answer, .sdlv')]
+      .map((n) => n.className.split(' ')[0])
+    expect(order).toEqual(['answer', 'sdlv', 'answer'])
+  })
+
+  /* A card that holds several turns needs several footers. With one footer for
+     the whole card the copy button carried the FIRST answer's text whichever
+     answer the reader clicked it beside, and every later answer lost its
+     button altogether. */
+  it('gives every answer in a shared card its own footer', () => {
+    wireDelivery()
+    const t0 = Date.now() - 30000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'run both graphs', timestamp: iso(t0) },
+        { role: 'assistant', text: 'first answer', timestamp: iso(t0 + 1000) },
+        {
+          role: 'user', text: fenced('one done'), timestamp: iso(t0 + 9000),
+          delegated: { kind: 'dag', label: 'run-1', status: 'ok', run_id: 'run-1' },
+        },
+        { role: 'assistant', text: 'second answer', timestamp: iso(t0 + 11000) },
+        {
+          role: 'user', text: fenced('two done'), timestamp: iso(t0 + 19000),
+          delegated: { kind: 'dag', label: 'run-2', status: 'ok', run_id: 'run-2' },
+        },
+        { role: 'assistant', text: 'third answer', timestamp: iso(t0 + 21000) },
+      ])
+    })
+    expect($$('.msg.ai').length).toBe(1)
+    expect($$('.turn.ai .answer').length).toBe(3)
+    expect($$('.turn.ai .ansfoot').length).toBe(3)
+    const copied: string[] = []
+    vi.spyOn(store, 'copyText').mockImplementation((text: string) => { copied.push(text) })
+    $$('.turn.ai .ansfoot .acts button').forEach((b) => act(() => { (b as HTMLElement).click() }))
+    expect(copied).toEqual(['first answer', 'second answer', 'third answer'])
+  })
+
   /* The test this whole change exists for: the two paths that draw the same
      turn have to draw the SAME thing. Either one alone can be green while they
      disagree, which is exactly how the bug shipped. */
