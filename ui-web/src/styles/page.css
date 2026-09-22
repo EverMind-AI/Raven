@@ -5274,8 +5274,11 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-diff-row .chgc { width: 22px; height: 22px; display: grid; place-items: center; flex: none;
   border-radius: 6px; font: 10px/1 var(--mono); background: var(--surface); color: var(--muted);
 }
-/* After the neutral rule above, which would otherwise win on order: a deletion
-   is the one row in this list that has to read as one at a glance. */
+/* After the neutral rule above, which would otherwise win on order: git's own
+   colours for git's own letters, so the list reads as a status at a glance --
+   added green, modified amber, deleted red. */
+.desk-diff-row .chgc.add { color: var(--moss); background: color-mix(in oklab, var(--moss) 15%, transparent); }
+.desk-diff-row .chgc.edit, .desk-diff-row .chgc.write { color: var(--amber); background: color-mix(in oklab, var(--amber) 15%, transparent); }
 .desk-diff-row .chgc.delete { color: var(--clay); background: color-mix(in oklab, var(--clay) 15%, transparent); }
 .desk-diff-row .desk-name { font: 11px/1.4 var(--mono); }
 .desk-diff-row .chgs { font-size: 10.5px; }

@@ -79,9 +79,12 @@ function DeskEmpty({ kind, title }: { kind: DeskTab; title: string }): JSX.Eleme
    handed over, which only `deliver_files` decides. */
 interface TaskFileEntry { row: TaskRow; node: TaskNode; file: TaskFile }
 
-/* Git's own three letters, over both halves of the list: a file that arrived,
-   one that went, and one that was changed in place. */
-const diffGlyph = (kind: WsChange['kind']): string => (kind === 'delete' ? 'D' : kind === 'add' ? '+' : 'M')
+/* Git's own three letters (`git status --short`), over both halves of the list:
+   a file that was added, one that was deleted, and one that was modified --
+   whether edited in place or written whole. Letters, because the file-level
+   verdict and the line counts beside it are two different things: `+4` on the
+   right is lines, and a `+` on the left read as more of the same. */
+const diffGlyph = (kind: WsChange['kind']): string => (kind === 'delete' ? 'D' : kind === 'add' ? 'A' : 'M')
 
 function taskFileEntries(): TaskFileEntry[] {
   const out: TaskFileEntry[] = []

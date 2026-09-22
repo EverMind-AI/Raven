@@ -662,7 +662,7 @@ describe('a task\'s own files, in the diff tab and not on the shelf', () => {
     await diffTab()
 
     const row = document.querySelector('.desk-diff-row') as HTMLElement
-    expect(row.querySelector('.chgc')?.textContent).toBe('+')
+    expect(row.querySelector('.chgc')?.textContent).toBe('A')
     expect(row.querySelector('.desk-name')?.textContent).toBe('/w/out.md')
     expect([...document.querySelectorAll('.desk-grp')].map((n) => n.textContent))
       .toEqual(['gui.ws.task_changes'])
@@ -690,7 +690,7 @@ describe('a task\'s own files, in the diff tab and not on the shelf', () => {
      insertion is still a modification -- the prototype's own
      `d.diff.del ? "M" : "+"` drew a creation for every edit that happened to
      delete nothing. */
-  it('chips a deletion-free edit with M, not +', async () => {
+  it('chips a deletion-free edit with M, not A', async () => {
     taskRows = [taskWithFile('t1', { path: '/w/new.py', op: 'edit', add: 4, del: 0 })]
     await diffTab()
 
@@ -700,7 +700,7 @@ describe('a task\'s own files, in the diff tab and not on the shelf', () => {
   /* And a whole-file write is a rewrite whatever it deleted -- appending to a
      file that was already there deletes nothing and is still not a creation.
      Only the lane's own `add` says a file arrived. */
-  it('chips a write with M, not +, however few lines it deleted', async () => {
+  it('chips a write with M, not A, however few lines it deleted', async () => {
     taskRows = [taskWithFile('t1', { path: '/w/old.py', op: 'write', add: 4, del: 0 })]
     await diffTab()
 
