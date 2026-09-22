@@ -1,12 +1,11 @@
 /* Everything that sits at the body rather than inside a page, and the order it
  * sits in.
  *
- * Two steps of the `--z` ladder in src/styles/page.css are deliberate ties --
- * `--z-shade` with `--z-tip` at 90, and `--z-picker` with the inline 46 the two
- * composer popovers set -- so for those four elements the DOM order at the body
- * IS the whole of the stacking decision. Left to the appending code, that order
- * would be an accident of which module ran first, and nothing would say the
- * four had to land in the order the stylesheet assumes.
+ * One step of the `--z` ladder in src/styles/page.css is a deliberate tie --
+ * `--z-shade` with `--z-tip` at 90 -- so for those two elements the DOM order
+ * at the body IS the whole of the stacking decision. Left to the appending
+ * code, that order would be an accident of which module ran first, and nothing
+ * would say the two had to land in the order the stylesheet assumes.
  *
  * The order is declared here instead, once, and `host` is what hands out the
  * four boot-time layers: made on first ask, appended in the order of this
@@ -19,7 +18,8 @@
  *   static   -- at the body from the page root's first commit, and the writer
  *               only fills it (src/App.tsx renders it with no children).
  *   reparent -- born inside a page, moved to the body on first open, and never
- *               moved back.
+ *               moved back. None today: the composer's popovers hang off their
+ *               chips with the stylesheet since the bar was reworked.
  *   append   -- created at runtime and appended to the body.
  */
 
@@ -27,9 +27,9 @@ import { PAGES } from './pages'
 
 export interface Portal {
   /** What the element is called, and the table's key: unique across the
-   *  thirteen. */
+   *  eleven. */
   readonly id: string
-  /** The selector that finds it, for the eleven that have one to themselves.
+  /** The selector that finds it, for the nine that have one to themselves.
    *  The other two are named only: the model picker's wrapper carries neither
    *  id nor class (`make` below says why), and `bootErrorBar` is a row of the
    *  design's table that nothing in src/ builds. Anything looking these up in
@@ -75,14 +75,12 @@ export const BOOT_BODY_ORDER = [
    invalidate six absolute indices in this file and three more in its tests. */
 const at = (bootKey: string): number => BOOT_BODY_ORDER.indexOf(bootKey) + 1
 
-/* The thirteen, in the order the design's portal table lists them. */
+/* The eleven, in the order the design's portal table lists them. */
 export const PORTALS: readonly Portal[] = [
   { id: '.sbars', selector: '.sbars', kind: 'append', z: '--z-scrollbars', at: at('div.sbars'), bootKey: 'div.sbars' },
   { id: 'pickHost', kind: 'append', z: '--z-picker', at: at('div'), bootKey: 'div' },
   { id: '#deskHost', selector: '#deskHost', kind: 'append', z: '--z-desk', at: at('div#deskHost'), bootKey: 'div#deskHost' },
   { id: '.tipp', selector: '.tipp', kind: 'append', z: '--z-tip', at: at('div.tipp'), bootKey: 'div.tipp' },
-  { id: '#permPop', selector: '#permPop', kind: 'reparent', z: '46', at: 'last' },
-  { id: '#tierPop', selector: '#tierPop', kind: 'reparent', z: '46', at: 'last' },
   { id: 'button.lightbox', selector: 'button.lightbox', kind: 'append', z: '--z-lightbox', at: 'last' },
   { id: '.upshade', selector: '.upshade', kind: 'append', z: '--z-shade', at: 'last' },
   { id: '.topfail', selector: '.topfail', kind: 'append', z: '--z-failbar', at: 'last' },

@@ -7,7 +7,8 @@
  * for the working-directory picker to be walked: one folder the engine would
  * refuse (`raven-home`, standing for the agent's own data) whose child is a
  * fine workspace all the same, which is the one shape the picker draws
- * differently.
+ * differently. `fs.pick_dir` stands in for the host's folder dialog and
+ * answers with one of those folders straight away.
  */
 
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
@@ -41,6 +42,9 @@ export function createFs(_env: FixtureEnv): FsFixture {
          and both callers ignore the answer, so arriving is the whole of it. */
       'fs.reveal': () => ({ ok: true }),
       'fs.open': () => ({ ok: true }),
+      /* The host's folder dialog, answered at once with a folder the picker's
+         tree also lists: offline there is no desktop to open one on. */
+      'fs.pick_dir': () => ({ path: '/home/me/work/notes', ok: true }),
       'fs.dirs': (p) => {
         const home = '/home/me'
         const at = (p as { path?: string }).path || home

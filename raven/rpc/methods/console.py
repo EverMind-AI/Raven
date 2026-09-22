@@ -15,6 +15,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1841,6 +1842,96 @@ def _walk_dirs(target: Path, agent_home: Path) -> dict:
     }
 
 
+# The native folder dialog, per host. Each prints the chosen folder on stdout
+# and exits non-zero (macOS) or prints nothing (the other two) when dismissed.
+# Only the first tool found on PATH is offered on Linux, where no dialog ships
+# with every desktop.
+_PICK_DIR_PROMPT = "Choose the folder this conversation will work in"
+
+
+def _pick_dir_argv() -> list[str] | None:
+    """The command that opens this host's folder dialog, or None where none is known."""
+    if sys.platform == "darwin":
+        return ["osascript", "-e", f'POSIX path of (choose folder with prompt "{_PICK_DIR_PROMPT}")']
+    if sys.platform.startswith("win"):
+        return [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Add-Type -AssemblyName System.Windows.Forms;"
+            "$d=New-Object System.Windows.Forms.FolderBrowserDialog;"
+            f"$d.Description='{_PICK_DIR_PROMPT}';"
+            "if($d.ShowDialog() -eq 'OK'){Write-Output $d.SelectedPath}",
+        ]
+    for argv in (
+        ["zenity", "--file-selection", "--directory", f"--title={_PICK_DIR_PROMPT}"],
+        ["kdialog", "--getexistingdirectory", str(Path.home()), "--title", _PICK_DIR_PROMPT],
+    ):
+        if shutil.which(argv[0]):
+            return argv
+    return None
+
+
+async def _run_pick_dir(argv: list[str]) -> str | None:
+    """Run the dialog and read the folder back, or None when it was dismissed.
+
+    A thread and a blocking run, not an asyncio subprocess: under the event
+    loop's child handling the macOS dialog closed itself after about three
+    seconds with "user canceled" (-128) and nobody at the keyboard, and the
+    same command run synchronously stays up until the person answers
+    (measured 2026-09-22). One thread held for as long as the dialog is up is
+    the price, and the page opens one dialog at a time.
+
+    A dismissed dialog is not an error -- `choose folder` exits 1 with "User
+    canceled", the others print nothing -- and both read as no folder.
+    """
+
+    def run() -> str | None:
+        done = subprocess.run(argv, capture_output=True, check=False)
+        text = done.stdout.decode("utf-8", errors="replace").strip()
+        return text or None
+
+    return await asyncio.to_thread(run)
+
+
+async def fs_pick_dir(params: dict, *, agent_loop_factory=None) -> dict:
+    """``fs.pick_dir`` -- a folder chosen in the host's own folder dialog.
+
+    The other half of the page's working-directory picker: ``fs.dirs`` walks
+    the tree in the page, this opens Finder (or the platform's equivalent) on
+    the gateway's host and hands the choice back. Only sensible where that host
+    is the reader's own desktop, which is the page's call to make -- it knows
+    where it is being served from -- so the method itself does not refuse a
+    remote caller; it would merely open a dialog nobody sees, and a host with
+    no dialog says so instead.
+
+    The answer carries the same ``ok`` ``fs.dirs`` puts on every entry, so the
+    page can decline a folder the create would refuse without a second call.
+    """
+    from raven.agent.workdir import validate_override
+    from raven.config.loader import load_config
+
+    argv = _pick_dir_argv()
+    if argv is None:
+        raise ConfigValidationError("no folder dialog is available on this host")
+    try:
+        chosen = await _run_pick_dir(argv)
+    except OSError as e:
+        raise ConfigValidationError(f"folder dialog failed: {e}") from None
+    if not chosen:
+        return {"ok": False}
+    target = Path(chosen).expanduser()
+    if not target.is_absolute() or not target.is_dir():
+        raise ConfigValidationError(f"not a directory: {chosen}")
+    target = target.resolve()
+    try:
+        validate_override(target, load_config().workspace_path)
+        ok = True
+    except ValueError:
+        ok = False
+    return {"path": str(target), "ok": ok}
+
+
 _UPLOAD_DIR = "uploads"
 
 
@@ -2232,6 +2323,7 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("channels.qr", channels_qr)
     dispatcher.register("fs.list", bind(fs_list))
     dispatcher.register("fs.dirs", bind(fs_dirs))
+    dispatcher.register("fs.pick_dir", bind(fs_pick_dir))
     dispatcher.register("fs.read", bind(fs_read))
     dispatcher.register("fs.upload", bind(fs_upload))
     dispatcher.register("deck.templates.list", bind(deck_templates_list))

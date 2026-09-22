@@ -1,33 +1,20 @@
-/* The model chip under the composer: what it says, and what clicking it opens.
+/* The model chip's repaint signal.
  *
- * Two halves of one element: the label every path that changes the model
- * repaints, and the one click that
- * raises the picker. Both stay imperative writes on elements src/chrome/Dock.tsx
- * renders -- the chip's text is a model id rather than a phrase from the
- * catalogue, so the component has no value of its own for it, and React diffs
- * against the props it rendered last rather than against the document.
+ * The chip itself is a component now (src/chrome/ModelChip.tsx), rendered from
+ * the model store's `current`. What that store cannot see is a change in what
+ * the chip should SAY about the same model -- the provider list refreshed and
+ * now carries a label, or the language flipped -- so the paths that used to
+ * write the label by id bump this instead, and the chip re-reads the list.
+ * `label` keeps its name because two call sites are held to it by literal: the
+ * settings chrome's provider refresh (features/settings/wire.ts) and the
+ * language repaint (state/lang/effects.ts).
  */
 
-import { openModelsForMissingProvider } from './source'
-import { current, open as openPicker } from './store'
+import { makeStore } from '../../state/store'
 
-/* A model id is provider-qualified (openrouter/anthropic/claude-opus-4.6); the
-   chip only has room for the part that identifies the model. */
-const shortModel = (m: string): string => String(m || '').split('/').pop() as string
+export const paint = makeStore(0)
 
-/** Repaints the chip from the current model. The hover title is the full id. */
+/** Asks the chip to re-read the provider list and the catalogue. */
 export function label(): void {
-  const model = current()
-  ;(document.getElementById('modelName') as HTMLElement).textContent = shortModel(model)
-  ;(document.getElementById('modelChip') as HTMLElement).title = model
-}
-
-/* The chip's own click: the picker, against the provider list the page really
-   has. A build with no provider configured sends the reader to Models first,
-   which is what that guard answers. */
-export function install(): void {
-  ;(document.getElementById('modelChip') as HTMLElement).onclick = () => {
-    if (openModelsForMissingProvider()) return
-    openPicker(null, label)
-  }
+  paint.set(paint.get() + 1)
 }

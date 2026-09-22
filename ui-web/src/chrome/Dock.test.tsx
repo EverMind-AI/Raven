@@ -6,9 +6,9 @@
  * here re-states it. What is here is what a golden of tags, ids, classes and
  * data-* cannot see: the roles and flags that are not data-*, the elements
  * handed over empty because another writer owns them, that the literals come
- * from the catalogue rather than from a copy in the JSX, and the three
- * contracts the field carries -- an IME's Enter, the palette's Escape, and a
- * popover that leaves the card's DOM without React noticing.
+ * from the catalogue rather than from a copy in the JSX, the two contracts the
+ * field carries -- an IME's Enter, the palette's Escape -- and where the three
+ * popovers off the bar stand.
  */
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,19 +16,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as composer from '../features/composer/mount'
 import * as store from '../features/composer/store'
 import { resetTranslator, setTranslator } from '../i18n/t'
+import * as session from '../lib/session'
 import * as confirmStore from '../state/confirm'
 import * as ctx from '../state/ctxChip'
 import * as lang from '../state/lang'
 import * as pageStore from '../state/page'
 import * as perm from '../state/perm'
-import { _resetForTests as resetLayers, host } from '../state/portals'
+import * as plus from '../state/plus'
 import { setSources } from '../state/sources'
 import * as tier from '../state/tier'
-import { bodySiblings } from '../test/domSnapshot'
+import * as wd from '../state/workdir'
 import { mountPageRoot } from '../test/pageRoot';
 
 import type { ComposerSource } from '../features/composer/types'
-import type { TierSource } from '../state/tier'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -62,6 +62,8 @@ function render(over: Partial<ComposerSource> = {}): void {
 }
 
 const el = (id: string): HTMLElement => document.getElementById(id) as HTMLElement
+/* The wrapper a chip shares with its popover, which is what hides the pair. */
+const anchor = (id: string): HTMLElement => el(id).closest('.chrome-anch') as HTMLElement
 const dock = (): HTMLElement => document.querySelector('.dock') as HTMLElement
 const ta = (): HTMLTextAreaElement => el('ta') as HTMLTextAreaElement
 
@@ -71,16 +73,18 @@ const key = (init: KeyboardEventInit): void => {
   })
 }
 
-/* The two popovers keep their up-or-down, the chip's paint and the tier popover's
-   two headings in a store rather than on the node (src/state/perm.ts,
-   src/state/tier.ts), so all of it outlives a case's markup and has to be put
-   back by hand between them. */
+/* The popovers keep their up-or-down and the chips their paint in a store
+   rather than on the node (src/state/perm.ts, src/state/plus.ts,
+   src/state/workdir.ts, src/state/tier.ts), so all of it outlives a case's
+   markup and has to be put back by hand between them. */
 beforeEach(() => {
   composer._resetForTests()
   store._resetForTests()
   ctx._resetForTests()
   perm._resetForTests()
   tier._resetForTests()
+  plus._resetForTests()
+  wd._resetForTests()
 })
 
 afterEach(() => {
@@ -91,6 +95,9 @@ afterEach(() => {
   ctx._resetForTests()
   perm._resetForTests()
   tier._resetForTests()
+  plus._resetForTests()
+  wd._resetForTests()
+  session._resetForTests()
   resetTranslator()
   localStorage.clear()
   document.body.innerHTML = ''
@@ -113,9 +120,9 @@ describe('the dock', () => {
     render()
     for (const id of [
       'sheetRack', 'queued', 'ta',
-      'attBtn', 'permChip', 'permName', 'envChip', 'envName', 'meter', 'ctxChip',
-      'tierChip', 'tierName', 'modelChip', 'modelName', 'go', 'wdChip', 'wdName',
-      'slashPop', 'slashList', 'permPop', 'permList', 'tierPop', 'tierPopLab', 'tierList', 'wdPop',
+      'plusBtn', 'wdChip', 'wdName', 'permChip', 'permName', 'envChip', 'envName', 'meter', 'ctxChip',
+      'modelChip', 'modelName', 'go',
+      'slashPop', 'slashList', 'plusPop', 'wdPop', 'permPop', 'wdTag',
     ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
@@ -127,21 +134,24 @@ describe('the dock', () => {
     render()
     expect(el('slashPop').getAttribute('role')).toBe('listbox')
     expect(el('permPop').getAttribute('role')).toBe('dialog')
-    expect(el('tierPop').getAttribute('role')).toBe('dialog')
+    expect(el('plusPop').getAttribute('role')).toBe('dialog')
     expect(el('wdPop').getAttribute('role')).toBe('dialog')
+    expect(el('wdPop').dataset.view).toBe('menu')
+    expect(el('plusBtn').getAttribute('aria-haspopup')).toBe('true')
     expect(el('wdChip').getAttribute('aria-haspopup')).toBe('true')
-    expect(el('wdChip').getAttribute('aria-expanded')).toBe('false')
-    expect(el('tierPop').getAttribute('aria-labelledby')).toBe('tierPopLab')
-    expect(el('tierList').getAttribute('role')).toBe('radiogroup')
     expect(el('permChip').getAttribute('aria-haspopup')).toBe('true')
     expect(el('permChip').getAttribute('aria-expanded')).toBe('false')
-    expect(el('tierChip').getAttribute('aria-haspopup')).toBe('true')
-    expect(el('tierChip').getAttribute('aria-expanded')).toBe('false')
+    expect(el('modelChip').getAttribute('aria-haspopup')).toBe('true')
     expect(ta().getAttribute('rows')).toBe('1')
     expect(ta().placeholder).not.toBe('')
-    /* Four things the page is served hidden, empty or disabled. */
+    /* Four things the page is served hidden or disabled: the "+" waits for the
+       composer's first repaint to say what it can offer, and the title tag for
+       a conversation. The workspace chip is a draft's, and the page is served
+       on a draft. */
     expect(el('envChip').hidden).toBe(true)
-    expect(el('tierChip').hidden).toBe(true)
+    expect(anchor('plusBtn').hidden).toBe(true)
+    expect(anchor('wdChip').hidden).toBe(false)
+    expect(el('wdTag').hidden).toBe(true)
     expect(el('ctxChip').hidden).toBe(true)
     expect((el('go') as HTMLButtonElement).disabled).toBe(true)
   })
@@ -158,29 +168,72 @@ describe('the dock', () => {
     expect(el('permChip').getAttribute('aria-label')).toBe('t:gui.perm.title: t:gui.perm.full')
   })
 
-  /* The bars are the store's markup rather than the two the page is served
-     with: `max` is three of them and the served svg has two (state/tier.ts's
-     ICO table, src/chrome/TierChip.tsx's SERVED), so a chip still rendering the
-     literal reds here instead of passing by coincidence -- which is what the
-     ladder's middle rung would do, its glyph being the served one exactly. */
-  it('draws the tier chip from the catalogue that answered', async () => {
-    const bars = (): Array<string | null> =>
-      [...el('tierChip').querySelectorAll('.pico path')].map((path) => path.getAttribute('d'))
+  /* The "+" is the same two rows in a draft and in a conversation: a file or a
+     deck template can go with any message. The composer's repaint is what tells
+     it which of the two the page can honour. */
+  it('offers the same two rows on a draft and in a conversation', () => {
+    render({ upload: async () => ({ path: '/u/x', size: 1 }), templates: { list: async () => ({ templates: [], available: false }), pick: async () => ({ path: '/u/t', size: 1 }), pages: async () => ({ pages: [] }) } })
+    act(() => { composer.goPaint() })
+    expect(anchor('plusBtn').hidden).toBe(false)
+    act(() => { el('plusBtn').click() })
+    expect(el('plusPop').dataset.open).toBe('true')
+    expect(el('plusBtn').getAttribute('aria-expanded')).toBe('true')
+    expect([...el('plusPop').querySelectorAll('.prow .nm')].map((n) => n.textContent))
+      .toEqual(['t:gui.plus.upload', 't:gui.plus.template'])
+    act(() => { el('plusBtn').click() })
+    expect(el('plusPop').dataset.open).toBe('false')
+
+    session.setCurrent('s1')
+    act(() => { composer.goPaint() })
+    expect(anchor('plusBtn').hidden).toBe(false)
+    act(() => { el('plusBtn').click() })
+    expect([...el('plusPop').querySelectorAll('.prow .nm')].map((n) => n.textContent))
+      .toEqual(['t:gui.plus.upload', 't:gui.plus.template'])
+  })
+
+  it('hides the "+" where neither row can be honoured, and offers only the row that can', () => {
     render()
-    const menu = [{ id: 'medium' }, { id: 'high' }, { id: 'max' }]
+    act(() => { composer.goPaint() })
+    expect(anchor('plusBtn').hidden).toBe(true)
+    expect(el('plusPop').dataset.open).toBe('false')
+    render({ templates: { list: async () => ({ templates: [], available: false }), pick: async () => ({ path: '/u/t', size: 1 }), pages: async () => ({ pages: [] }) } })
+    act(() => { composer.goPaint() })
+    expect(anchor('plusBtn').hidden).toBe(false)
+    act(() => { el('plusBtn').click() })
+    expect([...el('plusPop').querySelectorAll('.prow .nm')].map((n) => n.textContent)).toEqual(['t:gui.plus.template'])
+  })
+
+  /* The chip is a draft's: it names the default, then the folder picked, and
+     opens the folder list off itself. A conversation cannot change its folder,
+     so the chip goes and the tag beside the title says which folder it is. */
+  it('shows the workspace chip on a draft and the title tag in a conversation', () => {
+    render()
+    act(() => { wd.draw() })
+    expect(anchor('wdChip').hidden).toBe(false)
+    expect(el('wdName').textContent).toBe('t:gui.wd.none')
+    expect(el('wdTag').hidden).toBe(true)
+    act(() => { wd.pick('/w/thesis') })
+    expect(el('wdName').textContent).toBe('thesis')
+    expect(el('wdChip').className).toBe('chip chrome-wd-set')
+    act(() => { el('wdChip').click() })
+    expect(el('wdPop').dataset.open).toBe('true')
+    expect(el('wdPop').closest('.chrome-anch')).toBe(anchor('wdChip'))
+    act(() => { el('wdChip').click() })
+    expect(el('wdPop').dataset.open).toBe('false')
+
     setSources({
-      tier: {
-        read: async () => ({ mode: 'max', availableModes: menu }),
-        set: async () => ({ mode: 'max', availableModes: menu }),
-      } satisfies TierSource,
+      rail: {
+        snapshot: () => ({ rows: [{ id: 's1', title: 's1', workdir: '/w/thesis', persisted: true }], cur: 's1', busy: false }),
+        replace: () => {},
+        open: () => {},
+      },
     })
-    expect(bars()).toEqual(['M6 18.5v-4', 'M12 18.5v-9'])
-
-    await act(async () => { await tier.load() })
-
-    expect(el('tierChip').hidden).toBe(false)
-    expect(el('tierName').textContent).toBe('Max')
-    expect(bars()).toEqual(['M6 18.5v-4', 'M12 18.5v-9', 'M18 18.5v-14'])
+    session.setCurrent('s1')
+    act(() => { wd.draw() })
+    expect(anchor('wdChip').hidden).toBe(true)
+    expect(el('wdTag').hidden).toBe(false)
+    expect(el('wdTag').textContent).toBe('thesis')
+    expect(el('wdTag').title).toBe('/w/thesis')
   })
 
   /* The context ring is served with neither attribute, which is why the store
@@ -207,7 +260,7 @@ describe('the dock', () => {
      an empty string until there is something to say. */
   it('hands the rack, the queue, the palette and the two lists over empty', () => {
     render()
-    for (const id of ['sheetRack', 'queued', 'slashList', 'permList', 'tierList', 'tierPopLab', 'meter']) {
+    for (const id of ['sheetRack', 'queued', 'slashList', 'plusPop', 'wdPop', 'permPop', 'meter']) {
       expect(el(id).childNodes, id).toHaveLength(0)
     }
     expect(document.querySelectorAll('#sheetRack > *')).toHaveLength(0)
@@ -216,41 +269,32 @@ describe('the dock', () => {
 
   it('renders a literal in every element that carried one', () => {
     render()
-    for (const sel of ['#permName', '#envName', '#tierName', '#modelName', '#slashPop .lab', '#permPop .lab', '#permPop .note']) {
+    for (const sel of ['#permName', '#envName', '#modelName', '#slashPop .lab']) {
       expect(document.querySelector(sel)?.textContent, sel).not.toBe('')
-    }
-    /* The heading and the note of the tier popover come from the store, chosen on
-       open from the catalogue that answered, so they carry no key and no
-       literal -- and nothing at all before the first open. */
-    expect(el('tierPop').querySelector('.note')!.textContent).toBe('')
-    for (const node of el('tierPop').querySelectorAll('*')) {
-      for (const name of node.getAttributeNames()) expect(name).not.toMatch(/^data-i18n/)
     }
   })
 
-  /* Three of the clicks in the band are another module's: the send button and
-     the paperclip belong to the composer store, and the model chip to the live
-     layer. A React onClick beside one of those would not replace it -- it would
+  /* One click in the band is another module's: the send button belongs to the
+     composer store. A React onClick beside it would not replace it -- it would
      run BESIDE the imperative handler, and both would fire on one press. React
      leaves an empty onclick on every element it takes a click of (the trap that
      makes clicks fire on iOS), so a bare .onclick is what says the element is
-     still the other writer's, and that trap is what says the three chips are this
-     tree's (src/chrome/PermChip.tsx, src/chrome/TierChip.tsx, src/chrome/WorkdirChip.tsx). */
-  it('takes only the three chips, and leaves each other click to the module that owns it', () => {
+     still the other writer's, and that trap is what says the buttons are this
+     tree's (src/chrome/PlusMenu.tsx, src/chrome/WorkdirChip.tsx,
+     src/chrome/PermChip.tsx, src/chrome/ModelChip.tsx). */
+  it('takes the chips, and leaves the send button to the module that owns it', () => {
     render()
-    const IMPERATIVE = ['go', 'attBtn', 'modelChip']
-    for (const id of IMPERATIVE) expect(el(id).onclick, id).toBe(null)
-    const OWN = ['permChip', 'tierChip', 'wdChip']
+    expect(el('go').onclick).toBe(null)
+    const OWN = ['plusBtn', 'wdChip', 'permChip', 'modelChip']
     for (const id of OWN) expect(typeof el(id).onclick, id).toBe('function')
     for (const node of dock().querySelectorAll('*')) {
       if (OWN.includes(node.id)) continue
       expect((node as HTMLElement).onclick, node.id || node.className).toBe(null)
     }
-    /* And the two the composer does bind, once it has: the id it reaches for is
+    /* And the one the composer does bind, once it has: the id it reaches for is
        the one this renders. */
     composer.install()
     expect(el('go').onclick).not.toBe(null)
-    expect(el('attBtn').onclick).not.toBe(null)
   })
 
   /* The tray is not in the markup: it exists only once something is staged, and
@@ -263,7 +307,7 @@ describe('the dock', () => {
     const box = el('atts')
     expect(box.hidden).toBe(true)
     expect(Array.from(document.querySelector('.dock-in')!.children).map((c) => c.id || c.className)).toEqual([
-      'queued', 'atts', 'field', 'under', 'slashPop', 'permPop', 'tierPop', 'wdPop',
+      'queued', 'atts', 'field', 'under', 'slashPop',
     ])
   })
 })
@@ -329,32 +373,6 @@ describe('the field while the slash palette is open', () => {
   })
 })
 
-/* Both popover writers move their popover to the body the first time it opens,
-   because the card's entrance animation makes the card a containing block and
-   re-bases the popover's fixed coordinates. React renders the popover inside the
-   card, so the move takes a child out from under the portal -- which is safe
-   only because none of the card's children is conditional, and React therefore
-   never reconciles that child list. */
-describe('a popover reparented out of the card', () => {
-  it('stays at the body across a re-render, and the card renders on', () => {
-    render()
-    const pop = el('permPop')
-    expect(pop.parentElement!.className).toBe('dock-in')
-    document.body.appendChild(pop)
-    expect(() => {
-      act(() => { lang.set('zh') })
-    }).not.toThrow()
-    expect(pop.parentElement).toBe(document.body)
-    expect(el('permPop')).toBe(pop)
-    expect(document.querySelectorAll('#permPop')).toHaveLength(1)
-    expect(el('slashPop').parentElement!.className).toBe('dock-in')
-    /* Back before the root comes down: React deletes the children it rendered
-       from the container it rendered them into, and a node no longer there is a
-       removeChild that throws. Nothing unmounts this root in the page. */
-    document.querySelector('.dock-in')!.appendChild(pop)
-  })
-})
-
 /* Last in the file on purpose: applying a language is module state for
    everything after it. The claim is that every keyed word here is the
    catalogue's rather than the literal the markup was served with -- the
@@ -362,10 +380,10 @@ describe('a popover reparented out of the card', () => {
    visible at once -- and that a pick and a remount both leave it that way. */
 describe('the dock once a language is applied', () => {
   it('renders the keyed words from the catalogue, before and after a pick', () => {
-    const KEYED = ['#slashPop .lab', '#permPop .lab', '#permPop .note']
+    const KEYED = ['#slashPop .lab']
     const words = (): string[] => KEYED.map((sel) => document.querySelector(sel)?.textContent ?? '')
     const hint = (): string => ta().placeholder
-    const asked = ['t:gui.session_commands', 't:gui.perm.title', 't:gui.perm.note']
+    const asked = ['t:gui.session_commands']
     render()
     expect(words()).toEqual(asked)
     expect(hint()).toBe('t:gui.composer_ph')
@@ -378,19 +396,19 @@ describe('the dock once a language is applied', () => {
     expect(hint()).toBe('t:gui.composer_ph')
   })
 
-  /* The four chips carry no key: each is owned by whoever fills it afterwards,
+  /* The three chips carry no key: each is owned by whoever fills it afterwards,
      so a flip must leave the served word alone here and let that owner replace
-     it. Two of the four read their own store rather than the language, so the
+     it. Two of the three read their own store rather than the language, so the
      flip does not reach them either -- the boot's list and the language
      repaint's list are what call their draw. */
-  it('leaves the four unkeyed chip labels to their writers', () => {
+  it('leaves the three unkeyed chip labels to their writers', () => {
     render()
-    const labels = (): string[] => ['#permName', '#envName', '#tierName', '#modelName']
+    const labels = (): string[] => ['#permName', '#envName', '#modelName']
       .map((sel) => document.querySelector(sel)?.textContent ?? '')
     const served = labels()
     act(() => { lang.set('en') })
     expect(labels()).toEqual(served)
-    for (const sel of ['#permName', '#envName', '#tierName', '#modelName']) {
+    for (const sel of ['#permName', '#envName', '#modelName']) {
       for (const name of document.querySelector(sel)!.getAttributeNames()) {
         expect(name, sel).not.toMatch(/^data-i18n/)
       }
@@ -398,96 +416,48 @@ describe('the dock once a language is applied', () => {
   })
 })
 
-/* The two popovers, and the one thing about them a golden of the band cannot
- * see: where each stands.
+/* The three popovers off the bar, and the one thing about them a golden of
+ * the band cannot see: where each stands.
  *
- * Both are rendered inside the composer card, because that is where the page
- * was served with them, and both are moved to the body the first time they open
- * -- once, and never back. The move is not a preference: the card's entrance
- * animation makes the card a containing block, which re-bases the popover's
- * `position: fixed` against the card instead of the viewport, so a popover left
- * in the card is placed off the wrong box.
+ * Each is rendered beside its chip, inside an anchor the two share, and hangs
+ * off the chip's top edge with the stylesheet. Nothing measures, nothing moves:
+ * the fixed-coordinate popovers before them left the card for the body because
+ * the card's entrance animation re-based their coordinates, and that whole
+ * dance is gone with the coordinates.
  *
  * Last in the file because one case applies a language, which is module state
  * for everything after it.
  */
-describe('the two popovers', () => {
+describe('the anchored popovers', () => {
   interface Popover {
     readonly open: () => void
     readonly close: () => void
     readonly isOpen: () => boolean
   }
   const POPOVERS: ReadonlyArray<{ name: string, pop: string, chip: string, popover: Popover }> = [
+    { name: 'plus', pop: 'plusPop', chip: 'plusBtn', popover: plus },
+    { name: 'workdir', pop: 'wdPop', chip: 'wdChip', popover: wd },
     { name: 'perm', pop: 'permPop', chip: 'permChip', popover: perm },
-    { name: 'tier', pop: 'tierPop', chip: 'tierChip', popover: tier },
   ]
 
-  it('stands in the composer card until it is opened', () => {
-    render()
-    for (const { name, pop } of POPOVERS) {
-      expect(el(pop).parentElement!.closest('.dock-in'), name).not.toBe(null)
-    }
-  })
+  /* The "+" opens only once the composer source offers it a row, and the
+     workspace chip only on a draft with its paint drawn. */
+  function ready(): void {
+    render({ upload: async () => ({ path: '/u/x', size: 1 }) })
+    act(() => { composer.goPaint(); wd.draw() })
+  }
 
-  it('hangs off the body, last of its children, once it opens', () => {
-    render()
-    for (const { name, pop, popover } of POPOVERS) {
+  it('stands beside its chip, in the card, open or closed', () => {
+    ready()
+    for (const { name, pop, chip, popover } of POPOVERS) {
+      expect(el(pop).previousElementSibling, name).toBe(el(chip))
+      expect(el(pop).parentElement!.className, name).toBe('chrome-anch')
       popover.open()
-      expect(el(pop).parentElement, name).toBe(document.body)
-      expect(document.body.lastElementChild, name).toBe(el(pop))
-    }
-  })
-
-  /* The move is once, not per open: `close` only takes the popover down. A popover
-     put back in the card between opens would be placed off the card again. */
-  it('stays under the body when it closes', () => {
-    render()
-    for (const { name, pop, popover } of POPOVERS) {
-      popover.open()
+      expect(el(pop).dataset.open, name).toBe('true')
+      expect(el(pop).closest('.dock-in'), name).not.toBeNull()
+      expect(el(pop).getAttribute('style'), name).toBeNull()
       popover.close()
-      expect(el(pop).parentElement, name).toBe(document.body)
-      expect(el(pop).dataset.open, name).toBe('false')
-      popover.open()
-      expect(el(pop).parentElement, name).toBe(document.body)
-    }
-  })
-
-  /* `--z-picker` is 46 and both popovers set an inline 46, so for these three the
-     DOM order at the body IS the whole of the stacking decision -- the popover a
-     reader just opened has to be the one on top. src/state/portals.ts is where
-     that order is declared. */
-  it('lands after the model picker, which is what breaks the tie at 46', () => {
-    render()
-    resetLayers()
-    try {
-      const picker = host('picker')
-      perm.open()
-      tier.open()
-      const order = bodySiblings()
-      /* The picker's wrapper carries neither id nor class, which is why its
-         signature is a bare tag. */
-      expect(Array.from(document.body.children).indexOf(picker)).toBe(order.indexOf('div'))
-      for (const { name, pop } of POPOVERS) {
-        const at = order.findIndex((line) => line.startsWith(`div#${pop}.pop`))
-        expect(at, name).toBeGreaterThan(order.indexOf('div'))
-      }
-    } finally {
-      resetLayers()
-    }
-  })
-
-  /* The tier popover's heading and note are the store's, chosen on open from the
-     catalogue that answered, and neither may carry a key: the built-in ladder
-     is a Session Tier and reaches sub-agents, a deployment's own catalogue is a
-     Session Mode and does not, so a flip walking the document's keys would
-     paint the tier wording back over a mode catalogue's. */
-  it('leaves the tier popover with no key for a language flip to find', () => {
-    render()
-    const pop = el('tierPop')
-    for (const node of [pop, ...pop.querySelectorAll('*')]) {
-      for (const name of node.getAttributeNames()) {
-        expect(name, node.id || node.className).not.toMatch(/^data-i18n/)
-      }
+      expect(el(pop).parentElement!.className, name).toBe('chrome-anch')
     }
   })
 
@@ -496,10 +466,11 @@ describe('the two popovers', () => {
      -- which is what the chrome's own `$('#permChip').onclick` did until this
      step moved it into the component. */
   it('takes exactly one handler per chip, so one press toggles once', () => {
-    render()
+    ready()
     for (const { name, chip, popover } of POPOVERS) {
       act(() => { el(chip).click() })
       expect(popover.isOpen(), name).toBe(true)
+      expect(el(chip).getAttribute('aria-expanded'), name).toBe('true')
       act(() => { el(chip).click() })
       expect(popover.isOpen(), name).toBe(false)
       /* The onclick property is React's empty trap, not a second handler:
@@ -510,14 +481,22 @@ describe('the two popovers', () => {
     }
   })
 
-  /* A popover that has left the card is a child React no longer holds. Safe only
-     because none of the card's children is conditional, so React never
-     reconciles that child list -- a re-render renders on into it and leaves it
-     where it stands. */
-  it('survives a language applied after it left the card', () => {
-    render()
+  /* The rows are React's, in the container React delegates from: a click on
+     one reaches its handler, which is the whole reason the popovers stay put. */
+  it('takes a click on a row while it stands', () => {
+    ready()
     perm.open()
-    tier.open()
+    act(() => { el('permPop').querySelectorAll<HTMLElement>('.prow')[0]!.click() })
+    expect(perm.isOpen()).toBe(false)
+    expect(perm.current()).toBe('ask')
+    wd.open()
+    act(() => { [...el('wdPop').querySelectorAll<HTMLElement>('.prow')].find((r) => r.textContent === 't:gui.wd.none')!.click() })
+    expect(wd.isOpen()).toBe(false)
+  })
+
+  it('survives a language applied while it stands', () => {
+    ready()
+    for (const { popover } of POPOVERS) popover.open()
     const pops = POPOVERS.map(({ pop }) => el(pop))
     /* Not 'en': the describe above leaves that applied, and a flip to the
        language in force cannot move a key that is read off it. */
@@ -525,10 +504,9 @@ describe('the two popovers', () => {
       act(() => { lang.set('zh') })
     }).not.toThrow()
     for (const [i, { name, pop }] of POPOVERS.entries()) {
-      expect(el(pop).parentElement, name).toBe(document.body)
       expect(el(pop), name).toBe(pops[i])
+      expect(el(pop).dataset.open, name).toBe('true')
       expect(document.querySelectorAll(`#${pop}`), name).toHaveLength(1)
     }
-    expect(el('slashPop').parentElement!.className).toBe('dock-in')
   })
 })

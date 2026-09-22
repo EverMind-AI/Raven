@@ -83,6 +83,10 @@ workspace.setDeskOpener(desk.openDeskFile)
 session.onChange(() => {
   sheets.sync()
   dagRun.sync()
+  /* The dock's own repaint: the "+" is a menu on a draft and the file picker
+     in a conversation, and the field's placeholder says which, so both follow
+     the conversation on screen rather than only the dock's own changes. */
+  composer.goPaint()
   /* The desk palette is open or shut per conversation, and this is the event
      that says which one is on screen -- see features/desk/store.ts's sync. */
   desk.sync()

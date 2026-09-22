@@ -3,6 +3,7 @@ import { t } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
 import { formatDuration } from '../../lib/duration'
 import { current as currentSession } from '../../lib/session'
+import { draw as plusDraw } from '../../state/plus'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
@@ -190,12 +191,13 @@ const ICON_STOP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="current
    static element in page.html that half the page reaches by id, and the whole
    of its get() is four attributes. */
 export function goPaint(): void {
-  /* The template button rides this paint because it has no moment of its own:
-     the dock is wired before the composer source exists (src/main.tsx installs
-     the dock, then boots), and this is the repaint every state change and the
-     boot itself ask for. */
-  const tpl = el<HTMLButtonElement>('tplBtn')
-  if (tpl) tpl.hidden = !canPickTemplate()
+  /* The "+" button rides this paint because it has no moment of its own: the
+     dock is wired before the composer source exists (src/main.tsx installs the
+     dock, then boots), and this is the repaint every state change and the boot
+     itself ask for. */
+  plusDraw()
+  const ta = field()
+  if (ta) ta.placeholder = placeholder()
   const b = el<HTMLButtonElement>('go')
   if (!b) return
   if (turn.busy() && turn.cancellable()) {
@@ -205,11 +207,18 @@ export function goPaint(): void {
     b.setAttribute('aria-label', t('gui.stop'))
     return
   }
-  const ta = field()
   b.disabled = !(ta && ta.value.trim()) && !hasAtts()
   b.classList.remove('halt')
   b.innerHTML = ICON_SEND
   b.setAttribute('aria-label', t('gui.send'))
+}
+
+/* What the empty field says: the task on a draft, a continuation once the
+   conversation exists, and while a turn is running, that a message typed now
+   waits for it -- the one fact about the queue a reader cannot see. */
+function placeholder(): string {
+  if (currentSession() === null) return t('gui.composer_ph')
+  return t(turn.busy() ? 'gui.composer.ph_busy' : 'gui.composer.ph_session')
 }
 
 /* A textarea cannot size itself to its content, so the height is set here --

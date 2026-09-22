@@ -41,6 +41,7 @@ import { rename as renameSession } from '../features/rail/store'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import { Banner } from './Banner'
+import { WorkdirTag } from './WorkdirTag'
 
 import type { JSX } from 'react'
 
@@ -48,7 +49,8 @@ import type { JSX } from 'react'
    rather than in text, so each takes its key through lang.attr -- which is
    absent until a pick lands, the way the served markup carried neither -- and
    #title has no key at all, because its text is a conversation's name rather
-   than a phrase from the catalogue. */
+   than a phrase from the catalogue. The workspace tag after the pencil
+   renders the whole of state/workdir.ts's paint. */
 function Header(): JSX.Element {
   return (
     <>
@@ -64,6 +66,10 @@ function Header(): JSX.Element {
           <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z" /><path d="M14.5 6.5 17.5 9.5" />
         </svg>
       </button>
+      {/* The folder this conversation runs in, said once beside its name and
+          after the pencil that edits the name: the composer's workspace chip
+          is gone once a conversation starts (src/chrome/WorkdirTag.tsx). */}
+      <WorkdirTag />
       <span className="spacer" />
       <button
         className="ghost-ic wstog tipdn"

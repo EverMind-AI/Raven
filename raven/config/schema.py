@@ -787,9 +787,9 @@ only -- a deployment bringing its own modes and naming no default degrades to
 its first entry instead."""
 
 _TIER_TEXTS: dict[str, str] = {
-    "medium": "The least effort a sub-agent is asked for.",
-    "high": "The middle amount of effort, between the other two.",
-    "max": "The most effort a sub-agent is asked for.",
+    "medium": "Faster and cheaper, for small, well-defined tasks.",
+    "high": "The default: a balance of speed and quality.",
+    "max": "Deepest reasoning and full sub-agent effort, for complex or open-ended work.",
 }
 """One sentence per rung, saying only what differs between them.
 

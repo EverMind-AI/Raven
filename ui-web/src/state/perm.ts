@@ -98,7 +98,7 @@ export interface PermPopoverState {
      as of the last open rather than the mode in force, and the words are the
      catalogue as of the last open rather than the language in force. */
   readonly listed: readonly PermRow[] | null
-  /** Bumped by every open, so a popover opened twice is measured twice. */
+  /** Bumped by every open, so a case can tell a second open from the first. */
   readonly opened: number
   /** What the chip shows, or null while nothing has drawn it yet. */
   readonly paint: PermPaint | null
@@ -120,10 +120,9 @@ const samePaint = (a: PermPaint | null, b: PermPaint | null): boolean => {
   return a.label === b.label && a.risk === b.risk && a.ico === b.ico && a.aria === b.aria
 }
 
-/* Committed synchronously, the way the writes by id were: `open` measures the
-   popover it has just filled, and a caller that opens and then reads the DOM --
-   the chip's own toggle, the pointerdown that closes it, every case in
-   perm.test.ts -- has to see it. */
+/* Committed synchronously, the way the writes by id were: a caller that opens
+   and then reads the DOM -- the chip's own toggle, the pointerdown that closes
+   it, every case in perm.test.ts -- has to see it. */
 export function set(next: PermPopoverState): void {
   const now = get()
   if (next.open === now.open && next.listed === now.listed && next.opened === now.opened
@@ -176,16 +175,13 @@ export function setFromConfig(value: string): void {
 
 export const current = (): string => mode
 
-const el = <T extends HTMLElement>(id: string): T | null => document.getElementById(id) as T | null
-
 /* The chip, as four values <PermChip/> renders. The name is `draw` and so are
    its two call sites (the boot's ordered list and the language repaint), which
    is what the two ordered-list gates assert by literal; what changed is that
    the four land in the store instead of being written by id.
 
    Nothing here reads the document, so there is nothing to guard: a page whose
-   markup has gone still has a React tree to commit into (measured), and the
-   popover's own open is what still needs the two nodes to exist.
+   markup has gone still has a React tree to commit into (measured).
 
    The chip reads its own state, which is why it carries no hover label: the
    detail of each tier belongs in the popover the click opens. Nothing to remove
@@ -215,17 +211,6 @@ const rows = (): readonly PermRow[] =>
   }))
 
 export function open(): void {
-  const pop = el('permPop')
-  const chip = el('permChip')
-  if (!pop || !chip) return
-  /* Out of the card first, and once only: the card's entrance animation makes
-     it a containing block, which quietly re-bases the popover's position: fixed
-     against the card instead of the viewport. Moving a node React rendered is
-     safe because none of the card's children is conditional, so React never
-     reconciles that child list and never puts it back (src/chrome/Dock.tsx).
-     Before the rows and the flag, because the placement <PermPopover/> makes in
-     its layout effect measures the popover where it now stands. */
-  if (pop.parentElement !== document.body) document.body.appendChild(pop)
   set({ ...get(), open: true, listed: rows(), opened: get().opened + 1 })
 }
 

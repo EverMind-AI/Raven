@@ -11,6 +11,7 @@ import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
 import { sources } from '../../state/sources'
 import { show as toast } from '../../state/toast'
+import { remember } from './recent'
 import { KIND_ORDER, modelKind, offered, sameModel, statedTags } from './types'
 
 import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
@@ -153,11 +154,24 @@ export const column = (p: Provider, offer: Offer = at.offer): string[] => {
      `pick` is what tells them apart: every slot writes through one. */
   const cur = offer.current
     ? (offer.current.provider === p.id ? offer.current.model : null)
-    : (offer.pick ? null : (p.current ? selected : null))
+    : (offer.pick ? null : (p.current && !carried(selected) ? selected : null))
   /* By the backend's identity, not by string: a role stores the spelling it was
      handed while `model.add_model` stores the one it derived, so comparing the
      strings put the same model in the column twice, under one visible name. */
   return cur && !rows.some((m) => sameModel(p.id, m, cur)) ? [cur, ...rows] : rows
+}
+
+/* Whether any connected account lists this model as its own. The wire's
+   `is_current` marks the provider serving the model the SESSION started on, and
+   it goes stale the moment a pick moves the conversation to another account:
+   pinning by that flag alone drew the new model twice, once in its own column
+   and once, ticked, under the old account. */
+const carried = (m: string): boolean => {
+  try {
+    return source().providers().some((q) => q.on && offered(q).some((x) => sameModel(q.id, x, m)))
+  } catch {
+    return false
+  }
 }
 
 export { KIND_ORDER, statedTags }
@@ -216,6 +230,10 @@ export async function choose(m: string, provider: string, typed = false, kind?: 
   if (scope === 'session') {
     setCurrent(m)
     after?.()
+    /* Remembered on the pick rather than on the acknowledgement: a model the
+       reader reached for belongs at the head of the list whether or not this
+       one write lands. */
+    remember(m, provider)
   }
   try {
     const settled = await src.persist(m, provider, scope)

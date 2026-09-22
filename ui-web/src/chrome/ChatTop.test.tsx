@@ -74,6 +74,7 @@ describe('the chat column chrome', () => {
     expect(Array.from(top().children).map((child) => child.id || child.className)).toEqual([
       'title',
       'renameBtn',
+      'wdTag',
       'spacer',
       'wsBtn',
     ])
@@ -91,7 +92,7 @@ describe('the chat column chrome', () => {
 
   it('renders every id the chrome, the islands and the writers reach for, once each', () => {
     render()
-    for (const id of ['title', 'renameBtn', 'wsBtn', 'wsBdg', 'bannerHost', 'flash', 'stage']) {
+    for (const id of ['title', 'wdTag', 'renameBtn', 'wsBtn', 'wsBdg', 'bannerHost', 'flash', 'stage']) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
   })

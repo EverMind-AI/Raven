@@ -896,49 +896,34 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chip.risk { color: var(--clay); }
 .chip.risk:hover { color: var(--clay); background: color-mix(in oklab, var(--clay) 10%, transparent); }
 
-/* Permission rows: the name, and the sentence that decides the choice -- a
-   reader picking a permission level is reading the consequence, not the label,
-   so the sentence is not a hover away.
-   Geometry and type measured off the visual reference's chip menu, which is
-   this control there: 268px wide, 7px/9px rows, the name at
-   13.5px/500 going to 600 when it is the one in force, the sentence at
-   11.5px/1.5 in --faint, and a 14px amber tick with a 2px stroke sitting 3px
-   down so it lines up with the name's cap height rather than its box.
-   What the tick marks is the whole of the "this is the one" signal there --
-   no filled band behind the row, which on a translucent panel reads as a
-   second material -- and no shield beside each name (see state/perm.ts). */
-#permPop { width: 268px; }
-/* The heading's left edge on the row's text, not 1px inside it. The face stays
-   the page's own `.lab` -- mono, tracked, uppercase -- rather than the
-   prototype's plain sans: #tierPop opens from the chip next door and wears the
-   same heading, and one of the two in a different face is worse than either. */
-#permPop .hd { padding: 5px 9px 6px; }
-#permPop .prow { align-items: flex-start; gap: 8px; padding: 7px 9px; border-radius: 8px; }
-#permPop .prow .nm { font-weight: 500; font-size: 13.5px; }
-#permPop .prow[aria-checked="true"] .nm { font-weight: 600; }
-#permPop .prow .sub { display: block; font-size: 11.5px; line-height: 1.5; color: var(--faint); margin-top: 2px;
-  white-space: normal; }
-#permPop .prow .txt { flex: 1; min-width: 0; text-align: left; }
-#permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--amber); margin-top: 3px; }
-.pop .note { padding: 7px 9px 4px; font-size: 10.5px; line-height: 1.5; color: var(--faint); }
-
-/* The working-directory popover (#wdPop, src/chrome/WorkdirPopover.tsx): the
-   permission popover's rows for the menu, and under them a small folder
-   browser -- a path bar, a scrolling list, two buttons. The chip wears the
-   page's own .chip and says a folder is named by carrying chrome-wd-set. */
-#wdPop { left: 0; right: auto; width: 300px; }
-#wdPop .hd { padding: 5px 9px 6px; }
-#wdPop .prow { align-items: flex-start; gap: 8px; padding: 6px 9px; border-radius: 8px; }
-#wdPop .prow .pico { width: 13px; height: 13px; flex: none; margin-top: 2px; color: var(--faint); }
-#wdPop .prow .nm { font-weight: 500; font-size: 13px; }
-#wdPop .prow[aria-checked="true"] .nm { font-weight: 600; }
-#wdPop .prow .sub { display: block; font-family: var(--mono); font-size: 10.5px; line-height: 1.5; color: var(--faint);
-  margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
-#wdPop .prow .txt { flex: 1; min-width: 0; text-align: left; }
-#wdPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--amber); margin-top: 3px; }
-#wdPop .chrome-wd-open { margin-top: 2px; border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; padding-top: 8px; }
+/* The three small popovers off the bar -- the "+" menu (#plusPop), the
+   workspace (#wdPop) and the permission modes (#permPop) -- hang off their own
+   chips: each is a child of the `.chrome-anch` wrapper around its chip, and sits 6px
+   above the chip's top edge, left edges lined up. Names only, no heading: the
+   chip already says what is being chosen, and the sentence behind a name is on
+   the row's title. The tick is the whole of the "this is the one" signal -- no
+   filled band behind the row, which on a translucent panel reads as a second
+   material. */
+.chrome-anch { position: relative; display: inline-flex; align-items: center; }
+#plusPop, #wdPop, #permPop { left: 0; right: auto; bottom: calc(100% + 6px); padding: 4px; }
+#plusPop { width: 220px; }
+#wdPop { width: 232px; }
+#wdPop[data-view="browse"] { width: 300px; }
+#permPop { width: 200px; }
+.pop .chrome-hr { height: 1px; background: var(--line-soft); margin: 4px 6px; }
+#plusPop .prow, #wdPop .prow, #permPop .prow { align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; }
+#plusPop .prow .nm, #wdPop .prow .nm, #permPop .prow .nm { font-weight: 500; font-size: 13px; }
+#wdPop .prow[aria-checked="true"] .nm, #permPop .prow[aria-checked="true"] .nm { font-weight: 600; }
+#wdPop .prow .tick, #permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--amber); }
+/* The tier with no brakes says so in its row too, in the chip's colour. */
+#permPop .prow.risk .nm { color: var(--clay); }
+#plusPop .chrome-plus-row .pico { width: 15px; height: 15px; flex: none; color: var(--muted); }
+/* The workspace chip names a folder in the text colour, the default in the
+   bar's muted one. */
+#wdChip.chrome-wd-set { color: var(--text); }
 #wdPop .chrome-wd-open .nm { font-weight: 500; color: var(--amber); }
 #wdPop .chrome-wd-err { color: var(--clay); }
+/* The folder browser under the menu: a path bar, a scrolling list, two buttons. */
 .chrome-wd-path { display: flex; align-items: center; gap: 4px; padding: 2px 6px 6px; border-bottom: 1px solid var(--line); }
 .chrome-wd-nav { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: none;
   border-radius: 6px; color: var(--faint); }
@@ -948,8 +933,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-wd-p { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 .chrome-wd-list { max-height: 236px; overflow-y: auto; padding: 4px 0; }
-#wdPop .chrome-wd-list .prow { align-items: center; padding: 5px 9px; }
-#wdPop .chrome-wd-list .prow .pico { margin-top: 0; }
+#wdPop .chrome-wd-list .prow { padding: 5px 9px; }
+#wdPop .chrome-wd-list .prow .pico { width: 13px; height: 13px; flex: none; color: var(--faint); }
 #wdPop .chrome-wd-off { color: var(--faint); }
 #wdPop .chrome-wd-off .nm { font-weight: 400; font-style: italic; }
 .chrome-wd-foot { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 6px 2px; border-top: 1px solid var(--line); }
@@ -958,7 +943,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-wd-btn:disabled { opacity: .45; }
 .chrome-wd-use { color: var(--ink-on-accent); background: var(--amber); }
 .chrome-wd-use:hover:not(:disabled) { background: color-mix(in oklab, var(--amber) 88%, var(--text)); }
-#wdChip.chrome-wd-set { color: var(--text); }
+
+/* The workspace tag beside a conversation's title (src/chrome/WorkdirTag.tsx):
+   the folder it runs in, as a quiet chip -- a fact about the conversation, not
+   a control, so no hover state. */
+.chrome-wd-tag { display: inline-flex; align-items: center; gap: 5px; flex: none; max-width: 180px;
+  padding: 2px 8px; border-radius: 6px; font-size: 11.5px; color: var(--muted); background: var(--surface); }
+.chrome-wd-tag svg { width: 12px; height: 12px; flex: none; }
+.chrome-wd-tag > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The default folder is said, but said quietly: no fill, just the word. */
+.chrome-wd-tag.chrome-wd-default { background: none; color: var(--faint); padding-left: 2px; }
 
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
 /* The transcript stops being painted before it reaches the composer instead of
@@ -1913,6 +1907,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   max-width: calc(100vw - 16px); overflow: hidden; text-overflow: ellipsis;
 }
 .tipp[data-on="true"] { opacity: 1; }
+/* A sentence rather than a name: wrapped at a reading width, set a little
+   looser, instead of one line across the window (state/tooltip.ts). */
+.tipp[data-wrap="true"] { white-space: normal; max-width: 240px; line-height: 1.5; padding: 5px 8px; text-align: left; }
 
 /* The shared icon button: a quiet square that shows its verb on hover. */
 .icb {
@@ -2365,7 +2362,18 @@ textarea:focus, textarea:focus-visible,
 /* wraps instead of pushing the usage line past the edge on a narrow window */
 /* Pulled left of the field it sits under, so the first control's own padding
    lines its glyph up with the text above rather than with its box. */
-.under { display: flex; align-items: center; gap: 2px; margin: 6px 0 0 -6px; padding: 0; flex-wrap: wrap; }
+.under { display: flex; align-items: center; gap: 4px; margin: 8px 0 0 -4px; padding: 0; flex-wrap: wrap; }
+/* The "+" (src/chrome/PlusMenu.tsx): a square the size of the chips' line. */
+.plus { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--muted); }
+.plus:hover, .plus[aria-expanded="true"] { color: var(--text); background: var(--raised); }
+.plus svg { width: 16px; height: 16px; }
+/* The chips under the field read as words rather than as code: the value each
+   carries is a name from the catalogue or a model's display name. */
+.under .chip { font-family: var(--sans); font-size: 12px; padding: 4px 8px; border-radius: 8px; }
+.under .chip .pico { width: 14px; height: 14px; }
+.under .chip.model { color: var(--text); font-weight: 500; gap: 7px; }
+.under .chip.model .provider-icon { width: 15px; height: 15px; }
+.under .chip.model .chrome-model-caret { width: 12px; height: 12px; flex: none; opacity: .6; margin-left: -2px; }
 .tries { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .try {
   border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px;
@@ -2428,74 +2436,70 @@ textarea:focus, textarea:focus-visible,
 .model-picker-search .model-picker-title + svg {margin-left:6px}
 
 .mpick {
-  position: fixed; z-index: var(--z-picker); width: 520px; max-width: calc(100% - 32px);
+  position: fixed; z-index: var(--z-picker); width: 340px; max-width: calc(100% - 32px);
   border-radius: 12px; overflow: hidden;
-  display: grid; grid-template-rows: auto 262px auto; animation: up .16s ease both;
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto auto; animation: up .16s ease both;
 }
-.mpick .find { display: flex; align-items: center; gap: 8px; padding: 9px 12px;
-  border-bottom: 1px solid var(--line-soft); }
-.mpick .find input { flex: 1; min-width: 0; border: 0; outline: 0; background: none;
+.mpick .find { display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 14px;
+  border-bottom: 1px solid var(--line-soft); color: var(--faint); }
+.mpick .find svg { width: 14px; height: 14px; flex: none; }
+.mpick .find input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: none;
   font: inherit; font-size: 13px; color: var(--text); }
-.mpick .cols { display: grid; grid-template-columns: 168px 1fr; min-height: 0; }
-.mpick .provs { border-right: 1px solid var(--line-soft); overflow-y: auto; padding: 6px; }
-.mpick .model-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
-.mpick .model-toolbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  min-width: 0; padding: 9px 11px 8px; border-bottom: 1px solid var(--line-soft);
-  background: color-mix(in oklab, var(--raised) 42%, transparent);
-}
-.mpick .model-toolbar-copy { min-width: 0; display: grid; gap: 2px; }
-.mpick .model-toolbar-label {
-  color: var(--faint); font-size: 9.5px; font-weight: 600; letter-spacing: .08em;
-  line-height: 1.2; text-transform: uppercase;
-}
-.mpick .model-toolbar-model {
-  overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: 11px;
-  line-height: 1.25; text-overflow: ellipsis; white-space: nowrap;
-}
-.mpick .protocol-control { display: flex; align-items: center; gap: 7px; flex: none; }
-.mpick .protocol-control select {
-  width: 168px; max-width: 100%; min-height: 28px; padding: 4px 25px 4px 8px; border: 1px solid var(--line);
-  border-radius: 7px; outline: 0; background: var(--ink); color: var(--text); font: inherit;
-  font-size: 11px; cursor: pointer; color-scheme: light dark;
-}
-.mpick .protocol-control select:hover { border-color: var(--faint); }
-.mpick .protocol-control select:focus-visible { border-color: var(--amber); box-shadow: 0 0 0 2px color-mix(in oklab, var(--amber) 22%, transparent); }
-.mpick .models { min-height: 0; overflow-y: auto; padding: 6px; }
+.mpick .find input::placeholder { color: var(--faint); }
+/* One list, grouped by provider: the models a provider offers are only
+   comparable against each other, so each group carries its own head, and the
+   head is where the account's mark goes -- once per account, never per row. */
+.mpick .models { min-height: 0; max-height: 300px; overflow-y: auto; padding: 4px 6px 6px; }
+.mpick .model-group + .model-group { margin-top: 2px; }
+/* The last picks are set off from the accounts under them by a rule: they
+   belong to no one head, and without the line they read as a fourth account. */
+.mpick .model-recent { padding-bottom: 4px; border-bottom: 1px solid var(--line-soft); }
+.mpick .model-group-hd { display: flex; align-items: center; gap: 7px; padding: 9px 10px 3px;
+  font-size: 11.5px; font-weight: 500; color: var(--muted); }
+.mpick .model-group-hd .provider-icon { width: 13px; height: 13px; flex: none; }
+.mpick .model-group-hd .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mpick .row {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  padding: 7px 9px; border-radius: 7px; font-size: 13px; color: var(--text);
+  padding: 6px 10px; border-radius: 7px; font-size: 13px; color: var(--text);
 }
+/* The row that unfolds a group: an action in the list's own voice, muted. */
+.mpick .model-more .nm { color: var(--faint); font-family: var(--sans); font-size: 12px; }
 .mpick .row:hover { background: color-mix(in oklab, var(--text) 7%, transparent); }
-.mpick .provs .row.dim { opacity: .35; }
-.mpick .provs .row.dim:hover { background: none; }
-.mpick .row:has(> .model-provider-action[aria-selected="true"]) {
-  background: color-mix(in oklab, var(--text) 9%, transparent); }
 .mpick .row .nm { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .mpick .row .nm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mpick .provider-icon { width: 18px; height: 18px; }
-.mpick .row .ct { font-family: var(--mono); font-size: 10.5px; color: var(--faint); flex: none; }
-.mpick .row .tick { color: var(--amber); flex: none; }
-.mpick .models .row { font-family: var(--mono); font-size: 12px; }
-.mpick .models .row .sub { font-size: 10.5px; color: var(--faint); }
-.mpick .models .row .nm.named { font-family: var(--sans); font-size: 12.5px; }
-.mpick .models .row .model-tags { margin-left: auto; }
-.mpick .empty { padding: 18px 12px; font-size: 12.5px; color: var(--faint); text-align: center; }
+.mpick .row .ct, .mpick .model-group-hd .ct { font-size: 11px; color: var(--faint); flex: none;
+  font-variant-numeric: tabular-nums; }
+.mpick .row .tick { color: var(--amber); flex: none; font-size: 12px; }
+/* Names in the page's own face: a list of names is not code, and the mono face
+   made every row heavier than the head above it. */
+.mpick .models .row { font-size: 13px; }
+.mpick .empty { padding: 6px 12px 8px 10px; font-size: 12px; color: var(--faint); }
 /* The slot's name, where a settings row opened the picker; absent for the
    composer chip, whose own label already says what is being changed. */
 .mpick .model-slot { font-family: var(--disp); font-weight: 600; font-size: 13px; color: var(--text); }
 /* The row for an id the provider does not list yet, and the chip saying what
    the person is declaring it to be. */
 .mpick .model-typed { color: var(--amber); }
-.mpick .model-typed .nm { font-family: var(--mono); }
-.mpick .model-typed-hr { height: 1px; background: var(--line-soft); margin: 6px 4px; }
-.mpick .model-kind {
-  display: inline-flex; align-items: center; gap: 4px; flex: none; cursor: pointer;
-  padding: 1px 6px; border: 1px solid var(--line); border-radius: 99px;
-  font-family: var(--sans); font-size: 10.5px; color: var(--muted);
-}
-.mpick .model-kind:hover { border-color: var(--amber); color: var(--text); }
-.mpick .model-kind .model-tag { width: 11px; height: 11px; color: inherit; }
+.mpick .model-typed .nm { font-family: var(--mono); font-size: 12.5px; }
+/* The sub-agent tier, as one row of this picker: a setting of the same
+   conversation, drawn where the model is chosen rather than as a chip of its
+   own (state/tier.ts). */
+.mpick .model-tier { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 8px 12px 6px; border-top: 1px solid var(--line-soft); }
+.mpick .model-tier-k { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--faint); }
+.mpick .model-tier-k svg { width: 12px; height: 12px; flex: none; }
+/* The question mark: the row's one explanation, shown by the page's tooltip
+   on hover. Quieter than the label until pointed at. */
+.mpick .model-tier-help { display: inline-grid; place-items: center; width: 16px; height: 16px; margin-left: 1px;
+  border-radius: 50%; color: var(--faint); cursor: help; }
+.mpick .model-tier-help svg { width: 13px; height: 13px; }
+.mpick .model-tier-help:hover { color: var(--text); }
+/* The rungs wrap rather than overflow: the shipped catalogue is three, but a
+   deployment may declare more, and a 340px row cannot promise to hold them
+   in one line. */
+.mpick .model-seg { display: inline-flex; flex-wrap: wrap; flex: none; max-width: 100%; background: var(--raised); border-radius: 7px; padding: 2px; }
+.mpick .model-seg button { font-size: 11px; padding: 2px 9px; border-radius: 5px; color: var(--muted); }
+.mpick .model-seg button[aria-checked="true"] { background: var(--paper); color: var(--text); font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
 .mpick .foot { border-top: 1px solid var(--line-soft); padding: 7px 12px;
   display: flex; justify-content: space-between; align-items: center; }
 .mpick .foot button { font-size: 11.5px; color: var(--amber); }
@@ -2555,7 +2559,7 @@ textarea:focus, textarea:focus-visible,
    beside it read as one surface (see .main). */
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; flex: 1; }
 /* New-task state: no header title, the composer holds the centre line. */
-.chat[data-fresh] #title, .chat[data-fresh] #renameBtn { visibility: hidden; }
+.chat[data-fresh] #title, .chat[data-fresh] #wdTag, .chat[data-fresh] #renameBtn { visibility: hidden; }
 /* The landing page does not move the composer. It used to float it up to the
    centre at 640px with a hero lockup over it and five characters perched on
    it; the composer then jumped down and widened the moment the first message

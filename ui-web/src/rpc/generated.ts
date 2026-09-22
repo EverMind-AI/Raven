@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 194 methods, 109 component schemas.
+// 195 methods, 109 component schemas.
 
 /* eslint-disable */
 /**
@@ -3429,6 +3429,17 @@ export interface FsDirsResult {
    */
   entries: FsDirEntry[];
 }
+export interface FsPickDirParams {}
+export interface FsPickDirResult {
+  /**
+   * The folder chosen, absolute and resolved; absent when the dialog was dismissed.
+   */
+  path?: string;
+  /**
+   * Whether a session may be pinned to the chosen folder (see raven.agent.workdir); false with no path.
+   */
+  ok: boolean;
+}
 export interface FsReadParams {
   path: string;
   max_bytes?: number;
@@ -4844,6 +4855,7 @@ export interface RpcMethods {
   'channels.qr': { params: ChannelsQrParams; result: ChannelsQrResult };
   'fs.list': { params: FsListParams; result: FsListResult };
   'fs.dirs': { params: FsDirsParams; result: FsDirsResult };
+  'fs.pick_dir': { params: FsPickDirParams; result: FsPickDirResult };
   'fs.read': { params: FsReadParams; result: FsReadResult };
   'fs.upload': { params: FsUploadParams; result: FsUploadResult };
   'deck.templates.list': { params: DeckTemplatesListParams; result: DeckTemplatesListResult };
@@ -4981,6 +4993,7 @@ export const RPC_METHODS = [
   "fs.dirs",
   "fs.list",
   "fs.open",
+  "fs.pick_dir",
   "fs.read",
   "fs.reveal",
   "fs.upload",

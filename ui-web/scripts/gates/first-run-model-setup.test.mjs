@@ -22,7 +22,7 @@ import { moduleText } from '../module-harness.mjs'
 
 /* The three places the redirect is decided, as one text: which module a line
    sits in is not what this is about. */
-const wiring = moduleText('app/boot.ts') + moduleText('app/install.ts') + moduleText('features/model/chip.ts')
+const wiring = moduleText('app/boot.ts') + moduleText('app/install.ts') + moduleText('chrome/ModelChip.tsx')
 
 describe('first-run model setup', () => {
   it('opens the wizard on a first run, and records the flag the redirect reads', () => {

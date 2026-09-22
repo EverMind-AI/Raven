@@ -1,183 +1,58 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`the capability icons > keeps its rendered shape 1`] = `
+exports[`the model picker > keeps its rendered shape 1`] = `
 "div.mpick
-  svg.model-tag-defs
-    defs
-      symbol#mtag-text
-        path
-        path
-      symbol#mtag-reasoning
-        path
-        path
-      symbol#mtag-function-call
-        path
-      symbol#mtag-structured-output
-        rect
-        path
-      symbol#mtag-image-recognition
-        rect
-        path
-        circle
-      symbol#mtag-audio-recognition
-        rect
-        path
-      symbol#mtag-video-recognition
-        rect
-        path
-      symbol#mtag-file-input
-        path
-        path
-      symbol#mtag-image-generation
-        rect
-        path
-        path
-      symbol#mtag-audio-generation
-        path
-        path
-      symbol#mtag-video-generation
-        rect
-        path
-        path
-      symbol#mtag-embedding
-        path
-        path
-        circle
-        circle
-      symbol#mtag-rerank
-        path
-        path
-      symbol#mtag-computer-use
-        rect
-        path
   div.find
-    span
+    svg
+      path
     input
-  div.cols
-    div.provs
-      div.row.model-provider-row
-        button.model-provider-action
+  div.models
+    div.model-group[data-provider=minimax]
+      div.model-group-hd
+        img.provider-icon.mark-light[data-provider=minimax]
+        img.provider-icon.mark-dark[data-provider=minimax]
         span.nm
-          img.provider-icon[data-provider=anthropic][data-tone=hybrid]
-          span
         span.ct
-        span.provider-status.on
-    div.model-pane
-      div.models
-        button.row
-          span.nm.named
-          span.model-tags
-            svg.model-tag
-              title
-              use
-            svg.model-tag
-              title
-              use
-            svg.model-tag
-              title
-              use
-            span.model-window
-        button.row
-          span.nm
+      button.row
+        span.nm
+        span.tick
+      button.row
+        span.nm
+    div.model-group[data-provider=anthropic]
+      div.model-group-hd
+        img.provider-icon[data-provider=anthropic][data-tone=hybrid]
+        span.nm
+        span.ct
+      button.row
+        span.nm
+      button.row
+        span.nm
+    div.model-group[data-provider=empty]
+      div.model-group-hd
+        span.provider-icon.fallback
+        span.nm
+        span.ct
+      div.empty
   div.foot
     button"
 `;
 
-exports[`the model picker > keeps its rendered shape 1`] = `
+exports[`the names > keeps its rendered shape 1`] = `
 "div.mpick
-  svg.model-tag-defs
-    defs
-      symbol#mtag-text
-        path
-        path
-      symbol#mtag-reasoning
-        path
-        path
-      symbol#mtag-function-call
-        path
-      symbol#mtag-structured-output
-        rect
-        path
-      symbol#mtag-image-recognition
-        rect
-        path
-        circle
-      symbol#mtag-audio-recognition
-        rect
-        path
-      symbol#mtag-video-recognition
-        rect
-        path
-      symbol#mtag-file-input
-        path
-        path
-      symbol#mtag-image-generation
-        rect
-        path
-        path
-      symbol#mtag-audio-generation
-        path
-        path
-      symbol#mtag-video-generation
-        rect
-        path
-        path
-      symbol#mtag-embedding
-        path
-        path
-        circle
-        circle
-      symbol#mtag-rerank
-        path
-        path
-      symbol#mtag-computer-use
-        rect
-        path
   div.find
-    span
+    svg
+      path
     input
-  div.cols
-    div.provs
-      div.row.model-provider-row
-        button.model-provider-action
+  div.models
+    div.model-group[data-provider=anthropic]
+      div.model-group-hd
+        img.provider-icon[data-provider=anthropic][data-tone=hybrid]
         span.nm
-          img.provider-icon.mark-light[data-provider=minimax]
-          img.provider-icon.mark-dark[data-provider=minimax]
-          span
         span.ct
-        span.tick
-        span.provider-status.on
-      div.row.model-provider-row
-        button.model-provider-action
+      button.row
         span.nm
-          img.provider-icon[data-provider=anthropic][data-tone=hybrid]
-          span
-        span.ct
-        span.provider-status.on
-      div.row.model-provider-row.dim
-        button.model-provider-action
+      button.row
         span.nm
-          span.provider-icon.fallback
-          span
-        span.ct
-        span.provider-status.on
-    div.model-pane
-      div.model-toolbar
-        div.model-toolbar-copy
-          span.model-toolbar-label
-          span.model-toolbar-model
-        label.protocol-control
-          select
-            option
-            option
-            option
-            option
-      div.models
-        button.row
-          span.nm
-          span.tick
-        button.row
-          span.nm
   div.foot
     button"
 `;

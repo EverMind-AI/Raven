@@ -200,7 +200,7 @@ describe('rail island', () => {
     expect(screen.getByText('gui.rail.manage')).toBeTruthy()
   })
 
-  it('splits the rest on whether the conversation was pinned to a folder', () => {
+  it('keeps every unpinned conversation in one recent group, folder or not', () => {
     install({
       rows: [
         row({ id: 'a', title: 'thesis edits', workdir: '/Users/me/thesis' }),
@@ -210,38 +210,15 @@ describe('rail island', () => {
       ]
     })
     const host = mount()
-    /* Two groups for the rest: the folder one first, and the other renamed to
-       say what it is now that it is no longer all of them. */
-    expect(screen.getByText('gui.rail.workdir')).toBeTruthy()
-    expect(screen.getByText('gui.rail.no_workdir')).toBeTruthy()
-    expect(screen.queryByText('gui.rail.recent')).toBeNull()
+    /* One list of recent work: the folder a conversation runs in is said
+       beside its title once it is open, not as a second heading here, and
+       not as a tag on the row. A pinned session stays in the pinned group. */
     const groups = [...host.querySelectorAll('.grp .lab')].map((n) => n.textContent)
-    expect(groups).toEqual(['gui.rail.pinned', 'gui.rail.from_cron', 'gui.rail.workdir', 'gui.rail.no_workdir'])
-    /* Each pinned row wears its folder's name, with the whole path on hover;
-       either separator. A pinned session stays in the pinned group. */
-    const tags = [...host.querySelectorAll('.sess .rail-wdt')].map((n) => [n.textContent, n.getAttribute('title')])
-    expect(tags).toEqual([['thesis', '/Users/me/thesis'], ['thesis', '/Users/me/thesis'], ['notes', 'C:\\work\\notes']])
+    expect(groups).toEqual(['gui.rail.pinned', 'gui.rail.from_cron', 'gui.rail.recent'])
+    expect(host.querySelectorAll('.sess .rail-wdt').length).toBe(0)
     expect(host.querySelectorAll('.sess').length).toBe(4)
-  })
-
-  it('keeps the old recent heading while nothing is pinned to a folder', () => {
-    install({ rows: [row(), row({ id: 'b', title: 'another' })] })
-    mount()
-    expect(screen.getByText('gui.rail.recent')).toBeTruthy()
-    expect(screen.queryByText('gui.rail.workdir')).toBeNull()
-    expect(screen.queryByText('gui.rail.no_workdir')).toBeNull()
-  })
-
-  it('folds the folder group on its own key', () => {
-    install({ rows: [row({ id: 'a', title: 'thesis edits', workdir: '/w/thesis' }), row({ id: 'b', title: 'chat' })] })
-    const host = mount()
-    const head = [...host.querySelectorAll<HTMLElement>('.grp')].find((g) => g.querySelector('.lab')?.textContent === 'gui.rail.workdir')!
-    act(() => { head.click() })
-    expect(head.getAttribute('aria-expanded')).toBe('false')
-    expect(screen.queryByText('thesis edits')).toBeNull()
-    expect(screen.getByText('chat')).toBeTruthy()
-    act(() => { head.click() })
     expect(screen.getByText('thesis edits')).toBeTruthy()
+    expect(screen.getByText('notes')).toBeTruthy()
   })
 
   it('marks only the current session, and the new button when nothing is', () => {

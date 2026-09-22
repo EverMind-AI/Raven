@@ -23,8 +23,7 @@ function wire(): void {
 
 /* The chip and the popover are the page root's now (src/chrome/PermChip.tsx,
    src/chrome/PermPopover.tsx), so the fixture is the one band they render into --
-   the composer card comes with them, and the card is what the popover has to
-   open clear of. */
+   the composer card comes with them, and the popover hangs off the chip inside it. */
 function markup(): void {
   document.body.innerHTML = '<div class="dock"></div>'
 }
@@ -48,7 +47,7 @@ afterEach(() => {
 
 const chip = (): HTMLElement => document.getElementById('permChip')!
 const pop = (): HTMLElement => document.getElementById('permPop')!
-const rows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('#permList .prow')]
+const rows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('#permPop .prow')]
 
 describe('the permission chip', () => {
   it('defaults to smart, the product default the gate ships with', async () => {
@@ -115,51 +114,23 @@ describe('the permission popover', () => {
     /* Only the risky tier wears the class, and only the chosen one has a tick. */
     expect(rows().filter((r) => r.classList.contains('risk')).length).toBe(1)
     expect(pop().querySelectorAll('svg.tick').length).toBe(1)
+    /* Names only: the sentence behind each is a hover away, and there is no
+       heading and no note -- the chip already says what is being chosen. */
+    expect(rows().map((r) => r.title)).toEqual(['gui.perm.ask_h', 'gui.perm.smart_h', 'gui.perm.full_h'])
+    expect(pop().querySelector('.hd, .note, .sub')).toBeNull()
   })
 
-  it('reparents the popover to the body so fixed positioning means the viewport', async () => {
+  it('hangs off the chip inside the card, and measures nothing', async () => {
     const perm = await load()
-    expect(pop().parentElement!.className).toBe('dock-in')
+    /* The popover shares an anchor with the chip: the stylesheet hangs it off the
+       chip's top edge, so nothing here places it and nothing moves it out of
+       the card the way the fixed-coordinate popovers before it were moved. */
+    expect(pop().parentElement!.className).toBe('chrome-anch')
+    expect(pop().previousElementSibling).toBe(chip())
     perm.open()
-    /* The composer card animates, which makes it a containing block and quietly
-       re-bases position: fixed against it. */
-    expect(pop().parentElement).toBe(document.body)
-    expect(pop().style.position).toBe('fixed')
-    expect(pop().style.zIndex).toBe('46')
-    expect(pop().style.right).toBe('auto')
-    expect(pop().style.bottom).toBe('auto')
-  })
-
-  it('clamps its own left edge into the viewport', async () => {
-    const perm = await load()
-    perm.open()
-    /* happy-dom measures everything as zero, so the useful assertion is the
-       floor: the popover never lands at a negative offset. */
-    expect(parseFloat(pop().style.left)).toBeGreaterThanOrEqual(8)
-    expect(parseFloat(pop().style.top)).toBeGreaterThanOrEqual(8)
-  })
-
-  it('opens clear of the composer card, not clear of the chip on it', async () => {
-    /* happy-dom measures everything as zero, so the two boxes this turns on are
-       given the rects they have on the running page: the card at 436..562 and
-       the chip on its bottom bar at 518. Raised off the chip -- which is what
-       this did -- the popover's lower edge landed at 512 and its body covered the
-       field, the attachment row and anything staged in them. */
-    const perm = await load()
-    const card = document.querySelector('.dock-in')!
-    const box = (el: Element, top: number, bottom: number, height: number): void => {
-      el.getBoundingClientRect = () =>
-        ({ top, bottom, left: 40, right: 40, width: 0, height, x: 40, y: top } as DOMRect)
-    }
-    box(card, 436, 562, 126)
-    box(chip(), 518, 539, 21)
-    /* The popover's own height, which happy-dom would otherwise report as 0 and
-       leave the assertion true for the wrong reason. */
-    box(pop(), 0, 0, 240)
-    perm.open()
-    /* 436 - 240 - 6. Above the card's top edge, so nothing of the composer is
-       behind it -- and well above the chip's 518, which is the whole point. */
-    expect(parseFloat(pop().style.top)).toBe(190)
+    expect(pop().parentElement!.className).toBe('chrome-anch')
+    expect(pop().closest('.dock-in')).not.toBeNull()
+    expect(pop().getAttribute('style')).toBeNull()
   })
 
   it('picks a tier, stores it, repaints the chip and closes', async () => {
@@ -205,20 +176,22 @@ describe('the permission popover', () => {
     localStorage.setItem = real
   })
 
-  it('does nothing at all when the markup is not in the document', async () => {
+  it('reaches for nothing in the document, so it runs with the markup gone', async () => {
     const perm = await load()
     document.body.innerHTML = ''
     expect(() => {
       perm.draw()
       perm.open()
-      perm.close()
     }).not.toThrow()
+    /* The store is the popover's state; the markup only shows it. */
+    expect(perm.isOpen()).toBe(true)
+    perm.close()
     expect(perm.isOpen()).toBe(false)
   })
 })
 
 describe('persisting a pick', () => {
-  const rows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('#permList .prow')]
+  const rows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('#permPop .prow')]
 
   it('commits the chip only after the write is acknowledged', async () => {
     const perm = await load()

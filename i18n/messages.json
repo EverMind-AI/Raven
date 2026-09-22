@@ -1312,8 +1312,8 @@
       "zh": "Hi，我是 Raven Agent"
     },
     "gui.composer_ph": {
-      "en": "Do anything",
-      "zh": "想做什么都可以"
+      "en": "Describe your task, or have Raven build an agent for it",
+      "zh": "描述你的任务，或让 Raven 搭一个智能体来做"
     },
     "gui.compress.done": {
       "en": "Archived {n} messages - {before} to {after} tokens",
@@ -3356,36 +3356,32 @@
       "zh": "设置"
     },
     "gui.perm.ask": {
-      "en": "Ask Approval",
-      "zh": "请求批准"
+      "en": "Approve each step",
+      "zh": "逐项审批"
     },
     "gui.perm.ask_h": {
-      "en": "Reading is allowed; everything else asks you first.",
-      "zh": "只允许读，其他操作请求审批"
+      "en": "Reads run on their own; everything else asks you first.",
+      "zh": "只读操作直接执行，其余每一步先问你"
     },
     "gui.perm.full": {
-      "en": "Full Access",
+      "en": "Full access",
       "zh": "完全访问"
     },
     "gui.perm.full_h": {
-      "en": "No prompts, and it may run dangerous operations; deny rules still hold.",
-      "zh": "不弹审批，可能执行危险操作；禁止规则仍然生效"
+      "en": "Never asks and may run dangerous operations; deny rules still hold.",
+      "zh": "全程不问，可能执行危险操作；禁止规则仍然生效"
     },
     "gui.perm.smart": {
-      "en": "Smart",
+      "en": "Smart mode",
       "zh": "智能模式"
     },
     "gui.perm.smart_h": {
-      "en": "The model decides when to ask for approval.",
-      "zh": "模型决定是否请求审批"
+      "en": "Routine actions run on their own; risky ones ask you first.",
+      "zh": "常规操作直接执行，有风险的操作才问你"
     },
     "gui.perm.title": {
-      "en": "Permission mode",
-      "zh": "权限模式"
-    },
-    "gui.picker.empty_provider": {
-      "en": "No models under this account",
-      "zh": "这个账号下还没有模型"
+      "en": "Permission",
+      "zh": "权限"
     },
     "gui.picker.empty_kind": {
       "en": "No {kind} model added here yet",
@@ -3414,26 +3410,6 @@
     "gui.picker.search_ph": {
       "en": "Search models...",
       "zh": "搜索模型…"
-    },
-    "gui.picker.protocol": {
-      "en": "API route",
-      "zh": "API 接入方式"
-    },
-    "gui.picker.protocol_auto": {
-      "en": "Auto · {protocol}",
-      "zh": "自动 · {protocol}"
-    },
-    "gui.picker.protocol_chat": {
-      "en": "OpenAI Chat Completions",
-      "zh": "OpenAI Chat Completions"
-    },
-    "gui.picker.protocol_responses": {
-      "en": "OpenAI Responses",
-      "zh": "OpenAI Responses"
-    },
-    "gui.picker.protocol_anthropic": {
-      "en": "Anthropic Messages",
-      "zh": "Anthropic Messages"
     },
     "gui.pill.bottom": {
       "en": "back to bottom",
@@ -3875,10 +3851,6 @@
       "en": "Nothing here yet",
       "zh": "暂无会话"
     },
-    "gui.rail.no_workdir": {
-      "en": "Default workspace",
-      "zh": "默认工作区"
-    },
     "gui.rail.pinned": {
       "en": "Pinned",
       "zh": "已固定"
@@ -3886,10 +3858,6 @@
     "gui.rail.recent": {
       "en": "Recent",
       "zh": "最近"
-    },
-    "gui.rail.workdir": {
-      "en": "Pinned to a folder",
-      "zh": "指定工作区"
     },
     "gui.rail.search_hits": {
       "en": "Results - {n}",
@@ -4331,20 +4299,16 @@
       "en": "Home",
       "zh": "主目录"
     },
-    "gui.wd.locked": {
-      "en": "The workspace is fixed once the conversation starts",
-      "zh": "对话开始后工作区不可更改"
-    },
     "gui.wd.loading": {
       "en": "Reading the folder...",
       "zh": "正在读取…"
     },
     "gui.wd.none": {
-      "en": "Default",
-      "zh": "默认"
+      "en": "Default folder",
+      "zh": "默认目录"
     },
     "gui.wd.none_h": {
-      "en": "Work in the default directory",
+      "en": "Work in the default folder",
       "zh": "在默认目录中工作"
     },
     "gui.wd.not_live": {
@@ -4352,12 +4316,8 @@
       "zh": "离线预览无法浏览文件夹"
     },
     "gui.wd.open": {
-      "en": "Open folder...",
-      "zh": "打开文件夹…"
-    },
-    "gui.wd.recent": {
-      "en": "Recent",
-      "zh": "最近"
+      "en": "Choose a local folder...",
+      "zh": "选择本地文件夹…"
     },
     "gui.wd.title": {
       "en": "Workspace",
@@ -5396,24 +5356,24 @@
       "zh": "—"
     },
     "gui.tier.title": {
-      "en": "Subagent effort",
-      "zh": "子智能体力度"
+      "en": "Effort",
+      "zh": "力度"
     },
     "gui.tier.scope": {
-      "en": "The tier in force is offered to the subagents this conversation dispatches, clamped to what each one supports.",
-      "zh": "当前这一档会下发给本会话派出的子智能体，并按每个子智能体支持的档位钳定。"
+      "en": "Reasoning depth, sub-agent effort and the rest follow this setting. This conversation only.",
+      "zh": "模型思考深度、子智能体运行强度等都跟着这一档走。只作用于本会话。"
     },
     "gui.tier.failed": {
       "en": "Could not switch to {name}",
       "zh": "切换到 {name} 没有成功"
     },
     "gui.tier.mode": {
-      "en": "Session mode",
-      "zh": "会话模式"
+      "en": "Mode",
+      "zh": "模式"
     },
     "gui.tier.mode_scope": {
-      "en": "The tier in force is not a built-in one, so it is not offered to subagents.",
-      "zh": "当前这一档不是内置的三档之一，不会下发给子智能体。"
+      "en": "This is a deployment's own mode, not a built-in effort level; the effort policy does not apply.",
+      "zh": "当前这档不是内置力度档，力度策略不生效。"
     },
     "gui.imodel.title": {
       "en": "Model",
@@ -5458,10 +5418,6 @@
     "gui.imode.failed": {
       "en": "Could not change this instance's effort",
       "zh": "改这个实例的力度没有成功"
-    },
-    "gui.perm.note": {
-      "en": "Takes effect from the next tool call.",
-      "zh": "下一个工具调用起生效。"
     },
     "gui.confirm.deny_stop": {
       "en": "Deny and stop",
@@ -7830,6 +7786,54 @@
     "gui.tasks.copied_answer": {
       "en": "Answer copied",
       "zh": "已复制这次的回答"
+    },
+    "gui.composer.ph_session": {
+      "en": "Continue the conversation...",
+      "zh": "继续对话…"
+    },
+    "gui.composer.ph_busy": {
+      "en": "Continue the conversation; it is sent once this turn ends",
+      "zh": "继续对话，输入会排队到本轮结束再发"
+    },
+    "gui.plus.add": {
+      "en": "Add",
+      "zh": "添加"
+    },
+    "gui.plus.upload": {
+      "en": "Upload files",
+      "zh": "上传文件"
+    },
+    "gui.plus.template": {
+      "en": "Pick a deck template",
+      "zh": "选一个 PPT 模板"
+    },
+    "gui.tier.medium": {
+      "en": "Light",
+      "zh": "轻"
+    },
+    "gui.tier.high": {
+      "en": "Standard",
+      "zh": "标准"
+    },
+    "gui.tier.max": {
+      "en": "Max",
+      "zh": "全力"
+    },
+    "gui.picker.recent": {
+      "en": "Recent",
+      "zh": "最近使用"
+    },
+    "gui.picker.show_all": {
+      "en": "Show all {n}",
+      "zh": "显示全部 {n} 个"
+    },
+    "gui.wd.open_remote": {
+      "en": "Browse the host's folders...",
+      "zh": "浏览主机上的文件夹…"
+    },
+    "gui.wd.picking": {
+      "en": "Choose the folder in the dialog that opened...",
+      "zh": "在弹出的窗口里选择文件夹…"
     }
   }
 }
