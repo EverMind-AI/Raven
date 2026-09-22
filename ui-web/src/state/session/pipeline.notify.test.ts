@@ -359,16 +359,6 @@ describe('the conversation a request is filed under', () => {
     ])
   })
 
-  it('sends the sentence typed after a refusal on as the reader\'s next message', async () => {
-    const h = await harness({ current: 'tui:open' })
-    h.pipeline.approvalRequest({ approval_id: 'a1', command: 'rm -rf', conversation_id: 'tui:asker' })
-
-    h.sheet('approval').handlers!.onNote!('use git clean instead')
-
-    expect(h.seen.said).toEqual(['use git clean instead'])
-    /* Not an answer: the refusal already went, and this is a message. */
-    expect(h.seen.sent).toEqual([])
-  })
 
   it('waits and resumes on the conversation a clarify names', async () => {
     const h = await harness({ current: 'tui:open' })

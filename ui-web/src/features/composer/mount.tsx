@@ -1,7 +1,6 @@
 import { createRoot } from 'react-dom/client'
 
 import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
-import { ElsewhereBar, installElsewhere } from './ElsewhereBar'
 import * as store from './store'
 import './styles.css'
 import { open as openTemplates } from './templates'
@@ -64,17 +63,6 @@ function ensure(): void {
     const dock = ta.closest('.dock-in')
     if (dock) dock.insertBefore(atts, dock.querySelector('.field'))
   }
-  /* The line that says another conversation is waiting: not in the markup
-     either, and it belongs above the sheets, at the top of the dock. */
-  let elsewhere = document.getElementById('cpElsewhere')
-  if (!elsewhere) {
-    elsewhere = document.createElement('div')
-    elsewhere.className = 'cp-elsewhere'
-    elsewhere.id = 'cpElsewhere'
-    elsewhere.hidden = true
-    const dock = ta.closest('.dock')
-    if (dock) dock.insertBefore(elsewhere, dock.firstChild)
-  }
   liveHost = document.createElement('div')
   liveHost.dataset.cvl = '1'
   liveHost.style.display = 'contents'
@@ -82,14 +70,11 @@ function ensure(): void {
   const ar = createRoot(atts)
   const sr = createRoot(slashList)
   const lr = createRoot(liveHost)
-  const er = createRoot(elsewhere)
   qr.render(<QueueList />)
   ar.render(<AttTray />)
   sr.render(<SlashList />)
   lr.render(<TurnLive afterPaint={syncLiveHost} />)
-  installElsewhere()
-  er.render(<ElsewhereBar host={elsewhere} />)
-  roots = [qr, ar, sr, lr, er]
+  roots = [qr, ar, sr, lr]
   store.subscribe(syncLiveHost)
 }
 

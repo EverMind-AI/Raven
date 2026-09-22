@@ -15,7 +15,7 @@
 
 import { closeApproval as approvalClose, open as approveSheet, openApproval as approvalSheet } from '../../features/composer/approve'
 import { close as clarifyClose, open as clarifySheet } from '../../features/composer/clarify'
-import { drawMeter, goPaint as goState, say as composerSay } from '../../features/composer/mount'
+import { drawMeter, goPaint as goState } from '../../features/composer/mount'
 import { touchSession } from '../../features/rail/source'
 import { draw as sessionDraw } from '../../features/rail/store'
 import { t } from '../../i18n/t'
@@ -164,9 +164,6 @@ export function approvalRequest(frame: unknown): void {
          this grant put on disk and nothing the reader wrote themselves. */
       onRevoke: () => gateway().call('approval.revoke', { approval_id: p.approval_id })
         .then((r) => !!(r as { ok?: boolean } | null)?.ok, () => false),
-      /* A sentence typed after a refusal goes on as the reader's next message:
-         the refusal itself has already reached the model. */
-      onNote: (text: string) => composerSay(text),
     },
     owner,
   )

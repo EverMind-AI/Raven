@@ -1,8 +1,9 @@
 /* The permission gate's approval sheet: why the agent is asking, what it wants
- * to do, and the three answers -- deny, allow always (only when the runtime
- * offered a rule to save), allow once. After an answer the sheet lands: one
- * line saying what happened, with the undo a saved rule earns and the note a
- * refusal invites.
+ * to do, and the three answers -- deny, the broader grant the request can
+ * carry (a saved rule when the runtime offered one, the conversation
+ * otherwise), allow once. An answer that leaves something to do leaves a line
+ * behind: a saved rule and its undo, or the news that the engine never took
+ * the answer.
  *
  * The sheet element, the answers and the document key handler belong to
  * features/composer/approve.ts; this renders its children, for the reason
@@ -10,11 +11,9 @@
  * reads the catalogue once when the request lands, so a language flip does not
  * re-word a question already on screen.
  */
-import { useEffect, useRef } from 'react'
 
 import { SheetOption } from '../../chrome/SheetRack'
 import { SheetHead } from './AskApproveSheet'
-import { composing } from './store'
 
 import type { SheetOptionRow } from '../../chrome/SheetRack'
 import type { JSX } from 'react'
@@ -113,46 +112,21 @@ export function GateSheet({ kind, evidence, command, words, opts, onDeny }: Gate
 export interface LandedWords {
   readonly text: string
   readonly undo?: string
-  readonly notePh?: string
 }
 
 export interface LandedProps {
   readonly words: LandedWords
   /** Takes back the rule a saved grant wrote. */
   readonly onUndo?: () => void
-  /** Sends the sentence typed after a refusal. */
-  readonly onNote?: (text: string) => void
-  /** Called on every keystroke in the note field, so the sheet's own clock is
-      put back: a reader still typing has not finished, and taking the field
-      away under them loses the sentence with it. */
-  readonly onTyping?: () => void
 }
 
-/* What the sheet becomes once answered. The note field is uncontrolled and
-   listened to natively, for the reasons ClarifySheet gives: a component owning
-   the value re-renders a field the reader is typing into, and the keydown has
-   to stop at the input so the page's shortcuts do not read what is typed. */
-export function LandedSheet({ words, onUndo, onNote, onTyping }: LandedProps): JSX.Element {
-  const field = useRef<HTMLInputElement | null>(null)
-
-  useEffect(() => {
-    const el = field.current
-    if (!el || !onNote) return undefined
-    const onKeyDown = (e: KeyboardEvent): void => {
-      e.stopPropagation()
-      onTyping?.()
-      if (composing(e)) return
-      if (e.key === 'Enter' && el.value.trim()) onNote(el.value.trim())
-    }
-    el.addEventListener('keydown', onKeyDown)
-    return () => el.removeEventListener('keydown', onKeyDown)
-  }, [onNote, onTyping])
-
+/* What the sheet becomes once answered: one line, and the button that takes
+   the answer back where there is one. */
+export function LandedSheet({ words, onUndo }: LandedProps): JSX.Element {
   return (
     <div className="cp-land" role="status">
       <span className="cp-land-text">{words.text}</span>
       {onUndo && words.undo ? <button className="cp-undo" onClick={onUndo}>{words.undo}</button> : null}
-      {onNote ? <input className="cp-note" placeholder={words.notePh} aria-label={words.notePh} ref={field} /> : null}
     </div>
   )
 }

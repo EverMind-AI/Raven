@@ -8,7 +8,7 @@ import * as pageStore from '../../state/page'
 import { _resetForTests as draftsReset } from '../../state/sheetDrafts'
 import { _resetForTests, add as rackAdd, forget, remove as rackRemove, session, sync } from '../../state/sheetRack'
 import { mountPageRoot } from '../../test/pageRoot'
-import { _resetForTests as approveReset, closeApproval, LANDED_MS, open, openApproval } from './approve'
+import { _resetForTests as approveReset, closeApproval, open, openApproval } from './approve'
 
 import type { ApprovalHandlers } from './approve'
 
@@ -63,7 +63,7 @@ describe('the approval sheet', () => {
   it('marks itself as asking, so whatever else is docked can step aside', () => {
     /* The reader cannot get on until they answer this, and the rack is shared --
        a running graph is tall enough to push the question below the fold. The
-       rack passes the mark on through `watchAsking`. */
+       sweeps read the mark to know what they may replace. */
     open('rm -rf build/')
 
     expect(sheets()[0]!.dataset.asks).toBe('1')
@@ -387,14 +387,27 @@ describe('the permission approval sheet', () => {
     expect(sheets()[0]!.dataset.asks).toBe('1')
   })
 
-  it('offers deny first and focused, allow once last, and the saved rule only with a suggestion', () => {
+  it('offers deny first and focused, allow once last, and one broader grant between them', () => {
+    /* No rule can be written for this one, so the middle answer is the grant
+       that lasts as long as the conversation -- the only thing that stops the
+       same question repeating through a task. */
     openApproval(base, handlers())
-    expect(opts().map((b) => b.textContent)).toEqual(['1gui.confirm.deny', '2gui.confirm.allow'])
+    expect(opts().map((b) => b.textContent)).toEqual(
+      ['1gui.confirm.deny', '2gui.confirm.allow_session', '3gui.confirm.allow'])
     expect(opts()[0]!.className).toContain('go')
     expect(document.activeElement).toBe(opts()[0])
 
+    /* A rule can be written for this one, and it takes that middle slot rather
+       than adding a fourth answer beside it. */
     openApproval(suggested, handlers())
-    expect(opts().map((b) => b.textContent)).toEqual(['1gui.confirm.deny', '2gui.confirm.always', '3gui.confirm.allow'])
+    expect(opts().map((b) => b.textContent)).toEqual(
+      ['1gui.confirm.deny', '2gui.confirm.always', '3gui.confirm.allow'])
+  })
+
+  it('sends the session grant the engine knows by name', () => {
+    openApproval(base, handlers())
+    opts()[1]!.click()
+    expect(said).toEqual([['allow_session', '', undefined]])
   })
 
   /* The one sweep that could still strand a turn. A confirm request arriving on
@@ -418,29 +431,6 @@ describe('the permission approval sheet', () => {
   /* The landed sheet after a refusal carries a field. A reader typing into it
      for longer than the linger would have watched it vanish mid-sentence, with
      nothing sent and the words gone. */
-  it('keeps the note field up while it is still being typed into', () => {
-    vi.useFakeTimers()
-    try {
-      const said: string[] = []
-      openApproval(base, handlers({ onNote: (text) => said.push(text) }))
-      opts()[0]!.click()
-
-      const field = () => document.querySelector<HTMLInputElement>('.cp-note')
-      expect(field()).toBeTruthy()
-
-      vi.advanceTimersByTime(10_000)
-      field()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }))
-      vi.advanceTimersByTime(10_000)
-      expect(field()).toBeTruthy()
-
-      field()!.value = 'it deletes the wrong file'
-      field()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-      expect(said).toEqual(['it deletes the wrong file'])
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
   /* The gate cuts an oversized account down to what a person reads
      (PermissionGate._clamped) and marks it. Rendering the clipped value without
      the mark is the one thing the cap must not cause: the reader would answer
@@ -496,21 +486,21 @@ describe('the permission approval sheet', () => {
     expect(document.querySelector('.cp-why')!.textContent).toBe('gui.confirm.why.delete_command|Raven')
   })
 
-  it('answers at once and lands: allow once says so and leaves after a while', () => {
-    vi.useFakeTimers()
-    try {
-      openApproval(base, handlers())
-      opts()[1]!.click()
-      expect(said).toEqual([['allow', '', undefined]])
-      expect(document.querySelector('.csheet[role="dialog"]')).toBeNull()
-      expect(landed()!.textContent).toBe('gui.confirm.land.once')
-      /* Landed, not asking: the rail's light and the elsewhere line go out. */
-      expect(sheets()[0]!.dataset.asks).toBeUndefined()
-      vi.advanceTimersByTime(LANDED_MS + 1)
-      expect(sheets().length).toBe(0)
-    } finally {
-      vi.useRealTimers()
-    }
+  it('answers at once and leaves nothing behind when there is nothing to do', () => {
+    openApproval(base, handlers())
+    opts()[2]!.click()
+    expect(said).toEqual([['allow', '', undefined]])
+    /* The sheet going is the receipt. A line that only repeats the press is one
+       more thing to read, and the rack is where the reader is trying to work. */
+    expect(sheets().length).toBe(0)
+    expect(landed()).toBeNull()
+  })
+
+  it('leaves nothing behind after a refusal either', () => {
+    openApproval(base, handlers())
+    opts()[0]!.click()
+    expect(said).toEqual([['deny', '', undefined]])
+    expect(sheets().length).toBe(0)
   })
 
   it('sends the suggested rule with a saved grant, and the landed sheet can take it back', async () => {
@@ -537,21 +527,6 @@ describe('the permission approval sheet', () => {
     expect(landed()!.textContent).toBe('gui.confirm.land.revoke_failed')
   })
 
-  it('lands a refusal with a place for a sentence, sent on as the next message', () => {
-    const notes: string[] = []
-    openApproval(base, handlers({ onNote: (text: string) => { notes.push(text) } }))
-    opts()[0]!.click()
-    expect(said).toEqual([['deny', '', undefined]])
-    expect(landed()!.querySelector('.cp-land-text')!.textContent).toBe('gui.confirm.land.deny')
-
-    const note = landed()!.querySelector<HTMLInputElement>('.cp-note')!
-    note.value = ' use git clean instead '
-    note.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    expect(notes).toEqual(['use git clean instead'])
-    expect(landed()!.textContent).toBe('gui.confirm.land.deny_note')
-    expect(landed()!.querySelector('.cp-note')).toBeNull()
-  })
-
   it('reads Escape and the digits, deny being the default', () => {
     openApproval(fresh(suggested), handlers())
     key('Escape')
@@ -564,7 +539,7 @@ describe('the permission approval sheet', () => {
 
   it('answers once, whichever door is used twice', () => {
     openApproval(base, handlers())
-    const [deny, allow] = opts()
+    const [deny, , allow] = opts()
     allow!.click()
     deny!.click()
     key('Escape')
@@ -580,7 +555,7 @@ describe('the permission approval sheet', () => {
     expect(said).toEqual([])
     setCurrent('a')
     sync()
-    key('2')
+    key('3')
     expect(said.map(([c]) => c)).toEqual(['allow'])
   })
 
@@ -590,14 +565,14 @@ describe('the permission approval sheet', () => {
     expect(sheets().length).toBe(0)
     expect(said).toEqual([])
 
-    openApproval(base, handlers())
+    openApproval(suggested, handlers())
     opts()[1]!.click()
-    closeApproval('ap-1')
+    closeApproval('ap-s')
     expect(landed()).not.toBeNull()
   })
 
   it('takes a landed sheet down with the next request in the same conversation', () => {
-    openApproval(base, handlers())
+    openApproval(suggested, handlers())
     opts()[1]!.click()
     expect(landed()).not.toBeNull()
     openApproval({ ...base, approvalId: 'ap-2' }, handlers())
@@ -605,15 +580,16 @@ describe('the permission approval sheet', () => {
     expect(sheets().length).toBe(1)
   })
 
-  it('says so when the engine did not take the answer, instead of landing as allowed', async () => {
+  it('says so when the engine did not take the answer, where an answer that landed says nothing', async () => {
     openApproval(base, handlers({ onChoice: () => Promise.resolve(false) }))
-    opts()[1]!.click()
-    expect(landed()!.textContent).toBe('gui.confirm.land.once')
+    opts()[2]!.click()
+    /* Nothing yet: as far as the page knows the answer was taken. */
+    expect(landed()).toBeNull()
     await tick()
     expect(landed()!.textContent).toBe('gui.confirm.land.unsent')
 
     openApproval({ ...base, approvalId: 'ap-2' }, handlers({ onChoice: () => Promise.reject(new Error('socket')) }))
-    opts()[1]!.click()
+    opts()[2]!.click()
     await tick()
     expect(landed()!.textContent).toBe('gui.confirm.land.unsent')
   })
@@ -637,7 +613,7 @@ describe('the permission approval sheet', () => {
     key('2')
     expect(said).toEqual([])
     rackRemove(above)
-    key('2')
+    key('3')
     expect(said.map(([c]) => c)).toEqual(['allow'])
   })
 
@@ -645,7 +621,7 @@ describe('the permission approval sheet', () => {
     openApproval(base, handlers())
     openApproval(base, handlers())
     expect(sheets().length).toBe(1)
-    opts()[1]!.click()
+    opts()[2]!.click()
     expect(said.map(([c]) => c)).toEqual(['allow'])
   })
 })

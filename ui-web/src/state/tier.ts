@@ -158,10 +158,9 @@ export function set(next: TierPopoverState): void {
    what one sub-agent will run at is showing this value clamped -- so it has to
    hear about a switch, or it goes on naming the rung from before.
 
-   A notification rather than a call into whoever cares, for the reason the
-   composer rack gives for `watchAsking`: this module has no business knowing
-   that an instance pane exists. It says the value moved; what that is worth is
-   the listener's to decide. */
+   A notification rather than a call into whoever cares: this module has no
+   business knowing that an instance pane exists. It says the value moved; what
+   that is worth is the listener's to decide. */
 const WATCHERS = new Set<(next: string) => void>()
 
 export function watch(fn: (next: string) => void): () => void {

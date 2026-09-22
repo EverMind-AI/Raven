@@ -58,47 +58,18 @@ const SHEETS = new Map<string, Set<HTMLElement>>()
    collectable. */
 const TEARDOWN = new WeakMap<HTMLElement, () => void>()
 
-/* Who is waiting on the reader, per conversation, and who wants to know.
+/* Who is waiting on the reader, per conversation.
  *
  * A sheet that ASKS something -- an approval, a clarification -- interrupts:
  * the reader cannot get on until they answer it. A sheet that only SHOWS
- * something -- a graph running its nodes -- does not, and when the two dock
- * together the rack runs out of room and the question ends up below the fold.
+ * something -- a graph running its nodes -- does not. A tenant marks itself by
+ * setting `dataset.asks` before it docks, and the sweeps read the mark to know
+ * which sheets a new question may replace and which it must leave standing
+ * (features/composer/clarify.ts and approve.ts).
  *
- * The rack is the one place every tenant passes through, so it is the only one
- * that can say "something is being asked here" without a tenant having to know
- * about the others. It says exactly that and no more: what to do about it
- * belongs to whoever is in the way, which is why this hands out a count rather
- * than an instruction.
- *
- * A tenant marks itself by setting `dataset.asks` before it docks. */
-const WATCHERS = new Set<(key: string, asking: number) => void>()
-
-/* The count as it stands, for a tenant that arrives after the fact: a watcher
-   only hears about changes, and one docking under a question that is already up
-   was never told about it. */
-export const askingIn = (key: string): number =>
-  [...(SHEETS.get(key) || [])].filter((el) => el.dataset.asks === '1').length
-
-function told(key: string): void {
-  if (!key || !WATCHERS.size) return
-  const n = askingIn(key)
-  WATCHERS.forEach((fn) => {
-    try {
-      fn(key, n)
-    } catch {
-      /* A watcher is a courtesy; one that throws must not take the rack down. */
-    }
-  })
-}
-
-/* Hear when a conversation starts or stops being asked something. Returns the
-   unsubscribe -- nothing needs it yet, the one watcher lives as long as the
-   page does, and it is what keeps this testable. */
-export function watchAsking(fn: (key: string, asking: number) => void): () => void {
-  WATCHERS.add(fn)
-  return () => WATCHERS.delete(fn)
-}
+ * The rack used to hand the count out to watchers as well, for the line that
+ * said another conversation was waiting. That line is gone and nothing else
+ * asked, so what is left is the mark and the sweeps that read it. */
 
 /* The interior of each sheet whose conversation is open, for <SheetRack/>.
  *
@@ -168,7 +139,6 @@ export function add(el: HTMLElement, key?: string, teardown?: () => void, view?:
   let bucket = SHEETS.get(k)
   if (!bucket) SHEETS.set(k, (bucket = new Set()))
   bucket.add(el)
-  told(k)
   /* Filled before it is docked, the way a tenant that built its own sheet handed
      over a finished one. */
   paint()
@@ -200,7 +170,6 @@ export function remove(el: HTMLElement): void {
     TEARDOWN.delete(el)
     down()
   }
-  told(el.dataset.sess as string)
   dockLift()
 }
 

@@ -89,8 +89,8 @@ export function open(
 
   const sheet = document.createElement('div')
   sheet.className = 'csheet perm'
-  /* This one asks: the reader cannot get on until they answer it. The rack
-     passes that on to whatever else is docked -- see `watchAsking`. */
+  /* This one asks: the reader cannot get on until they answer it. The sweeps
+     read the mark to know what they may replace (state/sheetRack.ts). */
   sheet.dataset.asks = '1'
   sheet.setAttribute('role', 'dialog')
   sheet.setAttribute('aria-modal', 'true')
@@ -175,12 +175,10 @@ export interface ApprovalHandlers {
      rule the reader wrote themselves, and cannot race the write. Resolves false
      when this answer wrote nothing of its own. */
   onRevoke?: () => Promise<boolean>
-  /** A sentence typed after a refusal, sent on as the reader's next message. */
-  onNote?: (text: string) => void
 }
 
-/* How long a landed sheet stays: long enough to read, and for a saved rule or
-   an invited note long enough to act on. */
+/* How long a landed sheet stays: long enough to read, and for a saved rule
+   long enough to take back. */
 export const LANDED_MS = 4000
 export const LINGER_MS = 12000
 
@@ -236,12 +234,12 @@ function wordsFor(req: ApprovalReq): GateWords {
 }
 
 /* The permission gate's ask: deny (the agent reads the refusal and goes on),
-   allow and save the rule the runtime suggested (only when it did), or allow
-   once. Deny is the default and takes the focus, so an accidental Enter never
-   grants. The answer is sent the moment it is chosen; what follows is the
-   landed sheet, where a saved rule can be taken back and a refusal can carry a
-   sentence -- sent on as the reader's next message, since the refusal itself
-   has already reached the model. */
+   the broader grant this request can carry (a saved rule when the runtime
+   suggested one, the conversation otherwise), or allow once. Deny is the
+   default and takes the focus, so an accidental Enter never grants. The answer
+   is sent the moment it is chosen, and the sheet goes with it: the only thing
+   that outlives an answer is a line the reader can act on -- a saved rule to
+   take back, or the news that the engine never took the answer at all. */
 export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner?: string): Approval {
   /* One sheet per request: a replay after a reload may name a request that is
      already on screen, and a second sheet for it would be answered twice. */
@@ -288,7 +286,14 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
         label: t('gui.confirm.always', { pattern: req.suggestedPattern }),
         run: () => answer('allow_always', req.suggestedPattern),
       }]
-      : []),
+      /* Nothing to save: a file write and an MCP call have no rule table to
+         land in (permissions.tools takes prefix patterns for exec alone), so
+         the only thing that stops the same question repeating through a task
+         is the grant that lasts as long as the conversation. Offered in the
+         saved rule's place, never beside it -- two "don't ask again" answers
+         side by side is a question about storage the reader did not come here
+         to answer. */
+      : [{ label: t('gui.confirm.allow_session'), run: () => answer('allow_session') }]),
     { label: t('gui.confirm.allow'), run: () => answer('allow') },
   ]
 
@@ -314,9 +319,14 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
   return { close: withdraw }
 }
 
-/* The sheet an answer leaves behind. Docked as a sheet of its own rather than
-   the asking one re-dressed, so the rack's count of who is asking drops the
-   moment the answer is given, and a new request's sweep takes it down. */
+/* What an answer leaves behind, when it leaves anything. An answer that simply
+   landed says nothing: the reader pressed the button, the sheet going is the
+   receipt, and a line that only repeats the press is one more thing to read.
+   Two answers do leave a line, because both leave something to do -- a saved
+   rule, which nothing else in the product can take back, and an answer the
+   engine never took, which means the turn is still waiting. Docked as a sheet
+   of its own rather than the asking one re-dressed, so the rack's count of who
+   is asking drops the moment the answer is given. */
 function land(
   key: string, choice: string, pattern: string | undefined, handlers: ApprovalHandlers,
   sent: void | Promise<boolean>,
@@ -364,25 +374,7 @@ function land(
       : undefined
     show({ text: t('gui.confirm.land.always', { pattern }), undo: t('gui.confirm.land.revoke') }, { onUndo })
     stay(LINGER_MS)
-    return
   }
-  if (choice === 'deny') {
-    const onNote = handlers.onNote
-      ? (text: string): void => {
-        handlers.onNote!(text)
-        show({ text: t('gui.confirm.land.deny_note', { text }) })
-        stay(LANDED_MS)
-      }
-      : undefined
-    /* Every keystroke puts the clock back: a sentence still being typed is not
-       a sheet nobody wants, and taking it away takes the words with it. */
-    const onTyping = onNote ? (): void => stay(LINGER_MS) : undefined
-    show({ text: t('gui.confirm.land.deny'), notePh: t('gui.confirm.note_ph') }, { onNote, onTyping })
-    stay(onNote ? LINGER_MS : LANDED_MS)
-    return
-  }
-  show({ text: t('gui.confirm.land.once') })
-  stay(LANDED_MS)
 }
 
 /* approval.closed: the server retired this request (a teardown, or an answer
