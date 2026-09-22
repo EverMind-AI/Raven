@@ -108,7 +108,7 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 
 <table>
 <tr>
-<td valign="top"><p align="center"><b>用 Godot 4 做的 FPS Boss 竞技场游戏</b></p></td>
+<td valign="top"><p align="center"><b>用 Godot 4 做的 FPS Boss 竞技场游戏（自主运行约 4 天）</b></p></td>
 </tr>
 <tr>
 <td valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a></p></td>
@@ -124,8 +124,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>宋代居家美学</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>古希腊如何被漂白</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>宋代居家美学（成本约 0.80 美元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>古希腊如何被漂白（成本约 0.80 美元）</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4"><img src="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
@@ -139,8 +139,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>流行音乐如何被制造出来</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>抽象艺术的一百年</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>流行音乐如何被制造出来（成本约 0.80 美元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>抽象艺术的一百年（成本约 0.80 美元）</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
@@ -199,7 +199,7 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 ## ❯❯ 连接第三方 Agent
 
-Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 连接并编排 Agent，并提供 13 个**第三方 Agent**的预设，简化设置、任务委派和共享工作流中的协作。
+Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 连接并编排 Agent，并提供 13 个**第三方 Agent**的预设，简化设置、任务委派和共享工作流中的协作。通过统一界面在 Raven 中试用这些 Agent！
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
@@ -239,7 +239,7 @@ cd Raven
 
 这些 Agent 随 Raven 一同发布：wheel 包包含 `agents/` 产品目录，首次使用时会将其复制到 Raven 主目录；源码安装则直接读取仓库中的目录。配置向导会逐一询问是否启用，并为所选 Agent 注册其适配的模型，或使用当前 Raven 的 LLM。详见 [`agents/README.md`](agents/README.md)。
 
-首次运行之后的内容都在文档站：自托管、Docker 部署、WebUI、命令参考、运行时架构与仓库布局，中英文对照。
+在文档站了解更多 Raven 信息。
 
 **[阅读文档](https://evermind-ai.github.io/Raven/zh/)**
 
@@ -272,13 +272,13 @@ raven web
 该命令会在浏览器中打开 WebUI，并让 Raven 在后台持续运行。使用 `raven web --stop` 停止后台服务。
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/28248163-3607-408f-86cf-a1acb621767b"><img src="https://github.com/user-attachments/assets/28248163-3607-408f-86cf-a1acb621767b" alt="Raven WebUI new task page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/77c8fd36-a062-4c4e-9264-b0be38c344bd"><img src="https://github.com/user-attachments/assets/77c8fd36-a062-4c4e-9264-b0be38c344bd" alt="Raven WebUI new task page" width="90%"></a>
 </p>
 
 <p align="center"><em>新建任务：一个输入框，技能、剧本、知识库与记忆都在一侧。</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/76bf13ac-763b-4120-b323-0f694c237365"><img src="https://github.com/user-attachments/assets/76bf13ac-763b-4120-b323-0f694c237365" alt="Raven WebUI subagents page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/08b8b0e3-5a44-41c5-917e-33c7925c85df"><img src="https://github.com/user-attachments/assets/08b8b0e3-5a44-41c5-917e-33c7925c85df" alt="Raven WebUI subagents page" width="90%"></a>
 </p>
 
 <p align="center"><em>子智能体：内置与第三方 Agent 汇总在同一张花名册里。</em></p>

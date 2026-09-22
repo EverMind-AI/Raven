@@ -108,7 +108,7 @@ orchestration Raven generates for the task; below it is what the run produced.
 
 <table>
 <tr>
-<td valign="top"><p align="center"><b>An FPS boss arena game, built in Godot 4</b></p></td>
+<td valign="top"><p align="center"><b>An FPS boss arena game built in Godot 4 (~4 days of autonomous operation)</b></p></td>
 </tr>
 <tr>
 <td valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a></p></td>
@@ -124,8 +124,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>Song-dynasty domestic aesthetics</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>How ancient Greece was whitewashed</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>Song-dynasty domestic aesthetics (costs ~$0.80)</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>How ancient Greece was whitewashed (costs ~$0.80)</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4"><img src="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
@@ -139,8 +139,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>How pop music is manufactured</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>A century of abstract art</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>How pop music is manufactured (costs ~$0.80)</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A century of abstract art (costs ~$0.80)</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
@@ -199,7 +199,7 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 ## ❯❯ Connect Third-Party Agents
 
-Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible APIs, with presets for 13 **third-party agents** to simplify setup, task delegation, and coordination across shared workflows.
+Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible APIs, with presets for 13 **third-party agents** to simplify setup, task delegation, and coordination across shared workflows. Try these agents in Raven through a unified interface!
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
@@ -249,9 +249,7 @@ checkout reads the tree in place. Setup asks about each product and registers
 the ones you take up, on the model it is tuned for or on this raven's LLM.
 See [`agents/README.md`](agents/README.md).
 
-Everything past the first run lives on the documentation site: self-hosting,
-Docker deployment, the WebUI, the command reference, the runtime architecture
-and the repository layout, in English and Chinese.
+Learn more about Raven on the documentation site.
 
 **[Read the documentation](https://evermind-ai.github.io/Raven/)**
 
@@ -284,13 +282,13 @@ raven web
 The command opens the WebUI in your browser and keeps Raven running in the background. Use `raven web --stop` to stop the background service.
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/9ecddecc-c73f-4249-97bd-58a68ef2c7c1"><img src="https://github.com/user-attachments/assets/9ecddecc-c73f-4249-97bd-58a68ef2c7c1" alt="Raven WebUI new task page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/717ca81e-7b4d-4263-9c27-cfd47f3cf6af"><img src="https://github.com/user-attachments/assets/717ca81e-7b4d-4263-9c27-cfd47f3cf6af" alt="Raven WebUI new task page" width="90%"></a>
 </p>
 
 <p align="center"><em>New task: one composer, with skills, playbooks, knowledge and memory a click away.</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/68c6f1c7-a709-4742-9e32-1c2cbe98b500"><img src="https://github.com/user-attachments/assets/68c6f1c7-a709-4742-9e32-1c2cbe98b500" alt="Raven WebUI subagents page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/bd262fe2-58d4-4c5c-a741-97a8396833f3"><img src="https://github.com/user-attachments/assets/bd262fe2-58d4-4c5c-a741-97a8396833f3" alt="Raven WebUI subagents page" width="90%"></a>
 </p>
 
 <p align="center"><em>Subagents: every connected agent in one roster, built-in and third-party alike.</em></p>
