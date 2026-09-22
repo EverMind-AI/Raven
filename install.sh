@@ -615,22 +615,6 @@ han_font_hint() {
   esac
 }
 
-have_han_font() {
-  # fontconfig answers this directly wherever it exists. A Mac has no fc-list,
-  # and its own PingFang does not settle the question, so ask the directories a
-  # font can be installed into without privileges -- which is where both the
-  # cask and the fallback below put one.
-  if have fc-list; then
-    [ -n "$(fc-list :lang=zh family 2>/dev/null)" ] && return 0
-    return 1
-  fi
-  for face in "$HOME/Library/Fonts"/*CJK* "$HOME/Library/Fonts"/*NotoSans[ST]C* \
-              "/Library/Fonts"/*CJK* "${XDG_DATA_HOME:-$HOME/.local/share}/fonts"/*CJK*; do
-    [ -f "$face" ] && return 0
-  done
-  return 1
-}
-
 # Where this platform reads a font installed by a user who is not root.
 han_font_dir() {
   case "$NODE_OS" in
@@ -638,6 +622,29 @@ han_font_dir() {
     *) printf '%s' "${XDG_DATA_HOME:-$HOME/.local/share}/fonts" ;;
   esac
 }
+have_han_font() {
+  # The file this script installs, by its own name, before anything else: it is
+  # the one check that does not depend on how the host reports its fonts, and it
+  # is what makes a second install a no-op instead of another 8MB download.
+  [ -f "$(han_font_dir)/$HAN_FONT_NAME" ] && return 0
+  # fontconfig answers the general question wherever it exists.
+  if have fc-list; then
+    [ -n "$(fc-list :lang=zh family 2>/dev/null)" ] && return 0
+    return 1
+  fi
+  # A Mac has no fc-list, and its own PingFang does not settle the question, so
+  # ask the directories a font can be installed into without privileges -- under
+  # both namings that can appear there: the cask writes NotoSansCJK, the
+  # fallback writes NotoSansSC, and either may sit in either directory.
+  for face in "$HOME/Library/Fonts"/*CJK* "$HOME/Library/Fonts"/*NotoSans[ST]C* \
+              "/Library/Fonts"/*CJK* "/Library/Fonts"/*NotoSans[ST]C* \
+              "${XDG_DATA_HOME:-$HOME/.local/share}/fonts"/*CJK* \
+              "${XDG_DATA_HOME:-$HOME/.local/share}/fonts"/*NotoSans[ST]C*; do
+    [ -f "$face" ] && return 0
+  done
+  return 1
+}
+
 
 sha256_of() {
   if have sha256sum; then sha256sum "$1" | cut -d' ' -f1

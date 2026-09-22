@@ -383,7 +383,7 @@ def test_resolve_node_dir_answers_each_case_it_exists_for(tmp_path: Path) -> Non
 def test_the_office_prompt_and_sudo_both_read_the_tty() -> None:
     text = INSTALL_SH.read_text(encoding="utf-8")
     assert "read -r answer < /dev/tty" in text
-    assert "sudo apt-get install -y libreoffice < /dev/tty" in text
+    assert "sudo apt-get install -y libreoffice fonts-noto-cjk < /dev/tty" in text
 
 
 def test_a_failed_tty_read_declines_instead_of_defaulting_yes() -> None:
@@ -533,3 +533,79 @@ def test_the_windows_capability_steps_stay_above_the_closing_launch() -> None:
     closing = closing[closing.index("function Start-Web") :].lower()
     assert "playwright" not in closing
     assert "libreoffice" not in closing
+
+
+def _sh_function(text: str, name: str) -> str:
+    """One shell function lifted out of install.sh, to be run on its own."""
+    match = re.search(rf"^{name}\(\) \{{$.*?^\}}$", text, re.MULTILINE | re.DOTALL)
+    assert match, f"{name} is not defined in install.sh"
+    return match.group(0)
+
+
+def test_the_font_check_recognises_the_file_the_fallback_writes(tmp_path: Path) -> None:
+    """A second install has to be a no-op. The check runs before the download, so
+    a filename it cannot recognise makes every install fetch the same 8MB again.
+
+    Run with fc-list hidden, because that is the path where it matters: a host
+    that has fontconfig answers from it and never reaches the filename check.
+    """
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    name = re.search(r'^HAN_FONT_NAME="([^"]+)"$', text, re.MULTILINE)
+    assert name, "install.sh no longer names the font file it installs"
+    installed = name.group(1)
+
+    home = tmp_path / "home"
+    fonts = home / ".local" / "share" / "fonts"
+    fonts.mkdir(parents=True)
+    (fonts / installed).write_bytes(b"OTTO placeholder")
+
+    script = "\n".join(
+        [
+            "set -eu",
+            'have() { case "$1" in fc-list) return 1 ;; *) command -v "$1" >/dev/null 2>&1 ;; esac; }',
+            "NODE_OS=linux",
+            f'HAN_FONT_NAME="{installed}"',
+            _sh_function(text, "han_font_dir"),
+            _sh_function(text, "have_han_font"),
+            "have_han_font",
+        ]
+    )
+    done = subprocess.run(  # noqa: S603 - /bin/sh with a script this test built
+        ["/bin/sh", "-c", script],
+        capture_output=True,
+        text=True,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        check=False,
+    )
+    assert done.returncode == 0, (
+        f"{installed} sits in the user font directory and the check did not see it, "
+        f"so every later install downloads it again: {done.stderr}"
+    )
+
+
+def test_the_font_check_says_no_on_a_host_that_has_none(tmp_path: Path) -> None:
+    """The other half: an empty directory must not report a font, or the install
+    skips the step that is the whole point of it."""
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    home = tmp_path / "home"
+    (home / ".local" / "share" / "fonts").mkdir(parents=True)
+
+    script = "\n".join(
+        [
+            "set -eu",
+            'have() { case "$1" in fc-list) return 1 ;; *) command -v "$1" >/dev/null 2>&1 ;; esac; }',
+            "NODE_OS=linux",
+            'HAN_FONT_NAME="NotoSansSC-Regular.otf"',
+            _sh_function(text, "han_font_dir"),
+            _sh_function(text, "have_han_font"),
+            "have_han_font",
+        ]
+    )
+    done = subprocess.run(  # noqa: S603 - /bin/sh with a script this test built
+        ["/bin/sh", "-c", script],
+        capture_output=True,
+        text=True,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        check=False,
+    )
+    assert done.returncode != 0, "an empty font directory reported a font"
