@@ -441,8 +441,12 @@ async def test_a_reader_refusing_the_key_pauses_the_tool(
     assert "not sent" in second["detail"] and "Tell the user" in second["detail"]
     assert FETCH_PROVIDERS[vendor].config_path in first["detail"]
     assert "tools.web.fetch.provider" in first["detail"]
-    # Each remedy says when it takes effect; the vendor is fixed at registration.
-    assert "restart with another vendor selected under tools.web.fetch.provider" in first["detail"]
+    # Each remedy says when it takes effect: the two config routes are read live, the env var on restart.
+    assert (
+        "select another vendor under tools.web.fetch.provider (both are read from the config file without a restart)"
+        in first["detail"]
+    )
+    assert f"or restart with {FETCH_PROVIDERS[vendor].env_var} set" in first["detail"]
     # The failure streak reads a refusal as a deterministic failure, so a model
     # that keeps calling meets the stop-repeating nudge rather than a retry.
     from raven.agent.loop.failure_streak import failure_class, is_hard_tool_failure
@@ -541,6 +545,22 @@ async def test_a_key_rotated_while_a_request_is_in_flight_is_tried_before_it_is_
     assert transport.sent == ["KEY-OLD", "KEY-NEW"], "the replacement is tried, not answered from the pause"
     assert is_served(again), again
     assert reads == ["KEY-NEW"]
+
+
+async def test_a_refusal_by_one_vendor_pauses_no_other(monkeypatch: pytest.MonkeyPatch, _open_gate: None) -> None:
+    """The vendor is live too (``tools.web.<kind>.provider`` is read per call),
+    so the pause is recorded against the (vendor, key) pair the request carried:
+    a vendor switched under the tool is a new request, whatever its key."""
+    vendor = {"now": "tavily"}
+    with _patched(monkeypatch, {}, status=402) as recorder:
+        tool = WebFetchTool(api_key="same-key", provider=lambda: vendor["now"])
+        first = json.loads(await tool.execute("https://a.example"))
+        vendor["now"] = "exa"
+        second = json.loads(await tool.execute("https://a.example"))
+
+    assert first["error"] == "Tavily refused the key (HTTP 402)"
+    assert len(recorder.calls) == 2, "another vendor on the same key string is not paused"
+    assert second["error"] == "Exa refused the key (HTTP 402)" and "not sent" not in second["detail"]
 
 
 async def test_a_new_key_lifts_the_pause_at_once(monkeypatch: pytest.MonkeyPatch, _open_gate: None) -> None:
@@ -670,7 +690,10 @@ async def test_a_search_vendor_refusing_the_key_pauses_the_tool(
     assert second.startswith(f"Error: {label} refused the key (HTTP {status}). ")
     assert "SECRET-KEY-123" not in first + second
     assert "tools.web.search.provider" in first and "not sent" in second
-    assert "restart with another vendor selected under tools.web.search.provider" in first
+    assert (
+        "select another vendor under tools.web.search.provider (both are read from the config file without a restart)"
+        in first
+    )
 
 
 async def test_an_image_search_refusal_pauses_the_later_queries(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -102,12 +102,14 @@ All notable changes to Raven are documented here.
   streak reads them as one cause), what the status means, and what the user
   has to do (`tools.web.providers.<vendor>.apiKey`, the env var, the sign-up
   page, or another vendor under `tools.web.<search|fetch>.provider`; the
-  env var and the vendor take effect on restart, the slot on the next
-  call). All three tools read their key live, in both the main loop and
-  the sub-agent lane, and once per call, so the key a request carried is
-  the key its refusal is recorded against; a key set at that slot reaches
-  the next call and lifts the pause without a restart, and otherwise one
-  real request is sent again after ten minutes and re-arms it if refused.
+  slot and the vendor are read from the file without a restart, the env
+  var on restart). All three tools read their vendor and key live, in
+  both the main loop and the sub-agent lane, and resolve the pair once
+  per call, so the vendor and key a request carried are what its refusal
+  is recorded against and a refusal by one vendor pauses no other; a key
+  set at that slot reaches the next call and lifts the pause without a
+  restart, and otherwise one real request is sent again after ten minutes
+  and re-arms it if refused.
   A request that carried no key is
   never paused, and a reader's 403 pauses nothing: the default reader, Jina
   without a key, answers a domain it has blocked with 403, and Firecrawl

@@ -152,28 +152,32 @@ class _VendorRefusal:
     domain it blocks names the domain, not a key). ``active`` is the status a
     call with ``key`` would meet again, or ``None`` once the key changed or the
     pause ran out, at which point one real request goes through and re-arms
-    the pause if it is refused again. Both are handed the key the call read
-    once at its start, which is the key its request carried: read again at
-    ``note`` time, a key replaced during the request's flight would be paused
-    before it had ever been sent.
+    the pause if it is refused again. Both are handed the vendor and the key
+    the call resolved once at its start, which are what its request carried:
+    the vendor is read live too (``tools.web.<kind>.provider``), so a refusal
+    is one vendor's verdict on one key and says nothing about another vendor
+    that happens to be given the same key; and read again at ``note`` time, a
+    key replaced during the request's flight would be paused before it had
+    ever been sent.
     """
 
     def __init__(self, statuses: frozenset[int]) -> None:
         self.statuses = statuses
         self.status: int | None = None
+        self.vendor: str | None = None
         self.key: str | None = None
         self.at: float = 0.0
 
-    def note(self, status: int, key: str) -> bool:
+    def note(self, status: int, vendor: str, key: str) -> bool:
         if status not in self.statuses or not key:
             return False
-        self.status, self.key, self.at = status, key, time.monotonic()
+        self.status, self.vendor, self.key, self.at = status, vendor, key, time.monotonic()
         return True
 
-    def active(self, key: str) -> int | None:
+    def active(self, vendor: str, key: str) -> int | None:
         if self.status is None:
             return None
-        if key != self.key or time.monotonic() - self.at >= VENDOR_REFUSAL_PAUSE_S:
+        if (vendor, key) != (self.vendor, self.key) or time.monotonic() - self.at >= VENDOR_REFUSAL_PAUSE_S:
             self.status = None
             return None
         return self.status
@@ -200,8 +204,8 @@ def refusal_text(
     )
     detail = (
         f"{outcome}. Tell the user: {spec.label} needs attention -- set a working key at "
-        f"{spec.config_path} in the config file (read on the next call), restart with {spec.env_var} set, "
-        f"or restart with another vendor selected under tools.web.{kind}.provider; sign-up at {spec.signup}. "
+        f"{spec.config_path} or select another vendor under tools.web.{kind}.provider (both are read from the "
+        f"config file without a restart), or restart with {spec.env_var} set; sign-up at {spec.signup}. "
         "Do not retry this tool until they have."
     )
     return error, detail
@@ -287,6 +291,17 @@ class WebSearchTool(Tool):
         configured = self._api_key_source() if self._api_key_source is not None else self._init_api_key
         return configured or os.environ.get(self.spec.env_var, "")
 
+    def _resolve(self) -> tuple[str, str]:
+        """The (vendor, key) pair one call runs on, each source read once.
+
+        Read again on the way -- for the request, for the envelope, for the
+        refusal it records -- a call could pair a key with a vendor its request
+        never reached, or pause a key it never sent.
+        """
+        vendor = self.provider
+        configured = self._api_key_source() if self._api_key_source is not None else self._init_api_key
+        return vendor, configured or os.environ.get(SEARCH_PROVIDERS[vendor].env_var, "")
+
     @classmethod
     def is_configured(cls, config_key: str | None, provider: str = DEFAULT_SEARCH_PROVIDER) -> bool:
         """Whether a search key resolves, from the config value or the
@@ -300,10 +315,12 @@ class WebSearchTool(Tool):
         return bool(cls(api_key=config_key or None, provider=provider).api_key)
 
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
-        # Read once per call: the value this request carries is the value a
-        # refusal is recorded against, so a key replaced while the request is
-        # in flight is tried by the next call rather than paused unsent.
-        key = self.api_key
+        # Resolved once per call: the vendor and key this request carries are
+        # what a refusal is recorded against, so a key replaced while the
+        # request is in flight is tried by the next call rather than paused
+        # unsent, and a vendor switched under the tool starts afresh.
+        vendor, key = self._resolve()
+        spec = SEARCH_PROVIDERS[vendor]
         if not key:
             # Reachable only if the key goes away after registration, since the
             # loops withhold this tool when there is none. Name the file actually
@@ -312,22 +329,22 @@ class WebSearchTool(Tool):
             from raven.config.loader import get_config_path
 
             return (
-                f"Error: {self.spec.label} API key not configured. Set it in {get_config_path()} "
-                f"under {self.spec.config_path} (or export {self.spec.env_var}), "
+                f"Error: {spec.label} API key not configured. Set it in {get_config_path()} "
+                f"under {spec.config_path} (or export {spec.env_var}), "
                 "then restart the gateway."
             )
 
-        if (refused := self._refusal.active(key)) is not None:
-            error, detail = refusal_text(self.spec, refused, kind="search", sent=False)
+        if (refused := self._refusal.active(vendor, key)) is not None:
+            error, detail = refusal_text(spec, refused, kind="search", sent=False)
             return f"Error: {error}. {detail}"
         try:
             n = min(max(count or self.max_results, 1), 10)
-            logger.debug("WebSearch[{}]: {}", self.provider, "proxy enabled" if self.proxy else "direct connection")
+            logger.debug("WebSearch[{}]: {}", vendor, "proxy enabled" if self.proxy else "direct connection")
             async with httpx.AsyncClient(proxy=self.proxy) as client:
-                r = await self._provider_request(client, query, n, key)
+                r = await self._provider_request(client, query, n, vendor, key)
                 r.raise_for_status()
 
-            data = self._normalise_response(r.json())
+            data = self._normalise_response(r.json(), vendor)
             results = data.get("organic", [])[:n]
             if not results:
                 return f"No results for: {query}"
@@ -355,11 +372,11 @@ class WebSearchTool(Tool):
             # parameter, so the default message would hand the credential to
             # the model and the log.
             status = e.response.status_code
-            logger.error("WebSearch error: {} answered HTTP {}", self.spec.label, status)
-            if self._refusal.note(status, key):
-                error, detail = refusal_text(self.spec, status, kind="search", sent=True)
+            logger.error("WebSearch error: {} answered HTTP {}", spec.label, status)
+            if self._refusal.note(status, vendor, key):
+                error, detail = refusal_text(spec, status, kind="search", sent=True)
                 return f"Error: {error}. {detail}"
-            return f"Error: {self.spec.label} answered HTTP {status}"
+            return f"Error: {spec.label} answered HTTP {status}"
         except httpx.ProxyError as e:
             logger.error("WebSearch proxy error: {}", e)
             return f"Proxy error: {e}"
@@ -382,23 +399,26 @@ class WebSearchTool(Tool):
             # httpx names the proxy URL in the message, and a proxy URL can
             # carry its own credentials, so only the class goes out.
             return False, f"the configured web proxy is not usable ({type(e).__name__})"
-        key = self.api_key
+        vendor, key = self._resolve()
+        spec = SEARCH_PROVIDERS[vendor]
         try:
             async with client:
-                r = await self._provider_request(client, query, 1, key)
+                r = await self._provider_request(client, query, 1, vendor, key)
                 r.raise_for_status()
-            hits = len(self._normalise_response(r.json()).get("organic", []))
+            hits = len(self._normalise_response(r.json(), vendor).get("organic", []))
         except httpx.HTTPStatusError as e:
-            return False, f"{self.spec.label} answered HTTP {e.response.status_code}"
+            return False, f"{spec.label} answered HTTP {e.response.status_code}"
         except httpx.HTTPError as e:
-            return False, f"{self.spec.label} could not be reached ({type(e).__name__})"
+            return False, f"{spec.label} could not be reached ({type(e).__name__})"
         except ValueError as e:
-            return False, f"{self.spec.label} answered without results: {e}"
+            return False, f"{spec.label} answered without results: {e}"
         return True, f"{hits} result(s)"
 
-    async def _provider_request(self, client: httpx.AsyncClient, query: str, n: int, key: str) -> httpx.Response:
-        """One search request, built the way the selected provider expects, carrying ``key``."""
-        if self.provider == "serper":
+    async def _provider_request(
+        self, client: httpx.AsyncClient, query: str, n: int, vendor: str, key: str
+    ) -> httpx.Response:
+        """One search request, built the way ``vendor`` expects, carrying ``key``."""
+        if vendor == "serper":
             return await client.post(
                 "https://google.serper.dev/search",
                 json={"q": query, "num": n},
@@ -409,14 +429,14 @@ class WebSearchTool(Tool):
                 },
                 timeout=10.0,
             )
-        if self.provider == "serpapi":
+        if vendor == "serpapi":
             return await client.get(
                 "https://serpapi.com/search",
                 params={"engine": "google", "q": query, "num": n, "api_key": key},
                 headers={"Accept": "application/json"},
                 timeout=10.0,
             )
-        if self.provider == "tavily":
+        if vendor == "tavily":
             return await client.post(
                 "https://api.tavily.com/search",
                 json={"query": query, "max_results": n},
@@ -427,7 +447,7 @@ class WebSearchTool(Tool):
                 },
                 timeout=10.0,
             )
-        if self.provider == "exa":
+        if vendor == "exa":
             # Highlights, not ``text``: text is the whole page and the render
             # path shows whatever lands in the snippet slot. ``maxCharacters``
             # is the bound that holds on the live endpoint.
@@ -441,14 +461,14 @@ class WebSearchTool(Tool):
                 },
                 timeout=10.0,
             )
-        if self.provider == "brave":
+        if vendor == "brave":
             return await client.get(
                 "https://api.search.brave.com/res/v1/web/search",
                 params={"q": query, "count": n},
                 headers={"Accept": "application/json", "X-Subscription-Token": key},
                 timeout=10.0,
             )
-        if self.provider == "firecrawl":
+        if vendor == "firecrawl":
             return await client.post(
                 "https://api.firecrawl.dev/v1/search",
                 json={"query": query, "limit": n},
@@ -459,7 +479,7 @@ class WebSearchTool(Tool):
                 },
                 timeout=10.0,
             )
-        if self.provider == "serply":
+        if vendor == "serply":
             return await client.get(
                 "https://api.serply.io/v1/search",
                 params={"q": query, "num": n},
@@ -477,8 +497,8 @@ class WebSearchTool(Tool):
             timeout=10.0,
         )
 
-    def _normalise_response(self, data: Any) -> dict[str, Any]:
-        """A provider payload in the Serper shape the render path reads.
+    def _normalise_response(self, data: Any, vendor: str) -> dict[str, Any]:
+        """``vendor``'s payload in the Serper shape the render path reads.
 
         Only the keys the renderer reads are produced: ``organic`` rows with
         ``title`` / ``link`` / ``snippet``, plus ``answerBox`` and
@@ -486,21 +506,21 @@ class WebSearchTool(Tool):
         """
         if not isinstance(data, dict):
             return {}
-        if self.provider == "serper":
+        if vendor == "serper":
             return data
-        if self.provider == "serpapi":
+        if vendor == "serpapi":
             out: dict[str, Any] = {"organic": list(data.get("organic_results") or [])}
             if box := data.get("answer_box"):
                 out["answerBox"] = box
             if kg := data.get("knowledge_graph"):
                 out["knowledgeGraph"] = kg
             return out
-        if self.provider == "tavily":
+        if vendor == "tavily":
             out = {"organic": _rows(data.get("results"), url="url", snippet="content")}
             if answer := data.get("answer"):
                 out["answerBox"] = {"answer": answer}
             return out
-        if self.provider == "exa":
+        if vendor == "exa":
             organic = []
             for item in data.get("results") or []:
                 if not isinstance(item, dict):
@@ -514,15 +534,15 @@ class WebSearchTool(Tool):
                     }
                 )
             return {"organic": organic}
-        if self.provider == "brave":
+        if vendor == "brave":
             web = data.get("web") if isinstance(data.get("web"), dict) else {}
             return {"organic": _rows(web.get("results"), url="url", snippet="description")}
-        if self.provider == "firecrawl":
+        if vendor == "firecrawl":
             # A refusal inside a 200 must read as an error, not as a dry search.
             if data.get("success") is False:
                 raise ValueError(f"Firecrawl: {data.get('error') or 'search failed'}")
             return {"organic": _rows(data.get("data"), url="url", snippet="description")}
-        if self.provider == "serply":
+        if vendor == "serply":
             # Google SERP rows under ``results``; the snippet is ``description``.
             return {"organic": _rows(data.get("results"), url="link", snippet="description")}
         # AnySearch publishes the request shape but not the response: results may
@@ -657,6 +677,12 @@ class ImageSearchTool(Tool):
         configured = self._api_key_source() if self._api_key_source is not None else self._init_api_key
         return configured or os.environ.get(self.spec.env_var, "")
 
+    def _resolve(self) -> tuple[str, str]:
+        """The (vendor, key) pair one call runs on, each source read once; see ``WebSearchTool._resolve``."""
+        vendor = self.provider
+        configured = self._api_key_source() if self._api_key_source is not None else self._init_api_key
+        return vendor, configured or os.environ.get(SEARCH_PROVIDERS[vendor].env_var, "")
+
     @classmethod
     def is_configured(cls, config_key: str | None, provider: str = DEFAULT_SEARCH_PROVIDER) -> bool:
         """Whether a key resolves for the vendor, from the config value or the environment."""
@@ -670,13 +696,14 @@ class ImageSearchTool(Tool):
         min_width: int | None = None,
         **kwargs: Any,
     ) -> str:
-        key = self.api_key
+        vendor, key = self._resolve()
+        spec = SEARCH_PROVIDERS[vendor]
         if not key:
             from raven.config.loader import get_config_path
 
             return (
-                f"Error: {self.spec.label} API key not configured. Set it in {get_config_path()} under "
-                f"{self.spec.config_path} (or export {self.spec.env_var}), then restart the gateway."
+                f"Error: {spec.label} API key not configured. Set it in {get_config_path()} under "
+                f"{spec.config_path} (or export {spec.env_var}), then restart the gateway."
             )
         wanted = [said.strip() for said in (queries or ([query] if query else [])) if said and said.strip()]
         if not wanted:
@@ -689,26 +716,26 @@ class ImageSearchTool(Tool):
 
         async def one(said: str) -> str:
             async with gate:
-                if (refused := self._refusal.active(key)) is not None:
-                    error, detail = refusal_text(self.spec, refused, kind="search", sent=False)
+                if (refused := self._refusal.active(vendor, key)) is not None:
+                    error, detail = refusal_text(spec, refused, kind="search", sent=False)
                     return f"Image results for: {said}\n\n{error}. {detail}"
                 try:
-                    return await self._search_images(said, per_query, floor, key)
+                    return await self._search_images(said, per_query, floor, vendor, key)
                 except httpx.HTTPStatusError as exc:
                     # Status only: httpx puts the request in the message, and SerpApi
                     # carries its key as a query parameter.
                     status = exc.response.status_code
-                    if self._refusal.note(status, key):
-                        error, detail = refusal_text(self.spec, status, kind="search", sent=True)
+                    if self._refusal.note(status, vendor, key):
+                        error, detail = refusal_text(spec, status, kind="search", sent=True)
                         return f"Image results for: {said}\n\n{error}. {detail}"
-                    return f"Image results for: {said}\n\n{self.spec.label} answered HTTP {status}."
+                    return f"Image results for: {said}\n\n{spec.label} answered HTTP {status}."
                 except Exception as exc:  # noqa: BLE001 -- one query's failure is not the batch's
                     return f"Image results for: {said}\n\nThis search failed ({type(exc).__name__})."
 
         found = await asyncio.gather(*(one(said) for said in wanted))
         return found[0] if len(found) == 1 else ("\n\n" + "-" * 60 + "\n\n").join(found)
 
-    async def _search_images(self, query: str, count: int, min_width: int, key: str) -> str:
+    async def _search_images(self, query: str, count: int, min_width: int, vendor: str, key: str) -> str:
         """The vendor's image surface, filtered to what a screen can use.
 
         Dimensions and source page travel with every hit: the caller has two
@@ -717,9 +744,9 @@ class ImageSearchTool(Tool):
         leaves the first judgement to the caller, and the line says so.
         """
         async with httpx.AsyncClient(proxy=self.proxy) as client:
-            response = await self._provider_request(client, query, max(count, 10), key)
+            response = await self._provider_request(client, query, max(count, 10), vendor, key)
             response.raise_for_status()
-        hits = self.normalise_hits(response.json())
+        hits = self.normalise_hits(response.json(), vendor)
         usable = [
             hit
             for hit in hits
@@ -748,31 +775,33 @@ class ImageSearchTool(Tool):
         )
         return "\n".join(lines)
 
-    async def _provider_request(self, client: httpx.AsyncClient, query: str, n: int, key: str) -> httpx.Response:
-        """One image search, built the way the vendor's image surface expects, carrying ``key``."""
+    async def _provider_request(
+        self, client: httpx.AsyncClient, query: str, n: int, vendor: str, key: str
+    ) -> httpx.Response:
+        """One image search, built the way ``vendor``'s image surface expects, carrying ``key``."""
         auth_json = {"Accept": "application/json", "Content-Type": "application/json"}
-        if self.provider == "serper":
+        if vendor == "serper":
             return await client.post(
                 "https://google.serper.dev/images",
                 json={"q": query, "num": n},
                 headers={**auth_json, "X-API-KEY": key},
                 timeout=15.0,
             )
-        if self.provider == "serpapi":
+        if vendor == "serpapi":
             return await client.get(
                 "https://serpapi.com/search.json",
                 params={"engine": "google_images", "q": query, "api_key": key},
                 headers={"Accept": "application/json"},
                 timeout=15.0,
             )
-        if self.provider == "brave":
+        if vendor == "brave":
             return await client.get(
                 "https://api.search.brave.com/res/v1/images/search",
                 params={"q": query, "count": n},
                 headers={"Accept": "application/json", "X-Subscription-Token": key},
                 timeout=15.0,
             )
-        if self.provider == "tavily":
+        if vendor == "tavily":
             return await client.post(
                 "https://api.tavily.com/search",
                 json={"query": query, "max_results": n, "include_images": True, "include_image_descriptions": True},
@@ -786,10 +815,11 @@ class ImageSearchTool(Tool):
             timeout=15.0,
         )
 
-    def normalise_hits(self, data: Any) -> list[ImageHit]:
-        """A vendor payload as the one list the render path reads."""
+    def normalise_hits(self, data: Any, vendor: str | None = None) -> list[ImageHit]:
+        """A vendor payload as the one list the render path reads; ``vendor`` defaults to the tool's."""
         if not isinstance(data, dict):
             return []
+        vendor = self.provider if vendor is None else vendor
 
         def number(value: Any) -> int | None:
             try:
@@ -801,7 +831,7 @@ class ImageSearchTool(Tool):
             return urlparse(url).netloc if url else ""
 
         hits: list[ImageHit] = []
-        if self.provider == "serper":
+        if vendor == "serper":
             for item in data.get("images") or []:
                 hits.append(
                     ImageHit(
@@ -813,7 +843,7 @@ class ImageSearchTool(Tool):
                         page=str(item.get("link") or ""),
                     )
                 )
-        elif self.provider == "serpapi":
+        elif vendor == "serpapi":
             for item in data.get("images_results") or []:
                 hits.append(
                     ImageHit(
@@ -825,7 +855,7 @@ class ImageSearchTool(Tool):
                         page=str(item.get("link") or ""),
                     )
                 )
-        elif self.provider == "brave":
+        elif vendor == "brave":
             for item in data.get("results") or []:
                 properties = item.get("properties") or {}
                 page = str(item.get("url") or "")
@@ -839,7 +869,7 @@ class ImageSearchTool(Tool):
                         page=page,
                     )
                 )
-        elif self.provider == "tavily":
+        elif vendor == "tavily":
             # Tavily names the picture and describes it; it reports no size and no page.
             for item in data.get("images") or []:
                 if isinstance(item, str):
@@ -927,12 +957,7 @@ class WebFetchTool(Tool):
         behind it both move now, and a substitution decided once outlived the
         key that would have stopped it.
         """
-        selected = _resolve_provider(self._provider_source, self._init_provider, FETCH_PROVIDERS)
-        key = self._api_key_source() if self._api_key_source is not None else self._init_api_key
-        effective = self.effective_provider(selected, key, warn=not self._substitution_said)
-        if effective != selected:
-            self._substitution_said = True
-        return effective
+        return self._resolve()[0]
 
     @property
     def spec(self) -> FetchProviderSpec:
@@ -941,8 +966,22 @@ class WebFetchTool(Tool):
     @property
     def api_key(self) -> str:
         """Resolve API key at call time so env/config changes are picked up."""
+        return self._resolve()[1]
+
+    def _resolve(self) -> tuple[str, str]:
+        """The (vendor, key) pair one call runs on, each source read once.
+
+        The selected vendor, the key behind it and the Jina substitution are
+        one decision: a key read again for the substitution could differ from
+        the key the request carries, and a vendor read again for the envelope
+        could name a backend the request never reached.
+        """
+        selected = _resolve_provider(self._provider_source, self._init_provider, FETCH_PROVIDERS)
         configured = self._api_key_source() if self._api_key_source is not None else self._init_api_key
-        return configured or os.environ.get(self.spec.env_var, "")
+        vendor = self.effective_provider(selected, configured, warn=not self._substitution_said)
+        if vendor != selected:
+            self._substitution_said = True
+        return vendor, configured or os.environ.get(FETCH_PROVIDERS[vendor].env_var, "")
 
     @classmethod
     def effective_provider(cls, provider: str, api_key: str | None, *, warn: bool = True) -> str:
@@ -977,14 +1016,15 @@ class WebFetchTool(Tool):
             # The same rule as the handlers below: most of these reasons name the
             # hostname, and a reader whose every target is refused is one cause.
             return json.dumps({"error": "URL validation failed", "detail": error_msg, "url": url}, ensure_ascii=False)
-        key = self.api_key
-        if (refused := self._refusal.active(key)) is not None:
-            error, detail = refusal_text(self.spec, refused, kind="fetch", sent=False)
+        vendor, key = self._resolve()
+        spec = FETCH_PROVIDERS[vendor]
+        if (refused := self._refusal.active(vendor, key)) is not None:
+            error, detail = refusal_text(spec, refused, kind="fetch", sent=False)
             return json.dumps({"error": error, "detail": detail, "paused": True, "url": url}, ensure_ascii=False)
 
         try:
-            logger.debug("WebFetch[{}]: {}", self.provider, "proxy enabled" if self.proxy else "direct connection")
-            text, status, extras = await self._provider_fetch(url, key)
+            logger.debug("WebFetch[{}]: {}", vendor, "proxy enabled" if self.proxy else "direct connection")
+            text, status, extras = await self._provider_fetch(url, vendor, key)
 
             truncated = len(text) > max_chars
             if truncated:
@@ -995,7 +1035,7 @@ class WebFetchTool(Tool):
                     "url": url,
                     "finalUrl": url,
                     "status": status,
-                    "extractor": self.spec.extractor,
+                    "extractor": spec.extractor,
                     "extractMode": extractMode,
                     "truncated": truncated,
                     "length": len(text),
@@ -1008,11 +1048,11 @@ class WebFetchTool(Tool):
             # Same rule as the search tool: the vendor and the status, not a
             # message that repeats the request URL.
             status = e.response.status_code
-            logger.error("WebFetch error for {}: {} answered HTTP {}", url, self.spec.label, status)
-            if self._refusal.note(status, key):
-                error, detail = refusal_text(self.spec, status, kind="fetch", sent=True)
+            logger.error("WebFetch error for {}: {} answered HTTP {}", url, spec.label, status)
+            if self._refusal.note(status, vendor, key):
+                error, detail = refusal_text(spec, status, kind="fetch", sent=True)
                 return json.dumps({"error": error, "detail": detail, "paused": True, "url": url}, ensure_ascii=False)
-            return json.dumps({"error": f"{self.spec.label} answered HTTP {status}", "url": url}, ensure_ascii=False)
+            return json.dumps({"error": f"{spec.label} answered HTTP {status}", "url": url}, ensure_ascii=False)
         except httpx.ProxyError as e:
             # The same rule as the status half above, and it reaches past the log line:
             # ``failure_class`` keys the loop's streak on this envelope's ``error``
@@ -1036,13 +1076,13 @@ class WebFetchTool(Tool):
             logger.error("WebFetch error for {}: {}", url, e)
             return json.dumps({"error": type(e).__name__, "detail": str(e), "url": url}, ensure_ascii=False)
 
-    async def _provider_fetch(self, url: str, key: str) -> tuple[str, int, dict[str, Any]]:
-        """One page, read the way the selected backend serves it, carrying ``key``.
+    async def _provider_fetch(self, url: str, vendor: str, key: str) -> tuple[str, int, dict[str, Any]]:
+        """One page, read the way ``vendor`` serves it, carrying ``key``.
 
         Returns the page text, the status to report, and any extra envelope
         fields the backend can fill in. Raises when the answer was not a page.
         """
-        if self.provider == "jina":
+        if vendor == "jina":
             headers = {"Accept": "text/plain"}
             if key:
                 headers["Authorization"] = f"Bearer {key}"
@@ -1052,7 +1092,7 @@ class WebFetchTool(Tool):
             return r.text, r.status_code, {}
 
         json_headers = {"Accept": "application/json", "Content-Type": "application/json"}
-        if self.provider == "tavily":
+        if vendor == "tavily":
             async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
                 r = await client.post(
                     "https://api.tavily.com/extract",
@@ -1076,7 +1116,7 @@ class WebFetchTool(Tool):
                 raise _ProviderPageError("Tavily returned no page content")
             return text, r.status_code, {}
 
-        if self.provider == "exa":
+        if vendor == "exa":
             async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
                 r = await client.post(
                     "https://api.exa.ai/contents",
@@ -1092,7 +1132,7 @@ class WebFetchTool(Tool):
                 raise _ProviderPageError("Exa returned no page content")
             return text, r.status_code, {"title": str(hit["title"])} if hit.get("title") else {}
 
-        if self.provider == "firecrawl":
+        if vendor == "firecrawl":
             async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
                 r = await client.post(
                     "https://api.firecrawl.dev/v1/scrape",
