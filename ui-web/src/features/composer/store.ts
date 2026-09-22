@@ -14,9 +14,10 @@ import type { Attachment, ComposerSource, SlashCmd, TemplateRow } from './types'
 
 /* Plain external store, same shape as the other islands: the dock is driven
  * by callers that are not React. The turn machine advances the phase, the
- * queue drains into `send` and a session switch resets everything -- all of it
- * state/session's (pipeline, runtime, registry, residency, stages) -- so the
- * state lives here where those can reach it and the views subscribe.
+ * queue drains into `send` and a session switch swaps in that conversation's
+ * own draft and tray -- all of it state/session's (pipeline, runtime, registry,
+ * residency, stages) -- so the state lives here where those can reach it and
+ * the views subscribe.
  *
  * The live phase and the queue are composer state: every path that changes,
  * parks, or restores them goes through this island, so their ownership and
@@ -24,6 +25,8 @@ import type { Attachment, ComposerSource, SlashCmd, TemplateRow } from './types'
  */
 
 export interface ComposerState {
+  /* The open conversation's tray, mirrored for the views: what is staged
+     belongs to `trays`, keyed like the text draft. */
   atts: Attachment[]
   queue: string[]
   /* The queue row being edited, by index, or null. The text itself stays in
@@ -102,8 +105,13 @@ function draftsWrite(all: Drafts): void {
   }
 }
 
+/* What the unsent belongs to: the open conversation, or 'new' while the first
+   message has no session yet. The text draft and the tray share it, so a
+   switch moves both. */
+const ownerKey = (): string => draftOwner || currentSession() || 'new'
+
 export function parkDraft(): void {
-  const key = draftOwner || currentSession() || 'new'
+  const key = ownerKey()
   const text = field()?.value || ''
   const all = draftsRead()
   if (text.trim()) all[key] = { t: text, at: Date.now() }
@@ -113,6 +121,10 @@ export function parkDraft(): void {
 
 export function loadDraft(id: string | null): void {
   draftOwner = id || 'new'
+  /* Above the guard: the tray is swapped even on the paths that run before the
+     field is mounted, or the files of the conversation left behind stay on
+     screen and ride the next message out. */
+  traySet(draftOwner, trayOf(draftOwner))
   const ta = field()
   if (!ta) return
   ta.value = draftsRead()[draftOwner]?.t || ''
@@ -120,14 +132,30 @@ export function loadDraft(id: string | null): void {
   goPaint()
 }
 
-export function dropDraft(id: string | null): void {
+function dropDraftText(key: string): void {
   const all = draftsRead()
-  delete all[id || 'new']
+  delete all[key]
   draftsWrite(all)
 }
 
+/* The conversation itself is gone -- this is the rail's delete -- so its tray
+   goes with its text. Through the writer rather than the map, because the one
+   deleted may be the conversation on screen. */
+export function dropDraft(id: string | null): void {
+  const key = id || 'new'
+  dropDraftText(key)
+  traySet(key, [])
+}
+
 export function claimDraft(id: string | null): void {
-  if (draftOwner === 'new') draftOwner = id || currentSession() || 'new'
+  if (draftOwner !== 'new') return
+  const key = id || currentSession() || 'new'
+  const staged = trays.get('new')
+  if (staged) {
+    trays.delete('new')
+    trays.set(key, staged)
+  }
+  draftOwner = key
 }
 
 export function touchDraft(): void {
@@ -135,10 +163,15 @@ export function touchDraft(): void {
   draftTick = setTimeout(parkDraft, 250)
 }
 
+/* Consuming the draft this conversation owns -- a send, a slash command -- takes
+   the text only: what is staged has not been handed to anyone yet, and a command
+   that compresses or clears the history is not the reader saying to throw the
+   files away. `fireSend` empties the tray itself, through `takeAtts`, because
+   the message it builds is where those files went. */
 export function dropOwnedDraft(): void {
   if (draftTick) clearTimeout(draftTick)
   draftTick = null
-  dropDraft(draftOwner)
+  dropDraftText(draftOwner || 'new')
 }
 
 /* A file on its own is a message -- "look at this" is what dropping it already
@@ -368,10 +401,31 @@ function trayPaint(atts: Attachment[]): void {
   set({ atts })
 }
 
+/* One tray per conversation, filed under the draft's key: a file staged in one
+   conversation is as unsent as the text typed next to it, and must not leave
+   with another's message. Not persisted, unlike the text: a screenshot's data
+   URL blows the storage quota on its own, and an upload still in flight means
+   nothing after a reload. */
+const trays = new Map<string, Attachment[]>()
+
+const trayOf = (key: string): Attachment[] => trays.get(key) || []
+
+/* The only writer. An upload that lands after the reader has moved on writes
+   the tray it was staged in, and only the open one is painted. */
+function traySet(key: string, next: Attachment[]): void {
+  if (next.length) trays.set(key, next)
+  else trays.delete(key)
+  if (key !== ownerKey()) return
+  /* Empty replacing empty is not a change: every rail click would otherwise
+     repaint the dock of conversations that never staged a file. */
+  if (!next.length && !get().atts.length) return
+  trayPaint(next)
+}
+
 export function removeAtt(i: number): void {
   const atts = get().atts.slice()
   atts.splice(i, 1)
-  trayPaint(atts)
+  traySet(ownerKey(), atts)
   goPaint()
 }
 
@@ -383,7 +437,7 @@ export const attsPending = (): number => get().atts.filter((a) => a.uploading).l
    itself is the record of what was handed over from here on. */
 export function takeAtts(): string[] {
   const paths = get().atts.map((a) => String(a.path || '')).filter(Boolean)
-  trayPaint([])
+  traySet(ownerKey(), [])
   goPaint()
   return paths
 }
@@ -391,6 +445,15 @@ export function takeAtts(): string[] {
 const failDetail = (e: unknown): string => {
   const o = e as { data?: { detail?: string }; message?: string }
   return (o && o.data && o.data.detail) || (o && o.message) || String(e)
+}
+
+/* Where a failed upload is reported: the transcript of the conversation it was
+   staged in, or a toast once the reader has moved on -- a note written then
+   would land in whatever conversation is open instead of that one. */
+function sayFailed(owner: string, label: string, e: unknown): void {
+  const detail = failDetail(e)
+  if (owner === ownerKey()) transcriptNote(label, detail)
+  else toast(`${label} · ${detail}`)
 }
 
 /* Whether files can be staged at all. False on the demo canvas, which has
@@ -420,8 +483,11 @@ export function canPickTemplate(): boolean {
 export function addTemplate(row: TemplateRow): void {
   const api = source().templates
   if (!api) return
+  /* Captured once, so what the pick lands in is the conversation it was picked
+     for however long the copy takes. */
+  const owner = ownerKey()
   const entry: Attachment = { name: `${row.name}.pptx`, size: row.size, uploading: true, path: null, url: row.cover || null }
-  trayPaint(get().atts.concat([entry]))
+  traySet(owner, trayOf(owner).concat([entry]))
   goPaint()
   api.pick(row.name)
     .then((r) => {
@@ -429,13 +495,13 @@ export function addTemplate(row: TemplateRow): void {
       entry.size = r.size
       entry.uploading = false
       if (entry.url) attachmentCache.set(r.path, entry.url)
-      trayPaint(get().atts.slice())
+      traySet(owner, trayOf(owner).slice())
       goPaint()
     })
     .catch((e: unknown) => {
-      trayPaint(get().atts.filter((a) => a !== entry))
+      traySet(owner, trayOf(owner).filter((a) => a !== entry))
       goPaint()
-      transcriptNote(t('gui.tpl.fail', { name: row.label }), failDetail(e))
+      sayFailed(owner, t('gui.tpl.fail', { name: row.label }), e)
     })
 }
 
@@ -445,13 +511,17 @@ export function addTemplate(row: TemplateRow): void {
 export function addFiles(files: ArrayLike<File>): void {
   const up = source().upload
   if (!up) return
+  /* Captured once, before the read and the round trip: an upload that lands or
+     fails after the reader has switched conversations belongs to the tray it
+     was staged in, and a failure must clear the chip there rather than leave a
+     ghost that refuses that conversation every later send. */
+  const owner = ownerKey()
   Array.from(files).forEach((file) => {
     const entry: Attachment = { name: file.name, size: file.size, uploading: true, path: null, url: null }
-    trayPaint(get().atts.concat([entry]))
+    traySet(owner, trayOf(owner).concat([entry]))
     goPaint()
     const drop = (): void => {
-      const rest = get().atts.filter((a) => a !== entry)
-      trayPaint(rest)
+      traySet(owner, trayOf(owner).filter((a) => a !== entry))
       goPaint()
     }
     const reader = new FileReader()
@@ -467,12 +537,12 @@ export function addFiles(files: ArrayLike<File>): void {
           entry.size = r.size
           entry.uploading = false
           if (entry.url) attachmentCache.set(r.path, entry.url)
-          trayPaint(get().atts.slice())
+          traySet(owner, trayOf(owner).slice())
           goPaint()
         })
         .catch((e: unknown) => {
           drop()
-          transcriptNote(t('gui.att.fail', { name: file.name }), failDetail(e))
+          sayFailed(owner, t('gui.att.fail', { name: file.name }), e)
         })
     }
     reader.onerror = drop
@@ -522,8 +592,8 @@ export function runSlash(x: SlashCmd | undefined): void {
   const ta = field()
   if (ta) ta.value = ''
   fitField()
-  goPaint()
   dropOwnedDraft()
+  goPaint()
   x.fn()
 }
 
@@ -662,5 +732,6 @@ export function _resetForTests(): void {
   liveT0 = 0
   draftOwner = null
   draftTick = null
+  trays.clear()
   store.set({ ...initial })
 }
