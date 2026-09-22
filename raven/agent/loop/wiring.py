@@ -100,7 +100,7 @@ class WiringMixin:
         is about the entry the operator can actually see -- most of them are in
         the config file, which is no longer copied into ``_disabled_tools``.
         """
-        from raven.agent.tools.tool_search import META_TOOL_NAMES
+        from raven.agent.tools.tool_search import META_TOOL_NAMES, TOOL_SEARCH_NAME
         from raven.config.live import disabled_tool_names
         from raven.mcp.prompts import PROMPT_TOOL_NAMES
         from raven.mcp.resources import RESOURCE_TOOL_NAMES
@@ -123,12 +123,23 @@ class WiringMixin:
                 )
             elif any(name in META_TOOL_NAMES for name in resolved):
                 self._disabled_tools_reserved_warned.add(entry)
+                # One remedy per name, because the two are not owned the same
+                # way: tools.tool_search.enabled decides whether tool_search is
+                # registered at all, while tool_call is registered whatever that
+                # switch says -- it is the only route to a schema-hidden tool.
+                # A shared "turn the fold off" line sent an operator who wrote
+                # tool_call here to a setting that leaves it exactly where it was.
+                remedy = (
+                    "turn the fold off with tools.tool_search.enabled, which is what registers it"
+                    if TOOL_SEARCH_NAME in resolved
+                    else "this deploy has no switch for it: it is the only route to a tool whose "
+                    "schema is not in the array, so it is registered whatever the fold is doing"
+                )
                 logger.warning(
-                    "tools.disabled_tools names '{}', which raven owns for the life of the loop: "
-                    "tool_call is the only route to a tool whose schema is not in the array, and "
-                    "tool_search follows tools.tool_search.enabled. The entry has no effect; "
-                    "remove it, or turn the fold off with that setting.",
+                    "tools.disabled_tools names '{}', which raven owns for the life of the loop. "
+                    "The entry has no effect; remove it, or {}.",
                     entry,
+                    remedy,
                 )
 
     def _withheld_tool_names(self) -> frozenset[str]:

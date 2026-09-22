@@ -1070,6 +1070,7 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
 
     from raven.agent.loop import AgentLoop
     from raven.agent.loop.bundles import ToolWiring
+    from raven.config.schema import ToolSearchConfig
     from raven.session.manager import SessionManager
     from raven.spine.message import ChatType, Source
     from raven.spine.turn import Origin, TurnRequest
@@ -1109,6 +1110,17 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
                 session_manager=sessions,
                 tools=ToolWiring(
                     restrict_to_workspace=True,
+                    # A replay reproduces a request; it does not assemble one.
+                    # The fold ships on, and a recording made above the
+                    # threshold already IS the folded array -- core plus the
+                    # meta-pair -- so serving it through the strategy again
+                    # counts a catalog under the threshold and drops
+                    # ``tool_search`` from what the replay sends. That reads as
+                    # a divergence in the offered tool names, which halts every
+                    # strict regression case before the first recorded reply.
+                    # Spelled out rather than inherited: this harness is a
+                    # deliberate bypass, not a deployment.
+                    tool_search_config=ToolSearchConfig(enabled=False),
                 ),
             )
             # The loop's ContextBuilder starts the skill file watcher, a

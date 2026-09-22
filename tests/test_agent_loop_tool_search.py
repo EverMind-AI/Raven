@@ -157,6 +157,27 @@ async def test_tool_call_does_not_name_tool_search_when_it_is_absent(workspace) 
     assert "tool_search lists what is currently loaded" in out
 
 
+def test_the_reserved_warning_names_the_remedy_each_tool_actually_has(workspace) -> None:
+    # The two are not owned the same way: turning the fold off does stop
+    # tool_search registering, and leaves tool_call exactly where it was. A
+    # shared remedy sent an operator who wrote tool_call to a setting that
+    # changes nothing for it.
+    from loguru import logger
+
+    records: list[str] = []
+    sink_id = logger.add(lambda message: records.append(message.record["message"]), level="WARNING")
+    try:
+        _make_loop(workspace, ToolSearchConfig(enabled=True), disabled_tools=["tool_search", "tool_call"])
+    finally:
+        logger.remove(sink_id)
+    lines = {  # one line per entry, keyed by the name it names
+        name: next((text for text in records if f"names '{name}'" in text), "") for name in ("tool_search", "tool_call")
+    }
+    assert "tools.tool_search.enabled" in lines["tool_search"], lines["tool_search"]
+    assert "tools.tool_search.enabled" not in lines["tool_call"], lines["tool_call"]
+    assert "no switch" in lines["tool_call"], lines["tool_call"]
+
+
 @pytest.mark.asyncio
 async def test_disabled_tools_cannot_withhold_the_meta_tools(workspace) -> None:
     # The off switch reaches every other name, but not these two. The strategy
