@@ -85,6 +85,23 @@ export interface WorkspaceSnapshot extends WsShared {
   deliveries: DeliveryRow[]
 }
 
+/* One directory as `fs.dirs` lists it: where the browser stands, one level up
+   (null at the filesystem root), where it started, whether a conversation may
+   be pinned here, and the subdirectories -- each with the same yes-or-no. */
+export interface DirEntry {
+  name: string
+  path: string
+  ok: boolean
+}
+
+export interface DirListing {
+  path: string
+  parent?: string | null
+  home: string
+  ok: boolean
+  entries: DirEntry[]
+}
+
 /* The DS.workspace contract. A page with no host behind it offers only
    shortPath and the demo toast; the rpc source (live layer) adds the fs.*
    surface and flags it with canBrowse -- which is how the island knows to
@@ -109,4 +126,9 @@ export interface WorkspaceSource {
      machine is worse than not offering. */
   hostIsLocal?(): boolean
   openPath?(p: string): void
+  /* The subdirectories of one absolute directory, the reader's home when none
+     is named: what the composer's working-directory picker walks
+     (state/workdir.ts). Optional like `reveal`: a page with no gateway behind
+     it says so on the menu instead of offering a browser over nothing. */
+  dirs?(path?: string): Promise<DirListing>
 }

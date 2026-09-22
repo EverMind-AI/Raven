@@ -922,6 +922,44 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 #permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--amber); margin-top: 3px; }
 .pop .note { padding: 7px 9px 4px; font-size: 10.5px; line-height: 1.5; color: var(--faint); }
 
+/* The working-directory popover (#wdPop, src/chrome/WorkdirPopover.tsx): the
+   permission popover's rows for the menu, and under them a small folder
+   browser -- a path bar, a scrolling list, two buttons. The chip wears the
+   page's own .chip and says a folder is named by carrying chrome-wd-set. */
+#wdPop { left: 0; right: auto; width: 300px; }
+#wdPop .hd { padding: 5px 9px 6px; }
+#wdPop .prow { align-items: flex-start; gap: 8px; padding: 6px 9px; border-radius: 8px; }
+#wdPop .prow .pico { width: 13px; height: 13px; flex: none; margin-top: 2px; color: var(--faint); }
+#wdPop .prow .nm { font-weight: 500; font-size: 13px; }
+#wdPop .prow[aria-checked="true"] .nm { font-weight: 600; }
+#wdPop .prow .sub { display: block; font-family: var(--mono); font-size: 10.5px; line-height: 1.5; color: var(--faint);
+  margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+#wdPop .prow .txt { flex: 1; min-width: 0; text-align: left; }
+#wdPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--amber); margin-top: 3px; }
+#wdPop .chrome-wd-open { margin-top: 2px; border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; padding-top: 8px; }
+#wdPop .chrome-wd-open .nm { font-weight: 500; color: var(--amber); }
+#wdPop .chrome-wd-err { color: var(--clay); }
+.chrome-wd-path { display: flex; align-items: center; gap: 4px; padding: 2px 6px 6px; border-bottom: 1px solid var(--line); }
+.chrome-wd-nav { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: none;
+  border-radius: 6px; color: var(--faint); }
+.chrome-wd-nav:hover:not(:disabled) { color: var(--text); background: var(--surface); }
+.chrome-wd-nav:disabled { opacity: .4; }
+.chrome-wd-nav svg { width: 14px; height: 14px; }
+.chrome-wd-p { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.chrome-wd-list { max-height: 236px; overflow-y: auto; padding: 4px 0; }
+#wdPop .chrome-wd-list .prow { align-items: center; padding: 5px 9px; }
+#wdPop .chrome-wd-list .prow .pico { margin-top: 0; }
+#wdPop .chrome-wd-off { color: var(--faint); }
+#wdPop .chrome-wd-off .nm { font-weight: 400; font-style: italic; }
+.chrome-wd-foot { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 6px 2px; border-top: 1px solid var(--line); }
+.chrome-wd-btn { padding: 4px 10px; border-radius: 7px; font-size: 12px; color: var(--text); background: var(--surface); }
+.chrome-wd-btn:hover:not(:disabled) { background: color-mix(in oklab, var(--text) 9%, transparent); }
+.chrome-wd-btn:disabled { opacity: .45; }
+.chrome-wd-use { color: var(--ink-on-accent); background: var(--amber); }
+.chrome-wd-use:hover:not(:disabled) { background: color-mix(in oklab, var(--amber) 88%, var(--text)); }
+#wdChip.chrome-wd-set { color: var(--text); }
+
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
 /* Bottom inset tracks the floating composer (--lift is the card's height plus
    its offset, published by dockLift), so the last message always clears the

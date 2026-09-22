@@ -18,10 +18,10 @@
  * the served word until that store's first paint); the other two are rendered
  * as the page serves them and written over by hand.
  *
- * Four of the children are files of their own, because each renders the whole
- * of a store: the context ring (./CtxChip.tsx) and the two chips with the
+ * Five of the children are files of their own, because each renders the whole
+ * of a store: the context ring (./CtxChip.tsx) and the three chips with the
  * popovers they open (./PermChip.tsx, ./PermPopover.tsx, ./TierChip.tsx,
- * ./TierPopover.tsx). Their place in the two child lists below is the page's,
+ * ./TierPopover.tsx, ./WorkdirChip.tsx, ./WorkdirPopover.tsx). Their place in the two child lists below is the page's,
  * which is the one thing about them this file still decides.
  *
  * What this does NOT own, though it renders the elements:
@@ -65,6 +65,8 @@ import { PermChip } from './PermChip'
 import { PermPopover } from './PermPopover'
 import { TierChip } from './TierChip'
 import { TierPopover } from './TierPopover'
+import { WorkdirChip } from './WorkdirChip'
+import { WorkdirPopover } from './WorkdirPopover'
 
 import type { JSX } from 'react'
 
@@ -106,6 +108,9 @@ function DockIn(): JSX.Element {
           {' '}
         </button>
         <PermChip />
+        {/* Where the conversation will run. Live on a draft, a report once the
+            conversation exists (src/chrome/WorkdirChip.tsx). */}
+        <WorkdirChip />
         <span className="chip" id="envChip" hidden><span className="led" /><span id="envName">本机</span></span>
         <span className="meter" id="meter" />
         <CtxChip />
@@ -121,6 +126,7 @@ function DockIn(): JSX.Element {
 
       <PermPopover />
       <TierPopover />
+      <WorkdirPopover />
     </div>
   )
 }

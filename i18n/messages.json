@@ -3804,8 +3804,8 @@
       "zh": "暂无会话"
     },
     "gui.rail.no_workdir": {
-      "en": "No folder",
-      "zh": "无工作区"
+      "en": "Default workspace",
+      "zh": "默认工作区"
     },
     "gui.rail.pinned": {
       "en": "Pinned",
@@ -3816,8 +3816,8 @@
       "zh": "最近"
     },
     "gui.rail.workdir": {
-      "en": "With a folder",
-      "zh": "有工作区"
+      "en": "Pinned to a folder",
+      "zh": "指定工作区"
     },
     "gui.rail.search_hits": {
       "en": "Results - {n}",
@@ -4263,13 +4263,17 @@
       "en": "The workspace is fixed once the conversation starts",
       "zh": "对话开始后工作区不可更改"
     },
+    "gui.wd.loading": {
+      "en": "Reading the folder...",
+      "zh": "正在读取…"
+    },
     "gui.wd.none": {
-      "en": "No folder",
-      "zh": "无文件夹"
+      "en": "Default",
+      "zh": "默认"
     },
     "gui.wd.none_h": {
       "en": "Work in the default directory",
-      "zh": "在默认目录里工作"
+      "zh": "在默认目录中工作"
     },
     "gui.wd.not_live": {
       "en": "Browsing folders needs a running gateway",

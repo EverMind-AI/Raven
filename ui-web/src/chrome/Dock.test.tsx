@@ -114,8 +114,8 @@ describe('the dock', () => {
     for (const id of [
       'sheetRack', 'queued', 'ta',
       'attBtn', 'permChip', 'permName', 'envChip', 'envName', 'meter', 'ctxChip',
-      'tierChip', 'tierName', 'modelChip', 'modelName', 'go',
-      'slashPop', 'slashList', 'permPop', 'permList', 'tierPop', 'tierPopLab', 'tierList',
+      'tierChip', 'tierName', 'modelChip', 'modelName', 'go', 'wdChip', 'wdName',
+      'slashPop', 'slashList', 'permPop', 'permList', 'tierPop', 'tierPopLab', 'tierList', 'wdPop',
     ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
@@ -128,6 +128,9 @@ describe('the dock', () => {
     expect(el('slashPop').getAttribute('role')).toBe('listbox')
     expect(el('permPop').getAttribute('role')).toBe('dialog')
     expect(el('tierPop').getAttribute('role')).toBe('dialog')
+    expect(el('wdPop').getAttribute('role')).toBe('dialog')
+    expect(el('wdChip').getAttribute('aria-haspopup')).toBe('true')
+    expect(el('wdChip').getAttribute('aria-expanded')).toBe('false')
     expect(el('tierPop').getAttribute('aria-labelledby')).toBe('tierPopLab')
     expect(el('tierList').getAttribute('role')).toBe('radiogroup')
     expect(el('permChip').getAttribute('aria-haspopup')).toBe('true')
@@ -231,13 +234,13 @@ describe('the dock', () => {
      run BESIDE the imperative handler, and both would fire on one press. React
      leaves an empty onclick on every element it takes a click of (the trap that
      makes clicks fire on iOS), so a bare .onclick is what says the element is
-     still the other writer's, and that trap is what says the two chips are this
-     tree's (src/chrome/PermChip.tsx, src/chrome/TierChip.tsx). */
-  it('takes only the two chips, and leaves each other click to the module that owns it', () => {
+     still the other writer's, and that trap is what says the three chips are this
+     tree's (src/chrome/PermChip.tsx, src/chrome/TierChip.tsx, src/chrome/WorkdirChip.tsx). */
+  it('takes only the three chips, and leaves each other click to the module that owns it', () => {
     render()
     const IMPERATIVE = ['go', 'attBtn', 'modelChip']
     for (const id of IMPERATIVE) expect(el(id).onclick, id).toBe(null)
-    const OWN = ['permChip', 'tierChip']
+    const OWN = ['permChip', 'tierChip', 'wdChip']
     for (const id of OWN) expect(typeof el(id).onclick, id).toBe('function')
     for (const node of dock().querySelectorAll('*')) {
       if (OWN.includes(node.id)) continue
@@ -260,7 +263,7 @@ describe('the dock', () => {
     const box = el('atts')
     expect(box.hidden).toBe(true)
     expect(Array.from(document.querySelector('.dock-in')!.children).map((c) => c.id || c.className)).toEqual([
-      'queued', 'atts', 'field', 'under', 'slashPop', 'permPop', 'tierPop',
+      'queued', 'atts', 'field', 'under', 'slashPop', 'permPop', 'tierPop', 'wdPop',
     ])
   })
 })
