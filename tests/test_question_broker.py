@@ -784,3 +784,43 @@ async def test_question_respond_ignores_answers_with_a_non_string_entry() -> Non
     await _wait_until(lambda: len(frames) >= 2)
     broker.reply(CID, "manual")
     assert await second == "manual"
+
+
+def test_every_question_responder_in_the_repo_accepts_the_protocols_keywords() -> None:
+    """``QuestionResponder`` is structural, and each transport brings its own
+    implementation, so widening the protocol is only complete once every one of
+    them takes the new keyword: ``AskUserTool`` passes each flag on every call,
+    and an implementation that stopped short raised ``TypeError`` before a
+    question was ever put to anyone. Found by walking the tree rather than by a
+    list, so the next transport is held to the same shape."""
+    import ast
+    import importlib
+    import inspect
+    from pathlib import Path
+
+    from raven.contracts.asking import QuestionResponder
+
+    root = Path(__file__).resolve().parent.parent / "raven"
+    implementers: list[tuple[str, type]] = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if not any(isinstance(fn, ast.AsyncFunctionDef) and fn.name == "await_question" for fn in node.body):
+                continue
+            module = ".".join(path.relative_to(root.parent).with_suffix("").parts)
+            implementers.append((module, getattr(importlib.import_module(module), node.name)))
+
+    assert {cls.__name__ for _, cls in implementers} >= {"QuestionBroker", "RoutingQuestionBroker", "A2aQuestionBroker"}
+    wanted = inspect.signature(QuestionResponder.await_question).parameters
+    for module, cls in implementers:
+        if cls is QuestionResponder:
+            continue
+        got = inspect.signature(cls.await_question).parameters
+        for name, param in wanted.items():
+            assert name in got, f"{module}.{cls.__name__}.await_question lacks {name!r}"
+            assert got[name].kind == param.kind, f"{module}.{cls.__name__}.await_question: {name!r} kind differs"
+            assert (got[name].default is inspect.Parameter.empty) == (param.default is inspect.Parameter.empty), (
+                f"{module}.{cls.__name__}.await_question: {name!r} default presence differs"
+            )
