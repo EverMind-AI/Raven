@@ -202,3 +202,27 @@ async def test_quoting_the_lexer_cannot_close_still_watches_the_named_paths(tool
     watched = tool._removal_watch("rm gone.txt 'unclosed", str(tmp_path))
 
     assert list(watched) == [str(tmp_path / "gone.txt")]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm gone.txt;",
+        "rm gone.txt && echo done",
+        "rm gone.txt | cat",
+        "(rm gone.txt)",
+        "rm gone.txt >/dev/null 2>&1",
+        "echo first; rm gone.txt",
+        "rm 'gone.txt';echo tail",
+    ],
+)
+async def test_an_operator_beside_the_path_does_not_hide_the_removal(tool, tmp_path, command):
+    """The shell reads `gone.txt;` as a path followed by an operator; a lexer
+    that does not split on operators reads it as a file called `gone.txt;` and
+    watches nothing. The watch reads the command the way the fence does."""
+    (tmp_path / "gone.txt").write_text("gone\n")
+
+    result = await tool.execute(command=command)
+
+    assert not (tmp_path / "gone.txt").exists(), "the command itself must have run"
+    assert [(r.path, r.before) for r in result.removed] == [(str(tmp_path / "gone.txt"), "gone\n")]

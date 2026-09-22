@@ -317,13 +317,17 @@ class ExecTool(Tool):
         read. Absent past the byte cap or on undecodable bytes -- the deletion is
         still reported, only its body is not.
         """
+        readable = executable_text(command)
         try:
-            tokens = shlex.split(executable_text(command))
+            # The fence's own reading of the command: split on the shell's
+            # operators first, so `rm gone.txt;` names `gone.txt` and not a
+            # file called `gone.txt;` that was never there.
+            tokens = [token for segment, _ in _command_segments_with_separators(readable) for token in segment]
         except ValueError:
             # Quoting the lexer cannot close. The command may still run (the
             # shell is a better lexer than this one), so fall back to the
             # coarsest split rather than watching nothing.
-            tokens = executable_text(command).split()
+            tokens = readable.split()
         roots = [Path(cwd).resolve(), *(Path(d).resolve() for d in self.extra_allowed_dirs)]
         watched: dict[str, str | None] = {}
         for token in tokens:
