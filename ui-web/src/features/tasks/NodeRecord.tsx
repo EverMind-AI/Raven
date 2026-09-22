@@ -398,10 +398,15 @@ function CallRow({ call, nodeKey, foldKey, running }: {
   const done = call.result != null
   /* A call with no result is in flight only while the node is. A run that
      was cancelled or aborted mid-round leaves a record that still advertises
-     every call of that round, and drawing the ones it never reached as
-     breathing beside a settled status claims work that is not coming back. */
+     calls with no result, and drawing them as breathing beside a settled
+     status claims work that is not coming back. The settled label says only
+     what the record knows -- no result came back -- because the same shape
+     covers two facts the wire cannot tell apart: an acp `tool_call` frame
+     means the call was initiated (`status: in_progress`) and may well have
+     finished with side effects before the cancel landed, while the
+     in-process lane advertises a round's calls before it reaches them. */
   const busy = !done && running
-  const notRun = !done && !running
+  const noResult = !done && !running
   const bad = call.ok === false
   const kind: 'deleg' | 'dag' | 'plain' = bare === 'spawn'
     ? 'deleg'
@@ -411,7 +416,7 @@ function CallRow({ call, nodeKey, foldKey, running }: {
   const touched = useSyncExternalStore(store.subscribe, () => store.foldOf(nodeKey, foldKey))
   const open = touched ?? false
   const hunk = kind === 'plain' ? hunkOfCall(bare, args) : null
-  const withDtl = done || (kind !== 'plain' && !notRun)
+  const withDtl = done || (kind !== 'plain' && !noResult)
   const inner = (
     <>
       <Glyph d={bad ? ACT_ICO.bad as string : actIco(bare)} cls="tkic" />
@@ -432,12 +437,12 @@ function CallRow({ call, nodeKey, foldKey, running }: {
         )
         : null}
       {kind === 'plain' && bad ? <span className="err">{firstErrLine(call.result)}</span> : null}
-      {notRun ? <span className="tknotrunchip">{t('gui.tasks.call_not_run')}</span> : null}
+      {noResult ? <span className="tknoresultchip">{t('gui.tasks.call_no_result')}</span> : null}
       {withDtl ? <Glyph d={ACT_ICO.chev as string} cls="tkcv" /> : null}
     </>
   )
   return (
-    <div className={'tkwrow' + (busy ? ' tkbusy' : '') + (notRun ? ' tknotrun' : '') + (bad ? ' tkbad' : '') + (withDtl ? ' tktog' : '') + (withDtl && open ? ' tkopen' : '')}>
+    <div className={'tkwrow' + (busy ? ' tkbusy' : '') + (noResult ? ' tknoresult' : '') + (bad ? ' tkbad' : '') + (withDtl ? ' tktog' : '') + (withDtl && open ? ' tkopen' : '')}>
       {withDtl
         ? <button type="button" className="tkwhd" aria-expanded={open} onClick={() => store.setFold(nodeKey, foldKey, !open)}>{inner}</button>
         : <div className="tkwhd">{inner}</div>}
@@ -465,10 +470,10 @@ function CallsBlock({ calls, nodeKey, foldKey, running }: {
   /* Any call in the fold still out -- the same reason a single un-returned
      call's own row breathes, carried onto the summary that stands in for
      every row folded behind it. Once the node has settled, the same calls
-     are the ones it never reached, and the summary counts them instead. */
+     are the ones no result came back for, and the summary counts them. */
   const unanswered = calls.filter((c) => c.result == null).length
   const flying = running && unanswered > 0
-  const notRun = running ? 0 : unanswered
+  const noResult = running ? 0 : unanswered
   const bareNames = calls.map((c) => splitMcp(c.name).bare)
   const oneKind = new Set(bareNames).size === 1
   return (
@@ -482,7 +487,7 @@ function CallsBlock({ calls, nodeKey, foldKey, running }: {
             <Glyph d={oneKind ? actIco(bareNames[0] as string) : ACT_ICO.dot as string} cls="tkic" />
             <span className="tkar">{phraseOf(bareNames.map((name) => ({ name })))}</span>
             {bad ? <span className="tkbadchip">{t('gui.tasks.call_failed_n', { n: bad })}</span> : null}
-            {notRun ? <span className="tknotrunchip">{t('gui.tasks.call_not_run_n', { n: notRun })}</span> : null}
+            {noResult ? <span className="tknoresultchip">{t('gui.tasks.call_no_result_n', { n: noResult })}</span> : null}
             <Glyph d={ACT_ICO.chev as string} cls="tkcv" />
           </button>
         )

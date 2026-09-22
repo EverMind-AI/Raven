@@ -547,12 +547,12 @@
   color: var(--clay);
   background: color-mix(in oklab, var(--clay) 12%, transparent);
 }
-.tkwrow.tknotrun .tkic,
-.tkwrow.tknotrun .tkvb,
-.tkwrow.tknotrun .tkar {
+.tkwrow.tknoresult .tkic,
+.tkwrow.tknoresult .tkvb,
+.tkwrow.tknoresult .tkar {
   color: var(--faint);
 }
-.tknotrunchip {
+.tknoresultchip {
   flex: none;
   font-size: 10.5px;
   padding: 0 6px;

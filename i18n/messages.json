@@ -6483,13 +6483,13 @@
       "en": "{n} failed",
       "zh": "{n} 失败"
     },
-    "gui.tasks.call_not_run": {
-      "en": "not run",
-      "zh": "未执行"
+    "gui.tasks.call_no_result": {
+      "en": "no result",
+      "zh": "未返回"
     },
-    "gui.tasks.call_not_run_n": {
-      "en": "{n} not run",
-      "zh": "{n} 未执行"
+    "gui.tasks.call_no_result_n": {
+      "en": "{n} no result",
+      "zh": "{n} 未返回"
     },
     "gui.tasks.deleg_a_graph": {
       "en": "a graph",
