@@ -43,6 +43,9 @@ async function harness(
      resolves to nothing; committing puts the heading back and writes the typed
      name onto the row the editor captured when it opened. */
   const editor = { commit: () => {} }
+  /* The live row's clock anchor, which is composer island state: the switch
+     writes it and nothing here paints, so it is recorded rather than drawn. */
+  const anchor = { ms: 0 }
   const spare = new Map<string, HTMLElement>()
   const $ = (selector: string): HTMLElement | null => {
     if (selector in boxes || selector === '#title') return boxes[selector] || null
@@ -96,6 +99,8 @@ async function harness(
         queueClear: () => {},
         queueRestore: () => {},
         queueShift: () => undefined,
+        liveAnchor: () => anchor.ms,
+        setLiveAnchor: (ms: number) => { anchor.ms = ms; calls.push(['setLiveAnchor', ms]) },
         turn: {
           dispatch: (event: TurnEvent) => calls.push(['turnDispatch', event]),
           busy: () => machine().phase !== 'idle', snapshot: () => ({}),
@@ -182,6 +187,8 @@ async function harness(
   const asked = (method: string) => calls.filter((c) => c[0] === 'rpc' && c[1] === method).map((c) => c[2])
   return {
     turnState: machine,
+    liveAnchor: () => anchor.ms,
+    startedAt: (key: string) => registry.get(key)?.startedAt,
     subscribe: registry.subscribe,
     startDraft: registry.switchToDraft,
     openLiveSession: (row: Row) => registry.switchTo(row as SessRow),
@@ -264,6 +271,43 @@ describe('the live session switch', () => {
     expect(h.turnState()).toMatchObject({ phase: 'streaming', cancellable: true })
     expect(h.calls).toContainEqual(['goPaint'])
     expect(h.asked('session.resume')).toHaveLength(1)
+  })
+
+  /* The clock on the composer's live row, which is anchored on its first paint
+     and defaults that anchor to now. A reload of a running turn is the one
+     opening that has no first paint to be anchored by, so the turn read "0s"
+     again at every reload -- of a turn the reader had been watching for ten
+     minutes. The question is the turn's start, and this branch is where its
+     stamp arrives. */
+  it('anchors a resumed turn to the question that started it', async () => {
+    const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: true })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', {
+      session_id: 'a',
+      messages: [
+        { role: 'user', text: 'first', timestamp: '2026-09-22T09:00:00Z' },
+        { role: 'assistant', text: 'answered' },
+        { role: 'user', text: 'running', timestamp: '2026-09-22T10:00:00Z' },
+      ],
+      info: { running: true },
+    })
+
+    const askedAt = Date.parse('2026-09-22T10:00:00Z')
+    expect(h.liveAnchor()).toBe(askedAt)
+    /* The fold header's own elapsed, which reads the runtime rather than the
+       row: the two must not disagree about when the same turn began. */
+    expect(h.startedAt('a')).toBe(askedAt)
+  })
+
+  it('leaves the clock where it was when the question carries no stamp', async () => {
+    const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: true })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [{ role: 'user', text: 'running' }], info: { running: true } })
+
+    expect(h.calls.filter((c) => c[0] === 'setLiveAnchor')).toEqual([])
+    expect(h.liveAnchor()).toBe(0)
   })
 
   /* The gap between the two round trips. The resume is read before the

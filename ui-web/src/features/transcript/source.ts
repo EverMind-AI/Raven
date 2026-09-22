@@ -23,7 +23,7 @@ import { draw as sessionDraw } from '../rail/store'
 import { plainTitle } from '../rail/title'
 import * as subagents from '../subagents/store'
 import { history as drawHistory } from './mount'
-import { actLabel as storeActLabel } from './store'
+import { actLabel as storeActLabel, msOfIso as storeMsOfIso } from './store'
 
 import type { SessRow } from '../rail/types'
 import type { HistoryMessage } from './types'
@@ -59,6 +59,11 @@ export function okOf(name: string, preview: string): boolean {
    it through the seam rather than importing this island's private store. */
 export const actLabel = (name: string, args: Record<string, unknown>, display?: string | null): string =>
   storeActLabel(name, args, display)
+
+/* A stored message's stamp in milliseconds, through the same seam and for the
+   same reason: the session layer anchors a resumed turn's clock to the question
+   that started it, and must read that stamp the way the transcript reads it. */
+export const msOfIso = (raw: unknown): number => storeMsOfIso(raw)
 
 export function renderHistory(messages: HistoryMessage[]): void {
   /* Opening a stored conversation IS content: the new-task flag comes down

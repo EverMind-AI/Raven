@@ -13,7 +13,7 @@
  * painted over the conversation that overtook it.
  */
 
-import { drawMeter, goPaint as goState, loadDraft, parkDraft, queueClear, turn } from '../../features/composer/mount'
+import { drawMeter, goPaint as goState, loadDraft, parkDraft, queueClear, setLiveAnchor, turn } from '../../features/composer/mount'
 import { loadProviders } from '../../features/model/source'
 import { rowFrom, SESS_CHANNELS } from '../../features/rail/source'
 import { draw as sessionDraw, endRename, markNew as markNewCurrent, reconcileRows } from '../../features/rail/store'
@@ -21,7 +21,7 @@ import { plainTitle } from '../../features/rail/title'
 import { leaveDeletedSession } from '../../features/rail/wire'
 import { loadPermMode } from '../../features/settings/source'
 import { killStatus, status as transcriptStatus, stopStream } from '../../features/transcript/mount'
-import { renderHistory } from '../../features/transcript/source'
+import { msOfIso, renderHistory } from '../../features/transcript/source'
 import { wsOnHistory } from '../../features/workspace/record'
 import { wsSetRoot } from '../../features/workspace/source'
 import { loadDeliveries } from '../../features/workspace/store'
@@ -322,7 +322,15 @@ export async function switchTo(s: SessRow): Promise<void> {
        being refused as -32003, and the deltas still to come open a step of
        their own. What already streamed is not recoverable and is not pretended
        at -- the reader picks the answer up from where it has got to. */
-    if (r.info && r.info.running) { rt.dispatch({ type: 'stream', cancellable: true }); goState() }
+    if (r.info && r.info.running) {
+      /* Anchored to the question's own stamp, before anything paints the live
+         row: left to default to `Date.now()`, the clock on it started again
+         from zero at every reload of the same turn. */
+      const asked = (r.messages || []).filter((m) => m && m.role === 'user').pop()
+      const askedAt = asked ? msOfIso(asked.timestamp) : 0
+      if (askedAt) { setLiveAnchor(askedAt); rt.startedAt = askedAt }
+      rt.dispatch({ type: 'stream', cancellable: true }); goState()
+    }
     /* Every graph this conversation started, oldest first, as the gateway
        stamped them onto the rows that started them. This is the only source
        that survives a run the reader never saw start: no live event reached
