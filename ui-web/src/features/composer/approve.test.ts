@@ -444,7 +444,13 @@ describe('the permission approval sheet', () => {
     ]
     for (const c of cases) {
       openApproval(fresh({ ...base, ...c, family: '' }), handlers())
-      expect(document.querySelector('.cp-ev-cut')?.textContent, c.kind).toBe('gui.confirm.ev.cut')
+      const mark = document.querySelector('.cp-ev-cut')
+      expect(mark?.textContent, c.kind).toBe('gui.confirm.ev.cut')
+      /* Outside the box that scrolls. Inside it, the mark sits at the end of
+         however much evidence there is -- and the reader who never scrolls,
+         who is the one it exists for, never reaches it. */
+      expect(mark!.closest('.cp-ev'), c.kind).toBeNull()
+      expect(mark!.closest('.what'), c.kind).toBeNull()
     }
     /* And stays quiet when nothing was cut. */
     openApproval(fresh({ ...base, kind: 'file.write', family: '', evidence: { path: '/w/a.py', diff: '-a\n+b' } }), handlers())

@@ -27,6 +27,7 @@ import { createElement } from 'react'
 
 import { t } from '../../i18n/t'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
+import { ds } from '../../state/sources'
 import { AskApproveSheet } from './AskApproveSheet'
 import { GateSheet, LandedSheet } from './GateSheet'
 import { composing } from './store'
@@ -201,6 +202,15 @@ const typing = (e: KeyboardEvent): boolean => {
 const topmost = (sheet: HTMLElement): boolean =>
   !sheet.parentElement || sheet.parentElement.firstElementChild === sheet
 
+const shortened = (p: string): string => {
+  try {
+    return ds('workspace').shortPath(p) || p
+  } catch {
+    /* Before the workspace domain is wired, and in a test that never wires it. */
+    return p
+  }
+}
+
 /* The words a request is asked in. The family names the sentence when the
    engine sent one; a bare shell command, a file write, an MCP call and a tool
    the page has no layout for each have a sentence of their own. */
@@ -215,7 +225,11 @@ function wordsFor(req: ApprovalReq): GateWords {
        here rather than a key. */
     who: req.origin?.kind === 'subagent' && req.origin.name ? req.origin.name : 'Raven',
     cwd: str(ev.cwd) || str(ev.machine),
-    path,
+    /* The sentence gets the short form and the evidence block keeps the whole
+       path: one absolute path is four lines of a small sheet, and printing it
+       twice says nothing the second time. The panel's own shortener, through
+       the seam, so the sheet spells a path the way the rest of the page does. */
+    path: shortened(path),
     name: path.slice(path.lastIndexOf('/') + 1) || path,
     server: str(ev.server),
     tool: str(ev.tool),

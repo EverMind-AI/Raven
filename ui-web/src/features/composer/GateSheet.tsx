@@ -53,14 +53,16 @@ function EvidenceBlock(
   /* The gate cuts an oversized account down to what a person reads and says so
      here. Answering about a change you can only see part of is the one thing
      the cap must not cause, so the sheet says it was shortened wherever the
-     flag is set -- and says it below the evidence, where the reader has just
-     run out of it. */
+     flag is set -- and says it OUTSIDE the evidence block, which scrolls: put
+     inside, the mark sits at the end of the scroll, and the reader who never
+     scrolls is exactly the one it exists for. */
   const cut = evidence.truncated === true ? <div className="cp-ev-cut">{words.cut}</div> : null
   if (kind === 'file.write') {
     /* The file header names the path the line above already shows, and a
        two-line change should not spend its room on it. */
     const lines = str(evidence.diff).split('\n').filter((l) => !l.startsWith('--- ') && !l.startsWith('+++ '))
     return (
+    <>
       <div className="what cp-ev">
         <div className="cp-ev-path">{str(evidence.path)}{evidence.created ? ` · ${words.created}` : ''}</div>
         {str(evidence.diff)
@@ -70,27 +72,35 @@ function EvidenceBlock(
             </pre>
           )
           : <div className="cp-ev-none">{words.nodiff}</div>}
-        {cut}
       </div>
+      {cut}
+    </>
     )
   }
   if (kind === 'mcp.call') {
     return (
+    <>
       <div className="what cp-ev">
         <div className="cp-ev-path">{str(evidence.server)}.{str(evidence.tool)}</div>
         <pre className="cp-json">{JSON.stringify(evidence.input ?? {}, null, 2)}</pre>
-        {cut}
       </div>
+      {cut}
+    </>
     )
   }
   if (kind === 'shell.exec') {
-    return <div className="what">{str(evidence.command) || command}{cut}</div>
+    return <>
+      <div className="what">{str(evidence.command) || command}</div>
+      {cut}
+    </>
   }
   return (
-    <div className="what cp-ev">
-      <pre className="cp-json">{JSON.stringify(evidence.input ?? evidence, null, 2)}</pre>
+    <>
+      <div className="what cp-ev">
+        <pre className="cp-json">{JSON.stringify(evidence.input ?? evidence, null, 2)}</pre>
+      </div>
       {cut}
-    </div>
+    </>
   )
 }
 

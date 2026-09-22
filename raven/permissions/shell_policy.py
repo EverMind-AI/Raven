@@ -999,6 +999,17 @@ _FETCH_SEND_FLAGS = frozenset(
 )
 
 
+# What a forge CLI's publishing group does when the verb only reads. ``gh pr``
+# and ``glab mr`` are matched as a group because enumerating their writing verbs
+# means missing the next one; the cost is that ``gh pr view`` was asked about in
+# the words of a push ("others will see it"), which is not what it does. A verb
+# that only reads leaves the family: the prompt then words it as the plain
+# command it is. ``secret`` keeps no relief -- naming an organisation's secrets
+# is itself the thing worth asking about.
+_READ_ONLY_VERBS = frozenset({"list", "view", "status", "diff", "checks"})
+_NO_READ_RELIEF = frozenset({"secret"})
+
+
 def _matches_publish_command(command: str) -> bool:
     """A command that pushes work somewhere other people can see it."""
 
@@ -1007,7 +1018,15 @@ def _matches_publish_command(command: str) -> bool:
         if executable in _PUBLISH_EXECUTABLES:
             return True
         allowed = _PUBLISH_SUBCOMMANDS.get(executable)
-        if allowed and any(word in allowed for word in _subcommands(argv)):
+        if not allowed:
+            continue
+        words = _subcommands(argv)
+        for i, word in enumerate(words):
+            if word not in allowed:
+                continue
+            after = words[i + 1] if i + 1 < len(words) else ""
+            if word not in _NO_READ_RELIEF and after in _READ_ONLY_VERBS:
+                continue
             return True
     return False
 
