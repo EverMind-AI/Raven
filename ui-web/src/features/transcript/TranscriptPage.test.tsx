@@ -141,6 +141,46 @@ describe('transcript island, history', () => {
     expect($('.turn.me .achip')).toBeNull()
   })
 
+  it('renders an attached picture from the workspace once the cache is gone', () => {
+    /* The cache holds the bytes only for the page that uploaded them, so after
+       a reload every picture in the scrollback turned into a file name -- which
+       is not what the reader sent. The file is where the composer put it, so
+       the message's own path is enough to draw it. */
+    act(() => {
+      mount.history([{ role: 'user', text: `look\n\n${ATT_NOTE}\n- uploads/shot.png` }])
+    })
+    const img = $<HTMLImageElement>('.turn.me .shot')
+    expect(img).not.toBeNull()
+    expect(img?.getAttribute('src')).toContain('/file?path=uploads%2Fshot.png')
+    expect($('.turn.me .achip')).toBeNull()
+  })
+
+  it('gives the pictures and the files a row each', () => {
+    /* One row for both put a file chip on the pictures' baseline, where it read
+       as a caption on the thumbnail beside it, and pushed whatever did not fit
+       onto a line of its own. */
+    act(() => {
+      mount.history([{
+        role: 'user',
+        text: `look\n\n${ATT_NOTE}\n- uploads/a.png\n- uploads/b.png\n- uploads/deck.pptx\n- uploads/page.html`,
+      }])
+    })
+    const rows = [...document.querySelectorAll('.turn.me .abox > .transcript-arow')]
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.querySelectorAll('.shot')).toHaveLength(2)
+    expect(rows[0]!.querySelectorAll('.achip')).toHaveLength(0)
+    expect(rows[1]!.querySelectorAll('.achip')).toHaveLength(2)
+    expect(rows[1]!.querySelectorAll('.shot')).toHaveLength(0)
+  })
+
+  it('keeps a file that is not a picture as a chip', () => {
+    act(() => {
+      mount.history([{ role: 'user', text: `read it\n\n${ATT_NOTE}\n- uploads/notes.pdf` }])
+    })
+    expect($('.turn.me .shot')).toBeNull()
+    expect($('.turn.me .achip .nm')?.textContent).toBe('notes.pdf')
+  })
+
   /* Whether a tool result counts as a failure is the source's call, not this
      island's: the two modes classify differently. Nothing asserted that the row
      reflects the answer, so okOf could return anything and stay green. */

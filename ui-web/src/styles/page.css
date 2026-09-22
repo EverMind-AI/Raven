@@ -1720,9 +1720,21 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 
 /* attachments above the ask bubble — an image shows itself, a file shows its
    name, and a set too big to lay out flat shows one of itself plus a count */
+/* The box stacks what it holds; each row inside it packs to the right. One row
+   for both put a file chip on the pictures' baseline, where it read as a
+   caption on the thumbnail beside it, and pushed the rest onto a line of their
+   own -- ragged left edges under a straight row of squares. */
 .abox {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 100%;
+}
+/* No percentage of its own. The turn shrink-to-fits around its widest child, so
+   a share of it is a share of a width this box is what decides -- the box was
+   held to 78% of a number it had just set, which cut it below its own content
+   and wrapped a row that had room. The turn's own 70% is the bound that means
+   something; what a row may be is its items' business. */
+.transcript-arow {
   display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: flex-end;
-  gap: 6px; max-width: 78%;
+  gap: 6px; max-width: 100%;
 }
 .abox + .b { margin-top: 7px; }
 .abox .shot {

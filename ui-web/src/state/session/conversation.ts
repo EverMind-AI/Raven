@@ -14,6 +14,7 @@
 import { ask as drawAsk, dropSeg, note as drawNote } from '../../features/transcript/mount'
 import { setStuck } from '../../features/transcript/tail'
 import { I18N } from '../../i18n/t'
+import { splitAttachments } from '../../lib/attachments'
 
 import type { NoteHandle } from '../../features/transcript/types'
 
@@ -38,20 +39,13 @@ export function unpitch(): void {
 /* The composer appends an "[attachments]" note plus "- path" bullets for the
    model; the reader gets chips instead. Parsed against both language variants
    of the note, since history may have been written under the other one. */
+/** Every spelling of the attachment note's heading the catalogue carries: a
+ *  message sent under one language is read back under whichever is in force. */
+export const noteWords = (): string[] =>
+  Object.values((I18N.ui['gui.att.note'] ?? {}) as Record<string, string>).filter(Boolean)
+
 export function splitAtts(text: string): { body: string; atts: string[] } {
-  const notes = Object.values((I18N.ui['gui.att.note'] ?? {}) as Record<string, string>)
-  for (const note of notes) {
-    if (!note) continue
-    const ix = text.lastIndexOf(`\n\n${note}\n`)
-    if (ix < 0) continue
-    const tail = text.slice(ix + note.length + 3).split('\n')
-    if (!tail.length || !tail.every((l) => !l.trim() || /^- /.test(l))) continue
-    return {
-      body: text.slice(0, ix),
-      atts: tail.filter((l) => /^- /.test(l)).map((l) => l.slice(2).trim()),
-    }
-  }
-  return { body: text, atts: [] }
+  return splitAttachments(text, noteWords())
 }
 
 /* Answers the bubble's id so a caller that may have to take it back can: a

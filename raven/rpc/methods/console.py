@@ -1851,6 +1851,30 @@ def _safe_name(name: str) -> str:
     return (cleaned or "file")[:120]
 
 
+def viewer_root(workspace: Path, rel: Path) -> Path:
+    """Which root a relative path handed to the viewer is relative to.
+
+    Two roots, each deliberate, and one kind of path belongs to the other one.
+    ``fs.upload`` deposits into agent home whichever session asked -- it is the
+    root always writable, and ``turn.send`` fences an attachment there -- and
+    answers with a path relative to it. Everything else the viewer is handed is
+    relative to the session's own working directory, which is what the file
+    panel browses. The two are the same directory for a session that runs where
+    the agent lives, and part company for one pinned elsewhere: there a picture
+    the reader attached came back 404 from ``/file`` and its bubble fell back to
+    a file name.
+
+    The session's own root is tried first, so a session that keeps an
+    ``uploads`` directory of its own still serves its own file; agent home
+    answers only for a path that is an upload and is actually there.
+    """
+    if (workspace / rel).exists():
+        return workspace
+    if rel.parts[:1] == (_UPLOAD_DIR,) and (_upload_root() / rel).exists():
+        return _upload_root()
+    return workspace
+
+
 def _upload_root() -> Path:
     """Where an uploaded file is deposited: agent home, not the session workdir.
 

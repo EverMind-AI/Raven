@@ -2306,3 +2306,55 @@ async def test_deck_templates_pages_renders_every_page_once_and_refuses_a_strang
 
     with pytest.raises(ConfigValidationError):
         await console_module.deck_templates_pages({"name": "nope"}, agent_loop_factory=_loop_factory(None))
+
+
+def test_viewer_root_serves_a_session_its_own_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The session's own directory answers first, whatever the path is called."""
+    session = tmp_path / "project"
+    (session / "uploads").mkdir(parents=True)
+    (session / "uploads" / "shot.png").write_bytes(b"session copy")
+    home = tmp_path / "agent-home"
+    (home / "uploads").mkdir(parents=True)
+    (home / "uploads" / "shot.png").write_bytes(b"agent home copy")
+    monkeypatch.setattr(console_module, "_upload_root", lambda: home)
+
+    assert console_module.viewer_root(session, Path("uploads/shot.png")) == session
+
+
+def test_viewer_root_finds_an_upload_a_pinned_session_cannot_see(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An upload is relative to agent home, not to the session that asked for it.
+
+    `fs.upload` deposits there whichever session asked and answers with a path
+    relative to it, while the viewer resolves a relative path against the
+    session's own working directory. For a session pinned elsewhere the two
+    part company, and a picture the reader attached came back 404.
+    """
+    session = tmp_path / "project"
+    session.mkdir()
+    home = tmp_path / "agent-home"
+    (home / "uploads").mkdir(parents=True)
+    (home / "uploads" / "shot.png").write_bytes(b"the picture")
+    monkeypatch.setattr(console_module, "_upload_root", lambda: home)
+
+    assert console_module.viewer_root(session, Path("uploads/shot.png")) == home
+
+
+def test_viewer_root_leaves_every_other_path_with_the_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only an upload may come from the other root.
+
+    A file the session does not have stays the session's question: answering it
+    from agent home would widen what the viewer serves past the one ambiguity
+    this is for, and a missing file has to read as missing.
+    """
+    session = tmp_path / "project"
+    session.mkdir()
+    home = tmp_path / "agent-home"
+    (home / "notes").mkdir(parents=True)
+    (home / "notes" / "secret.md").write_text("not this session's")
+    (home / "uploads").mkdir(parents=True)
+    monkeypatch.setattr(console_module, "_upload_root", lambda: home)
+
+    assert console_module.viewer_root(session, Path("notes/secret.md")) == session
+    assert console_module.viewer_root(session, Path("uploads/absent.png")) == session

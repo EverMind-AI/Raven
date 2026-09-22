@@ -960,42 +960,93 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
 
 /* ── the other segments ────────────────────────────────────────────────── */
 
+/* One picture the reader attached, shown as itself.
+ *
+ * The bytes are in `attachmentCache` for as long as the page that uploaded
+ * them is open, and after that the file is where it was put: the composer
+ * uploads into the workspace and the message keeps the path. So the cache is
+ * the fast path and `/file` is the standing one -- without it, every picture
+ * in the scrollback turned into a file name the moment the page was reloaded,
+ * which is not what the reader sent.
+ *
+ * A file that cannot be fetched falls back to its name rather than to a broken
+ * image, the same way a generated shot does: an attachment can outlive the
+ * file, and the name is still true when the bytes are gone.
+ */
+function AskShot({ path, live }: { path: string; live: boolean }): ReactElement {
+  const [gone, setGone] = useState(false)
+  const name = String(path).split('/').pop() || String(path)
+  const src = attachmentCache.get(String(path)) || fileURL(String(path))
+  if (gone) {
+    return (
+      <button className="achip" title={String(path)} onClick={() => wsOpenPath(String(path))}>
+        <span className="nm">{name}</span>
+      </button>
+    )
+  }
+  return (
+    <img
+      className="shot" src={src} alt={name}
+      onError={() => setGone(true)}
+      {...(live ? { title: t('gui.img.open', { name }), onClick: () => lightbox.open(src, name) } : {})}
+    />
+  )
+}
+
 const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData }): ReactElement {
   useSeg(lane, seg)
   const bRef = useRef<HTMLDivElement | null>(null)
-  const imgs = seg.atts.filter((p) => attachmentCache.get(String(p)))
-  const docs = seg.atts.filter((p) => !attachmentCache.get(String(p)))
-  const openAll = (): void => store.expandAskAtts(lane, seg)
-  const thumb = (p: string, liveImg: boolean): ReactElement => {
-    const src = attachmentCache.get(String(p)) as string
-    const nm = String(p).split('/').pop() || ''
-    return <img key={p} className="shot" src={src} alt={nm}
-      {...(liveImg ? { title: t('gui.img.open', { name: nm }), onClick: () => lightbox.open(src, nm) } : {})} />
+  /* What the file IS, not whether this page happens to hold its bytes. Asking
+     the cache was asking "did I upload this myself, in this tab": true while
+     the message was being written and false for the same message after a
+     reload, so the pictures became file names on their own. */
+  const isPic = (p: unknown): boolean => {
+    const kind = fileKind(String(p))
+    return kind === 'img' || kind === 'svg'
   }
+  const imgs = seg.atts.filter(isPic)
+  const docs = seg.atts.filter((p) => !isPic(p))
+  const openAll = (): void => store.expandAskAtts(lane, seg)
+  const thumb = (p: string, liveImg: boolean): ReactElement => <AskShot key={p} path={p} live={liveImg} />
   const showClip = seg.clipped && !seg.clipOpen
   return (
     <div className="turn me in">
+      {/* Pictures and files each on their own row, because they are two
+          different things to look at and one row made them one: the files
+          packed in after the last thumbnail, bottom-aligned against it, so the
+          first chip read as a caption on the picture beside it and whatever
+          did not fit wrapped alone underneath -- a staircase of ragged left
+          edges under a tidy row of squares. Each row right-aligns and wraps
+          within itself now, so the files read as a list of files. */}
       {seg.atts.length ? (
         <div className={'abox' + (imgs.length > 1 ? ' set' : '')}>
-          {imgs.length && (seg.expanded || imgs.length <= 3)
-            ? imgs.map((p) => thumb(p, true))
-            : imgs.length ? (
-              <button className="pile" title={t('gui.att.show_all')} onClick={openAll}>
-                {thumb(imgs[0] as string, false)}
-                <span className="cnt">{`${imgs.length}`}</span>
-              </button>
-            ) : null}
-          {docs.length && (seg.expanded || docs.length <= 2)
-            ? docs.map((p) => (
-              <button key={p} className="achip" title={p} onClick={() => wsOpenPath(p)}>
-                <span className="nm">{String(p).split('/').pop()}</span>
-              </button>
-            ))
-            : docs.length ? (
-              <button className="achip more" title={t('gui.att.show_all')} onClick={openAll}>
-                <span className="nm">{t('gui.att.n_files', { n: docs.length })}</span>
-              </button>
-            ) : null}
+          {imgs.length ? (
+            <div className="transcript-arow">
+              {seg.expanded || imgs.length <= 3
+                ? imgs.map((p) => thumb(p, true))
+                : (
+                  <button className="pile" title={t('gui.att.show_all')} onClick={openAll}>
+                    {thumb(imgs[0] as string, false)}
+                    <span className="cnt">{`${imgs.length}`}</span>
+                  </button>
+                )}
+            </div>
+          ) : null}
+          {docs.length ? (
+            <div className="transcript-arow">
+              {seg.expanded || docs.length <= 2
+                ? docs.map((p) => (
+                  <button key={p} className="achip" title={p} onClick={() => wsOpenPath(p)}>
+                    <span className="nm">{String(p).split('/').pop()}</span>
+                  </button>
+                ))
+                : (
+                  <button className="achip more" title={t('gui.att.show_all')} onClick={openAll}>
+                    <span className="nm">{t('gui.att.n_files', { n: docs.length })}</span>
+                  </button>
+                )}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {/* A turn nothing typed is the reader's own side of the conversation --
