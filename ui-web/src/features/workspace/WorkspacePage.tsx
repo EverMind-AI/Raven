@@ -391,18 +391,14 @@ const whySaid = (e: unknown): string => {
   return said?.data?.detail || said?.message || String(e)
 }
 
-/* The one control a deck adds to the bar: its own bytes. Nothing else -- no
-   application picker, no viewer toolbar in the frame below. The deck is read
-   here and changed by talking to the agent; what a reader still needs from the
-   bar is the file, or the file among the others in the file manager, and the
-   folder button every kind gets covers the second. Drawn as the same icon
-   control as its neighbours, so a deck's bar reads as the same bar an image
-   or a PDF gets. */
+/* A deck adds nothing to the bar: no application picker, no viewer toolbar
+   in the frame below, no download control. The deck is read here and changed
+   by talking to the agent; what a reader still needs from the bar is the
+   file, or the file among the others in the file manager, and the folder
+   button every kind gets covers the second. So a deck's bar reads as the
+   same bar an image or a PDF gets. */
 function Fbar({ f, running }: { f: WsFile | null; running: boolean }): JSX.Element {
   const platform = hostPlatform()
-  /* Subscribed for the same reason BinNote is: the delivery row a save link
-     prefers can arrive after the pane mounts. */
-  useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
   const revealTip = t(platform === 'mac' ? 'gui.ws.reveal_finder'
     : platform === 'windows' ? 'gui.ws.reveal_explorer' : 'gui.ws.reveal_folder')
   const rel = f ? store.source().shortPath(f.path) : ''
