@@ -1231,9 +1231,21 @@
       "en": "Raven needs more from you",
       "zh": "Raven 需要你补充"
     },
+    "gui.clarify.back": {
+      "en": "Back",
+      "zh": "上一步"
+    },
     "gui.clarify.fold": {
       "en": "Fold",
       "zh": "折叠"
+    },
+    "gui.clarify.multi_hint": {
+      "en": "Select all that apply",
+      "zh": "可多选"
+    },
+    "gui.clarify.next": {
+      "en": "Next",
+      "zh": "下一步"
     },
     "gui.clarify.other_ph": {
       "en": "Other - write your own answer...",
@@ -1242,6 +1254,10 @@
     "gui.clarify.ph": {
       "en": "Write your answer...",
       "zh": "输入你的回答…"
+    },
+    "gui.clarify.recommended": {
+      "en": "Recommended",
+      "zh": "推荐"
     },
     "gui.clarify.skip": {
       "en": "Skip",
@@ -1258,6 +1274,10 @@
     "gui.clarify.skipped_msg": {
       "en": "(the user skipped this question - use your best judgement and continue)",
       "zh": "（用户跳过了这个问题，请按你的最佳判断继续）"
+    },
+    "gui.clarify.step_aria": {
+      "en": "Question {n} of {m}",
+      "zh": "第 {n} / {m} 题"
     },
     "gui.clarify.submit": {
       "en": "Submit",

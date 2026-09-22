@@ -80,7 +80,7 @@ describe('the sheet rack', () => {
   it('docks the sheet itself, with no wrapper of its own', () => {
     clarifyOpen({ question: 'q', request_id: 'q1' }, () => {})
     const child = rack().firstElementChild!
-    expect(child.className).toBe('csheet')
+    expect(child.className).toBe('csheet cp-ask')
     expect((child as HTMLElement).dataset.sess).toBe('a')
     expect(child.querySelector('.hd .q')!.textContent).toBe('q')
   })
@@ -135,14 +135,14 @@ describe('the sheet rack', () => {
     add(earlier)
     clarifyOpen({ question: 'q', request_id: 'q1' }, () => {})
 
-    expect([...rack().children].map((n) => n.className)).toEqual(['csheet', 'othersheet'])
+    expect([...rack().children].map((n) => n.className)).toEqual(['csheet cp-ask', 'othersheet'])
 
     /* And the same order comes back on a return, where both are re-docked. */
     setCurrent('b')
     sync()
     setCurrent('a')
     sync()
-    expect([...rack().children].map((n) => n.className)).toEqual(['csheet', 'othersheet'])
+    expect([...rack().children].map((n) => n.className)).toEqual(['csheet cp-ask', 'othersheet'])
   })
 
   /* The question is still pending on the server, so coming back has to be the

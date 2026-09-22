@@ -198,8 +198,9 @@ export function approvalClosed(frame: unknown): void {
 
 /* The question the agent asks mid-turn. The sheet is the island's
  (features/composer/clarify.ts); what is left here is the transport and the
- step marking -- it answers with one string, whichever control the reader
- used, including the skip, whose wording is the sheet's copy.
+ step marking -- it answers with one string per question of the batch it drew,
+ whichever control the reader used, including the skip, whose wording is the
+ sheet's copy.
 
  No echo row: the asking tool's own row renders the full question-to-answer
  exchange in its detail once the tool returns, so a separate answered line
@@ -210,12 +211,18 @@ export function approvalClosed(frame: unknown): void {
  defect, kept because this refactor changes no behaviour. See the design's
  issue list. */
 export function clarifyRequest(frame: unknown): void {
-  const p = frame as { request_id: string; conversation_id?: string }
+  const p = frame as { request_id: string; conversation_id?: string; index?: number }
   const owner = p.conversation_id || sessionCurrent()!
   notify(owner, { type: 'wait' })
-  clarifySheet(p, (answer: string) => {
+  clarifySheet(p, (answers: string[]) => {
     notify(owner, { type: 'resume' })
-    gateway().call('clarify.respond', { request_id: p.request_id, answer }).catch(() => {})
+    /* Both: `answer` is this question's own, which is all a broker that never
+       heard of a batch reads, and `answers` is the whole form, which the broker
+       stashes so the questions still to come are answered without asking
+       again. */
+    gateway().call('clarify.respond', {
+      request_id: p.request_id, answer: answers[p.index ?? 0] ?? '', answers,
+    }).catch(() => {})
     const open = viewRuntime().st
     if (open) open.hasQA = true
   })
