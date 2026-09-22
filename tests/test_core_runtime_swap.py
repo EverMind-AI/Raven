@@ -16,6 +16,7 @@ by the shell, so the gap is a visible fact rather than a silent one.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -598,3 +599,144 @@ def test_the_runtime_declares_the_command_families_its_prompts_are_worded_by(tmp
     policy = rt.loop.tools._permission_gate._builtin._policy
     assert policy.approval_reason("rm coverage.xml") == "delete_command"
     assert policy.approval_reason("mkdir -p build") is None
+
+
+@pytest.mark.asyncio
+async def test_dispose_retires_a_detached_start_before_stopping_the_backend(monkeypatch):
+    """Ordering: cancel the in-flight start, then drain, then stop.
+
+    The resident hosts no longer await ``backend.start()``; they hand it to
+    ``plugin_stack.start_backend_detached``. A start still polling for
+    readiness when the generation is retired would outlive it -- reporting a
+    failure for a generation that is gone, and on process exit raising "Task
+    was destroyed but it is pending". ``dispose`` is the one retirement point
+    both the gateway and ``raven a2a serve`` go through, so the cancel belongs
+    there and nowhere else.
+    """
+    from raven.core import plugin_stack
+    from raven.core.runtime import RavenRuntime
+
+    order: list[str] = []
+
+    async def _record(_backend):
+        order.append("cancel_pending_backend_starts")
+
+    monkeypatch.setattr(plugin_stack, "cancel_pending_backend_starts", _record)
+
+    class _Backend:
+        async def stop(self):
+            order.append("stop")
+
+    class _Subagents:
+        async def cancel_all(self, *, reason: str = ""):
+            order.append("cancel_all")
+
+    class _Skills:
+        def stop_file_watcher(self) -> None:
+            order.append("stop_file_watcher")
+
+    class _Context:
+        skills = _Skills()
+
+    class _Loop:
+        subagents = _Subagents()
+        context = _Context()
+
+        async def stop_plugin_services(self):
+            order.append("stop_plugin_services")
+
+        async def close_mcp(self):
+            order.append("close_mcp")
+
+        def stop(self):
+            order.append("loop_stop")
+
+        async def drain_backend_stores(self):
+            order.append("drain_backend_stores")
+
+    rt = RavenRuntime(
+        loop=_Loop(),
+        plugin_registry=None,
+        backend=_Backend(),
+        strategies=None,
+        deliverables=None,
+    )
+
+    await rt.dispose()
+
+    assert order.index("cancel_pending_backend_starts") < order.index("drain_backend_stores")
+    assert order.index("cancel_pending_backend_starts") < order.index("stop")
+
+
+@pytest.mark.asyncio
+async def test_dispose_waits_for_the_cancelled_start_to_leave_before_stopping():
+    """``stop()`` must not run while ``start()`` is still inside the backend.
+
+    ``Task.cancel()` only requests cancellation; the coroutine keeps running
+    until it reaches its next suspension point. Without awaiting the cancelled
+    task, an ordinary reload during a cold start gives
+    ``start-enter -> stop -> start-exit``: the contract asks a backend to
+    survive ``stop()`` after a failed start, not concurrently with one, so a
+    plugin can finish wiring after teardown or touch what ``stop`` just closed.
+    """
+    import asyncio
+
+    from raven.core import plugin_stack
+    from raven.core.runtime import RavenRuntime
+
+    order: list[str] = []
+    entered = asyncio.Event()
+
+    class _SlowBackend:
+        async def start(self):
+            order.append("start-enter")
+            entered.set()
+            try:
+                await asyncio.sleep(30)
+            finally:
+                order.append("start-exit")
+
+        async def stop(self):
+            order.append("stop")
+
+    class _Subagents:
+        async def cancel_all(self, *, reason: str = ""):
+            pass
+
+    class _Skills:
+        def stop_file_watcher(self) -> None:
+            pass
+
+    class _Context:
+        skills = _Skills()
+
+    class _Loop:
+        subagents = _Subagents()
+        context = _Context()
+
+        async def stop_plugin_services(self):
+            pass
+
+        async def close_mcp(self):
+            pass
+
+        def stop(self):
+            pass
+
+        async def drain_backend_stores(self):
+            pass
+
+    backend = _SlowBackend()
+    rt = RavenRuntime(
+        loop=_Loop(),
+        plugin_registry=None,
+        backend=backend,
+        strategies=None,
+        deliverables=None,
+    )
+    plugin_stack.start_backend_detached(backend, logger=logging.getLogger(__name__))
+    await asyncio.wait_for(entered.wait(), timeout=2)
+
+    await rt.dispose()
+
+    assert order.index("start-exit") < order.index("stop"), order
