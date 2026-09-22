@@ -541,6 +541,22 @@ def set_transcript(activity: "RunActivity | None", messages: list[dict[str, Any]
     activity.transcript = [m for m in messages[:_MAX_TRANSCRIPT_MESSAGES] if isinstance(m, dict)]
 
 
+def set_tool_calls(activity: "RunActivity | None", calls: list[str] | None, failures: list[str] | None = None) -> None:
+    """Record the calls one named run has made so far, and which of them failed.
+
+    Replaced, not appended: the acp collector republishes the whole list on
+    every tool frame, because the opening ``tool_call`` frame names a call by
+    its title and only a later frame carries the arguments its label is built
+    from. Named rather than ambient for the reason ``set_transcript`` is.
+    """
+    if activity is None or not isinstance(calls, list):
+        return
+    _touch(activity)
+    activity.tool_calls = [c for c in calls[:_MAX_TOOL_CALLS] if isinstance(c, str) and c]
+    if isinstance(failures, list):
+        activity.tool_failures = [c for c in failures[:_MAX_TOOL_CALLS] if isinstance(c, str) and c]
+
+
 def note_closing(text: str | None) -> None:
     """Record what the run said after its last step, for a lane that can tell.
 
@@ -635,6 +651,7 @@ __all__ = [
     "collecting",
     "current",
     "forget_settled",
+    "set_tool_calls",
     "set_transcript",
     "live",
     "live_instance",
