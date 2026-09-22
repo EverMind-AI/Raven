@@ -331,7 +331,7 @@ describe('one prompt per request', () => {
       instance.cleanup()
     }
   })
-  it('carries a direct chat\'s sub-agent name out of the frame', () => {
+  it("carries a direct chat's sub-agent name out of the frame", () => {
     const onEvent = createGatewayEventHandler(buildCtx([]))
 
     onEvent({
@@ -389,15 +389,12 @@ describe('one prompt per request', () => {
       conversationId: 'session-a',
       description: 'Delete files'
     }
-    const instance = renderSync(
-      React.createElement(ApprovalPrompt, { onChoice: vi.fn(), req, t: DEFAULT_THEME }),
-      {
-        patchConsole: false,
-        stderr: stderr as unknown as NodeJS.WriteStream,
-        stdin: stdin as unknown as NodeJS.ReadStream,
-        stdout: stdout as unknown as NodeJS.WriteStream
-      }
-    )
+    const instance = renderSync(React.createElement(ApprovalPrompt, { onChoice: vi.fn(), req, t: DEFAULT_THEME }), {
+      patchConsole: false,
+      stderr: stderr as unknown as NodeJS.WriteStream,
+      stdin: stdin as unknown as NodeJS.ReadStream,
+      stdout: stdout as unknown as NodeJS.WriteStream
+    })
 
     try {
       await delay(30)
