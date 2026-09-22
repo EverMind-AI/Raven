@@ -534,7 +534,7 @@ describe('the folded summary row', () => {
     expect(container.querySelector('.tkwrow.tksum')?.className).not.toContain('tkbusy')
   })
 
-  it('reads a result-less call in a settled node as one no result came back for, and does not breathe', () => {
+  it('reads a result-less call in a settled node as having no result, and does not breathe', () => {
     /* A run cancelled mid-round leaves a record with calls that have no
        result: some it never reached, some it had started (an acp tool_call
        is an initiated call). Neither is in flight any more, and the label
@@ -577,7 +577,7 @@ describe('the folded summary row', () => {
     )
     const sum = container.querySelector('.tkwrow.tksum')
     expect(sum?.className).not.toContain('tkbusy')
-    expect(sum?.querySelector('.tknoresultchip')?.textContent).toBe('2 no result')
+    expect(sum?.querySelector('.tknoresultchip')?.textContent).toBe('2 with no result')
   })
 })
 

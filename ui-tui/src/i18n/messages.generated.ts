@@ -1831,7 +1831,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.tasks.rec_thinking': 'Thinking',
     'gui.tasks.call_failed_n': '{n} failed',
     'gui.tasks.call_no_result': 'no result',
-    'gui.tasks.call_no_result_n': '{n} no result',
+    'gui.tasks.call_no_result_n': '{n} with no result',
     'gui.tasks.deleg_a_graph': 'a graph',
     'gui.tasks.exit_code': 'exit code {n}',
     'gui.tasks.canvas': 'Graph - drag to pan, ctrl and scroll to zoom',

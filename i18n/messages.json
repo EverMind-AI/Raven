@@ -6488,7 +6488,7 @@
       "zh": "未返回"
     },
     "gui.tasks.call_no_result_n": {
-      "en": "{n} no result",
+      "en": "{n} with no result",
       "zh": "{n} 未返回"
     },
     "gui.tasks.deleg_a_graph": {

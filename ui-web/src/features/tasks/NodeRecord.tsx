@@ -396,15 +396,12 @@ function CallRow({ call, nodeKey, foldKey, running }: {
 }): JSX.Element {
   const { srv, bare } = splitMcp(call.name)
   const done = call.result != null
-  /* A call with no result is in flight only while the node is. A run that
-     was cancelled or aborted mid-round leaves a record that still advertises
-     calls with no result, and drawing them as breathing beside a settled
-     status claims work that is not coming back. The settled label says only
-     what the record knows -- no result came back -- because the same shape
-     covers two facts the wire cannot tell apart: an acp `tool_call` frame
-     means the call was initiated (`status: in_progress`) and may well have
-     finished with side effects before the cancel landed, while the
-     in-process lane advertises a round's calls before it reaches them. */
+  /* A call with no result is in flight only while the node is. Settled, the
+     label says only what the record knows -- no result came back -- because
+     one shape covers two facts the wire cannot tell apart: an acp `tool_call`
+     frame means the call was initiated (`status: in_progress`) and may have
+     finished with side effects before the cancel landed, while the in-process
+     lane advertises a round's calls before it reaches them. */
   const busy = !done && running
   const noResult = !done && !running
   const bad = call.ok === false
@@ -470,7 +467,7 @@ function CallsBlock({ calls, nodeKey, foldKey, running }: {
   /* Any call in the fold still out -- the same reason a single un-returned
      call's own row breathes, carried onto the summary that stands in for
      every row folded behind it. Once the node has settled, the same calls
-     are the ones no result came back for, and the summary counts them. */
+     are the ones with no result, and the summary counts them. */
   const unanswered = calls.filter((c) => c.result == null).length
   const flying = running && unanswered > 0
   const noResult = running ? 0 : unanswered
