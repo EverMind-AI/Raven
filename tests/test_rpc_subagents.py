@@ -943,7 +943,113 @@ async def test_update_whole_entry_validation_failure_does_not_leak_the_api_key(c
     assert "input_value" not in blob
 
 
-async def test_toggle_flips_enabled(config_path: Path) -> None:
+async def test_update_reproves_a_live_row_whose_credential_changed(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A key swapped under a row that is already on is a connect nobody gated.
+
+    The row goes on serving dispatches with a credential nothing has tried, so
+    the first real task is what discovers a typo. The update asks the same
+    question the switch asks, and a refusal leaves the stored key alone --
+    otherwise the refusal would still have taken the working key away.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    asked = _gate_answers(monkeypatch)
+    await subagents_toggle({"name": "Researcher", "enabled": True})
+    asked.clear()
+
+    async def _refuse(cfg):
+        asked.append(cfg)
+        return PingResult(False, 'HTTP 401: {"error":"invalid api key"}')
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _refuse)
+
+    with pytest.raises(subagents_mod.SubagentNotReadyError):
+        await subagents_update({"name": "Researcher", "api_key": "sk-wrong"})
+
+    assert [c.name for c in asked] == ["Researcher"]
+    entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
+    assert entry["apiKey"] == "sk-secret-value", "a refused update must leave the working key on disk"
+
+
+async def test_update_reproves_a_live_row_whose_model_changed(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the same question: an agent need not still serve the
+    model it is asked for, and the row would carry the new name until something
+    ran. Only an acp row reaches this -- an openai row's model is fixed, and a
+    built-in one is this process, which the gate never asks.
+    """
+    from raven.acp_client.capabilities import AcpModelChoice, CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
+    from raven.config.schema import SubagentsConfig
+
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"].append(
+        {"name": "Coded", "kind": "acp", "command": "coded acp", "description": "d", "enabled": True, "model": "v/m"}
+    )
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    store_path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: store_path)
+    cfg = next(c for c in SubagentsConfig(agents=raw["subagents"]["agents"]).agents if c.name == "Coded")
+    SnapshotStore(path=store_path).record(
+        CapabilitySnapshot(
+            agent="Coded",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=1,
+            agent_name="other-agent",
+            model_choices=(
+                AcpModelChoice(value="v/m", name="M", group="V"),
+                AcpModelChoice(value="v/m2", name="M2", group="V"),
+            ),
+        )
+    )
+
+    asked = _gate_answers(monkeypatch)
+    await subagents_update({"name": "Coded", "model": "v/m2"})
+
+    assert [c.name for c in asked] == ["Coded"]
+    entry = next(e for e in _stored(config_path) if e["name"] == "Coded")
+    assert entry["model"] == "v/m2"
+
+
+async def test_update_asks_nothing_when_neither_credential_nor_model_moved(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An edit that cannot change what the agent answers is not worth a call.
+
+    Re-sending the same key counts as not moving: the sheet posts what is in the
+    field, so an unchanged form would otherwise spend one on every save.
+    """
+    asked = _gate_answers(monkeypatch)
+    await subagents_toggle({"name": "Researcher", "enabled": True})
+    asked.clear()
+
+    await subagents_update({"name": "Researcher", "description": "new words"})
+    await subagents_update({"name": "Researcher", "api_key": "sk-secret-value"})
+
+    assert asked == [], "neither a description nor an unchanged key reaches the agent"
+
+
+async def test_update_asks_nothing_of_a_row_that_is_switched_off(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing is serving dispatches, and switching it on is already gated, so
+    asking here would spend a second call to learn the same thing."""
+    asked = _gate_answers(monkeypatch)
+
+    await subagents_update({"name": "Researcher", "api_key": "sk-new"})
+
+    assert asked == [], "an off row is proved by the switch that turns it on"
+    entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
+    assert entry["apiKey"] == "sk-new"
+
+
+async def test_toggle_flips_enabled(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _gate_answers(monkeypatch)
     assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
     entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
     assert entry["enabled"] is True

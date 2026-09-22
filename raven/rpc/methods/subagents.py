@@ -626,6 +626,11 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             entries.append(target)
         else:
             raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
+    # Read before anything below moves them: the two fields whose new value the
+    # agent has never been asked about. Everything else this call can change is
+    # presentation or policy, which cannot alter what the agent answers.
+    key_before = target.get("apiKey")
+    model_before = target.get("model")
     new_name = _clean_name(params.get("new_name"), field="new_name")
     if new_name:
         if materialized_discovered and new_name != name:
@@ -714,6 +719,16 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                         data={"field": "model", "name": name},
                     )
                 target["model"] = stored
+    # A credential or a model swapped under a row that is already on is a
+    # connect nobody gated: the row goes on serving dispatches with something
+    # nothing has tried, and the first real task is what discovers the typo. So
+    # it is asked here, the same question the switch asks, and only when one of
+    # the two actually moved -- the sheet posts whatever is in its field, so an
+    # unchanged form would otherwise spend a call on every save. A row that is
+    # off is left alone: nothing is serving, and the switch that turns it on is
+    # already gated, so asking here would buy the same answer twice.
+    if bool(target.get("enabled")) and (target.get("apiKey") != key_before or target.get("model") != model_before):
+        await _refuse_unless_it_answers(entries, str(target["name"]), refusal="so it was not changed")
     try:
         reject_unsupported_openai_fields([target])
         set_agents(entries, config_path=get_config_path())
