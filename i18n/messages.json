@@ -5435,10 +5435,6 @@
       "en": "Deny and stop",
       "zh": "拒绝并停止"
     },
-    "gui.confirm.note_ph": {
-      "en": "Tell it what to do instead (optional)",
-      "zh": "要告诉它该怎么做吗？不写也行"
-    },
     "gui.perm.save_failed": {
       "en": "Could not save the permission mode; the engine keeps the previous one.",
       "zh": "权限模式没有保存成功，引擎仍是原来的模式。"
@@ -5591,10 +5587,6 @@
       "en": "shortened to what fits -- the rest is not shown",
       "zh": "内容过长，这里只显示了前一部分"
     },
-    "gui.confirm.land.once": {
-      "en": "Allowed, just this once",
-      "zh": "已允许 · 只这一次"
-    },
     "gui.confirm.land.always": {
       "en": "Won't ask again for: {pattern}, in every working directory",
       "zh": "以后不再问：{pattern}，在所有工作目录生效"
@@ -5611,25 +5603,9 @@
       "en": "Could not take {pattern} back; remove it under permissions.tools.exec in the config",
       "zh": "没能收回 {pattern}，去配置的 permissions.tools.exec 里删掉它"
     },
-    "gui.confirm.land.deny": {
-      "en": "Denied, not asked again this turn",
-      "zh": "已拒绝 · 这一轮不再问同一条"
-    },
     "gui.confirm.land.unsent": {
       "en": "Not delivered: the request had already gone or the connection dropped; the turn is still waiting",
       "zh": "没送出去 · 这条请求已失效或连接断了，会话还在等"
-    },
-    "gui.confirm.land.deny_note": {
-      "en": "Denied, you said: {text}",
-      "zh": "已拒绝 · 你说：{text}"
-    },
-    "gui.confirm.elsewhere": {
-      "en": "Another conversation is waiting for you",
-      "zh": "另一条会话在等你同意"
-    },
-    "gui.confirm.elsewhere_go": {
-      "en": "Open",
-      "zh": "去看看"
     },
     "gui.set.usg.cost_unknown": {
       "en": "cost unknown",

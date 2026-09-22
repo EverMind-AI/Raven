@@ -310,7 +310,7 @@ describe('re-adding a docked sheet', () => {
 })
 
 describe('who counts as asking', () => {
-  /* `askingIn` decides who blocks the reader from `dataset.asks`, which each
+  /* The sweeps decide what they may replace from `dataset.asks`, which each
      tenant sets on itself. That is a convention, and a convention is exactly
      what a test has to hold: a future sheet that blocks the reader and forgets
      the mark loses the behaviour with every other test still green, because

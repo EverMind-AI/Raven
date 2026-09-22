@@ -63,6 +63,9 @@ const LISTENERS = {
   'state/lang/store.ts':
     '`afterwards`: lang.onApplied, the group that runs after the rendered half '
     + 'has committed',
+  'state/sheetRack.ts':
+    '`watchAsking`: who is being asked something moved, which is not this '
+    + "module's store (that one carries the docked sheets' views)",
 }
 
 /* Modules with module-level `let` and no reset seam. */

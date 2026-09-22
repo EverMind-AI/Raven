@@ -90,7 +90,6 @@ div.app[data-rail=on]
               path
           span.wl
         div.dock
-          div#cpElsewhere.cp-elsewhere
           div#sheetRack.sheets
           div.dock-in
             div#queued.queued

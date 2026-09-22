@@ -78,9 +78,8 @@ export function open(req: ClarifyRequest, answered: (text: string) => void): voi
 
   const sheet = document.createElement('div')
   sheet.className = 'csheet'
-  /* This one asks: the turn is waiting on the answer. The rack passes that on to
-     whatever else is docked -- see `watchAsking` -- so a tall tenant can step
-     aside instead of pushing the question below the fold. */
+  /* This one asks: the turn is waiting on the answer. The sweeps read the mark
+     to know which sheets a new question may replace (state/sheetRack.ts). */
   sheet.dataset.asks = '1'
   sheet.setAttribute('role', 'dialog')
   sheet.setAttribute('aria-label', t('gui.clarify.aria'))
