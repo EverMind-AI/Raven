@@ -72,7 +72,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     '<div class="app" data-page="off">' +
     '<button id="newBtn"></button><button id="agentsBtn"></button>' +
     PAGES.map(p => `<div id="${p}" data-open="false"></div>`).join('') +
-    '<div id="list"></div><h1 id="title">t</h1><button id="renameBtn"></button></div>'
+    '<div id="list"></div><h1 id="title">t</h1></div>'
   return { state, calls, toasts }
 }
 
@@ -668,7 +668,6 @@ describe('rail island', () => {
       expect(said).toEqual([['b', 'named once']])
       expect(document.querySelectorAll('#title').length).toBe(1)
       expect(document.getElementById('title')!.textContent).toBe('named once')
-      expect((document.getElementById('renameBtn') as HTMLButtonElement).hidden).toBe(false)
     })
 
     /* The editor stands IN PLACE OF h1#title, so while it is open that id
@@ -693,7 +692,6 @@ describe('rail island', () => {
 
       expect(document.getElementById('title')!.textContent).toBe('named on the way out')
       expect(document.querySelector('input.titin')).toBeNull()
-      expect((document.getElementById('renameBtn') as HTMLButtonElement).hidden).toBe(false)
       expect(said).toEqual([['b', 'named on the way out']])
       expect(h.state.rows[1]!.title).toBe('named on the way out')
 

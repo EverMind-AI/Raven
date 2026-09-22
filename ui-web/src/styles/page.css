@@ -775,13 +775,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   display: flex; align-items: center; gap: 10px; padding: 0 16px 0 20px;
   height: 52px; flex: none; position: relative; z-index: 2;
 }
+/* The name is its own rename control: a text cursor and a quiet frame on
+   hover say it can be typed into, and a click swaps it for the field below.
+   The frame is padding pulled back by a negative margin, so the text sits
+   where it did and the tag beside it stays close. */
 .top h1 {
-  font-size: 15px; font-weight: 500; margin: 0; min-width: 0; max-width: 52%;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default;
+  font-size: 15px; font-weight: 500; margin: 0 0 0 -6px; padding: 2px 6px; min-width: 0; max-width: 52%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; border-radius: 6px;
+  transition: background .12s;
 }
-/* rename affordance: an icon that appears on hover, editing only the title box */
-#renameBtn { opacity: 0; transition: opacity .14s; }
-.top:hover #renameBtn, #renameBtn:focus-visible { opacity: 1; }
+.top h1:hover { background: var(--surface); }
 /* The box is the name's width, not a fixed slot: a two-word conversation opened
    a 420px field with most of it empty paper. `field-sizing: content` is what
    makes an input measure its own value, so the width follows what is typed.
@@ -2559,7 +2562,7 @@ textarea:focus, textarea:focus-visible,
    beside it read as one surface (see .main). */
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; flex: 1; }
 /* New-task state: no header title, the composer holds the centre line. */
-.chat[data-fresh] #title, .chat[data-fresh] #wdTag, .chat[data-fresh] #renameBtn { visibility: hidden; }
+.chat[data-fresh] #title, .chat[data-fresh] #wdTag { visibility: hidden; }
 /* The landing page does not move the composer. It used to float it up to the
    centre at 640px with a hero lockup over it and five characters perched on
    it; the composer then jumped down and widened the moment the first message

@@ -57,10 +57,6 @@ div.app
       div.chat
         div.top
           h1#title
-          button#renameBtn.ghost-ic.tipdn
-            svg
-              path
-              path
           span#wdTag.chrome-wd-tag
             svg
               path

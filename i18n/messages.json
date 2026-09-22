@@ -3895,10 +3895,6 @@
       "en": "Connection lost, reconnecting...",
       "zh": "连接已断开，正在重连…"
     },
-    "gui.rename_session": {
-      "en": "Rename session",
-      "zh": "重命名会话"
-    },
     "gui.resize_rail": {
       "en": "Drag to resize the sidebar",
       "zh": "拖动调整侧边栏宽度"

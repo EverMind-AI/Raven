@@ -62,7 +62,6 @@ const LEGACY_FLAT = new Set([
   'gui.new_task',
   'gui.reconnected',
   'gui.reconnecting',
-  'gui.rename_session',
   'gui.resize_rail',
   'gui.resize_ws',
   'gui.retry',
