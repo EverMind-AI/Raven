@@ -682,19 +682,25 @@
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--ink);
-  box-shadow: 0 1px 3px var(--ring);
   transition: border-color .16s ease, box-shadow .16s ease;
 }
-.tkfork .nd:hover .tkrun { border-color: var(--faint); transform: translateY(-1px); }
+/* Neither cue lifts the box. A `foreignObject` clips to its own rect, and
+   `DagGraph` sizes that rect to the node's box exactly, so a box filling it has
+   nowhere to rise into: the prototype's 1px lift carried the whole 1px top
+   border out of the clip and the card read as three-sided under the cursor,
+   with only the corner arcs left. The border's own colour carries both cues
+   instead, and a colour survives the clip where a translate cannot. */
+.tkfork .nd:hover .tkrun { border-color: var(--faint); }
+/* The ring draws inward. Outside the border box it fell entirely outside the
+   clip, which left selection saying no more than hover did; `--elev-up` went
+   with it, a drop shadow being outward by definition. */
 .tkfork .nd[data-sel="1"] .tkrun {
   border-color: var(--text);
-  box-shadow: 0 0 0 1.5px var(--text), var(--elev-up);
-  transform: translateY(-1px);
+  box-shadow: inset 0 0 0 1.5px var(--text);
 }
 .tkfork .nd[data-sel="1"] .tkrunl1 { font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   .tkrun { transition: none; }
-  .tkfork .nd:hover .tkrun, .tkfork .nd[data-sel="1"] .tkrun { transform: none; }
 }
 /* `page.css`'s `.daggraph .nd { outline: none }` takes the UA ring off the node
    group, and the only box inside that group is the one this domain hands
@@ -702,14 +708,28 @@
 .tkfork .nd:focus-visible .tkrun {
   border-color: var(--amber);
   outline: 1px solid var(--amber);
-  outline-offset: 2px;
+  /* Inward, like the ring above: at `2px` the whole outline sat outside the
+     clip and tabbing to a node showed nothing at all. It stays an `outline`
+     rather than becoming a third shadow because forced-colors mode keeps an
+     outline and drops a box-shadow. */
+  outline-offset: -2px;
 }
 /* The prototype's own two per-status box treatments (proto.css:1088-1093);
    every other status -- completed, failed, cancelled, interrupted, exception
    -- draws the plain box above and differs only in `.tkrunrt`, below. */
 .tkfork .nd[data-st="running"] .tkrun {
   border-color: color-mix(in oklab, var(--amber) 55%, var(--line));
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--amber) 16%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--amber) 16%, transparent);
+}
+/* The running node that is also the picked one. Both cues are the same
+   property, and this rule's two neighbours carry equal weight, so the status
+   one simply replaced the ring: a node kept its mark until it started running
+   and lost it for as long as it ran. Selection owns the border and the inner
+   ring, and the status glow sits just outside it. */
+.tkfork .nd[data-sel="1"][data-st="running"] .tkrun {
+  border-color: var(--text);
+  box-shadow: inset 0 0 0 1.5px var(--text),
+              inset 0 0 0 3.5px color-mix(in oklab, var(--amber) 16%, transparent);
 }
 .tkfork .nd[data-st="pending"] .tkrun { opacity: .62; border-style: dashed; }
 .tkfork .nd[data-st="skipped"] .tkrun { opacity: .45; border-style: dashed; }
