@@ -82,6 +82,18 @@ export interface ApprovalClosedParams {
   reason: string
 }
 
+/** One question of an ask_user batch, as the request's `batch` lists them.
+    `choices` and its two companions arrive from the ask_user tool; a producer
+    that predates them (an ACP form) sends the question and header alone, and
+    the sheet then asks that batch one question at a time. */
+export interface ClarifyBatchEntry {
+  question: string
+  header?: string
+  choices?: string[]
+  recommended?: string
+  multi_select?: boolean
+}
+
 /** raven/rpc/question_broker.py: the question a tool asks mid-turn. */
 export interface ClarifyRequestParams {
   conversation_id: string
@@ -90,10 +102,11 @@ export interface ClarifyRequestParams {
   choices: string[]
   header: string
   recommended: string
+  multi_select: boolean
   timeout_s: number
   index: number
   total: number
-  batch: { question: string; header?: string }[]
+  batch: ClarifyBatchEntry[]
 }
 
 /** raven/rpc/question_broker.py: nobody answered it and nobody will. */

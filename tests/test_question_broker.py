@@ -2,7 +2,9 @@
 
 Mirrors the ConfirmBroker tests: pending_req before/after, reply resolves the
 future (by either handle), idempotent late/duplicate reply, timeout fail-safe to
-default, cancel_all, and overlapping-question replacement.
+default, cancel_all, and overlapping-question replacement. Also covers the
+batch-answer stash: a reply carrying the whole batch's answers must let the
+loop's later await_question calls skip the round trip entirely.
 """
 
 from __future__ import annotations
@@ -137,6 +139,17 @@ async def _wait_for_method(frames: list[dict], method: str, timeout: float = 1.0
             raise AssertionError(f"no {method} frame within {timeout}s: {[f.get('method') for f in frames]}")
         await asyncio.sleep(0.005)
     return _of_method(frames, method)[0]
+
+
+async def _wait_until(predicate, timeout: float = 1.0) -> None:
+    """Poll ``predicate`` until it is truthy, timing out as an assertion rather
+    than a hang -- used below wherever the condition is "a stash was (or was
+    not) consulted", which a stuck ``await`` would not report as a failure."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not met in time")
+        await asyncio.sleep(0.005)
 
 
 async def test_timeout_closes_the_question_on_the_surface() -> None:
@@ -517,3 +530,257 @@ async def test_clarify_request_carries_the_recommended_option_and_the_budget() -
 
     broker.reply(CID, "ship")
     await task
+
+
+# ---------------------------------------------------------------------------
+# multi_select on the wire
+# ---------------------------------------------------------------------------
+
+
+async def test_clarify_request_carries_multi_select_default_false() -> None:
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+
+    task = asyncio.create_task(broker.await_question(CID, prompt="Which?", choices=["a", "b"]))
+    params = (await _wait_for_frame(frames))["params"]
+
+    assert params["multi_select"] is False
+
+    broker.reply(CID, "a")
+    await task
+
+
+async def test_clarify_request_carries_multi_select_true() -> None:
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+
+    task = asyncio.create_task(broker.await_question(CID, prompt="Which?", choices=["a", "b"], multi_select=True))
+    params = (await _wait_for_frame(frames))["params"]
+
+    assert params["multi_select"] is True
+
+    broker.reply(CID, "a")
+    await task
+
+
+# ---------------------------------------------------------------------------
+# reply(answers=...) stashes a batch's later answers for later await_question
+# calls, so a surface that answers a whole batch in one form costs one frame.
+# ---------------------------------------------------------------------------
+
+
+async def test_reply_with_answers_stashes_the_batchs_later_questions() -> None:
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+    batch = [{"question": "Base?"}, {"question": "Rebase?"}, {"question": "Squash?"}]
+
+    first = asyncio.create_task(broker.await_question(CID, prompt="Base?", index=0, total=3, batch=batch))
+    await _wait_for_frame(frames)
+    broker.reply(CID, "main", answers=["main", "yes", "squash"])
+    assert await first == "main"
+    assert broker.pending_count() == 0
+
+    second = await broker.await_question(CID, prompt="Rebase?", index=1, total=3, batch=batch)
+    assert second == "yes"
+    assert broker.pending_count() == 0
+    assert len(frames) == 1, "the second question must be answered from the stash, not a new frame"
+
+    third = await broker.await_question(CID, prompt="Squash?", index=2, total=3, batch=batch)
+    assert third == "squash"
+    assert broker.pending_count() == 0
+    assert len(frames) == 1, "the third question must be answered from the stash too"
+    assert _of_method(frames, "clarify.closed") == [], "a stash hit must not close a request that was never sent"
+
+
+async def test_stash_mismatch_on_question_text_falls_through_to_a_new_frame() -> None:
+    sent: list[str] = []
+
+    async def send_frame(frame: dict) -> None:
+        sent.append(frame["params"]["question"])
+
+    broker = QuestionBroker(send_frame)
+    batch = [{"question": "Base?"}, {"question": "Rebase?"}]
+
+    first = asyncio.create_task(broker.await_question(CID, prompt="Base?", index=0, total=2, batch=batch))
+    await _wait_until(lambda: sent)
+    broker.reply(CID, "main", answers=["main", "yes"])
+    assert await first == "main"
+
+    # The actual second question's text does not match what the stash holds --
+    # a live edit to the batch, or a different batch reusing the same slot.
+    second = asyncio.create_task(
+        broker.await_question(CID, prompt="Rebase onto develop?", index=1, total=2, batch=batch)
+    )
+    await _wait_until(lambda: len(sent) >= 2)
+    assert sent == ["Base?", "Rebase onto develop?"]
+
+    broker.reply(CID, "sure")
+    assert await second == "sure"
+
+
+async def test_fresh_batch_at_index_zero_drops_a_half_consumed_stash() -> None:
+    sent: list[str] = []
+
+    async def send_frame(frame: dict) -> None:
+        sent.append(frame["params"]["question"])
+
+    broker = QuestionBroker(send_frame)
+    batch = [{"question": "Base?"}, {"question": "Rebase?"}, {"question": "Squash?"}]
+
+    first = asyncio.create_task(broker.await_question(CID, prompt="Base?", index=0, total=3, batch=batch))
+    await _wait_until(lambda: sent)
+    broker.reply(CID, "main", answers=["main", "yes", "squash"])
+    assert await first == "main"
+    # The stash now holds "yes" and "squash" for indices 1 and 2, unconsumed.
+
+    new_batch = [{"question": "New question?"}]
+    second = asyncio.create_task(broker.await_question(CID, prompt="New question?", index=0, total=1, batch=new_batch))
+    await _wait_until(lambda: len(sent) >= 2)
+    broker.reply(CID, "ok")
+    assert await second == "ok"
+
+    # The old stash must be gone: a later call that happens to repeat the old
+    # batch's index-1 question must not get "yes" for free any more.
+    third = asyncio.create_task(broker.await_question(CID, prompt="Rebase?", index=1, total=3, batch=batch))
+    await _wait_until(lambda: len(sent) >= 3)
+    broker.reply(CID, "fresh-answer")
+    assert await third == "fresh-answer"
+
+
+async def test_cancel_all_clears_a_stash() -> None:
+    sent: list[str] = []
+
+    async def send_frame(frame: dict) -> None:
+        sent.append(frame["params"]["question"])
+
+    broker = QuestionBroker(send_frame)
+    batch = [{"question": "Base?"}, {"question": "Rebase?"}]
+
+    first = asyncio.create_task(broker.await_question(CID, prompt="Base?", index=0, total=2, batch=batch))
+    await _wait_until(lambda: sent)
+    broker.reply(CID, "main", answers=["main", "yes"])
+    assert await first == "main"
+
+    broker.cancel_all()
+
+    second = asyncio.create_task(broker.await_question(CID, prompt="Rebase?", index=1, total=2, batch=batch))
+    await _wait_until(lambda: len(sent) >= 2)
+    broker.reply(CID, "manual")
+    assert await second == "manual"
+
+
+async def test_stashed_empty_string_returns_the_questions_default() -> None:
+    sent: list[str] = []
+
+    async def send_frame(frame: dict) -> None:
+        sent.append(frame["params"]["question"])
+
+    broker = QuestionBroker(send_frame)
+    batch = [{"question": "Base?"}, {"question": "Rebase?"}]
+
+    first = asyncio.create_task(broker.await_question(CID, prompt="Base?", index=0, total=2, batch=batch))
+    await _wait_until(lambda: sent)
+    broker.reply(CID, "main", answers=["main", ""])
+    assert await first == "main"
+
+    second = await broker.await_question(CID, prompt="Rebase?", default="skip", index=1, total=2, batch=batch)
+    assert second == "skip"
+    assert len(sent) == 1, "an empty stashed answer must still come from the stash, not a new frame"
+
+
+async def test_reply_for_unknown_key_does_not_stash_anything() -> None:
+    sent: list[str] = []
+
+    async def send_frame(frame: dict) -> None:
+        sent.append(frame["params"]["question"])
+
+    broker = QuestionBroker(send_frame)
+    batch = [{"question": "Base?"}, {"question": "Rebase?"}]
+
+    assert broker.reply("no-such-conversation", "x", answers=["a", "b", "c"]) is False
+
+    first = asyncio.create_task(broker.await_question(CID, prompt="Base?", index=0, total=2, batch=batch))
+    await _wait_until(lambda: sent)
+    broker.reply(CID, "main")
+    assert await first == "main"
+
+    second = asyncio.create_task(broker.await_question(CID, prompt="Rebase?", index=1, total=2, batch=batch))
+    await _wait_until(lambda: len(sent) >= 2)
+    broker.reply(CID, "manual")
+    assert await second == "manual"
+
+
+async def test_routing_reply_forwards_answers_and_stashes_on_the_routed_broker() -> None:
+    routed, page, page_frames, _channel, channel_frames = _routing_pair()
+    batch = [{"question": "Base?"}, {"question": "Rebase?"}]
+
+    first = asyncio.create_task(routed.await_question(PAGE_CID, prompt="Base?", index=0, total=2, batch=batch))
+    await _wait_for_frame(page_frames)
+    assert routed.reply(PAGE_CID, "main", answers=["main", "yes"]) is True
+    assert await first == "main"
+
+    second = await routed.await_question(PAGE_CID, prompt="Rebase?", index=1, total=2, batch=batch)
+    assert second == "yes"
+    assert len(page_frames) == 1, "the routed page broker must answer index 1 from its own stash"
+    assert channel_frames == []
+
+
+# ---------------------------------------------------------------------------
+# question_respond and the answers param
+# ---------------------------------------------------------------------------
+
+
+async def test_question_respond_passes_through_a_valid_answers_list() -> None:
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+    batch = [{"question": "Base?"}, {"question": "Rebase?"}]
+
+    first = asyncio.create_task(broker.await_question(CID, prompt="Base?", index=0, total=2, batch=batch))
+    await _wait_for_frame(frames)
+
+    result = await question_respond(
+        {"conversation_id": CID, "answer": "main", "answers": ["main", "yes"]}, question_broker=broker
+    )
+    assert result == {"ok": True}
+    assert await first == "main"
+
+    second = await broker.await_question(CID, prompt="Rebase?", index=1, total=2, batch=batch)
+    assert second == "yes"
+    assert len(frames) == 1
+
+
+async def test_question_respond_ignores_a_non_list_answers() -> None:
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+
+    task = asyncio.create_task(broker.await_question(CID, prompt="Base?", index=0, total=1))
+    await _wait_for_frame(frames)
+
+    result = await question_respond(
+        {"conversation_id": CID, "answer": "main", "answers": "not-a-list"}, question_broker=broker
+    )
+
+    assert result == {"ok": True}
+    assert await task == "main"
+
+
+async def test_question_respond_ignores_answers_with_a_non_string_entry() -> None:
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+    batch = [{"question": "Base?"}, {"question": "Rebase?"}]
+
+    task = asyncio.create_task(broker.await_question(CID, prompt="Base?", index=0, total=2, batch=batch))
+    await _wait_for_frame(frames)
+
+    result = await question_respond(
+        {"conversation_id": CID, "answer": "main", "answers": ["main", 5]}, question_broker=broker
+    )
+    assert result == {"ok": True}
+    assert await task == "main"
+
+    # Not stashed: a malformed answers shape must not silently promise the
+    # batch's later question an answer that was never validated as a string.
+    second = asyncio.create_task(broker.await_question(CID, prompt="Rebase?", index=1, total=2, batch=batch))
+    await _wait_until(lambda: len(frames) >= 2)
+    broker.reply(CID, "manual")
+    assert await second == "manual"

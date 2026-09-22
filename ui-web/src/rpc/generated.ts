@@ -3859,6 +3859,7 @@ export interface ClarifyRespondParams {
   answer: string;
   request_id?: string;
   conversation_id?: string;
+  answers?: string[];
 }
 export interface ClarifyRespondResult {
   ok: boolean;

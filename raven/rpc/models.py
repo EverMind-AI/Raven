@@ -3960,6 +3960,14 @@ class ClarifyRespondParams(_Strict):
     answer: str
     request_id: str | None = None
     conversation_id: str | None = None
+    answers: list[str] | None = Field(
+        default=None,
+        description=(
+            "The whole batch's answers, aligned with the request's `batch`, from a surface that "
+            "collected them as one form; entries after the pending question's index answer the "
+            "later questions without another round trip."
+        ),
+    )
 
 
 class ClarifyRespondResult(_Strict):
