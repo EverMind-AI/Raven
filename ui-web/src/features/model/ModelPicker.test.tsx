@@ -525,7 +525,7 @@ const TAGGED: Provider[] = [
 describe('the tier row', () => {
   const MENU = [
     { id: 'medium', name: 'Medium', description: 'Faster and cheaper, for small, well-defined tasks.' },
-    { id: 'high', name: 'High', description: 'The default: a balance of speed and quality.' },
+    { id: 'high', name: 'High', description: 'A balance of speed and quality.' },
     { id: 'max', name: 'Max', description: 'Deepest reasoning and full sub-agent effort, for complex or open-ended work.' },
   ]
   const seg = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.mpick .model-seg button')]

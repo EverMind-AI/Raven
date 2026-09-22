@@ -32,7 +32,7 @@ type Json = ResultOf<'config.get'>['config'][string]
 const TIER_SUB: Record<string, Record<string, string>> = {
   en: {
     medium: 'Faster and cheaper, for small, well-defined tasks.',
-    high: 'The default: a balance of speed and quality.',
+    high: 'A balance of speed and quality.',
     max: 'Deepest reasoning and full sub-agent effort, for complex or open-ended work.',
   },
   zh: {

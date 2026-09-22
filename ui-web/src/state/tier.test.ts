@@ -20,7 +20,7 @@ import type { TierReply, TierSource } from './tier'
    the shape the retired copy had, and it is the only shape worth pinning. */
 const MENU = [
   { id: 'medium', name: 'Medium', description: 'Faster and cheaper, for small, well-defined tasks.' },
-  { id: 'high', name: 'High', description: 'The default: a balance of speed and quality.' },
+  { id: 'high', name: 'High', description: 'A balance of speed and quality.' },
   { id: 'max', name: 'Max', description: 'Deepest reasoning and full sub-agent effort, for complex or open-ended work.' },
 ]
 
