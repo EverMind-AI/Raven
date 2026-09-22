@@ -1339,6 +1339,10 @@
       "en": "Approval needed",
       "zh": "请求审批"
     },
+    "gui.confirm.asker": {
+      "en": "asked by {name}",
+      "zh": "{name} 请求"
+    },
     "gui.conn.as_you": {
       "en": "{who} - sends and receives as you",
       "zh": "{who} · 以你的身份收发消息"

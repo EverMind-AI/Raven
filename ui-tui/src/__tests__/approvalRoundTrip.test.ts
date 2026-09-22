@@ -331,4 +331,80 @@ describe('one prompt per request', () => {
       instance.cleanup()
     }
   })
+  it('carries a direct chat\'s sub-agent name out of the frame', () => {
+    const onEvent = createGatewayEventHandler(buildCtx([]))
+
+    onEvent({
+      payload: {
+        approval_id: 'approval-s',
+        command: 'rm target.txt',
+        conversation_id: 'session-a',
+        description: 'Delete files',
+        origin: { kind: 'subagent', name: 'auditor' }
+      },
+      session_id: 'session-a',
+      type: 'approval.request'
+    } as any)
+
+    expect(getOverlayState().approval?.asker).toBe('auditor')
+  })
+
+  it('leaves the asker out when the main agent is the one asking', () => {
+    const onEvent = createGatewayEventHandler(buildCtx([]))
+
+    onEvent({
+      payload: {
+        approval_id: 'approval-m',
+        command: 'rm target.txt',
+        conversation_id: 'session-a',
+        description: 'Delete files',
+        origin: { kind: 'user', name: '' }
+      },
+      session_id: 'session-a',
+      type: 'approval.request'
+    } as any)
+
+    expect(getOverlayState().approval).not.toHaveProperty('asker')
+  })
+
+  it('names the sub-agent on the prompt a person answers', async () => {
+    // A contract test can only see the frame; what decides whether the reader
+    // knows who wants the authority is this line on the box.
+    const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
+    const noop = () => {}
+    const stdout = new PassThrough()
+    const stdin = new PassThrough()
+    const stderr = new PassThrough()
+    Object.assign(stdout, { columns: 100, isTTY: false, rows: 30 })
+    Object.assign(stdin, { isTTY: true, ref: noop, setRawMode: noop, unref: noop })
+    Object.assign(stderr, { isTTY: true })
+    let out = ''
+    stdout.on('data', (d: Buffer) => {
+      out += d.toString()
+    })
+    const req = {
+      approvalId: 'approval-s',
+      asker: 'auditor',
+      command: 'rm target.txt',
+      conversationId: 'session-a',
+      description: 'Delete files'
+    }
+    const instance = renderSync(
+      React.createElement(ApprovalPrompt, { onChoice: vi.fn(), req, t: DEFAULT_THEME }),
+      {
+        patchConsole: false,
+        stderr: stderr as unknown as NodeJS.WriteStream,
+        stdin: stdin as unknown as NodeJS.ReadStream,
+        stdout: stdout as unknown as NodeJS.WriteStream
+      }
+    )
+
+    try {
+      await delay(30)
+      expect(stripAnsi(out)).toContain('asked by auditor')
+    } finally {
+      instance.unmount()
+      instance.cleanup()
+    }
+  })
 })
