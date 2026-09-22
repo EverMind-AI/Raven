@@ -319,7 +319,7 @@ describe('connecting', () => {
     expect(sheetName()).toBe('mirothinker')
   })
 
-  it('shows the row connecting for the length of the write, with nothing else to press', async () => {
+  it('shows the row testing for the length of a switch-on, with nothing else to press', async () => {
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -334,9 +334,9 @@ describe('connecting', () => {
     })
     await mount()
     await click(buttonOf('off_one'))
-    expect(controlOf('off_one')).toBe('gui.agent.setup_connecting')
+    expect(controlOf('off_one')).toBe('gui.agent.testing')
     expect(buttonOf('off_one')).toBeNull()
-    expect(lineOf('off_one')).toBe('gui.agent.setup_connecting')
+    expect(lineOf('off_one')).toBe('gui.agent.testing')
     expect(ledOf('off_one')).toBe('extAgents-led extAgents-led-busy')
     await act(async () => {
       release()
@@ -344,6 +344,54 @@ describe('connecting', () => {
     })
     expect(sectionOf('off_one')).toBe('gui.agent.g_on')
     expect(controlOf('off_one')).toBe('gui.agent.disconnect')
+  })
+
+  it('says testing on the sheet button too, since that is what the wait is', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const rows = [row({ name: 'off_one', enabled: false })]
+    install(rows, {
+      act: async (op, r, args) => {
+        await gate
+        if (op === 'toggle') r.enabled = !!(args as { enabled?: boolean } | undefined)?.enabled
+        return rows
+      },
+    })
+    await mount()
+    await openSheet('off_one')
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(sheetActs()).toEqual(['gui.agent.testing'])
+    await act(async () => {
+      release()
+      await gate
+    })
+  })
+
+  /* The same `pending` covers every write this page makes, so the word has to
+     come from which write it is: a disconnect pings nothing and must not
+     claim to be testing the agent it is switching off. */
+  it('does not call a disconnect a test', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const rows = [row({ name: 'on_one', configured: true, enabled: true })]
+    install(rows, {
+      act: async (op, r, args) => {
+        await gate
+        if (op === 'toggle') r.enabled = !!(args as { enabled?: boolean } | undefined)?.enabled
+        return rows
+      },
+    })
+    await mount()
+    await click(buttonOf('on_one'))
+    expect(controlOf('on_one')).toBe('gui.agent.setup_connecting')
+    await act(async () => {
+      release()
+      await gate
+    })
   })
 
   it('keeps a refusal on the row in red with a retry, and does not toast it', async () => {

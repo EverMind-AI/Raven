@@ -9,7 +9,7 @@ import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
 import { offered } from '../model/types'
 import { byOf, installOf, isOwnRow } from './catalogue'
-import { SectionBlock, Spin, Tile, connect, ordered, shownOf } from './Rows'
+import { SectionBlock, Spin, Tile, connect, ordered, pendingLabel, shownOf } from './Rows'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
@@ -270,7 +270,7 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
     return (
       <div className="extAgents-by">
         <Spin />
-        {t(testing ? 'gui.agent.testing_head' : 'gui.agent.setup_connecting')}
+        {t(testing ? 'gui.agent.testing_head' : pendingLabel(row, s))}
       </div>
     )
   }
@@ -377,7 +377,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
     actions = (
       <button className="mini go" disabled={primaryDisabled} onClick={primary}>
         {shown === 'pending' ? <Spin /> : null}
-        {t(shown === 'pending' ? 'gui.agent.setup_connecting' : shown === 'failed' ? 'gui.retry' : 'gui.agent.connect')}
+        {t(shown === 'pending' ? pendingLabel(row, s) : shown === 'failed' ? 'gui.retry' : 'gui.agent.connect')}
       </button>
     )
   }
