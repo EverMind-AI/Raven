@@ -70,6 +70,33 @@ describe('reading a sent message back', () => {
     }
   })
 
+  it('reads back a message that carried a document, which the engine annotates too', () => {
+    /* The engine writes a note per file, not per picture: one it cannot inline
+       is named `[Attachment: ...]`, with the same `(path: ...)` in it. The
+       reader knew only the picture's spelling, so those lines survived, the
+       tail after the note was then neither blank nor a path, and the whole
+       message -- heading, paths and annotations -- was drawn as the question. */
+    const DASH = '\u2014'
+    const stored = '[image] [image] hello\n\n[attachments, saved in the workspace]\n'
+      + '- uploads/shot.png\n- uploads/slides.pptx\n- uploads/guide.html\n- uploads/card.jpg\n\n'
+      + `[Image: shot.png (path: /w/uploads/shot.png) | 1312x732px, downscaled from 5312x2964 ${DASH} `
+      + 're-read it with read_file if you need another look]\n'
+      + `[Attachment: slides.pptx (path: /w/uploads/slides.pptx) ${DASH} use the understand_media tool to read its contents]\n`
+      + `[Attachment: guide.html (path: /w/uploads/guide.html) ${DASH} use the understand_media tool to read its contents]\n`
+      + `[Image: card.jpg (path: /w/uploads/card.jpg) | 787x1399px ${DASH} re-read it with read_file if you need another look]`
+    expect(splitAttachments(stored, NOTES)).toEqual({
+      body: 'hello',
+      atts: ['/w/uploads/shot.png', '/w/uploads/slides.pptx', '/w/uploads/guide.html', '/w/uploads/card.jpg'],
+    })
+  })
+
+  it('reads the other thing the engine says about a document', () => {
+    /* Two shapes, and like the picture's five they share only the opening. */
+    const DASH = '\u2014'
+    const stored = `read it\n\n[Attachment: a.pdf (path: /w/a.pdf) ${DASH} could not be read: Permission denied]`
+    expect(stripRuntimeNotes(stored)).toBe('read it')
+  })
+
   it('leaves alone the words a person wrote that only look like a marker', () => {
     /* `[image]` further down is a person typing, and a bracketed line that
        names no path is not one of the engine's. */
