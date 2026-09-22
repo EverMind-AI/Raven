@@ -500,14 +500,21 @@ function PlainCallRow({ lane, c }: { lane: Lane; c: CallData }): ReactElement {
   )
 }
 
-/* One elapsed clock per running card, self-stopping. */
-function DelegState({ state, err, extra }: { state: string; err?: string; extra?: string }): ReactElement {
+/* One elapsed clock per running card, self-stopping.
+ *
+ * The word and nothing else. The node tally used to ride here, one separator
+ * away from it, and in Chinese the two read as one phrase said twice: the
+ * state word for a finished run and the tally's word for a completed node are
+ * the same word, so a two-node graph with one node done said that word twice
+ * in one cell and invited the count to be read as a second opinion about the
+ * run. The breakdown is its own labelled row on the dag card now, where the
+ * label says which of the two facts it is. */
+function DelegState({ state, err }: { state: string; err?: string }): ReactElement {
   const word = t(state === 'run' ? 'gui.deleg.st_run' : state === 'ok' ? 'gui.deleg.st_ok' : 'gui.deleg.st_bad')
   return (
     <>
       <span className={'dot ' + state} />
       {state === 'bad' && err ? `${word} · ${err}` : word}
-      {extra ? ` · ${extra}` : ''}
     </>
   )
 }
@@ -693,8 +700,27 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
   useSeg(lane, c)
   const rowRef = useRef<HTMLDivElement | null>(null)
   const flip = (): void => pinRow(rowRef.current, () => store.toggleCall(lane, c))
-  const state = c.done ? (c.ok ? 'ok' : 'bad') : 'run'
   const nodes = c.nodes
+  /* How many nodes have stopped, and how many have not. `pending` and `running`
+     are the two that have not, and the second number is what the card could not
+     say before: a tally of the finished ones alone leaves "1" on a graph of two
+     without saying whether the other is coming. */
+  /* Nothing is outstanding once the run has closed: a node this side never heard
+     report is unknown rather than pending, and counting it as work still to come
+     is the one reading the event rules out. */
+  const left = c.graphClosed ? 0 : nodes.filter((n) => !store.nodeSettled(n.status)).length
+  /* The GRAPH's state, not the call's. `run_subagent_dag` is backgrounded by
+     default, so the call returns the moment the run is submitted: reading `ok`
+     off it called the run finished on a card whose nodes were still going, and
+     next to a clock that was still ticking, since that clock already reads the
+     nodes. The call still decides two things it alone knows --
+     that it has returned at all, and that it failed outright -- and the nodes
+     decide the rest. Nodes this side has not heard about yet cannot argue with
+     a finished call, which is what keeps a replayed run from reading as live:
+     an unhydrated card has no nodes, so `left` is 0 -- and neither can a node
+     that never reported before `dag.run_completed` closed the run, which is
+     what `graphClosed` settles above. */
+  const state = !c.done ? 'run' : !c.ok ? 'bad' : left ? 'run' : 'ok'
   /* The graph's clock, not the call's. A backgrounded graph -- which is the
      default -- returns as soon as it is submitted, so `c.ms` is that submit: a
      number near zero, frozen there while the nodes run for minutes. The span
@@ -722,16 +748,25 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
     else if (d === 'run') tally.run += 1
   })
   const bits: string[] = []
-  if (c.done && (tally.ok || tally.bad || tally.stop || tally.skip)) {
-    bits.push(t('gui.deleg.dag_done', { ok: String(tally.ok) }))
+  /* Reported from the first node the card hears about rather than from the
+     call's return: the count is about the graph, and the graph is what the
+     reader is watching. `n` is the denominator -- a bare "1" says nothing about
+     whether the run is a third of the way through or done. */
+  if (nodes.length) {
+    bits.push(t('gui.deleg.dag_done', { ok: String(tally.ok), n: String(nodes.length) }))
     if (tally.bad) bits.push(t('gui.deleg.dag_bad', { n: String(tally.bad) }))
     /* Its own word: `dag_bad` reads "failed" in both locales, and a node that was
        stopped did not fail. Between the failures and the skips, which is where it
        sits on the runner's own scale too. */
     if (tally.stop) bits.push(t('gui.deleg.dag_stopped', { n: String(tally.stop) }))
     if (tally.skip) bits.push(t('gui.deleg.dag_skip', { n: String(tally.skip) }))
+    /* Last, because it is the one bit about what has NOT happened. Said even
+       though the denominator implies it on a clean run: once a node has failed
+       or been skipped the subtraction stops being obvious, and "still to go" is
+       the fact a reader watching a live graph actually wants. */
+    if (left) bits.push(t('gui.deleg.dag_left', { n: String(left) }))
   }
-  const extra = bits.join(' · ')
+  const nodeLine = bits.join(' · ')
   const agents = [...new Set(nodes.map((n) => n.subagent).filter(Boolean))]
   const openTask = (): void => store.openDagRun(c.runId as string)
   const grid: ReactNode[] = []
@@ -788,8 +823,14 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
      the nodes cannot explain, and withholding the receipt there left the card
      showing a node count and no cause. */
   kv('state', t('gui.deleg.d_state'),
-    <DelegState state={state} {...(state === 'bad' ? { err: store.firstErrLine(c.res) } : {})}
-      {...(extra ? { extra } : {})} />)
+    <DelegState state={state} {...(state === 'bad' ? { err: store.firstErrLine(c.res) } : {})} />)
+  /* The breakdown, under the state and labelled as its own fact. Two rows
+     rather than one cell, because every wording that put them side by side
+     repeated a word: in Chinese the state word for a finished run is the
+     tally's word for a completed node, and the two for failure are one word as
+     well, so whichever way the run went the cell said one of those words
+     twice. A label each is what tells the run's outcome from its nodes'. */
+  if (nodeLine) kv('nodes', t('gui.deleg.d_nodes'), nodeLine)
   /* Only when there is something to say. Both clocks here can come up empty --
      a call that finished carrying no duration, and a graph that stopped
      without leaving an end stamp -- and a labelled row with an empty value

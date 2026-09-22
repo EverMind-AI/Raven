@@ -142,6 +142,15 @@ export interface CallData {
      fresh run instead. Only that event sets it: a reload's `dag.get` carries
      no such field, so a card restored from history never has one. */
   replannedInto?: string
+  /* Set once `dag.run_completed` has been seen for this card's run: the graph is
+     over, whatever the nodes this side heard about happen to say. The event
+     carries per-node file rows and legitimately carries none -- a run closed by
+     a backend error or a cancel has no manifest (raven/rpc/spine.py) -- so the
+     nodes it leaves behind can still read `pending`. Recorded rather than
+     inferred from them, because "the run ended" is exactly what they cannot
+     say. A card restored from history has no such event; `dag.get` gives it the
+     real statuses instead. */
+  graphClosed?: boolean
   /* Set once a `dag.get` has been asked for, so a card whose arguments carried no
      graph asks once rather than on every re-render. */
   asked: boolean

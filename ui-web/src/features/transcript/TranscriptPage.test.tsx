@@ -3908,14 +3908,21 @@ describe('transcript island, delegated calls', () => {
       h.done(true, 'stopped', 40)
       st.seal()
     })
-    const state = dagField(openDagCard(), 'gui.deleg.d_state') || ''
-    expect(state).toContain('gui.deleg.dag_done {"ok":"1"}')
+    const card = openDagCard()
+    const nodeRow = dagField(card, 'gui.deleg.d_nodes') || ''
+    expect(nodeRow).toContain('gui.deleg.dag_done {"ok":"1","n":"2"}')
     /* Its own word, not the failures'. `dag_bad` reads "failed" / "失败" in both
        locales, and the runner keeps `cancelled` distinct from `failed` on purpose
        -- one was stopped, the other went wrong. Counting it as bad traded a node
        that vanished for a node that lies. */
-    expect(state).toContain('gui.deleg.dag_stopped {"n":"1"}')
-    expect(state).not.toContain('gui.deleg.dag_bad')
+    expect(nodeRow).toContain('gui.deleg.dag_stopped {"n":"1"}')
+    expect(nodeRow).not.toContain('gui.deleg.dag_bad')
+    /* Both nodes stopped, so nothing is outstanding and the state is the run's
+       own outcome rather than a count repeated beside it. */
+    expect(nodeRow).not.toContain('gui.deleg.dag_left')
+    const state = dagField(card, 'gui.deleg.d_state') || ''
+    expect(state).toContain('gui.deleg.st_ok')
+    expect(state).not.toContain('gui.deleg.dag_done')
   })
 
   it('keeps the failure reason on a run the nodes cannot explain', () => {
@@ -3935,11 +3942,105 @@ describe('transcript island, delegated calls', () => {
       h.done(false, 'Error running DAG r4: backend write failed: disk full', 40)
       st.seal()
     })
-    const state = dagField(openDagCard(), 'gui.deleg.d_state')
+    const card = openDagCard()
+    const state = dagField(card, 'gui.deleg.d_state')
     expect(state).toContain('disk full')
-    /* The tally stays beside it: "1 done" is not the same fact as the cause, and
-       it is the only word on what did get through before the run stopped. */
-    expect(state).toContain('gui.deleg.dag_done')
+    /* The receipt is the state's; the tally is the row under it. "1 done" is not
+       the same fact as the cause, and it is the only word on what did get
+       through before the run stopped -- but it is a fact about the nodes, and
+       reading it off the state row was what let a count pass for an outcome. */
+    expect(state).not.toContain('gui.deleg.dag_done')
+    expect(dagField(card, 'gui.deleg.d_nodes')).toContain('gui.deleg.dag_done {"ok":"1","n":"2"}')
+  })
+
+  it('reads the graph, not the call that dispatched it, once the call has returned', () => {
+    /* `run_subagent_dag` is backgrounded by default: it returns the moment the
+       run is submitted. Reading `ok` off that return put "completed" on a card
+       whose nodes were still going -- beside a clock that was still ticking --
+       and the count next to it, "1" with no denominator, was the only hint that
+       the graph was two nodes deep. The state is the graph's now, and the count
+       is a row of its own. */
+    act(() => {
+      const st = mount.step()
+      const h = st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r7', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r7', node: 'scan', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r7', node: 'brief', status: 'running' })
+      /* The call returns while the second node runs on, which is the case the
+         card used to call finished. */
+      h.done(true, 'submitted', 40)
+      st.seal()
+    })
+    const card = openDagCard()
+    const state = dagField(card, 'gui.deleg.d_state') || ''
+    expect(state).toContain('gui.deleg.st_run')
+    expect(state).not.toContain('gui.deleg.st_ok')
+    const nodeRow = dagField(card, 'gui.deleg.d_nodes') || ''
+    expect(nodeRow).toContain('gui.deleg.dag_done {"ok":"1","n":"2"}')
+    expect(nodeRow).toContain('gui.deleg.dag_left {"n":"1"}')
+  })
+
+  it('counts the nodes before the call returns, and says what is outstanding', () => {
+    /* The tally used to appear only once the call had returned, so a graph the
+       reader was watching run said nothing about its own progress until it was
+       over. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r8', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r8', node: 'scan', status: 'running' })
+    })
+    const card = openDagCard()
+    expect(dagField(card, 'gui.deleg.d_state')).toContain('gui.deleg.st_run')
+    const nodeRow = dagField(card, 'gui.deleg.d_nodes') || ''
+    expect(nodeRow).toContain('gui.deleg.dag_done {"ok":"0","n":"2"}')
+    expect(nodeRow).toContain('gui.deleg.dag_left {"n":"2"}')
+  })
+
+  it('leaves a replayed run finished when its nodes have not been read back', () => {
+    /* A card reopened from history before `dag.get` answers has no nodes at all.
+       Nodes this side has not heard about must not argue with a call that
+       returned, or every finished run in the scrollback would read as live. */
+    act(() => {
+      const st = mount.step()
+      const h = st.tool('run_subagent_dag', { task_summary: 'a graph', nodes: [] })
+      h.done(true, 'done', 40)
+      st.seal()
+    })
+    const card = openDagCard()
+    expect(dagField(card, 'gui.deleg.d_state')).toContain('gui.deleg.st_ok')
+    expect(dagField(card, 'gui.deleg.d_nodes')).toBeNull()
+  })
+
+  it('lets a terminal event close a graph whose last node never reported', () => {
+    /* `dag.run_completed` carries a file row per node and legitimately carries
+       none: a run closed by a backend error or a cancel has no manifest. Reading
+       the state off the nodes alone therefore left a background run -- whose
+       call returned long ago -- drawn as running for as long as the page stayed
+       open, because the node it never heard from stayed `pending`. */
+    act(() => {
+      const st = mount.step()
+      const h = st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r6', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r6', node: 'scan', status: 'completed' })
+      h.done(true, 'submitted', 40)
+      st.seal()
+      /* The second node never reported, and the run closes with no file rows. */
+      mount.dagFeed('dag.run_completed', { run_id: 'r6', files: [] })
+    })
+    const card = openDagCard()
+    expect(dagField(card, 'gui.deleg.d_state')).toContain('gui.deleg.st_ok')
+    const nodeRow = dagField(card, 'gui.deleg.d_nodes') || ''
+    /* What it heard, and no claim about what it did not: the node that never
+       reported is absent from the count rather than outstanding. */
+    expect(nodeRow).toContain('gui.deleg.dag_done {"ok":"1","n":"2"}')
+    expect(nodeRow).not.toContain('gui.deleg.dag_left')
   })
 
   it('names the run that took over, before the old one is done', () => {
