@@ -4726,6 +4726,39 @@ async def test_announce_result_names_the_working_directory(monkeypatch):
     assert "[Subagent 'label' returned]" in submitted[0].text
 
 
+async def test_announce_passes_through_a_run_that_reports_its_own_directory(monkeypatch):
+    """The receipt names the directory the run was dispatched into. A run that
+    moved beneath it says so itself, in its own reply; the host neither parses
+    that line nor lifts it out of the fence, so the caller holds both and the
+    one that names where the files are is the run's own.
+
+    Measured on a real dispatch: the design engine mints a per-session
+    directory under the dispatch directory, and a caller that resolved the
+    reply's relative paths against the line above delivered nothing.
+    """
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(lambda req: submitted.append(req))
+    own = Path("/work/here/designs/poster-3f2a")
+
+    await mgr._announce_result(
+        task_id="t1",
+        task_summary="poster",
+        task="task",
+        result=f"The poster is ready.\nDesign session directory: {own}\nPaths in this reply resolve against it.",
+        origin={"channel": "tui", "chat_id": "default", "session_key": "tui:sess", "workspace": Path("/work/here")},
+        status="ok",
+    )
+
+    text = submitted[0].text
+    assert "Working directory: /work/here" in text
+    report = f"Design session directory: {own}"
+    assert report in text and "Paths in this reply resolve against it." in text
+    begin = text.index("[BEGIN UNTRUSTED subagent")
+    end = text.index("[END UNTRUSTED subagent")
+    assert begin < text.index(report) < end, "the run's own report rides as the run's, not as the host's claim"
+
+
 # ---- session_model_for (the DAG lane's own resolver) -----------------------
 
 

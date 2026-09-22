@@ -46,15 +46,20 @@ Here both ride the loop's own hook phases, per the amended verdict:
   be eaten by a mid-turn compaction -- both are the ledgered D5 loss, and
   both self-heal because every iteration appends the fresh snapshot.
 
-* ``after_send`` -- two reply tails, in the fork's own order: the completion
-  notice while unfinished items remain (fork ``main.py:2928-2931``), then the
-  caller-workspace git summary the fork launcher appended after every answer
-  (fork ``run.py:357-378``, the amended D3 rebuild) -- names and counts, not
-  a patch, and only when the bound working directory is a git tree; a
-  workspace that is not a checkout passes untouched. The rewritten reply is
-  what ``context_engine.after_turn`` receives, so Curator bookkeeping sees
-  the appended tails (bounded, replaced each turn; the ppt after_send rides
-  the same channel) -- the session record and the memory store do not.
+* ``after_send`` -- three reply tails: the fork's own two first, in its own
+  order -- the completion notice while unfinished items remain (fork
+  ``main.py:2928-2931``), then the caller-workspace git summary the fork
+  launcher appended after every answer (fork ``run.py:357-378``, the amended
+  D3 rebuild), names and counts rather than a patch, and only when the bound
+  working directory is a git tree, a workspace that is not a checkout passing
+  untouched -- and last the session directory this turn worked in, absolute
+  and machine-written. That third one is the caller's handoff: the directory
+  above is the one the caller dispatched into, and this turn's files are not
+  in it, so the engine names the directory they are in on the same reply that
+  names them. The rewritten reply is what ``context_engine.after_turn``
+  receives, so Curator bookkeeping sees the appended tails (bounded, replaced
+  each turn; the ppt after_send rides the same channel) -- the session record
+  and the memory store do not.
 """
 
 from __future__ import annotations
@@ -251,6 +256,17 @@ class MisconfiguredEngineHook(AgentHook):
         return HookDecision(short_circuit_result=(f"{_MALFORMED_SLICE_ERROR}: {self._error}", []))
 
 
+def session_dirname(session_key: str) -> str:
+    """The directory name this engine mints for ``session_key``.
+
+    Read from two seats: the one that makes the directory, and the one that
+    recognises it again from a binding it was handed.
+    """
+    name = mint_slug(session_key.rpartition(":")[2], max_chars=48) or "session"
+    digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:16]
+    return f"{name}-{digest}"
+
+
 class DesignParticipant(AgentParticipant):
     """Domain selection on the way in; task-state projection and nudge through.
 
@@ -280,9 +296,7 @@ class DesignParticipant(AgentParticipant):
         """Keep state and artifacts together across resumed and concurrent turns."""
         if not self._cfg.workdir_per_session:
             return bound
-        name = mint_slug(session_key.rpartition(":")[2], max_chars=48) or "session"
-        digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:16]
-        dirname = f"{name}-{digest}"
+        dirname = session_dirname(session_key)
         root = bound.parent.parent if bound.name == dirname and bound.parent.name == DESIGNS_DIRNAME else bound
         root = root.resolve()
         own = root / DESIGNS_DIRNAME / dirname
@@ -298,6 +312,19 @@ class DesignParticipant(AgentParticipant):
             raise
         workdir.repoint(own)
         return own
+
+    def _own_session_dir(self, bound: Path | None, session_key: str) -> Path | None:
+        """``bound`` when it is the directory this engine minted for ``session_key``.
+
+        The send seat reads the turn's live binding and keeps no record of the
+        repoint, so ownership is answered from the binding itself, by the rule
+        ``_own_folder`` uses to recognise the directory it already owns.
+        """
+        if not self._cfg.workdir_per_session or bound is None:
+            return None
+        if bound.parent.name == DESIGNS_DIRNAME and bound.name == session_dirname(session_key):
+            return bound
+        return None
 
     async def intake(self, text: str, step: StepView) -> Answer | None:
         # D1 clause 2: hooks fire before slash dispatch, so a command-shaped
@@ -412,6 +439,13 @@ class DesignParticipant(AgentParticipant):
             changes = describe_changes(Path(bound))
             if changes:
                 suffixes.append(f"--- {changes}")
+        # Last, because it is the one line a caller acts on: this turn's files
+        # are not in the directory the caller dispatched it into, and a caller
+        # that assumed they were delivered nothing and had to search the disk
+        # for paths its run had used as relative all along.
+        own = self._own_session_dir(bound, step.session_key)
+        if own is not None:
+            suffixes.append(f"Design session directory: {own}\nPaths in this reply resolve against it.")
         appended = "".join(f"\n\n{part}" for part in suffixes)
         return reply + appended if appended else None
 

@@ -180,7 +180,11 @@ Agent notes:
   channel names, normalized characters and truncated names remain distinct.
   Task State is still stored under the configured `taskState.stateRoot`,
   keyed by this session directory; relative file and render paths use the
-  same directory. A symlink used as `designs/` or as the session directory
+  same directory. The reply ends with that directory's absolute path and the
+  note that its paths resolve against it: a caller dispatched the run into the
+  directory above, which is what its dispatch receipt names, so it would
+  otherwise resolve the reply's relative paths one level too high and deliver
+  nothing. A symlink used as `designs/` or as the session directory
   stops the turn before model or tool execution, preserving the original
   working directory's access boundary. The caller's working directory may
   itself be a symlink; its resolved location is the root. Resuming a session
