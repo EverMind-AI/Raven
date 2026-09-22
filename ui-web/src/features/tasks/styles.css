@@ -668,7 +668,8 @@
 /* `BoardCard`'s box -- the prototype's own `.pbnode` (proto.css:1485-1490),
    filling the `foreignObject` `DagGraph` sizes to the node's box when this
    domain hands it `renderNode`. Position and size come from that box, not
-   from this rule. */
+   from this rule, and `.pbnode`'s own drop shadow is left out for the reason
+   the notes below give: it would fall outside that box. */
 .tkrun {
   box-sizing: border-box;
   position: relative;
@@ -714,9 +715,11 @@
      outline and drops a box-shadow. */
   outline-offset: -2px;
 }
-/* The prototype's own two per-status box treatments (proto.css:1088-1093);
-   every other status -- completed, failed, cancelled, interrupted, exception
-   -- draws the plain box above and differs only in `.tkrunrt`, below. */
+/* The border colour is the prototype's own per-status treatment
+   (proto.css:1088-1093), but its glow is drawn inward here rather than as the
+   outer ring the prototype wrote -- see the clip note above. Every other status
+   -- completed, failed, cancelled, interrupted, exception -- draws the plain
+   box above and differs only in `.tkrunrt`, below. */
 .tkfork .nd[data-st="running"] .tkrun {
   border-color: color-mix(in oklab, var(--amber) 55%, var(--line));
   box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--amber) 16%, transparent);
