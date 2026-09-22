@@ -9,6 +9,7 @@ which discovery finds through the ``raven.plugins`` entry-point group.
 from __future__ import annotations
 
 import ast
+import logging
 from pathlib import Path
 
 import pytest
@@ -549,3 +550,117 @@ def test_build_onboard_steps_hands_each_plugin_its_own_config_slice(tmp_path):
         assert received_config == {"marker": "b-slice"}
     finally:
         _sys.modules.pop("_test_onboard_slice_owner", None)
+
+
+class TestStartBackendDetached:
+    """The resident hosts start the memory backend without waiting on it.
+
+    Awaited, the start held every resident boot for the readiness budget --
+    10s on a machine whose first everos start has to compile its bytecode --
+    and a session that overran it reported no long-term memory while the child
+    was still coming up. Detached, the backend's own state machine covers that
+    window: ``store`` answers False so the loop retries, ``recall`` returns no
+    hits and schedules a probe.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_caller_is_not_held_until_the_start_finishes(self) -> None:
+        """The whole point: control comes back before ``start()`` is done."""
+        import asyncio
+
+        from raven.core.plugin_stack import start_backend_detached
+
+        released = asyncio.Event()
+        finished = asyncio.Event()
+
+        class _SlowBackend:
+            async def start(self) -> None:
+                await released.wait()
+                finished.set()
+
+        start_backend_detached(_SlowBackend(), logger=logging.getLogger(__name__))
+
+        # Still blocked inside start(), and we are already here.
+        assert not finished.is_set()
+        released.set()
+        await asyncio.wait_for(finished.wait(), timeout=2)
+
+    @pytest.mark.asyncio
+    async def test_the_task_is_held_so_it_cannot_be_collected_mid_flight(self) -> None:
+        """asyncio keeps only a weak reference; a dropped task is a lost start."""
+        import asyncio
+        import gc
+
+        from raven.core import plugin_stack
+
+        gate = asyncio.Event()
+        ran = asyncio.Event()
+
+        class _Backend:
+            async def start(self) -> None:
+                await gate.wait()
+                ran.set()
+
+        plugin_stack.start_backend_detached(_Backend(), logger=logging.getLogger(__name__))
+        gc.collect()
+        assert plugin_stack._PENDING_BACKEND_STARTS, "the in-flight start was not held"
+        gate.set()
+        await asyncio.wait_for(ran.wait(), timeout=2)
+        await asyncio.sleep(0)
+        assert not plugin_stack._PENDING_BACKEND_STARTS, "a finished start was not released"
+
+    @pytest.mark.asyncio
+    async def test_a_start_that_raises_is_logged_and_not_re_raised(self) -> None:
+        """The three call sites all swallowed it; the helper owes them the same."""
+        import asyncio
+
+        from raven.core import plugin_stack
+
+        class _Failing:
+            async def start(self) -> None:
+                raise RuntimeError("no service here")
+
+        logged: list[str] = []
+
+        class _Logger:
+            def exception(self, msg: str) -> None:
+                logged.append(msg)
+
+        plugin_stack.start_backend_detached(_Failing(), logger=_Logger())
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if logged:
+                break
+        assert logged and "memory backend start failed" in logged[0]
+
+    @pytest.mark.asyncio
+    async def test_no_backend_is_nothing_to_do(self) -> None:
+        """``backend`` is None when no memory plugin is wired."""
+        from raven.core import plugin_stack
+
+        plugin_stack.start_backend_detached(None, logger=logging.getLogger(__name__))
+        assert not plugin_stack._PENDING_BACKEND_STARTS
+
+    @pytest.mark.asyncio
+    async def test_cancel_retires_a_start_still_in_flight(self) -> None:
+        """A start left running polls an address for a generation that is gone."""
+        import asyncio
+
+        from raven.core import plugin_stack
+
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class _Hanging:
+            async def start(self) -> None:
+                entered.set()
+                try:
+                    await asyncio.sleep(30)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+
+        plugin_stack.start_backend_detached(_Hanging(), logger=logging.getLogger(__name__))
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        plugin_stack.cancel_pending_backend_starts()
+        await asyncio.wait_for(cancelled.wait(), timeout=2)

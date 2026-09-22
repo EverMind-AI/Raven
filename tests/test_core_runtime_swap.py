@@ -598,3 +598,70 @@ def test_the_runtime_declares_the_command_families_its_prompts_are_worded_by(tmp
     policy = rt.loop.tools._permission_gate._builtin._policy
     assert policy.approval_reason("rm coverage.xml") == "delete_command"
     assert policy.approval_reason("mkdir -p build") is None
+
+
+@pytest.mark.asyncio
+async def test_dispose_retires_a_detached_start_before_stopping_the_backend(monkeypatch):
+    """Ordering: cancel the in-flight start, then drain, then stop.
+
+    The resident hosts no longer await ``backend.start()``; they hand it to
+    ``plugin_stack.start_backend_detached``. A start still polling for
+    readiness when the generation is retired would outlive it -- reporting a
+    failure for a generation that is gone, and on process exit raising "Task
+    was destroyed but it is pending". ``dispose`` is the one retirement point
+    both the gateway and ``raven a2a serve`` go through, so the cancel belongs
+    there and nowhere else.
+    """
+    from raven.core import plugin_stack
+    from raven.core.runtime import RavenRuntime
+
+    order: list[str] = []
+    monkeypatch.setattr(
+        plugin_stack,
+        "cancel_pending_backend_starts",
+        lambda: order.append("cancel_pending_backend_starts"),
+    )
+
+    class _Backend:
+        async def stop(self):
+            order.append("stop")
+
+    class _Subagents:
+        async def cancel_all(self, *, reason: str = ""):
+            order.append("cancel_all")
+
+    class _Skills:
+        def stop_file_watcher(self) -> None:
+            order.append("stop_file_watcher")
+
+    class _Context:
+        skills = _Skills()
+
+    class _Loop:
+        subagents = _Subagents()
+        context = _Context()
+
+        async def stop_plugin_services(self):
+            order.append("stop_plugin_services")
+
+        async def close_mcp(self):
+            order.append("close_mcp")
+
+        def stop(self):
+            order.append("loop_stop")
+
+        async def drain_backend_stores(self):
+            order.append("drain_backend_stores")
+
+    rt = RavenRuntime(
+        loop=_Loop(),
+        plugin_registry=None,
+        backend=_Backend(),
+        strategies=None,
+        deliverables=None,
+    )
+
+    await rt.dispose()
+
+    assert order.index("cancel_pending_backend_starts") < order.index("drain_backend_stores")
+    assert order.index("cancel_pending_backend_starts") < order.index("stop")

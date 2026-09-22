@@ -29,6 +29,7 @@ sub-agent trace writer. :func:`everos_plugin_installed` and
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from collections.abc import Callable
@@ -682,6 +683,57 @@ def _plugin_id_for_backend(
     return None
 
 
+# Held so a detached start cannot be collected mid-flight, and so one place
+# can retire them. asyncio keeps only a weak reference to a running task.
+_PENDING_BACKEND_STARTS: set[asyncio.Task] = set()
+
+
+def start_backend_detached(backend: Any, *, logger: Any) -> None:
+    """Bring the memory backend up without holding the boot on it.
+
+    The same shape as ``warm_up_in_background`` for litellm: a resident host
+    starts the slow thing once and goes on serving, and the on-demand path
+    reports a failure to whoever needs it. Here that path is the backend's own
+    state machine -- ``store`` answers False so the loop retries the record,
+    and ``recall`` returns no hits for that turn and schedules a probe, so a
+    turn arriving before the service is up costs that turn its recall and
+    nothing else.
+
+    Awaited, this cost every first session of a machine's uptime the readiness
+    budget: a cold start that overruns it leaves the session reporting no
+    long-term memory while the child is still booting behind it.
+
+    Only for hosts that serve many turns. A caller that acts on the service
+    immediately -- an import checking readiness, a sub-agent writing one
+    record, a one-shot turn that then exits -- must keep awaiting ``start()``,
+    because for those there is no later turn to recover into.
+    """
+    if backend is None:
+        return
+
+    async def _start() -> None:
+        try:
+            await backend.start()
+        except Exception:
+            logger.exception("memory backend start failed; continuing with legacy memory path")
+
+    task = asyncio.create_task(_start(), name="memory-backend-start")
+    _PENDING_BACKEND_STARTS.add(task)
+    task.add_done_callback(_PENDING_BACKEND_STARTS.discard)
+
+
+def cancel_pending_backend_starts() -> None:
+    """Retire any start still in flight, before the backend is stopped.
+
+    A start left running across teardown polls an address nothing will answer
+    and then reports a failure for a generation that no longer exists; on
+    process exit it is also what raises "Task was destroyed but it is pending".
+    Cancelling is idempotent -- a finished task drops itself from the set.
+    """
+    for task in list(_PENDING_BACKEND_STARTS):
+        task.cancel()
+
+
 __all__ = [
     "build_onboard_steps",
     "build_plugin_hooks",
@@ -690,7 +742,9 @@ __all__ = [
     "build_plugin_services",
     "build_plugin_session_observers",
     "build_plugin_tool_gates",
+    "cancel_pending_backend_starts",
     "discover_plugins",
     "maybe_build_memory_backend",
     "plugin_discovery_sources",
+    "start_backend_detached",
 ]

@@ -37,7 +37,8 @@ from raven.utils.workspace import sync_workspace_templates
 
 if TYPE_CHECKING:
     from raven.config.schema import GatewayPageConfig
-    from raven.core.runtime import SwapCoordinator
+from raven.core import plugin_stack
+from raven.core.runtime import SwapCoordinator
 
 console = Console()
 
@@ -585,20 +586,13 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
             question_broker = None
             control = None
             page_mount = None
-            # Bring the memory backend online before any turn
-            # runs. ``backend`` is ``None`` when no plugin is wired;
-            # the start / stop awaits are then skipped entirely.
-            from loguru import logger as _logger  # local import: gateway
+            # Detached: a resident host serves many turns, and the backend's
+            # own state machine covers the window before the service answers.
+            # ``backend`` is ``None`` when no plugin is wired, which the helper
+            # takes as nothing to do.
+            from loguru import logger as _logger  # local import: gateway has no module-level logger
 
-            # doesn't have a module-
-            # level logger
-            if backend is not None:
-                try:
-                    await backend.start()
-                except Exception:
-                    _logger.exception(
-                        "memory backend start failed; continuing with legacy memory path",
-                    )
+            plugin_stack.start_backend_detached(backend, logger=_logger)
 
             async def _bind_generation():
                 nonlocal gw_teardown, gw_scheduler, question_broker, page_mount, heartbeat
@@ -997,13 +991,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     )
                     agent = runtime.loop
                     backend = runtime.backend
-                    if backend is not None:
-                        try:
-                            await backend.start()
-                        except Exception:
-                            _logger.exception(
-                                "memory backend start failed; continuing with legacy memory path",
-                            )
+                    plugin_stack.start_backend_detached(backend, logger=_logger)
                     try:
                         await _bind_generation()
                     except Exception:
