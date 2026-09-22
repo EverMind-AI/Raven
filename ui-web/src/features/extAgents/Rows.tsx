@@ -6,7 +6,7 @@
  * only whether a row opens the sheet, which is the caller's `onOpen`.
  *
  * Connecting is the server's readiness ping -- one real prompt through the
- * agent, up to a minute for a cli or acp one -- so the row says "testing" for
+ * agent, up to a minute -- so the row says "testing" for
  * its length and offers nothing else meanwhile; a refusal stays on the row as
  * red text with a Retry, rather than as a toast that is gone before the reader
  * looks up.

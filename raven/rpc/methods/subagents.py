@@ -952,13 +952,12 @@ def _resolve_toggle(entries: list[dict], name: Any, enabled: bool) -> tuple[list
 async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """Set `enabled` on one entry - the flag the roster filter reads.
 
-    Switching a `cli` or `acp` row *on* first sends one real prompt through that
-    row's own backend and refuses the enable, in the agent's own words, when
-    nothing answers: for those kinds the roster's entry criterion is that the
-    agent works now, not that it is installed. So this spends one call on that
-    agent's own quota and can hold the switch for up to
-    `_ENABLE_PING_TIMEOUT_SECONDS`. Exempt: switching off, an `openai` row
-    (whose credential the free `/models` probe already settles), and
+    Switching a row *on* first sends one real prompt through that row's own
+    backend and refuses the enable, in the agent's own words, when nothing
+    answers: the roster's entry criterion is that the agent works now, not that
+    it is installed. So this spends one call on that agent's own quota and can
+    hold the switch for up to `_ENABLE_PING_TIMEOUT_SECONDS`. Exempt: switching
+    off, a `builtin` row (this process, with no backend to reach), and
     `force: true`, the operator's override for an agent whose provider is
     briefly down. A refusal writes nothing.
     """

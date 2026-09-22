@@ -314,11 +314,17 @@ before it writes the flag, and refuses the enable in the agent's own words when 
 answers (`force: true` is the operator's override). The two layers therefore ask
 different questions: readiness decides how the row is listed and spends nothing, the
 switch spends one call on that agent's quota before it writes a yes. Neither validates
-retroactively — a folder that ships enabled, and a row already switched on, stay on the
-roster unpinged — because the gate is on the act that turns an agent on, and not on
-membership. That act is the switch, or an add that writes a preset in already enabled:
-`subagents.add` proves a pinged kind the same way and stores nothing when it does not
-answer, so a preset cannot arrive on the roster unproved either.
+retroactively — a folder that ships enabled stays on the roster unpinged — because the
+gate is on the act that turns an agent on, and not on membership. Three acts qualify.
+The switch. An add that writes a preset in already enabled: `subagents.add` proves a
+pinged kind the same way and stores nothing when it does not answer, so a preset cannot
+arrive on the roster unproved either. And a `subagents.update` that changes the key or
+the model of a row that is already on — that is a connect nobody gated, since the row
+goes on serving dispatches with something nothing has tried — so it is asked the same
+question, and only when one of those two fields actually moved; every other field the
+call can write is presentation or policy, and a row that is off is left to the switch.
+Every kind but `builtin` is pinged, that one being this process, with no backend to
+reach.
 Not deletable through config — removing one means removing its folder, or setting
 `"enabled": false` in its own `subagent.json`. On the RPC wire the row source is still
 spelled `vendored`; renaming that is a schema change.
