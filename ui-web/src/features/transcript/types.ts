@@ -186,6 +186,10 @@ export interface AskData {
      schedule's own description of when it was set. Absent on a turn somebody
      typed, which is every other one. */
   auto?: { origin: string; note: string }
+  /* A message merged into the turn that was already running, so this bubble
+     sits INSIDE a turn instead of opening one. Every scan that walks back to
+     find where a turn began reads it -- see collapse() and foldRuns(). */
+  midTurn?: boolean
   body: string
   atts: string[]
   when: string

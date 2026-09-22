@@ -31,6 +31,8 @@ async function harness({
 } = {}) {
   const log: unknown[][] = []
   const steps: Step[] = []
+  const bubbles: Array<{ id: number; text: string; midTurn: boolean }> = []
+  let bubbleId = 0
   document.body.innerHTML = '<div id="stage"></div><div id="cronPage"></div>'
   const step = (): Step => {
     const st: Step = {
@@ -53,7 +55,19 @@ async function harness({
     fakes: {
       'src/state/ws': { setOpen: () => {} },
       'src/state/session/conversation': {
-        ask: (text: string) => log.push(['ask', text]),
+        /* Answers the id the bubble was drawn under, and keeps the bubbles the
+           stage is holding: a mid-turn one may be taken back. */
+        ask: (text: string, _when?: string, opts?: { midTurn?: boolean } | null) => {
+          log.push(['ask', text])
+          bubbleId += 1
+          bubbles.push({ id: bubbleId, text, midTurn: !!(opts && opts.midTurn) })
+          return bubbleId
+        },
+        unask: (id: number) => {
+          log.push(['unask', id])
+          const at = bubbles.findIndex((b) => b.id === id)
+          if (at >= 0) bubbles.splice(at, 1)
+        },
         noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) =>
           log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null]),
       },
@@ -151,6 +165,7 @@ async function harness({
     dispatch: pipeline.dispatch,
     log,
     steps,
+    bubbles,
     rows,
     park,
     live: runtime.state() as unknown as {
@@ -211,6 +226,9 @@ describe('message.injected', () => {
     h.dispatch({ type: 'message.injected', payload: { turn_id: 't-inject', content: 'only the last quarter' } })
 
     expect(h.did('ask')).toEqual([['ask', 'only the last quarter']])
+    /* Marked as part of the turn under way, which is what keeps the fold, the
+       merge of silent steps and the stop note reading it as one. */
+    expect(h.bubbles).toEqual([{ id: 1, text: 'only the last quarter', midTurn: true }])
     expect(h.did('touch')).toEqual([['touch', 's1', 'only the last quarter']])
     /* The turn is not re-opened: no workspace turn, no phase change. */
     expect(h.did('advanceTurn')).toEqual([])
@@ -224,18 +242,36 @@ describe('message.injected', () => {
     expect(h.live.st).not.toBe(open)
   })
 
-  it('keeps the bubble when the same message opens a turn of its own', async () => {
+  it('re-files the bubble when the same message opens a turn of its own', async () => {
     /* The host turn ended before its next drain, so the message fell back to a
-       turn of its own -- under the id it was announced with. The turn
-       bookkeeping is still owed; a second bubble is not. */
+       turn of its own -- under the id it was announced with. The bubble drawn
+       inside the ended turn is taken back and drawn again where this turn
+       begins, which is below that turn's answer: one bubble, in the place a
+       reload puts it. */
     const h = await harness({ rows: [{ id: 's1' }] })
     h.dispatch({ type: 'message.injected', payload: { turn_id: 't-inject', content: 'only the last quarter' } })
+    const [drawn] = h.bubbles
 
     h.dispatch({ type: 'message.start', payload: { turn_id: 't-inject', content: 'only the last quarter' } })
 
-    expect(h.did('ask')).toEqual([['ask', 'only the last quarter']])
+    expect(h.did('unask')).toEqual([['unask', drawn!.id]])
+    expect(h.bubbles).toEqual([{ id: 2, text: 'only the last quarter', midTurn: false }])
     expect(h.did('advanceTurn')).toHaveLength(1)
     expect(h.did('dispatch')).toEqual([['dispatch', 'stream', true]])
+  })
+
+  it('re-files it once, however many windows announced it', async () => {
+    /* The id is forgotten with the bubble: a second message.start under it --
+       a reconnect replaying the buffer -- must not take the new bubble back
+       and leave the turn with no question at all. */
+    const h = await harness({ rows: [{ id: 's1' }] })
+    h.dispatch({ type: 'message.injected', payload: { turn_id: 't-inject', content: 'only the last quarter' } })
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't-inject', content: 'only the last quarter' } })
+
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't-inject', content: 'only the last quarter' } })
+
+    expect(h.did('unask')).toHaveLength(1)
+    expect(h.bubbles.map((b) => b.text)).toEqual(['only the last quarter', 'only the last quarter'])
   })
 
   it('still draws a question that was never injected', async () => {

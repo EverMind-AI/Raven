@@ -102,8 +102,14 @@ export function mainLane(): Lane {
 
 /* ── the public face the page's own machinery calls ───────────────────── */
 
-export function ask(text: string, when?: string | null): void {
-  store.askText(mainLane(), String(text), when ?? null)
+/* Answers the segment's id: a mid-turn bubble may have to be taken back when
+   its message turns out to be running as a turn of its own (`dropSeg`). */
+export function ask(text: string, when?: string | null, opts?: { midTurn?: boolean } | null): number {
+  return store.askText(mainLane(), String(text), when ?? null, opts).id
+}
+
+export function dropSeg(id: number): boolean {
+  return store.dropSeg(mainLane(), id)
 }
 
 export function step(): StepHandle {

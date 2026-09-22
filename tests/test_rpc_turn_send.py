@@ -16,10 +16,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from pydantic import ValidationError
 
 from raven.rpc.dispatcher import Dispatcher
-from raven.rpc.errors import ModelNotAvailableError, RpcError, TurnInProgressError
+from raven.rpc.errors import InvalidParamsError, ModelNotAvailableError, RpcError, TurnInProgressError
 from raven.rpc.methods.turn import register_turn_methods, turn_send
 
 
@@ -207,12 +206,25 @@ async def test_turn_send_without_scheduler_surfaces_build_error_code() -> None:
 
 
 async def test_turn_send_rejects_missing_session_key() -> None:
-    with pytest.raises(ValidationError):
+    """As invalid params, not as a server fault. The page reaches this by racing
+    itself -- a second message typed while the first is still making the
+    conversation carries a session_key of null -- and an internal error there is
+    a traceback in the log and a red failure row over a message that goes on to
+    be delivered."""
+    with pytest.raises(InvalidParamsError) as caught:
         await turn_send({"content": "missing session_key"}, scheduler=FakeScheduler())
+
+    assert caught.value.code == -32602
+    assert caught.value.message == "invalid_params"
+
+
+async def test_turn_send_rejects_a_null_session_key() -> None:
+    with pytest.raises(InvalidParamsError):
+        await turn_send({"session_key": None, "content": "hi"}, scheduler=FakeScheduler())
 
 
 async def test_turn_send_rejects_missing_content() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(InvalidParamsError):
         await turn_send({"session_key": "tui:default"}, scheduler=FakeScheduler())
 
 
@@ -487,7 +499,7 @@ async def test_no_target_leaves_direct_target_none() -> None:
 
 async def test_a_partial_target_is_refused_at_the_schema() -> None:
     """Both halves are the instance's identity; one alone would address nothing."""
-    with pytest.raises(ValidationError):
+    with pytest.raises(InvalidParamsError):
         await turn_send(
             {"session_key": "tui:default", "content": "hi", "target": {"agent": "Raven-Code"}},
             scheduler=FakeScheduler(),
@@ -729,6 +741,40 @@ async def test_busy_inject_hands_the_text_to_the_running_turn() -> None:
     assert req.busy is BusyPolicy.INJECT and req.text == "how far along?" and req.conversation == "tui:default"
     assert req.turn_id == result["turn_id"]
     assert turn_ids == {"tui:default": "running-1"}, "the running turn keeps the lane's slot"
+
+
+async def test_an_inject_carries_the_time_it_arrived() -> None:
+    """The stored entry is stamped from here, not from the gap it waits for.
+
+    An inject sits in the lane's mailbox until the running turn reaches its next
+    tool-loop gap, which on the long turns people correct is minutes away -- so
+    the loop's own clock filed a message typed at 11:50 under 11:51, after the
+    work it was meant to change."""
+    from datetime import datetime
+
+    from raven.rpc.methods import turn as turn_mod
+
+    scheduler = FakeScheduler()
+    turn_mod._active_turns["tui:default"] = FakeHandle()
+    before = datetime.now()
+
+    await turn_send(
+        {"session_key": "tui:default", "content": "only the last quarter", "busy": "inject"},
+        scheduler=scheduler,
+        turn_ids={"tui:default": "running-1"},
+    )
+
+    stamped = datetime.fromisoformat(scheduler.submitted[0].received_at)
+    assert before <= stamped <= datetime.now()
+
+
+async def test_an_ordinary_send_is_stamped_when_it_runs() -> None:
+    """The turn path stamps a turn that runs at once, so nothing is carried."""
+    scheduler = FakeScheduler()
+
+    await turn_send({"session_key": "tui:default", "content": "hi"}, scheduler=scheduler, turn_ids={})
+
+    assert scheduler.submitted[0].received_at is None
 
 
 async def test_an_accepted_inject_is_announced_to_every_window() -> None:

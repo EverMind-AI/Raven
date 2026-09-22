@@ -19,7 +19,7 @@ type Runtime = typeof import('./runtime')
 
 interface Row { id: string; title?: string }
 
-async function harness({ reject = null as { code?: number; message?: string } | null } = {}) {
+async function harness({ reject = null as { code?: number; message?: string } | null, draft = false } = {}) {
   const log: unknown[][] = []
   const queue: string[] = []
   const asked: Array<[string, unknown]> = []
@@ -95,15 +95,19 @@ async function harness({ reject = null as { code?: number; message?: string } | 
   await fakeGateway((method: string, params: unknown) => {
     asked.push([method, params])
     if (method === 'turn.send' && reject) return Promise.reject(Object.assign(new Error(reject.message || 'no'), reject))
+    /* The promotion hangs here, which is the window under test: the draft is
+       becoming a conversation and there is no session key yet. */
+    if (method === 'session.create') return new Promise<Record<string, unknown>>(() => {})
     return Promise.resolve({})
   })
   const { setSources } = await import('../sources')
   setSources({ composer: { slash: [] }, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   const part = await import('../../app/install')
   part.installActions()
-  registry.adopt('s1')
+  registry.adopt(draft ? null : 's1')
   return {
     runtime,
+    registry,
     log,
     queue,
     asked,
@@ -182,5 +186,41 @@ describe('a message typed while the turn is running', () => {
 
     expect(h.queue).toEqual(['only the last quarter'])
     expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.send', 'gui.err.disconnected', ['retry']]])
+  })
+})
+
+
+describe('a message typed while a brand-new conversation is being made', () => {
+  it('waits in the queue instead of going to a turn that does not exist yet', async () => {
+    /* There is no turn to merge into until the conversation exists, and no
+       session key to name either: sending anyway answered -32602 and drew a red
+       failure row over a message the queue then delivered a second later. */
+    const h = await harness({ draft: true })
+
+    h.runtime.send('summarise the report')
+    await h.tick()
+    h.runtime.send('only the last quarter')
+    await h.tick()
+
+    expect(h.sends()).toEqual([])
+    expect(h.queue).toEqual(['only the last quarter'])
+    expect(h.did('noteRow')).toEqual([])
+  })
+
+  it('waits while the conversation is still being finished', async () => {
+    /* The draft flag is lowered partway through the promotion, with the staged
+       writes and the subscription still running -- so "is this a draft" is not
+       the whole question, and the send that read only that flag went out
+       against a session key of null. */
+    const h = await harness({ draft: true })
+    h.runtime.send('summarise the report')
+    await h.tick()
+    h.registry.mint(h.registry.draft(), 's1')
+
+    h.runtime.send('only the last quarter')
+    await h.tick()
+
+    expect(h.sends()).toEqual([])
+    expect(h.queue).toEqual(['only the last quarter'])
   })
 })

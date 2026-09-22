@@ -11,7 +11,7 @@
  * owned by nobody who could be handed the flag instead.
  */
 
-import { ask as drawAsk, note as drawNote } from '../../features/transcript/mount'
+import { ask as drawAsk, dropSeg, note as drawNote } from '../../features/transcript/mount'
 import { setStuck } from '../../features/transcript/tail'
 import { I18N } from '../../i18n/t'
 
@@ -54,11 +54,19 @@ export function splitAtts(text: string): { body: string; atts: string[] } {
   return { body: text, atts: [] }
 }
 
-export function ask(text: string, when?: string): void {
+/* Answers the bubble's id so a caller that may have to take it back can: a
+   mid-turn message whose turn ended before it was merged runs as a turn of its
+   own, and that turn draws the question where the turn begins. */
+export function ask(text: string, when?: string, opts?: { midTurn?: boolean } | null): number {
   unpitch()
   setStuck(true)
   /* The bubble, its attachment chips and its footer are the island's. */
-  drawAsk(text, when)
+  return drawAsk(text, when, opts)
+}
+
+/* Take a drawn bubble back off the stage. */
+export function unask(id: number): void {
+  dropSeg(id)
 }
 
 /* Writes what the row shows and what it can give back, together; `row` is the

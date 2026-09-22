@@ -760,7 +760,12 @@ class TurnPathMixin:
             if drain is not None:
                 for inj in drain():
                     inj_text = inj.text or ""
-                    inj_paths = [m.path for m in inj.media]
+                    # Only the paths the message does not already name. A send
+                    # from the page bakes its own attachment note into the text
+                    # and derives ``media`` from it, so naming them again put a
+                    # second, raw copy of the path into the reader's own bubble
+                    # once the stored entry was drawn.
+                    inj_paths = [m.path for m in inj.media if m.path not in inj_text]
                     if inj_paths:
                         prefix = inj_text + "\n" if inj_text else ""
                         inj_text = f"{prefix}[injected message; attached files: {', '.join(inj_paths)}]"
@@ -772,7 +777,10 @@ class TurnPathMixin:
                             {
                                 "role": "user",
                                 "content": inj_text,
-                                "timestamp": self._now_fn().isoformat(),
+                                # When it arrived, not when the turn happened to
+                                # reach a gap: the wait is the whole point of an
+                                # inject, and a long turn is where they are sent.
+                                "timestamp": inj.received_at or self._now_fn().isoformat(),
                                 _MID_TURN_USER_KEY: True,
                             }
                         )

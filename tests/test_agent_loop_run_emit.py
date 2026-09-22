@@ -34,7 +34,7 @@ from raven.spine.events import Reasoning as EvReasoning
 from raven.spine.events import StreamDelta as EvStreamDelta
 from raven.spine.events import Text as EvText
 from raven.spine.events import ToolEvent as EvToolEvent
-from raven.spine.message import ChatType, Source
+from raven.spine.message import ChatType, Media, Source
 from raven.spine.turn import Origin, TurnRequest
 
 
@@ -758,6 +758,41 @@ async def test_a_single_mid_turn_message_is_labelled_too(tmp_path):
     await loop.run_turn(_req("summarise the report"), _EmitCollector(), drain, stream=True)
 
     assert [m["content"] for m in _labelled(provider.calls[1])] == [f"{_MID_TURN_HEADER}\n\nonly the last quarter"]
+
+
+async def test_a_mid_turn_attachment_the_message_already_names_is_not_named_twice(tmp_path):
+    # The page bakes its own attachment note into the text and derives `media`
+    # from it, so the drain's note repeated the path -- and the reader, whose
+    # live bubble showed the bare sentence, came back from a reload to an
+    # absolute path written into their own words.
+    provider = _RecordingStreamProvider(_stream_scripts(1))
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+
+    typed = "please look at the attached note\n\n[attachments]\n- /tmp/rt_note.txt"
+    drain = _gap_drain([[], [_req(typed, media=(Media(path="/tmp/rt_note.txt", mime="text/plain", kind="file"),))]])
+    await loop.run_turn(_req("summarise the report"), _EmitCollector(), drain, stream=True)
+
+    assert [m["content"] for m in _labelled(provider.calls[1])] == [f"{_MID_TURN_HEADER}\n\n{typed}"]
+
+
+async def test_a_mid_turn_attachment_the_message_does_not_name_is_still_named(tmp_path):
+    # The other half: a sender that hands over a file without naming it -- a
+    # channel's own intake -- must still have it reach the model.
+    provider = _RecordingStreamProvider(_stream_scripts(1))
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+
+    drain = _gap_drain(
+        [[], [_req("look at this", media=(Media(path="/tmp/rt_note.txt", mime="text/plain", kind="file"),))]]
+    )
+    await loop.run_turn(_req("summarise the report"), _EmitCollector(), drain, stream=True)
+
+    assert [m["content"] for m in _labelled(provider.calls[1])] == [
+        f"{_MID_TURN_HEADER}\n\nlook at this\n[injected message; attached files: /tmp/rt_note.txt]"
+    ]
 
 
 async def test_mid_turn_messages_from_different_gaps_stay_apart(tmp_path):

@@ -32,7 +32,7 @@ import { hasToolOk } from '../../rpc/capabilities'
 import { session as sheetSession } from '../sheetRack'
 import { ds, sources } from '../sources'
 import { show as toast } from '../toast'
-import { ask, noteRow } from './conversation'
+import { ask, noteRow, unask } from './conversation'
 import { namingEnded, settleNaming } from './naming'
 import { viewRuntime } from './registry'
 import {
@@ -73,11 +73,17 @@ export const STAGES: readonly Stage[] = [
     /* Read BEFORE the phase is set: the window that sent this turn has already
        drawn the question; a window that is only watching has not.
 
-       A message already drawn from `message.injected` keeps its bubble: the
-       host turn ended before draining it, so it is running as a turn of its
-       own, and this frame opens that turn rather than announcing a second
-       message. The turn bookkeeping below is still owed. */
-    if (!turn.busy() && p.content && !rt.injected.has(p.turn_id)) ask(p.content)
+       A message already drawn from `message.injected` is re-filed rather than
+       drawn twice: the host turn ended before draining it, so it is running as
+       a turn of its own, and the bubble that was drawn inside the ended turn
+       belongs at the head of this one -- below that turn's answer, which is
+       where a reload puts it. Taking it back and letting the ordinary path
+       draw it is what moves it. */
+    if (!turn.busy() && p.content) {
+      const drawn = rt.injected.get(p.turn_id)
+      if (drawn !== undefined) { unask(drawn); rt.injected.delete(p.turn_id) }
+      ask(p.content)
+    }
     if (p.content) touchSession(sessionCurrent(), p.content)
     rt.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter()
     advanceTurn()
@@ -90,9 +96,12 @@ export const STAGES: readonly Stage[] = [
      follows opens a step BELOW the bubble instead of writing into the step
      that was open above it. */
   arm('message.injected', (rt, p) => {
-    ask(p.content)
+    /* Marked as mid-turn: every scan that walks back to find where a turn
+       began -- the fold, the merge of silent steps, the stop note's "output
+       above" -- would otherwise read this bubble as the start of one and file
+       the work that follows it above it. */
+    rt.injected.set(p.turn_id, ask(p.content, undefined, { midTurn: true }))
     rt.st = null
-    rt.injected.add(p.turn_id)
     touchSession(sessionCurrent(), p.content)
   }),
 

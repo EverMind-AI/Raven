@@ -182,15 +182,18 @@ async def test_the_user_message_is_stamped_at_turn_start_not_turn_end(workspace)
 async def test_a_mid_turn_message_is_stamped_when_it_arrived(workspace):
     """A message merged into a running turn is stored at its own arrival time.
 
-    ``_save_turn`` stamps whatever has no timestamp with the clock at turn end,
-    and a long turn is exactly where mid-turn messages are sent -- so left to
-    that gate a correction typed a minute in is filed an hour later, after the
-    answer it was meant to change.
+    Two clocks are wrong here and the request's is right. ``_save_turn`` stamps
+    whatever has no timestamp with the clock at turn END, and the drain runs at
+    the turn's next tool-loop GAP -- both of them minutes after the message was
+    typed, on exactly the long turns people correct. The request carries the
+    moment it reached the server (``turn.send``), and that is what is stored.
     """
+    from dataclasses import replace
     from datetime import datetime, timedelta
 
     base = datetime(2026, 9, 22, 9, 0, 0)
     arrived = base + timedelta(seconds=30)
+    gap = base + timedelta(minutes=30)
     ended = base + timedelta(hours=1)
     clock = {"now": base}
 
@@ -222,8 +225,8 @@ async def test_a_mid_turn_message_is_stamped_when_it_arrived(workspace):
         gaps["n"] += 1
         if gaps["n"] > 1:
             return []
-        clock["now"] = arrived
-        return [_make_msg("actually, only the last quarter")]
+        clock["now"] = gap
+        return [replace(_make_msg("actually, only the last quarter"), received_at=arrived.isoformat())]
 
     agent = AgentLoop(
         provider=SlowProvider(),
@@ -239,6 +242,60 @@ async def test_a_mid_turn_message_is_stamped_when_it_arrived(workspace):
     merged = [m for m in msgs if str(m.get("content") or "").startswith("actually,")]
     assert len(merged) == 1, msgs
     assert merged[0]["timestamp"] == arrived.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_a_mid_turn_message_without_an_arrival_time_keeps_the_drain_clock(workspace):
+    """A submitter that carries no arrival time still gets a timestamp: the
+    channels and the ACP steer path reach the same mailbox without one."""
+    from datetime import datetime, timedelta
+
+    base = datetime(2026, 9, 22, 9, 0, 0)
+    gap = base + timedelta(minutes=30)
+    clock = {"now": base}
+
+    class SlowProvider(LLMProvider):
+        def __init__(self):
+            super().__init__(api_key="test")
+
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+            reasoning_effort=None,
+            tool_choice=None,
+        ):
+            clock["now"] = base + timedelta(hours=1)
+            return LLMResponse(content="stub response", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    gaps = {"n": 0}
+
+    def drain():
+        gaps["n"] += 1
+        if gaps["n"] > 1:
+            return []
+        clock["now"] = gap
+        return [_make_msg("actually, only the last quarter")]
+
+    agent = AgentLoop(
+        provider=SlowProvider(),
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=2, now_fn=lambda: clock["now"]),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    out = await agent._process_message(_make_msg("summarise the report"), drain=drain)
+    assert out is not None
+
+    msgs = _persisted_messages(workspace)
+    merged = [m for m in msgs if str(m.get("content") or "").startswith("actually,")]
+    assert [m["timestamp"] for m in merged] == [gap.isoformat()]
 
 
 class ScriptedProvider(LLMProvider):
