@@ -1842,6 +1842,27 @@ describe("the turn's delivered files and file changes", () => {
     expect(src).toContain('render=thumb')
   })
 
+  it('shows a delivered pdf by its first page too', async () => {
+    vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
+      if (init?.method === 'HEAD') return Promise.resolve({ ok: true })
+      return Promise.resolve({ ok: true, text: () => Promise.resolve('') })
+    })
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make the report', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['report.pdf']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    const img = $('.atile .pic.shot img') as HTMLImageElement | null
+    expect(img).toBeTruthy()
+    const src = img?.getAttribute('src') || ''
+    expect(src).toContain('/file?path=' + encodeURIComponent('/w/report.pdf'))
+    expect(src).toContain('render=thumb')
+  })
+
   it('falls back to the document face when the deck cannot be rendered', async () => {
     vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
       if (init?.method === 'HEAD') return Promise.resolve({ ok: true })

@@ -1524,6 +1524,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   width: auto; aspect-ratio: auto; margin: 12px 0 12px 12px; border-bottom: 0; border-radius: 7px;
   border: 1px solid var(--line-soft); height: 98px;
 }
+/* A rendered page or a photo keeps the tile's 16:10 ratio at that height, which
+   is wider than the 92px column the document face fits in -- left there, the
+   picture ran over the title beside it. The column follows the picture. */
+.atiles.single .atile:has(> .pic.shot) { grid-template-columns: auto minmax(0, 1fr); }
 .atiles.single .atile .cap { align-content: center; padding: 13px 16px; }
 /* No narrow-container type step. Every caption row is one ellipsised line now,
    so a narrow card already fits without shrinking anything -- and shrinking the

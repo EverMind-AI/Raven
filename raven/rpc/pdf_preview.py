@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import os
 import shutil
 import tempfile
@@ -89,6 +90,13 @@ class PdfPreviewTimeoutError(PdfPreviewError):
 
 def is_renderable(path: Path) -> bool:
     return path.suffix.lower() in RENDERABLE_SUFFIXES
+
+
+def has_thumb(path: Path) -> bool:
+    """Whether a first-page picture can be made of ``path``: every Office source
+    LibreOffice renders, and a PDF, which is its own rendering and only needs
+    rasterising."""
+    return is_renderable(path) or path.suffix.lower() == ".pdf"
 
 
 def cache_dir() -> Path:
@@ -240,8 +248,93 @@ async def png_for(source: Path, *, timeout_s: float | None = None) -> Path:
     async with lock:
         if cached.is_file():
             return _touched(cached)
-        await asyncio.to_thread(_render, source, cached, budget, "png")
+        if source.suffix.lower() == ".pdf":
+            await asyncio.to_thread(_rasterise_pdf_page, source, cached, THUMB_WIDTH_PX, budget)
+        else:
+            await asyncio.to_thread(_render, source, cached, budget, "png")
     return cached
+
+
+#: The width of a PDF's first page as a tile picture. LibreOffice's PNG export
+#: of a deck is the slide at screen size; a PDF page is drawn to about the same.
+THUMB_WIDTH_PX = 1280
+
+#: And the ceiling on the picture that width implies. A page's height is a
+#: number inside the file, so width alone bounds nothing: a legal 519-byte PDF
+#: declaring a 72 x 14400 point page draws 1280 x 256000 at this width, which is
+#: 328 megapixels and 1.4 GB of resident memory for one thumbnail, several of
+#: them at once on a transcript full of deliveries. Past this the whole page is
+#: scaled down instead, so a tall page arrives small rather than expensively.
+#: Four megapixels holds a letter page at full width (1280 x 1656) with room.
+THUMB_MAX_PIXELS = 4_000_000
+
+
+def _rasterise_pdf_page(source: Path, target: Path, width: int, timeout_s: float = CONVERT_TIMEOUT_S) -> None:
+    """The first page of a PDF as a PNG at most ``width`` wide, written atomically.
+
+    A PDF is already a rendering, so LibreOffice has nothing to convert (and its
+    Draw import refuses most of them). PyMuPDF draws the page when it is
+    installed -- it rides with either deck engine, so an install that makes
+    decks has it -- and poppler's ``pdftoppm`` is the fallback for one that
+    does not. Neither is a dependency of this package; both are probed.
+
+    Both paths are bounded in the picture they may draw, and the fallback in
+    the time it may take as well: it is a child process, so a clock reaches it,
+    while the PyMuPDF path draws in this thread where a clock would not stop it.
+    """
+    root = cache_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix="render-", dir=root))
+    try:
+        staged = scratch / "page.png"
+        try:
+            import pymupdf  # type: ignore[import-not-found]
+        except ImportError:
+            try:
+                import fitz as pymupdf  # type: ignore[import-not-found, no-redef]
+            except ImportError:
+                pymupdf = None
+        if pymupdf is not None:
+            with pymupdf.open(source) as doc:
+                if doc.page_count == 0:
+                    raise PdfPreviewError(f"{source.name} has no pages")
+                page = doc[0]
+                zoom = _thumb_zoom(page.rect.width, page.rect.height, width)
+                page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False).save(str(staged))
+        else:
+            pdftoppm = shutil.which("pdftoppm")
+            if pdftoppm is None:
+                raise PdfPreviewUnavailableError(
+                    f"no PDF rasteriser on the gateway host, so {source.name} has no picture: "
+                    "install a deck engine (PyMuPDF) or poppler (pdftoppm)"
+                )
+            import subprocess
+
+            prefix = scratch / "p"
+            subprocess.run(  # noqa: S603 - resolved above, argv is literals plus this file's path
+                [pdftoppm, "-f", "1", "-l", "1", *_scale_argv(source, width), "-png", str(source), str(prefix)],
+                check=True,
+                capture_output=True,
+                timeout=timeout_s,
+            )
+            made = sorted(scratch.glob("p-*.png"))
+            if not made:
+                raise PdfPreviewError(f"pdftoppm drew nothing for {source.name}")
+            os.replace(made[0], staged)
+        _sweep(root)
+        os.replace(staged, target)
+    except PdfPreviewError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - every way a rasteriser fails is this route's 500
+        # Not a tuple of the ones foreseen: PyMuPDF refuses a page past its own
+        # limits with an exception of its own (`FzErrorLimit`), and the fallback
+        # can raise `CalledProcessError` or `TimeoutExpired`. Left uncaught each
+        # of those reaches the transport as an unnamed failure; named here, the
+        # route answers with the same sentence as every other render that could
+        # not be made.
+        raise PdfPreviewError(f"{source.name} could not be drawn: {exc}") from exc
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _render(source: Path, target: Path, timeout_s: float, fmt: str = "pdf") -> None:
@@ -285,6 +378,71 @@ def _render(source: Path, target: Path, timeout_s: float, fmt: str = "pdf") -> N
         os.replace(done.produced[0], target)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+#: The side of the box the fallback fits a page into when it cannot learn the
+#: page's size: an area bound that needs nothing but the flag, since poppler's
+#: ``-scale-to`` keeps the ratio inside a square.
+THUMB_BOX_PX = int(math.sqrt(THUMB_MAX_PIXELS))
+
+
+def _pdf_page_size(source: Path) -> tuple[float, float] | None:
+    """The first page's size in points, read with poppler's ``pdfinfo``, or None.
+
+    It ships beside ``pdftoppm``, so the host that has the fallback usually has
+    this too; None is for the one that does not, and for anything unparseable.
+    """
+    import re
+    import subprocess
+
+    pdfinfo = shutil.which("pdfinfo")
+    if pdfinfo is None:
+        return None
+    try:
+        done = subprocess.run(  # noqa: S603 - resolved above, argv is literals plus this file's path
+            [pdfinfo, "-f", "1", "-l", "1", str(source)], capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = re.search(r"size:\s*([0-9.]+)\s*x\s*([0-9.]+)\s*pts", done.stdout or "")
+    if not found:
+        return None
+    try:
+        return float(found.group(1)), float(found.group(2))
+    except ValueError:
+        return None
+
+
+def _scale_argv(source: Path, width: int) -> list[str]:
+    """How the fallback is told to size the page, bounded the same way the
+    rasteriser above is.
+
+    ``-scale-to-x W -scale-to-y -1`` is what a thumbnail wants and what the page
+    can abuse: the height it leaves to the ratio is a number inside the file.
+    Given the page's size the two sides are computed here instead, from the same
+    scale, so the ratio is kept and the area is bounded; without it the page is
+    fitted into a square, which bounds the area with the ratio left to poppler.
+    """
+    size = _pdf_page_size(source)
+    if size is None:
+        return ["-scale-to", str(THUMB_BOX_PX)]
+    zoom = _thumb_zoom(size[0], size[1], width)
+    return [
+        "-scale-to-x",
+        str(max(1, round(size[0] * zoom))),
+        "-scale-to-y",
+        str(max(1, round(size[1] * zoom))),
+    ]
+
+
+def _thumb_zoom(page_width: float, page_height: float, width: int) -> float:
+    """The scale that makes a page ``width`` wide, or less where that would draw
+    more than :data:`THUMB_MAX_PIXELS`."""
+    zoom = width / max(page_width, 1.0)
+    pixels = max(page_width * zoom, 1.0) * max(page_height * zoom, 1.0)
+    if pixels > THUMB_MAX_PIXELS:
+        zoom *= math.sqrt(THUMB_MAX_PIXELS / pixels)
+    return zoom
 
 
 def _touched(cached: Path) -> Path:

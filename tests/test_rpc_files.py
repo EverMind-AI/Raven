@@ -377,6 +377,335 @@ async def test_the_thumb_and_the_pdf_are_cached_apart(client: TestClient, tmp_pa
     assert sum("--convert-to png" in c for c in calls) == 1 and sum("--convert-to pdf" in c for c in calls) == 1
 
 
+async def test_a_pdf_tile_gets_its_first_page_without_libreoffice(
+    client: TestClient, tmp_path: Path, soffice: FakeSoffice, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A PDF is already a rendering: its tile picture comes from rasterising page one,
+    not from LibreOffice, which cannot load most PDFs anyway. The pdf render route
+    still refuses it, since there is nothing to convert."""
+    from raven.rpc import pdf_preview
+
+    drawn: list[tuple[Path, int, float]] = []
+
+    def rasterise(source: Path, target: Path, width: int, timeout_s: float) -> None:
+        drawn.append((source, width, timeout_s))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(FAKE_PNG)
+
+    monkeypatch.setattr(pdf_preview, "_rasterise_pdf_page", rasterise)
+    report = _deck(tmp_path, "report.pdf", FAKE_PDF)
+
+    thumb = await _thumb(client, report)
+    again = await _thumb(client, report)
+    as_pdf = await _render(client, report)
+
+    assert thumb.status == again.status == 200
+    assert thumb.headers["Content-Type"] == "image/png"
+    assert await thumb.read() == FAKE_PNG
+    assert drawn == [(report, pdf_preview.THUMB_WIDTH_PX, pdf_preview.CONVERT_TIMEOUT_S)], (
+        "drawn once, with the route's budget, then read from the cache"
+    )
+    assert soffice.calls() == [], "LibreOffice is not asked about a PDF"
+    assert as_pdf.status == 400
+
+
+def test_a_pdf_page_is_drawn_by_pymupdf_when_it_is_installed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pymupdf = pytest.importorskip("pymupdf")
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=225)
+    page.draw_rect(pymupdf.Rect(20, 20, 380, 205), color=(0, 0, 1), fill=(0.9, 0.9, 1))
+    source = tmp_path / "one.pdf"
+    doc.save(source)
+    target = tmp_path / "cache" / "one.png"
+
+    pdf_preview._rasterise_pdf_page(source, target, 640)
+
+    drawn = pymupdf.Pixmap(str(target))
+    assert (drawn.width, drawn.height) == (640, 360)
+    assert not list((tmp_path / "cache").glob("render-*")), "the scratch directory is gone"
+
+
+def test_a_tall_page_is_drawn_small_rather_than_expensively(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A page's height is a number inside the file, so a width alone bounds
+    nothing: a legal 519-byte PDF declaring a 72 x 14400 point page draws 328
+    megapixels at the tile width, which is 1.4 GB of memory for one thumbnail.
+    The whole page is scaled down past the ceiling instead."""
+    pymupdf = pytest.importorskip("pymupdf")
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    doc = pymupdf.open()
+    doc.new_page(width=72, height=14400)
+    source = tmp_path / "tall.pdf"
+    doc.save(source)
+    assert source.stat().st_size < 2000, "the cost is not in the file"
+
+    target = tmp_path / "cache" / "tall.png"
+    pdf_preview._rasterise_pdf_page(source, target, pdf_preview.THUMB_WIDTH_PX)
+
+    drawn = pymupdf.Pixmap(str(target))
+    # The ceiling is on the area the scale asks for; each drawn side is then
+    # rounded up to a whole pixel, which is the row and column of slack here.
+    assert drawn.width * drawn.height <= pdf_preview.THUMB_MAX_PIXELS + drawn.width + drawn.height
+    assert drawn.width * drawn.height < 5_000_000, "far under the 328 megapixels this page used to draw"
+    assert drawn.width < pdf_preview.THUMB_WIDTH_PX, "the width came down with the height"
+    # An ordinary page is untouched by the ceiling.
+    assert pdf_preview._thumb_zoom(612, 792, 1280) == pytest.approx(1280 / 612)
+
+
+def test_a_rasteriser_that_fails_its_own_way_is_still_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PyMuPDF refuses a page past its own limits with an exception of its own,
+    and the fallback can raise from the subprocess module. Neither is foreseeable
+    here by type; both must reach the route as the render error it answers for."""
+    pymupdf = pytest.importorskip("pymupdf")
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    doc = pymupdf.open()
+    doc.new_page(width=200, height=100)
+    source = tmp_path / "one.pdf"
+    doc.save(source)
+
+    class _MupdfLimit(Exception):
+        """Stands in for pymupdf.mupdf.FzErrorLimit, which is not an OSError."""
+
+    real_open = pymupdf.open
+
+    def refusing(path):
+        doc = real_open(path)
+
+        class _Refuses:
+            page_count = 1
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                doc.close()
+                return None
+
+            def __getitem__(self, n):
+                raise _MupdfLimit("integer out of range")
+
+        return _Refuses()
+
+    monkeypatch.setattr(pymupdf, "open", refusing)
+    with pytest.raises(pdf_preview.PdfPreviewError, match="could not be drawn"):
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "x.png", 640)
+
+
+def test_a_pdf_page_says_what_went_wrong_rather_than_leaking_the_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three ways drawing fails, each named: a PDF with no pages, a rasteriser
+    that dies mid-draw, and the fallback writing nothing."""
+    pymupdf = pytest.importorskip("pymupdf")
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    doc = pymupdf.open()
+    doc.new_page(width=200, height=100)
+    source = tmp_path / "one.pdf"
+    doc.save(source)
+
+    # A PDF with no pages cannot be written by this library, so the reader is
+    # one that answers zero: a file that arrived from somewhere else.
+    class _Empty:
+        page_count = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+    monkeypatch.setattr(pymupdf, "open", lambda path: _Empty())
+    with pytest.raises(pdf_preview.PdfPreviewError, match="has no pages"):
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "a.png", 640)
+
+    def explode(path):
+        raise OSError("the file went away")
+
+    monkeypatch.setattr(pymupdf, "open", explode)
+    with pytest.raises(pdf_preview.PdfPreviewError, match="could not be drawn"):
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "b.png", 640)
+    assert not list((tmp_path / "cache").glob("render-*")), "the scratch directory is gone either way"
+
+
+def _without_pymupdf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The supported host shape the fallback exists for: poppler, no PyMuPDF."""
+    import builtins
+    import sys
+
+    real_import = builtins.__import__
+
+    def no_pymupdf(name, *args, **kwargs):
+        if name in ("pymupdf", "fitz"):
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_pymupdf)
+    monkeypatch.delitem(sys.modules, "pymupdf", raising=False)
+    monkeypatch.delitem(sys.modules, "fitz", raising=False)
+
+
+def test_the_fallback_is_bounded_by_the_same_ceiling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`-scale-to-x W -scale-to-y -1` is the flag pair a tall page abuses: the
+    height it leaves to the ratio is a number inside the file. Given the page's
+    size both sides are computed from the bounded scale; without it the page is
+    fitted into a square, which bounds the area either way."""
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    tall = tmp_path / "tall.pdf"
+    tall.write_bytes(FAKE_PDF)
+
+    monkeypatch.setattr(pdf_preview, "_pdf_page_size", lambda source: (72.0, 14400.0))
+    argv = pdf_preview._scale_argv(tall, pdf_preview.THUMB_WIDTH_PX)
+    assert argv[0::2] == ["-scale-to-x", "-scale-to-y"], "both sides are stated, none left to the page"
+    drawn = int(argv[1]) * int(argv[3])
+    assert drawn <= pdf_preview.THUMB_MAX_PIXELS + int(argv[1]) + int(argv[3])
+    assert "-1" not in argv, "nothing is left for the file to decide"
+
+    monkeypatch.setattr(pdf_preview, "_pdf_page_size", lambda source: (612.0, 792.0))
+    letter = pdf_preview._scale_argv(tall, pdf_preview.THUMB_WIDTH_PX)
+    assert letter[1] == str(pdf_preview.THUMB_WIDTH_PX), "an ordinary page still gets the tile width"
+
+    monkeypatch.setattr(pdf_preview, "_pdf_page_size", lambda source: None)
+    boxed = pdf_preview._scale_argv(tall, pdf_preview.THUMB_WIDTH_PX)
+    assert boxed == ["-scale-to", str(pdf_preview.THUMB_BOX_PX)]
+    assert pdf_preview.THUMB_BOX_PX**2 <= pdf_preview.THUMB_MAX_PIXELS
+
+
+def test_the_page_size_is_read_from_poppler_or_answered_as_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every way the reading can fail answers None, which is the square: a host
+    without pdfinfo, a run that cannot start, and output that says nothing."""
+    import subprocess
+
+    from raven.rpc import pdf_preview
+
+    source = tmp_path / "one.pdf"
+    source.write_bytes(FAKE_PDF)
+
+    monkeypatch.setattr(pdf_preview.shutil, "which", lambda name: None)
+    assert pdf_preview._pdf_page_size(source) is None
+
+    monkeypatch.setattr(pdf_preview.shutil, "which", lambda name: "/usr/bin/pdfinfo")
+
+    class _Out:
+        def __init__(self, text: str) -> None:
+            self.stdout = text
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Out("Page    1 size:  72 x 14400 pts\n"))
+    assert pdf_preview._pdf_page_size(source) == (72.0, 14400.0)
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Out("Page size:       612 x 792 pts (letter)\n"))
+    assert pdf_preview._pdf_page_size(source) == (612.0, 792.0)
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Out("Encrypted: yes\n"))
+    assert pdf_preview._pdf_page_size(source) is None
+
+    def cannot_start(*a, **k):
+        raise OSError("pdfinfo is not executable")
+
+    monkeypatch.setattr(subprocess, "run", cannot_start)
+    assert pdf_preview._pdf_page_size(source) is None
+
+
+def test_the_fallback_runs_with_that_argv_on_a_host_without_pymupdf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole path, on the host shape it is written for: what the child is
+    asked to draw is what the bound above computed, not what the page said."""
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    _without_pymupdf(monkeypatch)
+    monkeypatch.setattr(pdf_preview, "_pdf_page_size", lambda source: (72.0, 14400.0))
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    seen = tmp_path / "argv"
+    script = fake_bin / "pdftoppm"
+    script.write_text(
+        '#!/bin/bash\nout="${@: -1}"\nprintf "PNGfake" > "$out-1.png"\nprintf "%s\\n" "$@" > "$RAVEN_ARGV_LOG"\n'
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin))
+    monkeypatch.setenv("RAVEN_ARGV_LOG", str(seen))
+    source = tmp_path / "one.pdf"
+    source.write_bytes(FAKE_PDF)
+
+    target = tmp_path / "cache" / "one.png"
+    pdf_preview._rasterise_pdf_page(source, target, pdf_preview.THUMB_WIDTH_PX, 12.0)
+
+    assert target.read_bytes() == b"PNGfake"
+    assert not list((tmp_path / "cache").glob("render-*")), "the scratch directory is gone"
+    argv = seen.read_text().split()
+    assert "-1" not in argv, "the child is told both sides"
+    drawn = int(argv[argv.index("-scale-to-x") + 1]) * int(argv[argv.index("-scale-to-y") + 1])
+    assert drawn <= pdf_preview.THUMB_MAX_PIXELS * 1.01
+
+
+def test_a_pdf_page_fallback_that_writes_nothing_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    _without_pymupdf(monkeypatch)
+
+    fake_bin = tmp_path / "quiet"
+    fake_bin.mkdir()
+    script = fake_bin / "pdftoppm"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin))
+    source = tmp_path / "one.pdf"
+    source.write_bytes(FAKE_PDF)
+
+    with pytest.raises(pdf_preview.PdfPreviewError, match="drew nothing"):
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "c.png", 640)
+
+
+def test_a_pdf_page_falls_back_to_pdftoppm_and_then_says_what_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    _without_pymupdf(monkeypatch)
+    source = tmp_path / "one.pdf"
+    source.write_bytes(FAKE_PDF)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    script = fake_bin / "pdftoppm"
+    script.write_text(
+        '#!/bin/bash\nprintf "%s " "$@" > "'
+        + str(fake_bin / "argv.txt")
+        + '"\nout="${@: -1}"\nprintf "PNGfake" > "$out-1.png"\n'
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin))
+
+    target = tmp_path / "cache" / "one.png"
+    pdf_preview._rasterise_pdf_page(source, target, 640)
+    assert target.read_bytes() == b"PNGfake"
+    # One number for the long side, not a pinned width with the height left to
+    # follow: the child must not be able to draw what this process refuses to.
+    argv = (fake_bin / "argv.txt").read_text().split() if (fake_bin / "argv.txt").exists() else []
+    if argv:
+        assert "-scale-to" in argv and "-scale-to-y" not in argv
+
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    with pytest.raises(pdf_preview.PdfPreviewUnavailableError, match="no PDF rasteriser"):
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "two.png", 640)
+
+
 async def test_a_second_click_reads_the_cache(client: TestClient, tmp_path: Path, soffice: FakeSoffice) -> None:
     deck = _deck(tmp_path)
 
