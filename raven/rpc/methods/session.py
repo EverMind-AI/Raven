@@ -281,6 +281,9 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
     * ``diff`` — a file tool's unified diff of the change it made, on its
       ``role="tool"`` entry. The one record with real line numbers, which the
       arguments alone can never reconstruct.
+    * ``file_removed`` — the files that call made vanish, as ``{path, del}``.
+      Nothing else records a deletion: the arguments of the command that did it
+      are a string, and the file it names is gone by the time anyone looks.
     * ``reasoning_ms`` / ``duration_ms`` — how long the thought on that
       assistant entry took, and how long the call that ``role="tool"`` entry
       answers ran. Absent on anything written before they were recorded, and
@@ -311,6 +314,7 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
             "tool_call_id",
             "timestamp",
             "diff",
+            "file_removed",
             "turn_ended",
             "notice",
             "origin",

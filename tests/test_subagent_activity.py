@@ -163,3 +163,104 @@ def test_a_settled_account_is_kept_until_its_run_forgets_it():
     )
     activity.forget_settled(["dag:r1:a", "dag:r1:never-recorded"])
     assert activity.settled("dag:r1:a") is None
+
+
+def test_a_created_file_stays_created_when_it_is_later_written_or_edited() -> None:
+    """``add`` is what the run did to the path: a file this run made is a
+    creation however many times it was then rewritten, which is what git shows
+    for the same range of commits."""
+    with activity.collecting() as run:
+        activity.note_file_change("a.py", "add", 3, 0, 42)
+        activity.note_file_change("a.py", "write", 1, 2, 20)
+        activity.note_file_change("a.py", "edit", 2, 1, 30)
+
+    assert run.files == [{"path": "a.py", "op": "add", "add": 6, "del": 3, "size": 30}]
+
+
+def test_a_removal_replaces_a_write_and_takes_its_own_counts() -> None:
+    """What the run did to that path is remove it; the lines it wrote on the way
+    are in no file a reader can open, so they are not counted as additions."""
+    with activity.collecting() as run:
+        activity.note_file_change("a.py", "write", 4, 1, 42)
+        activity.note_file_change("a.py", "delete", 0, 6, None)
+
+    assert run.files == [{"path": "a.py", "op": "delete", "add": 0, "del": 6, "size": None}]
+
+
+def test_a_removal_replaces_an_edit_too() -> None:
+    with activity.collecting() as run:
+        activity.note_file_change("a.py", "edit", 1, 1, 10)
+        activity.note_file_change("a.py", "delete", 0, 3, None)
+
+    assert run.files == [{"path": "a.py", "op": "delete", "add": 0, "del": 3, "size": None}]
+
+
+def test_a_file_created_and_removed_in_one_run_leaves_no_entry() -> None:
+    """Net nothing, and git shows the same nothing for a file born and deleted
+    inside one range. An entry here would put a row in the panel for a file that
+    never existed before the run and does not exist after it."""
+    with activity.collecting() as run:
+        activity.note_file_change("kept.py", "write", 1, 0, 5)
+        activity.note_file_change("scratch.py", "add", 3, 0, 42)
+        activity.note_file_change("scratch.py", "delete", 0, 3, None)
+
+    assert run.files == [{"path": "kept.py", "op": "write", "add": 1, "del": 0, "size": 5}]
+
+
+def test_a_path_written_again_after_being_removed_is_that_write() -> None:
+    """The path exists again, and what is in it was written after the deletion,
+    so neither the op nor the counts of the removal survive."""
+    with activity.collecting() as run:
+        activity.note_file_change("a.py", "edit", 1, 1, 10)
+        activity.note_file_change("a.py", "delete", 0, 4, None)
+        activity.note_file_change("a.py", "write", 2, 0, 12)
+
+    assert run.files == [{"path": "a.py", "op": "write", "add": 2, "del": 0, "size": 12}]
+
+
+def test_a_path_created_again_after_being_removed_reads_as_a_rewrite() -> None:
+    """``write_file`` calls it a creation because the run's own deletion left
+    nothing to replace, but the path was there before the run -- the range
+    rewrote it, over the lines the deletion took out."""
+    with activity.collecting() as run:
+        activity.note_file_change("a.py", "write", 1, 1, 10)
+        activity.note_file_change("a.py", "delete", 0, 2, None)
+        activity.note_file_change("a.py", "add", 5, 0, 20)
+
+    assert run.files == [{"path": "a.py", "op": "write", "add": 5, "del": 2, "size": 20}]
+
+
+def test_a_path_removed_again_after_being_put_back_is_still_a_removal() -> None:
+    """The run deleted a file that was there before it, and nothing it wrote in
+    between survives. Read as a creation, the entry would have cancelled itself
+    away here and the run would report nothing for that path at all."""
+    with activity.collecting() as run:
+        activity.note_file_change("a.py", "delete", 0, 10, None)
+        activity.note_file_change("a.py", "add", 3, 0, 20)
+        activity.note_file_change("a.py", "delete", 0, 3, None)
+
+    assert run.files == [{"path": "a.py", "op": "delete", "add": 0, "del": 3, "size": None}]
+
+
+def test_a_pre_fold_record_folds_the_same_way_through_the_tasks_reader() -> None:
+    """``tasks.list`` re-folds whatever is on disk, so a record written one
+    entry per call must come out of that reader exactly as the recorder would
+    have folded it -- including the created-then-removed path that leaves
+    nothing behind."""
+    from raven.rpc.methods.tasks import _files_of
+
+    stored = {
+        "files": [
+            {"path": "a.py", "op": "add", "add": 3, "del": 0, "size": 42},
+            {"path": "a.py", "op": "edit", "add": 1, "del": 1, "size": 40},
+            {"path": "b.py", "op": "write", "add": 2, "del": 0, "size": 9},
+            {"path": "b.py", "op": "delete", "add": 0, "del": 2, "size": None},
+            {"path": "c.py", "op": "add", "add": 1, "del": 0, "size": 3},
+            {"path": "c.py", "op": "delete", "add": 0, "del": 1, "size": None},
+        ]
+    }
+
+    assert _files_of(stored) == [
+        {"path": "a.py", "op": "add", "add": 4, "del": 1, "size": 40},
+        {"path": "b.py", "op": "delete", "add": 0, "del": 2, "size": None},
+    ]

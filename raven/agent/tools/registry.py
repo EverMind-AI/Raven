@@ -980,6 +980,7 @@ class ToolRegistry:
                 blocks = result.blocks
                 diff = result.diff
                 file_change = result.file_change
+                removed = result.removed
             else:
                 model_text, display_text = str(result), None
                 retryable, blocks_call = True, False
@@ -988,6 +989,10 @@ class ToolRegistry:
                 blocks = None
                 diff = None
                 file_change = None
+                # Read off the result rather than defaulted: a tool whose own
+                # return is already a ToolOutput (exec) misses the unwrap above,
+                # and its removals would be dropped at this boundary.
+                removed = tuple(getattr(result, "removed", ()) or ())
             # Remembered once the verdict is in, and only when it is good. A
             # rule that asks for a prior ``read_file`` is asking whether the
             # file was read; a read that errored read nothing, and letting it
@@ -1031,6 +1036,7 @@ class ToolRegistry:
                 blocks=blocks,
                 diff=diff,
                 file_change=file_change,
+                removed=removed,
             )
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint

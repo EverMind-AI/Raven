@@ -44,6 +44,7 @@ from raven.agent.loop._shared import (
     _appended_by_hook,
     _display_label,
     _file_change_payload,
+    _file_removed_payload,
     _first_line,
     _runtime_origin,
     _stamp_reasoning_ms,
@@ -79,6 +80,7 @@ from raven.agent.loop.dead_end import NO_RESPONSE_FALLBACK, dead_reasons
 from raven.agent.loop.first_call import FirstCallGuard
 from raven.agent.loop.recovery import ContinuationGate, DraftGate, cut_reasoning_head, lower_reasoning_effort
 from raven.agent.tools.registry import call_failed
+from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
 from raven.contracts.harness import ActionRequest, CapabilityRequest, PlanningRequest, WindowPressure, WindowState
@@ -585,6 +587,10 @@ class TurnPathMixin:
         # Set to the tool's name when the ladder's last step fires, which ends
         # the turn the way an exhausted iteration budget does.
         stalled_tool: str | None = None
+        # What this turn has written, so a later call that removes one of those
+        # files is seen. Per turn for the reason the counters above are: the loop
+        # is a singleton and another session's turn is running beside this one.
+        removal_watch = RemovalWatch()
         # Empty-response recovery state, local to the turn — the AgentLoop is a
         # long-lived singleton shared across sessions, so per-instance counters
         # would leak across turns; resetting here gives clean per-turn budgets.
@@ -1208,6 +1214,11 @@ class TurnPathMixin:
                         preview.replace("\n", " ")[:200],
                     )
                     tool_metadata = self.tools.take_metadata(tool_call.name, tool_call.arguments)
+                    # What the tool saw go, plus what this turn wrote and can no
+                    # longer find. Settled before this call's own write is noted,
+                    # so the file it just wrote is not stat'ed to say it exists.
+                    tool_removed = removal_watch.settle(getattr(result, "removed", ()))
+                    removal_watch.note_write(getattr(result, "file_change", None))
                     if emit_tool_event:
                         await on_tool_event(
                             "complete",
@@ -1227,6 +1238,9 @@ class TurnPathMixin:
                                 # Alongside it, for a surface that renders the
                                 # change itself rather than a unified diff of it.
                                 "file_change": _file_change_payload(getattr(result, "file_change", None)),
+                                # The deletions, which no tool reports as its
+                                # result: a command's own watch plus the turn's.
+                                "file_removed": _file_removed_payload(tool_removed),
                             },
                         )
                     # A skill the model loaded itself never passes through
@@ -1269,6 +1283,16 @@ class TurnPathMixin:
                         # exists only on the live tool event, and a reloaded page
                         # can never number a change it no longer has.
                         messages[-1]["_diff"] = tool_diff
+                    if tool_removed and messages:
+                        # The same underscore-then-rename convention as the diff
+                        # above, and line counts rather than bodies: a removed
+                        # file's text is what the live event carries, while what
+                        # a reloaded page needs is that the file went and how big
+                        # the hole is.
+                        messages[-1]["_file_removed"] = [
+                            {"path": removal.path, "del": len((removal.before or "").splitlines())}
+                            for removal in tool_removed
+                        ]
                     if attach_blocks:
                         pending_images.extend(attach_blocks)
                         pending_sources.extend(sources)
@@ -2592,6 +2616,11 @@ class TurnPathMixin:
                 # live provider payload, the plain one is what session.resume
                 # maps onto the wire so a reloaded page can renumber the change.
                 entry["diff"] = tool_diff
+            if tool_removed := entry.pop("_file_removed", None):
+                # Renamed for storage for the same reason as the diff above: the
+                # plain name is what session.resume puts on the wire, so a
+                # reloaded page draws the deletion the live view drew.
+                entry["file_removed"] = tool_removed
             if tool_metadata := entry.pop(_TOOL_METADATA_KEY, None):
                 entry["metadata"] = tool_metadata
             # Provenance of pictures that lived for this turn only; nothing to file.
@@ -2850,6 +2879,7 @@ class TurnPathMixin:
                         metadata=info.get("metadata"),
                         diff=info.get("diff"),
                         file_change=info.get("file_change"),
+                        file_removed=info.get("file_removed"),
                     )
                 )
 

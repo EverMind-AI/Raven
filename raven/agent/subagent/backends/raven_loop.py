@@ -30,6 +30,7 @@ from raven.agent.subagent.mcp_grant import (
 from raven.agent.subagent.tool_vocabulary import RAVEN_NAME
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry, call_failed
+from raven.agent.tools.removals import RemovalWatch
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import ImageSearchTool, WebFetchTool, WebSearchTool, image_search_vendor, resolve_vendor_key
 from raven.config.live import LiveConfig, exec_extra_deny_patterns, live_vendor_key
@@ -565,6 +566,10 @@ class RavenLoopBackend:
         # in full delivered its answer, and the verdict reading this is asking
         # what the run has to show for itself.
         cut_at_ceiling = False
+        # What this run has written, so a command of its own that removes one of
+        # those files reaches the record. Per run, like everything else here: the
+        # backend object is shared and other runs write beside this one.
+        removal_watch = RemovalWatch()
         while iteration < self._MAX_ITERATIONS:
             iteration += 1
             if participants:
@@ -675,14 +680,32 @@ class RavenLoopBackend:
                     activity.note_tool_call(tool_call.name)
                     set_current_tool_call_id(tool_call.id)
                     result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
+                    # Settled before this call's own write is noted, so the file
+                    # it just wrote is not stat'ed to say it exists.
+                    for removal in removal_watch.settle(getattr(result, "removed", ())):
+                        # No add, and no size: the file is gone, and a zero there
+                        # would read as a file that is present and empty.
+                        activity.note_file_change(
+                            _workspace_relative(removal.path, workspace),
+                            "delete",
+                            0,
+                            len((removal.before or "").splitlines()),
+                            None,
+                        )
+                    removal_watch.note_write(getattr(result, "file_change", None))
                     if (file_change := getattr(result, "file_change", None)) is not None:
-                        # The op is the tool's, not the file's: a write over an
-                        # existing file is still a write, and `before` only
-                        # decides how many lines it replaced.
+                        # The op is the tool's, except that a write onto nothing
+                        # is a creation: `before is None` is the only record that
+                        # the file did not exist, and a reader draws an added file
+                        # differently from a rewritten one.
                         add, delete = _file_change_counts(file_change, getattr(result, "diff", None))
+                        if "edit" in RAVEN_NAME.get(tool_call.name, tool_call.name):
+                            op = "edit"
+                        else:
+                            op = "add" if file_change.before is None else "write"
                         activity.note_file_change(
                             _workspace_relative(file_change.path, workspace),
-                            "edit" if "edit" in RAVEN_NAME.get(tool_call.name, tool_call.name) else "write",
+                            op,
                             add,
                             delete,
                             len(file_change.after.encode("utf-8")),

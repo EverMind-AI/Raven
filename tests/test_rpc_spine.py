@@ -678,6 +678,46 @@ async def test_outlet_deliver_tool_complete_forwards_the_file_change():
     assert "file_change" not in emitter.emitted[0][1]["payload"]
 
 
+async def test_outlet_deliver_tool_complete_forwards_the_files_that_went():
+    """The deletions, which no tool result carries and no argument records.
+
+    Absent rather than null when the call removed nothing, for the reason
+    ``file_change`` is: nearly every call removes nothing, and a payload that
+    grew a null key under every one of them would change the shape the wire
+    already had. An empty list is the same nothing as no list.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t1",
+            result_preview="ok",
+            truncated=False,
+            file_removed=[{"path": "/tmp/gone.txt", "before": "one\ntwo\n"}, {"path": "/tmp/also.txt"}],
+            conversation_id="tui:c1",
+        )
+    )
+    assert emitter.emitted[0][1]["payload"]["file_removed"] == [
+        {"path": "/tmp/gone.txt", "before": "one\ntwo\n"},
+        {"path": "/tmp/also.txt"},
+    ]
+
+    for nothing in (None, []):
+        emitter.emitted.clear()
+        await outlet.deliver(
+            ToolEvent(
+                phase=ToolPhase.COMPLETE,
+                tool_call_id="t2",
+                result_preview="ok",
+                truncated=False,
+                file_removed=nothing,
+                conversation_id="tui:c1",
+            )
+        )
+        assert "file_removed" not in emitter.emitted[0][1]["payload"], nothing
+
+
 async def test_a_blocked_action_rides_notice_and_never_the_token_stream():
     """The one notice that replaces the answer instead of accompanying it.
 
@@ -737,6 +777,13 @@ async def test_every_outlet_emission_validates_against_the_wire_contract():
             diff="--- a\n+++ b",
             metadata={"k": "v"},
             file_change={"path": "/tmp/a.txt", "after": "new", "before": "old"},
+            conversation_id="tui:c1",
+        ),
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t2",
+            result_preview="ok",
+            file_removed=[{"path": "/tmp/gone.txt", "before": "one\ntwo\n"}],
             conversation_id="tui:c1",
         ),
         Text(content="hello", conversation_id="tui:c1"),

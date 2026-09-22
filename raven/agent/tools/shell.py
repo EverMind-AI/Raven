@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent import workdir
-from raven.contracts.tool import STOP_RETRY_INSTRUCTION, Continuation, Tool, ToolOutput, ToolResult
+from raven.contracts.tool import STOP_RETRY_INSTRUCTION, Continuation, FileRemoval, Tool, ToolOutput, ToolResult
 from raven.permissions.shell_policy import (
     _MAX_EMBEDDED_SHELL_DEPTH,
     _command_segments_with_separators,
@@ -98,6 +98,18 @@ class ExecTool(Tool):
 
     _MAX_TIMEOUT = 600
     _MAX_OUTPUT = 10_000
+
+    # What the deletion watch will look at and hold. The candidate cap bounds a
+    # stat per token of one command; the byte cap bounds what a removed file's
+    # body costs to carry, and past it the deletion is still reported, without
+    # its text.
+    _MAX_REMOVAL_CANDIDATES = 64
+    _MAX_REMOVAL_BYTES = 256 * 1024
+
+    # A token holding one of these is a pattern, not a path: the shell expands it
+    # to names this tool never sees, so resolving it as written would stat a file
+    # that does not exist under that name.
+    _GLOB_CHARS = frozenset("*?[")
 
     @property
     def description(self) -> str:
@@ -257,6 +269,12 @@ class ExecTool(Tool):
         # Use `is None` check — `timeout or default` would treat timeout=0 as falsy.
         effective_timeout = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
 
+        # Read from the command as written, before the PATH wrapper below
+        # rewrites it, and only on this lane: a detached command finishes after
+        # the result is gone, and one on another machine names paths that are
+        # not this filesystem's.
+        watched = self._removal_watch(command, cwd)
+
         env: dict[str, str] | None = None
         if self.path_append:
             if self._executor.is_sandboxed:
@@ -278,7 +296,66 @@ class ExecTool(Tool):
         # The exit code is the verdict a config change, a security call or a
         # syntax error share, and the text a failing command produced is not
         # token-safe to classify from -- so the caller gets it structurally.
-        return ToolOutput(text, ok=result.exit_code == 0)
+        return ToolOutput(
+            text,
+            ok=result.exit_code == 0,
+            removed=tuple(
+                FileRemoval(path=path, before=before) for path, before in watched.items() if not os.path.exists(path)
+            ),
+        )
+
+    def _removal_watch(self, command: str, cwd: str) -> dict[str, str | None]:
+        """The files this command could remove, with the text they hold now.
+
+        No tool deletes a file as its purpose, so a deletion is only ever
+        visible as a file that was there before a command ran and is not there
+        after. What can be watched is what the command names: a path it computes
+        (a glob the shell expands, a name a substitution produces) is outside
+        this, the same limit the workspace fence declares for itself.
+
+        The text is read here because after the command there is nothing left to
+        read. Absent past the byte cap or on undecodable bytes -- the deletion is
+        still reported, only its body is not.
+        """
+        try:
+            tokens = shlex.split(executable_text(command))
+        except ValueError:
+            # Quoting the lexer cannot close. The command may still run (the
+            # shell is a better lexer than this one), so fall back to the
+            # coarsest split rather than watching nothing.
+            tokens = executable_text(command).split()
+        roots = [Path(cwd).resolve(), *(Path(d).resolve() for d in self.extra_allowed_dirs)]
+        watched: dict[str, str | None] = {}
+        for token in tokens:
+            if len(watched) >= self._MAX_REMOVAL_CANDIDATES:
+                break
+            raw = token.strip("\"'")
+            if not raw or self._GLOB_CHARS & set(raw):
+                continue
+            try:
+                candidate = Path(raw).expanduser()
+                if not candidate.is_absolute():
+                    candidate = Path(cwd) / candidate
+                candidate = candidate.resolve()
+                if not candidate.is_file():
+                    continue
+            except OSError:
+                continue
+            if not any(root == candidate or root in candidate.parents for root in roots):
+                continue
+            key = str(candidate)
+            if key not in watched:
+                watched[key] = self._text_before(candidate)
+        return watched
+
+    @classmethod
+    def _text_before(cls, path: Path) -> str | None:
+        try:
+            if path.stat().st_size > cls._MAX_REMOVAL_BYTES:
+                return None
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError, ValueError):
+            return None
 
     @classmethod
     def _boundary_error(cls, message: str) -> ToolResult:

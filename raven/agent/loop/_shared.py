@@ -544,6 +544,35 @@ def _file_change_payload(change: Any) -> dict[str, Any] | None:
     return payload
 
 
+def _file_removed_payload(removals: Any) -> list[dict[str, Any]] | None:
+    """The files a call made vanish, as plain mappings, or ``None`` for none.
+
+    Flattened here for the reason ``_file_change_payload`` is, and ``None`` rather
+    than an empty list so the emit site can leave the key off a payload entirely:
+    a call that removed nothing is every call, and the wire shape it already had
+    must not change under it.
+
+    ``before`` is dropped past the budget instead of truncated -- half a removed
+    file reads as a smaller deletion than the one that happened -- and the removal
+    is still reported without it. The budget is the event's and not each file's:
+    one command can unlink as many files as it names, and a per-file ceiling would
+    let a single payload carry all of them at full size.
+    """
+    out: list[dict[str, Any]] = []
+    budget = _FILE_CHANGE_MAX_CHARS
+    for removal in removals or ():
+        path = getattr(removal, "path", None)
+        if not isinstance(path, str) or not path:
+            continue
+        entry: dict[str, Any] = {"path": path}
+        before = getattr(removal, "before", None)
+        if isinstance(before, str) and len(before) <= budget:
+            entry["before"] = before
+            budget -= len(before)
+        out.append(entry)
+    return out or None
+
+
 def monotonic() -> float:
     """The turn's elapsed-time clock, as one name the loop calls.
 

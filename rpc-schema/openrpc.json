@@ -9389,6 +9389,13 @@
             "description": "A file tool's unified diff of the change it made, on its role='tool' entry.",
             "type": "string"
           },
+          "file_removed": {
+            "description": "The files that call made vanish, on its role='tool' entry. Absent when it removed none.",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptFileRemoval"
+            },
+            "type": "array"
+          },
           "turn_ended": {
             "$ref": "#/components/schemas/TranscriptTurnEnded"
           },
@@ -9483,6 +9490,24 @@
         },
         "required": [
           "status"
+        ],
+        "type": "object"
+      },
+      "TranscriptFileRemoval": {
+        "additionalProperties": false,
+        "description": "One file a stored tool call made vanish, on its role='tool' entry. The line count and not the body: the text of a removed file is what the live event carries, while a reloaded page needs to know the file went and how big the hole is.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "del": {
+            "description": "Lines the file held when it went; 0 when unknown.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "del"
         ],
         "type": "object"
       },
@@ -11865,6 +11890,24 @@
           }
         }
       },
+      "FileRemoval": {
+        "description": "One file a tool call made vanish, with the text it held when known. The counterpart of FileChange and not one of them: a removal has no after, and its before is a best effort -- absent means unknown, not that the file was empty.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute path of the file that is gone."
+          },
+          "before": {
+            "type": "string",
+            "description": "The contents the file held before it went, when they could be captured. Absent means unknown -- not that the file was empty -- so a client draws the deletion with whatever it already knew of the file."
+          }
+        }
+      },
       "ToolCompleteEvent": {
         "type": "object",
         "additionalProperties": false,
@@ -11911,6 +11954,13 @@
               },
               "file_change": {
                 "$ref": "#/components/schemas/FileChange"
+              },
+              "file_removed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FileRemoval"
+                },
+                "description": "The files this call made vanish. Absent on every call that removed nothing, which is nearly all of them."
               }
             }
           }
@@ -13550,8 +13600,10 @@
           "op": {
             "type": "string",
             "enum": [
+              "add",
               "write",
-              "edit"
+              "edit",
+              "delete"
             ]
           },
           "add": {

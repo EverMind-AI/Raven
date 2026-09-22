@@ -599,6 +599,27 @@ class FileChange(_Strict):
     )
 
 
+class FileRemoval(_Strict):
+    """One file a tool call made vanish, with the text it held when known.
+
+    The counterpart of :class:`FileChange`, and it cannot be one: a removal has no
+    ``after``, and its ``before`` is not a distinction but a best effort. No tool
+    deletes a file as its purpose, so what is reported here was read off the disk
+    either side of a shell command, and the content is absent when nothing had
+    read it, when it was too large to hold, or when it was not text at all.
+    """
+
+    path: str = Field(description="Absolute path of the file that is gone.")
+    before: str | None = Field(
+        default=None,
+        description=(
+            "The contents the file held before it went, when they could be captured. Absent "
+            "means unknown -- not that the file was empty -- so a client draws the deletion "
+            "with whatever it already knew of the file, or with no body at all."
+        ),
+    )
+
+
 class ToolCompletePayload(_Strict):
     tool_call_id: str
     result_preview: str
@@ -618,6 +639,14 @@ class ToolCompletePayload(_Strict):
         ),
     )
     file_change: FileChange | None = None
+    file_removed: list[FileRemoval] | None = Field(
+        default=None,
+        description=(
+            "The files this call made vanish. Absent on every call that removed nothing, "
+            "which is nearly all of them; nothing else on the wire records a deletion, "
+            "since the file a command unlinked is gone by the time anyone can look."
+        ),
+    )
 
 
 class ToolCompleteEvent(_Strict):
@@ -1010,7 +1039,7 @@ class TaskFile(_Strict):
     """One file a node wrote, as the lane that ran it recorded the tool result."""
 
     path: str
-    op: Literal["write", "edit"]
+    op: Literal["add", "write", "edit", "delete"]
     add: int
     del_: int = Field(..., alias="del")
     size: int | None = None
@@ -3043,6 +3072,18 @@ class TranscriptDelegated(_Strict):
     )
 
 
+class TranscriptFileRemoval(_Strict):
+    """One file a stored tool call made vanish, on its role='tool' entry.
+
+    The line count and not the body: the text of a removed file is what the live
+    event carries, while a reloaded page needs to know the file went and how big
+    the hole is. Nothing else in a stored transcript records a deletion.
+    """
+
+    path: str
+    del_: int = Field(..., alias="del", description="Lines the file held when it went; 0 when unknown.")
+
+
 class TranscriptMessage(_Strict):
     """One stored message in wire form: ``content`` renamed to ``text``."""
 
@@ -3089,6 +3130,10 @@ class TranscriptMessage(_Strict):
     diff: str | None = Field(
         default=None,
         description="A file tool's unified diff of the change it made, on its role='tool' entry.",
+    )
+    file_removed: list[TranscriptFileRemoval] | None = Field(
+        default=None,
+        description="The files that call made vanish, on its role='tool' entry. Absent when it removed none.",
     )
     turn_ended: TranscriptTurnEnded | None = Field(
         default=None,

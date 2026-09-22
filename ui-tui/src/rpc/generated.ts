@@ -252,6 +252,10 @@ export interface TranscriptMessage {
    * A file tool's unified diff of the change it made, on its role='tool' entry.
    */
   diff?: string;
+  /**
+   * The files that call made vanish, on its role='tool' entry. Absent when it removed none.
+   */
+  file_removed?: TranscriptFileRemoval[];
   turn_ended?: TranscriptTurnEnded;
   notice?: TranscriptNotice;
   /**
@@ -275,6 +279,19 @@ export interface TranscriptToolCall {
    * JSON-encoded arguments; re-serialized when stored as an object.
    */
   arguments: string;
+}
+/**
+ * One file a stored tool call made vanish, on its role='tool' entry. The line count and not the body: the text of a removed file is what the live event carries, while a reloaded page needs to know the file went and how big the hole is.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TranscriptFileRemoval".
+ */
+export interface TranscriptFileRemoval {
+  path: string;
+  /**
+   * Lines the file held when it went; 0 when unknown.
+   */
+  del: number;
 }
 /**
  * Why a turn's transcript stops where it does.
@@ -1574,6 +1591,22 @@ export interface FileChange {
   before?: string;
 }
 /**
+ * One file a tool call made vanish, with the text it held when known. The counterpart of FileChange and not one of them: a removal has no after, and its before is a best effort -- absent means unknown, not that the file was empty.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FileRemoval".
+ */
+export interface FileRemoval {
+  /**
+   * Absolute path of the file that is gone.
+   */
+  path: string;
+  /**
+   * The contents the file held before it went, when they could be captured. Absent means unknown -- not that the file was empty -- so a client draws the deletion with whatever it already knew of the file.
+   */
+  before?: string;
+}
+/**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ToolCompleteEvent".
  */
@@ -1595,6 +1628,10 @@ export interface ToolCompleteEvent {
      */
     diff?: string;
     file_change?: FileChange;
+    /**
+     * The files this call made vanish. Absent on every call that removed nothing, which is nearly all of them.
+     */
+    file_removed?: FileRemoval[];
   };
 }
 /**
@@ -2241,7 +2278,7 @@ export interface TaskReplan {
  */
 export interface TaskFile {
   path: string;
-  op: 'write' | 'edit';
+  op: 'add' | 'write' | 'edit' | 'delete';
   add: number;
   del: number;
   /**

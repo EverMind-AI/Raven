@@ -73,11 +73,11 @@ class RunActivity:
     # a run that worked, and the caller reading it announced success.
     tool_failures: list[str] = field(default_factory=list)
     # One entry per path a writing tool touched, in the order it was first
-    # touched: ``{path, op: write|edit, add, del, size}``, folded across repeat
-    # touches of one path by ``merge_file_change`` -- ``add``/``del`` sum,
-    # ``op`` prefers ``write``, ``size`` is the last touch's. Only the
-    # in-process lane fills this (see ``backends/raven_loop.py``) -- the acp
-    # and cli lanes see no tool result to record one from.
+    # touched: ``{path, op: add|write|edit|delete, add, del, size}``, folded
+    # across repeat touches of one path by ``merge_file_change`` -- see it for
+    # which op survives which. Only the in-process lane fills this (see
+    # ``backends/raven_loop.py``) -- the acp and cli lanes see no tool result to
+    # record one from.
     files: list[dict[str, Any]] = field(default_factory=list)
     tokens_in: int | None = None
     tokens_out: int | None = None
@@ -389,27 +389,72 @@ def merge_file_change(entries: list[dict[str, Any]], change: dict[str, Any]) -> 
 
     One entry per path, not per call: a node that edits a file twice changed
     one file, and the readers of this list count it (``tasks.list``'s
-    ``files``, drawn as "N products") and key rows by it. ``add``/``del``
+    ``files``, drawn as "N files changed") and key rows by it. ``add``/``del``
     accumulate because the diff a reader opens is every hunk against the
-    path; ``op`` prefers ``write`` because a node that ever rewrote the path
-    whole produced the file's true current content, which a patch against
-    the pre-node baseline cannot reconstruct; ``size`` is the last touch's,
-    which is the file as it stands.
+    path; ``size`` is the last touch's, which is the file as it stands.
+
+    The ``op`` is what the whole run did to the path, read the way a version
+    control system reads a range of commits rather than as the last tool call:
+
+    * ``add`` outlives a later ``write`` or ``edit`` -- a file this run created
+      is a creation however many times it was then rewritten;
+    * ``write`` outlives ``edit`` in either order, because a node that ever
+      rewrote the path whole produced the file's true current content, which a
+      patch against the pre-node baseline cannot reconstruct;
+    * ``delete`` replaces a ``write`` or ``edit`` and takes the removal's own
+      counts: what the run did to that path is remove it, and the lines it wrote
+      on the way are not in any file a reader can open;
+    * ``add`` then ``delete`` leaves no entry at all. The run created the file
+      and removed it, so nothing of it survives the run -- git shows the same
+      nothing for a file born and deleted inside one range;
+    * ``delete`` then a write of the path is that write: the path exists again,
+      and what is in it was written after the deletion. A creation among them
+      counts as a ``write`` -- an entry survives as a ``delete`` only for a path
+      the run did not create, so putting it back is a rewrite over the range.
     """
-    for entry in entries:
-        if entry["path"] == change["path"]:
-            entry["add"] += change["add"]
-            entry["del"] += change["del"]
-            entry["size"] = change["size"]
-            if change["op"] == "write":
-                entry["op"] = "write"
+    for index, entry in enumerate(entries):
+        if entry["path"] != change["path"]:
+            continue
+        if change["op"] == "delete":
+            if entry["op"] == "add":
+                entries.pop(index)
+                return
+            entry["op"] = "delete"
+            entry["add"] = 0
+            entry["del"] = change["del"]
+            entry["size"] = None
             return
+        if entry["op"] == "delete":
+            if change["op"] == "add":
+                # Read as a creation, a second removal of the path would cancel
+                # the entry away under the add-then-delete rule above, and the
+                # run would show nothing at all for a file it deleted. The lines
+                # the removal took out stay counted: they were in the file the
+                # range started from.
+                entry["op"] = "write"
+                entry["add"] = change["add"]
+                entry["size"] = change["size"]
+                return
+            entry["op"] = change["op"]
+            entry["add"] = change["add"]
+            entry["del"] = change["del"]
+            entry["size"] = change["size"]
+            return
+        entry["add"] += change["add"]
+        entry["del"] += change["del"]
+        entry["size"] = change["size"]
+        if change["op"] == "write" and entry["op"] != "add":
+            entry["op"] = "write"
+        return
     if len(entries) < _MAX_TOOL_CALLS:
         entries.append(change)
 
 
-def note_file_change(path: str, op: str, add: int, delete: int, size: int) -> None:
-    """Record one file a tool wrote or edited, folded by path.
+def note_file_change(path: str, op: str, add: int, delete: int, size: int | None) -> None:
+    """Record one file a tool created, wrote, edited or removed, folded by path.
+
+    ``size`` is nullable because a removal has none to report: the file is gone,
+    and zero would read as a file that is there and empty.
 
     See :func:`merge_file_change` for how a repeat touch of a path already
     recorded combines with what is there.
