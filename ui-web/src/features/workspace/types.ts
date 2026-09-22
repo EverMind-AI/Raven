@@ -9,7 +9,9 @@ export interface WsChange {
   key: string
   dir: string
   name: string
-  kind: string
+  /* A file the turn created, a whole-file write over one that existed, or an
+     in-place edit -- the three a change row draws a different glyph for. */
+  kind: 'add' | 'write' | 'edit'
   add: number
   del: number
   hunks: WsHunk[]

@@ -18,6 +18,7 @@ import { pane } from '../../state/wsPane'
 import { shortPath } from './source'
 import { shared as workspaceShared } from './store'
 
+import type { FileChange } from '../../rpc/generated'
 import type { WsChange, WsHunk, WsShared } from './types'
 
 const record = (): WsShared => workspaceShared()
@@ -37,7 +38,7 @@ export function wsArgs(name: string, args: unknown): Record<string, unknown> {
 
 /* One row per path, not per call: five edits to the same file is one changed
    file with five hunks, which is how a person thinks about it. */
-export function wsRecordChange(path: string, kind: string, hunk: WsHunk): WsChange {
+export function wsRecordChange(path: string, kind: WsChange['kind'], hunk: WsHunk): WsChange {
   const WS = record()
   const key = String(path)
   let c = WS.changes.find((x) => x.key === key && x.turn === WS.turn)
@@ -52,7 +53,9 @@ export function wsRecordChange(path: string, kind: string, hunk: WsHunk): WsChan
       kind, add: 0, del: 0, hunks: [], turn: WS.turn, open: true, auto: true, seen: false }
     WS.changes.unshift(c)
   }
-  if (kind === 'write') c.kind = 'write'
+  /* A creation stays one for the rest of the turn: rewriting a file the turn
+     itself made does not turn it into a file that was already there. */
+  if (kind === 'write' && c.kind === 'edit') c.kind = 'write'
   c.add += hunk.add; c.del += hunk.del
   c.hunks.push(hunk)
   return c
@@ -83,23 +86,38 @@ export function wsOnTool(name: string, args: unknown, _silent?: boolean): void {
   pane().bump()
 }
 
+/* A whole-file write onto nothing is a creation, and the tool reports it twice:
+   `file_change` leaves `before` out when there was no file to replace (an empty
+   string means the file was there and empty), and the unified diff it carries
+   opens its first hunk at line zero of the old side. The payload settles it
+   alone wherever it reaches, because the header cannot: a write over a file
+   that existed and was empty diffs against no old lines and opens at zero too.
+   The header is read only where the payload never reaches -- a reloaded
+   conversation stores the diff and nothing else. */
+function createdTheFile(fileChange: FileChange | undefined, diff: string | undefined): boolean {
+  if (fileChange) return fileChange.before === undefined
+  return /^@@ -0,0 /m.test(diff || '')
+}
+
 export function wsOnToolDone(
   name: string, args: unknown, _ok?: boolean, _preview?: string, _ms?: number | null, diff?: string,
+  fileChange?: FileChange,
 ): void {
   const WS = record()
   const a = wsArgs(name, args)
-  /* The tool's own diff is the ground truth -- for a whole-file write it is the
-     only record of what was replaced, which the arguments cannot show. It
-     replaces the hunk guessed at tool.start. */
-  if (diff && diff.length && /^(edit_file|write_file)$/.test(name)) {
+  if (/^(edit_file|write_file)$/.test(name)) {
     const path = (a.path || a.file_path || '') as string
     const c = WS.changes.find((x) => x.key === path && x.turn === WS.turn)
-    if (c) {
+    /* The tool's own diff is the ground truth -- for a whole-file write it is
+       the only record of what was replaced, which the arguments cannot show. It
+       replaces the hunk guessed at tool.start. */
+    if (c && diff && diff.length) {
       const h = hunks.fromUnified(diff)
       const stale = c.hunks.pop()
       if (stale) { c.add -= stale.add; c.del -= stale.del }
       c.hunks.push(h); c.add += h.add; c.del += h.del
     }
+    if (c && c.kind === 'write' && createdTheFile(fileChange, diff)) c.kind = 'add'
   }
   if (pane().showsTurn()) pane().draw()
   pane().bump()

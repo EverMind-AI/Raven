@@ -258,6 +258,17 @@ export function onSubagentStatus(p: live.SubagentStatusPayload): void {
   apply(live.applySubagentStatus(store.get().rows, p))
 }
 
+/** The id one of a task's files is opened under, so the desk's diff tab can
+    count the same item the pane's own chip opens. */
+export const taskChangeKey = (row: TaskRow, node: TaskNode, file: TaskFile): string =>
+  `task:${row.kind}:${row.id}:${node.node_id}:${file.path}`
+
+/* `edit_file` can only touch a file that already exists, so an edit is never a
+   creation however few lines it deleted; a whole-file write that replaced
+   nothing is one. */
+export const taskChangeKind = (file: TaskFile): 'add' | 'write' | 'edit' =>
+  file.op === 'edit' ? 'edit' : file.del === 0 ? 'add' : 'write'
+
 /* A write/edit chip's diff pane, read from the node's own tool calls
    (diffs.ts) since the wire carries only the counts (`add` / `del` / `size`),
    never a patch body. Shared by every door that opens one of a task's
@@ -267,9 +278,9 @@ export async function fileDiffChange(row: TaskRow, node: TaskNode, file: TaskFil
   const src = source()
   const rec = src ? await src.node(row, node).catch(() => null) : null
   return {
-    key: `task:${row.kind}:${row.id}:${node.node_id}:${file.path}`,
+    key: taskChangeKey(row, node, file),
     dir: file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/') + 1) : '',
-    name: file.path.split('/').pop() || file.path, kind: 'edit',
+    name: file.path.split('/').pop() || file.path, kind: taskChangeKind(file),
     add: file.add, del: file.del, hunks: rec ? hunksForFile(rec.steps, file.path) : [], turn: 0, open: false,
   }
 }

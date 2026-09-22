@@ -2622,7 +2622,7 @@ textarea:focus, textarea:focus-visible,
 .chgc { flex: none; width: 17px; height: 17px; border-radius: 4px; display: grid; place-items: center;
   font-family: var(--mono); font-size: 9.5px; line-height: 1; font-style: normal; }
 .chgc.edit { color: var(--amber); background: color-mix(in oklab, var(--amber) 15%, transparent); }
-.chgc.write { color: var(--moss); background: color-mix(in oklab, var(--moss) 15%, transparent); }
+.chgc.write, .chgc.add { color: var(--moss); background: color-mix(in oklab, var(--moss) 15%, transparent); }
 .chgp { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   font-size: 12.5px; direction: rtl; text-align: left; }
 .chgp .dir { color: var(--faint); }

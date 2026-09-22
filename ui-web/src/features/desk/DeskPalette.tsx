@@ -72,15 +72,17 @@ function DeskEmpty({ kind, title }: { kind: DeskTab; title: string }): JSX.Eleme
   )
 }
 
-/* What a task's nodes wrote or changed, across every task -- beside the
+/* Every file a task's nodes wrote or edited, across every task -- beside the
    session's own rows rather than instead of them: a sub-agent's writes never
-   reach the session's own change list. */
+   reach the session's own change list, and they are changes to the same working
+   directory. Not the shelf: what a task wrote is not what the conversation
+   handed over, which only `deliver_files` decides. */
 interface TaskFileEntry { row: TaskRow; node: TaskNode; file: TaskFile }
 
-function taskFileEntries(op: 'write' | 'edit'): TaskFileEntry[] {
+function taskFileEntries(): TaskFileEntry[] {
   const out: TaskFileEntry[] = []
   tasksStore.rows().forEach((row) => row.nodes.forEach((node) => node.files.forEach((file) => {
-    if (file.op === op) out.push({ row, node, file })
+    out.push({ row, node, file })
   })))
   return out
 }
@@ -88,7 +90,7 @@ function taskFileEntries(op: 'write' | 'edit'): TaskFileEntry[] {
 function DiffNav(): JSX.Element {
   useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
   const changes = workspace.shared().changes
-  const taskDiffs = taskFileEntries('edit')
+  const taskDiffs = taskFileEntries()
   if (!changes.length && !taskDiffs.length) {
     return (
       <DeskEmpty kind="diff" title={t('gui.ws.no_changes')} />
@@ -108,16 +110,16 @@ function DiffNav(): JSX.Element {
       ))}
       {taskDiffs.length ? (
         <>
-          <div className="desk-grp">{t('gui.ws.task_output')}</div>
+          <div className="desk-grp">{t('gui.ws.task_changes')}</div>
           {taskDiffs.map(({ row, node, file }) => {
-            const kind = file.del ? 'edit' : 'add'
+            const kind = tasksStore.taskChangeKind(file)
             return (
               <button
-                key={`${row.kind}:${row.id}:${node.node_id}:${file.path}`}
+                key={tasksStore.taskChangeKey(row, node, file)}
                 className="desk-row desk-diff-row"
                 onClick={() => { void tasksStore.fileDiffChange(row, node, file).then(desk.openDeskDiff) }}
               >
-                <i className={`chgc ${kind}`}>{file.del ? 'M' : '+'}</i>
+                <i className={`chgc ${kind}`}>{kind === 'add' ? '+' : 'M'}</i>
                 <span className="desk-name" title={file.path}>{file.path}</span>
                 <span className="chgs">
                   <i className="a">+{file.add}</i>
@@ -172,10 +174,8 @@ function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX
    difference between what Raven wrote and what it gave you. */
 function DeliverablesNav(): JSX.Element {
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
-  useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
   const rows = deliveries.list()
-  const taskFiles = taskFileEntries('write')
-  if (!rows.length && !taskFiles.length) {
+  if (!rows.length) {
     return (
       <DeskEmpty kind="deliverables" title={t('gui.ws.dlv_none')} />
     )
@@ -201,27 +201,6 @@ function DeliverablesNav(): JSX.Element {
     out.push(<div key={`grp:${key}`} className="desk-grp">{t(key)}</div>)
     group.forEach((row) => out.push(<DeliverableRow key={row.path} row={row} here={here(row)} />))
   })
-  if (taskFiles.length) {
-    out.push(<div key="grp:task" className="desk-grp">{t('gui.ws.task_output')}</div>)
-    taskFiles.forEach(({ row, node, file }) => {
-      const name = file.path.split('/').pop() || file.path
-      const ext = (name.split('.').pop() || '').toUpperCase()
-      out.push(
-        <button
-          key={`${row.kind}:${row.id}:${node.node_id}:${file.path}`}
-          className="desk-row desk-dlv-row"
-          title={file.path}
-          onClick={() => desk.openDeskFile(file.path)}
-        >
-          <span className="dlv-kind" data-kind={fileKind(name)}>{ext ? ext.slice(0, 4) : t('gui.arts.file')}</span>
-          <span className="desk-name">
-            <b>{name.replace(/\.[^.]+$/, '')}</b>
-            <s>{[name, file.size != null ? deliveries.humanSize(file.size) : ''].filter(Boolean).join(' · ')}</s>
-          </span>
-        </button>,
-      )
-    })
-  }
   return <div className="desk-list">{out}</div>
 }
 

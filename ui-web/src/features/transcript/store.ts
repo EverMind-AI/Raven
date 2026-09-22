@@ -78,7 +78,9 @@ export function artifactsOf(lane: Lane, turn: number): ArtifactRow[] {
       head: artifactHead(c),
       lines: c.add || 0,
       deleted: c.del || 0,
-      change: c.kind === 'write' ? 'new' : 'edit',
+      /* Only a write onto nothing is new: a whole-file write over a file that
+         was already there replaced its contents, which is an edit. */
+      change: c.kind === 'add' ? 'new' : 'edit',
     }
   })
 }

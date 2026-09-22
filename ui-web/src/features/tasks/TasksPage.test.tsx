@@ -153,7 +153,7 @@ describe('the tasks list', () => {
       ],
     })]
     await draw()
-    expect(document.querySelector('.sarow.task .st')?.textContent).toContain('gui.tasks.artifacts_n {"n":2}')
+    expect(document.querySelector('.sarow.task .st')?.textContent).toContain('gui.tasks.files_n {"n":2}')
   })
 
   it('renders no rows and does not crash when the store holds none', async () => {

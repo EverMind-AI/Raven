@@ -148,11 +148,32 @@ const TABS: readonly DeskTab[] = ['deliverables', 'tasks', 'diff']
    the turn that made it, a delivery is its path, an instance is its handle
    under its agent. */
 export function idsOf(tab: DeskTab): string[] {
-  if (tab === 'diff') return workspace.shared().changes.map((c) => `${c.key}:${c.turn}`)
+  if (tab === 'diff') {
+    return [
+      ...workspace.shared().changes.map((c) => `${c.key}:${c.turn}`),
+      ...taskChangeIds(),
+    ]
+  }
   if (tab === 'deliverables') return deliveries.paths()
   /* `kind:id`, never bare `id`: a spawn's record id and a dag's run id share
      no namespace and can collide. */
   return tasks.rows().map((r) => `${r.kind}:${r.id}`)
+}
+
+/* What a task's nodes wrote or edited, in the diff tab beside the session's
+   own rows -- a sub-agent's writes never reach the session's change list, and
+   the tab that counts changes has to count those too or its badge disagrees
+   with what the reader then sees on it.
+
+   Turn zero because that is the turn `tasks.fileDiffChange` builds the change
+   with, and `openDeskDiff` marks an item read under `${key}:${turn}`: an id
+   spelled any other way here would be counted forever and never read. */
+function taskChangeIds(): string[] {
+  const out: string[] = []
+  tasks.rows().forEach((row) => row.nodes.forEach((node) => node.files.forEach((file) => {
+    out.push(`${tasks.taskChangeKey(row, node, file)}:0`)
+  })))
+  return out
 }
 
 /* The tasks tab's own badge: how many are running right now, not how many

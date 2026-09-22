@@ -17,7 +17,7 @@ import * as workspace from '../workspace/store'
 import * as desk from './store'
 
 import type { InstanceRow } from '../subagents/types'
-import type { TaskRow } from '../tasks/types'
+import type { TaskFile, TaskRow } from '../tasks/types'
 
 /* Recorded rather than ignored: the pane the desk lives in is page chrome
    (state/ws.ts), so telling it to open and to shut is the desk's only way to
@@ -35,6 +35,11 @@ const taskRow = (id: string): TaskRow => ({
     interrupted: 0, exception: 0,
   },
   nodes: [],
+})
+
+const taskWithFiles = (id: string, files: TaskFile[]): TaskRow => ({
+  ...taskRow(id),
+  nodes: [{ node_id: 'n1', agent: 'raven', status: 'completed', depends_on: [], files }],
 })
 
 function wire(): void {
@@ -888,6 +893,31 @@ describe('what is new', () => {
     expect(desk.unseen('diff')).toBe(1)
   })
 
+  /* A sub-agent's writes never reach the session's own change list, so a tab
+     that counted only those disagreed with the list it draws: the reader saw a
+     quiet tab over rows they had never opened. */
+  it('counts what a task\'s nodes wrote beside the session\'s own changes', async () => {
+    changed('/w/a.ts')
+    taskRows = [taskWithFiles('t1', [
+      { path: '/w/out.md', op: 'write', add: 5, del: 0 },
+      { path: '/w/mod.py', op: 'edit', add: 2, del: 1 },
+    ])]
+    await tasksStore.refresh()
+
+    expect(desk.unseen('diff')).toBe(3)
+  })
+
+  /* Under the very id `fileDiffChange` builds and `openDeskDiff` marks -- an id
+     spelled any other way here would be counted forever. */
+  it('reads a task file when its own diff is opened', async () => {
+    taskRows = [taskWithFiles('t1', [{ path: '/w/out.md', op: 'write', add: 5, del: 0 }])]
+    await tasksStore.refresh()
+    const row = tasksStore.rows()[0]!
+    desk.openDeskDiff(await tasksStore.fileDiffChange(row, row.nodes[0]!, row.nodes[0]!.files[0]!))
+
+    expect(desk.unseen('diff')).toBe(0)
+  })
+
   /* The launcher's own case: the palette is DOWN, so the tab the reader left it
      on is not a tab they are looking at. The count this replaced exempted the
      shown tab unconditionally, on the argument that a shut palette draws no
@@ -983,6 +1013,20 @@ describe('choosing a tab on the way up', () => {
     taskRows = [taskRow('t1')]
     await tasksStore.refresh()
     expect(open()).toBe('tasks')
+  })
+
+  /* A task the reader has already looked at still leaves what its nodes wrote
+     unread, and those are changes: while the diff rung counted only the
+     session's own list, the desk came up on the fallback with a diff tab that
+     was not empty. */
+  it('opens on the diff tab when a seen task is the only thing that wrote', async () => {
+    taskRows = [taskWithFiles('t1', [{ path: '/w/out.md', op: 'write', add: 5, del: 0 }])]
+    await tasksStore.refresh()
+    desk.set({ paletteOpen: true, tab: 'tasks' })
+    desk.seeTab('tasks')
+    desk.set({ paletteOpen: false })
+
+    expect(open()).toBe('diff')
   })
 
   /* Rung two is "unseen", not "exists", so a run the reader already looked at
