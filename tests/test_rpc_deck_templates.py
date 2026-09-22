@@ -274,6 +274,37 @@ async def test_warming_draws_only_the_covers_that_are_missing(tmp_path: Path, mo
     assert sorted(drawn) == ["one", "three"], "the cover already on disk is left alone"
 
 
+async def test_warming_draws_nothing_when_every_cover_is_on_disk(templates: Path, monkeypatch) -> None:
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    template = deck_templates.bundled()[0]
+    covers = deck_templates.cover_cache_dir()
+    covers.mkdir(parents=True, exist_ok=True)
+    (covers / f"{deck_templates._cover_key(template.path)}.jpg").write_bytes(b"\xff\xd8")
+    drawn: list[str] = []
+
+    async def draw(t):
+        drawn.append(t.name)
+        return None
+
+    monkeypatch.setattr(deck_templates, "cover_for", draw)
+
+    task = deck_templates.warm_covers_in_background(delay_s=0)
+    assert task is not None
+    await task
+    assert drawn == [] and deck_templates._drawing == {}
+
+
+def test_warming_never_raises_out_of_a_boot_path(monkeypatch) -> None:
+    """Its callers are the gateway's and the serve path's boot; a gallery that
+    cannot be drawn is smaller than a gateway that does not start."""
+
+    def broken() -> None:
+        raise RuntimeError("no engine here")
+
+    monkeypatch.setattr(deck_templates, "templates_dir", broken)
+    assert deck_templates.warm_covers_in_background(delay_s=0) is None
+
+
 def test_warming_is_a_no_op_without_an_engine_or_a_rasteriser(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(deck_templates, "templates_dir", lambda: None)
     monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)

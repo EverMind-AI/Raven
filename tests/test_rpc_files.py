@@ -426,6 +426,75 @@ def test_a_pdf_page_is_drawn_by_pymupdf_when_it_is_installed(tmp_path: Path, mon
     assert not list((tmp_path / "cache").glob("render-*")), "the scratch directory is gone"
 
 
+def test_a_pdf_page_says_what_went_wrong_rather_than_leaking_the_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three ways drawing fails, each named: a PDF with no pages, a rasteriser
+    that dies mid-draw, and the fallback writing nothing."""
+    pymupdf = pytest.importorskip("pymupdf")
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    doc = pymupdf.open()
+    doc.new_page(width=200, height=100)
+    source = tmp_path / "one.pdf"
+    doc.save(source)
+
+    # A PDF with no pages cannot be written by this library, so the reader is
+    # one that answers zero: a file that arrived from somewhere else.
+    class _Empty:
+        page_count = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+    monkeypatch.setattr(pymupdf, "open", lambda path: _Empty())
+    with pytest.raises(pdf_preview.PdfPreviewError, match="has no pages"):
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "a.png", 640)
+
+    def explode(path):
+        raise OSError("the file went away")
+
+    monkeypatch.setattr(pymupdf, "open", explode)
+    with pytest.raises(pdf_preview.PdfPreviewError, match="could not be drawn"):
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "b.png", 640)
+    assert not list((tmp_path / "cache").glob("render-*")), "the scratch directory is gone either way"
+
+
+def test_a_pdf_page_fallback_that_writes_nothing_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+    import sys
+
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    real_import = builtins.__import__
+
+    def no_pymupdf(name, *args, **kwargs):
+        if name in ("pymupdf", "fitz"):
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_pymupdf)
+    monkeypatch.delitem(sys.modules, "pymupdf", raising=False)
+    monkeypatch.delitem(sys.modules, "fitz", raising=False)
+
+    fake_bin = tmp_path / "quiet"
+    fake_bin.mkdir()
+    script = fake_bin / "pdftoppm"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin))
+    source = tmp_path / "one.pdf"
+    source.write_bytes(FAKE_PDF)
+
+    with pytest.raises(pdf_preview.PdfPreviewError, match="drew nothing"):
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "c.png", 640)
+
+
 def test_a_pdf_page_falls_back_to_pdftoppm_and_then_says_what_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

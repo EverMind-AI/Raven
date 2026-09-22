@@ -265,25 +265,33 @@ WARM_COVERS_AFTER_S = 15.0
 def warm_covers_in_background(*, delay_s: float = WARM_COVERS_AFTER_S) -> asyncio.Task | None:
     """Draw every bundled template's missing cover once the gateway has settled.
 
+    Never raises, and answers None rather than failing, because its callers are
+    boot paths: a gallery that cannot be drawn is smaller than a gateway that
+    does not start.
+
     The first cold gallery used to be built on the click that opened it: ten
     LibreOffice conversions, three at a time, a picker that filled in over half
     a minute. Drawn here instead, at start and through the same gate, a picker
     opened later finds its covers on disk. None where there is no engine or no
     rasteriser, and a no-op start to start once the cache is warm.
     """
-    if templates_dir() is None or not _rasteriser_available():
+    try:
+        if templates_dir() is None or not _rasteriser_available():
+            return None
+
+        async def warm() -> None:
+            await asyncio.sleep(delay_s)
+            missing = [template for template in bundled() if cached_cover(template) is None]
+            if not missing:
+                return
+            logger.info("deck templates: drawing {} missing cover(s) in the background", len(missing))
+            for template in missing:
+                _draw_in_background(template)
+
+        return asyncio.ensure_future(warm())
+    except Exception as exc:  # noqa: BLE001 - the gallery is optional, starting is not
+        logger.debug("deck templates: covers not warmed ({})", exc)
         return None
-
-    async def warm() -> None:
-        await asyncio.sleep(delay_s)
-        missing = [template for template in bundled() if cached_cover(template) is None]
-        if not missing:
-            return
-        logger.info("deck templates: drawing {} missing cover(s) in the background", len(missing))
-        for template in missing:
-            _draw_in_background(template)
-
-    return asyncio.ensure_future(warm())
 
 
 def deposit(template: Template, uploads: Path) -> Path:
