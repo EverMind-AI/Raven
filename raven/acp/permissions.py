@@ -86,10 +86,10 @@ class AcpPermissionBroker:
         self._outbound = outbound
         self._translator = translator
         # A parameter rather than the callee's default, and not because a test
-        # wants it short. The RPC broker's ceiling is 35 seconds because a
-        # terminal overlay owns a visible countdown; here a person is reading a
-        # diff, and the deadline is a product decision that belongs to whoever
-        # assembles the connection.
+        # wants it short. The RPC broker waits without a deadline because a
+        # person is looking at its prompt; here the other side is an editor
+        # process that can stop answering, and the deadline is a product
+        # decision that belongs to whoever assembles the connection.
         self._timeout_s = timeout_s
         # Counted per outcome rather than logged per request: a turn that ran
         # twenty commands would otherwise write twenty lines saying the same
@@ -105,11 +105,18 @@ class AcpPermissionBroker:
         command: str,
         description: str,
         suggested_pattern: str = "",
+        kind: str = "",
+        family: str = "",
+        origin: str = "",
+        origin_name: str = "",
+        evidence: dict[str, Any] | None = None,
     ) -> ApprovalOutcome:
         """Ask, and return the grant the client's user chose.
 
-        ``suggested_pattern`` is accepted for the responder contract and unused:
-        this wire has no editor a human could confirm a rule in.
+        ``suggested_pattern`` and the prompt's view (``kind``, ``family``,
+        ``origin``, ``evidence``) are accepted for the responder contract and
+        unused: this wire has no editor a human could confirm a rule in, and
+        ``session/request_permission`` has its own shape for what a client shows.
 
         Fails closed on every path. The signature is the one the permission
         gate calls, including the keyword-only arguments, so this object can be

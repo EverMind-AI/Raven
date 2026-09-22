@@ -5,6 +5,7 @@ import { NAV_BUTTONS } from '../../state/pages'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
+import { draw as drawWorkdir } from '../../state/workdir'
 import { dropDraft } from '../composer/store'
 import { plainTitle } from './title'
 
@@ -124,6 +125,10 @@ export function draw(): void {
   }
   markNew()
   set({ snap, skel: false })
+  /* The composer's working-directory chip reads the same two things a draw
+     does -- the rows and the conversation on screen -- and has no moment of its
+     own, so it repaints here. */
+  drawWorkdir()
 }
 
 export function hold(): void {

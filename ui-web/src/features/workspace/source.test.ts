@@ -79,14 +79,24 @@ describe('whether the gateway host is the reader own desktop', () => {
 })
 
 describe('a bare path in prose', () => {
-  it('links a workspace path, relative to the workspace', () => {
-    expect(livePathOf('/home/a/.raven/workspace/notes.md')).toBe('notes.md')
+  /* As written, not made relative: the viewer's route roots a relative path at
+     the session's working directory, so a shortened workspace path opened onto
+     a file that is not there (the chip said "no longer there" for a file that
+     was). */
+  it('links a workspace path as the answer wrote it', () => {
+    expect(livePathOf('/home/a/.raven/workspace/notes.md')).toBe('/home/a/.raven/workspace/notes.md')
+  })
+
+  /* A workspace path an answer wrote relative stays relative -- the route
+     roots it where the turn ran, which is what the author meant. */
+  it('leaves a relative workspace path alone', () => {
+    expect(livePathOf('workspace/notes.md')).toBe('workspace/notes.md')
   })
 
   /* A line and column reference is how a tool names a place in a file; the
      file is what a click can open. */
   it('drops a line and column reference before resolving', () => {
-    expect(livePathOf('/srv/workspace/a.ts:12:3')).toBe('a.ts')
+    expect(livePathOf('/srv/workspace/a.ts:12:3')).toBe('/srv/workspace/a.ts')
   })
 
   it('refuses anything with whitespace in it, and the empty string', () => {

@@ -53,7 +53,7 @@ import { refusal as uploadRefusal } from '../lib/upload'
 import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
 import * as page from '../state/page'
-import { clarifyRequest, dispatch, installPipeline } from '../state/session/pipeline'
+import { clarifyRequest, dispatch, installPipeline, replayPendingApprovals } from '../state/session/pipeline'
 import { reconnect, switchToDraft } from '../state/session/registry'
 import { installComposerActions, installSlashActions } from '../state/session/runtime'
 import * as settingsDialog from '../state/settings'
@@ -148,7 +148,13 @@ export function installSources(): void {
   sources.cron = cronSource
   sources.connections = connSource
   sources.memory = memorySource
-  sources.onboard = onboardSource
+  /* The wizard's data-sync step asks for the same run the rail's own click
+     does, so it goes through the same verb rather than calling `import.run` a
+     second way: the store is then following a run it knows is its own, which is
+     what keeps the finished row on the rail (features/importSync/store.ts's
+     `stale`). Grown here rather than by the wizard importing a sibling
+     domain's store, the same way the step bodies below are handed over. */
+  sources.onboard = { ...onboardSource, startImport: (platforms, tier) => importSyncStore.start(platforms, tier) }
   /* The onboarding wizard draws the owning domains' own bodies for its three
      configured steps -- the settings dialog's model page and web controls,
      the sub-agents roster -- and asks each domain's store whether the step is
@@ -323,6 +329,9 @@ export function installPushes(): void {
 async function afterReconnect(): Promise<void> {
   await gateway().call('system.hello', { client_version: '0.1.0', surface: surface() }).catch(() => {})
   await reconnect()
+  /* The sheets a question was waiting in are gone with the old socket; the
+     questions are not. */
+  await replayPendingApprovals()
   /* The installed skills, plugins and tools are read once at boot into
      module state and served from there, so a socket that was down when boot
      ran leaves all three empty for the life of the tab -- an empty page

@@ -5059,6 +5059,52 @@ export interface ApprovalRespondResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ApprovalRevokeParams".
+ */
+export interface ApprovalRevokeParams {
+  /**
+   * The answered request whose grant to take back.
+   */
+  approval_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ApprovalRevokeResult".
+ */
+export interface ApprovalRevokeResult {
+  /**
+   * False when that answer wrote no rule of its own, the undo came twice, or the file could not be written.
+   */
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ApprovalPendingParams".
+ */
+export interface ApprovalPendingParams {
+  /**
+   * One conversation's requests; every conversation's when absent.
+   */
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ApprovalPendingResult".
+ */
+export interface ApprovalPendingResult {
+  /**
+   * Each open request's approval.request params, exactly as they were first sent.
+   */
+  requests: {
+    [k: string]: JsonValue;
+  }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ClarifyRespondParams".
  */
 export interface ClarifyRespondParams {

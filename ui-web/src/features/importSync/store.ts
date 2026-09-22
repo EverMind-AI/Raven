@@ -9,9 +9,14 @@
  * only while a run is on; otherwise the page reads once at boot and once when
  * the wizard closes (app/install.ts), the two moments a run can begin.
  *
- * A finished run stays on the rail until dismissed, and the dismissal is
- * remembered per run (its request and its final counts) so a reload does not
- * bring the same finished row back. */
+ * A settled run -- finished, or stopped short -- is on the rail only while
+ * this page has something to say about it: it asked for the run or found it in
+ * flight, or the row's click can still act on it. The importer's file outlives
+ * every run that wrote it, so without that the next reader of any install whose
+ * file is not empty is told about an import they never started. A finished run
+ * that did earn its row stays until dismissed, and the dismissal is remembered
+ * per run (its request and its final counts) so a reload does not bring the
+ * same finished row back. */
 
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -28,6 +33,14 @@ export interface ImportSyncState {
   /* Between asking for a run and hearing that it started: the scan the gateway
      does before it answers is the one stretch with no counts to show. */
   starting: boolean
+  /* A run of this page's own is in flight: it asked for one, or it found one
+     running. Becomes `followed` the moment that run settles. */
+  watching: boolean
+  /* The run this page followed to its end, by the same signature `dismissed`
+     uses. A settled run is only ever on the rail because of this or because
+     its click still does something -- see `stale` below. Page state, never
+     stored: a reload has followed nothing. */
+  followed: string
   dismissed: string
   error: string
 }
@@ -48,6 +61,21 @@ export interface RowView {
 
 const HIDDEN: RowView = { kind: 'hidden', pct: 0, failed: 0, phase: null, source: null, clickable: false }
 
+/* Whether a run that is NOT running has earned a row. Two reasons it has:
+   something can still be done about it, or this page followed THAT run to its
+   end. A run that is neither is history -- the importer's file outlives every
+   run that wrote it, so a CLI import from weeks ago, or one an earlier reader
+   started, would otherwise greet the next reader as news. It is not news:
+   nothing is moving, the click does nothing, and the reader never asked for
+   it. The row is the work outstanding, never a receipt for work nobody here
+   watched.
+
+   Held per run rather than per page, because a page outlives a run: a tab that
+   followed one import and stayed open would otherwise draw the receipt of the
+   next one somebody ran from the CLI. */
+const stale = (s: ImportSyncState, st: ImportStatus, clickable: boolean): boolean =>
+  !clickable && s.followed !== signature(st)
+
 const readDismissed = (): string => {
   try { return window.localStorage.getItem(DISMISSED_KEY) ?? '' } catch { return '' }
 }
@@ -56,7 +84,7 @@ const writeDismissed = (sig: string): void => {
   try { window.localStorage.setItem(DISMISSED_KEY, sig) } catch { /* a private window keeps nothing */ }
 }
 
-const initial = (): ImportSyncState => ({ status: null, starting: false, dismissed: readDismissed(), error: '' })
+const initial = (): ImportSyncState => ({ status: null, starting: false, watching: false, followed: '', dismissed: readDismissed(), error: '' })
 
 const store = makeStore<ImportSyncState>(initial())
 
@@ -100,15 +128,21 @@ export function view(s: ImportSyncState): RowView {
   }
   if (!total && !phases) return HIDDEN
   /* Short of the total: the message pass was stopped, or the gateway lost it. */
-  if (settled < total) return { kind: 'paused', pct, failed: st.failed, phase: null, source: null, clickable: again }
+  if (settled < total) {
+    return stale(s, st, again) ? HIDDEN : { kind: 'paused', pct, failed: st.failed, phase: null, source: null, clickable: again }
+  }
   /* Settled, but the phases behind the pass never finished: no verdict on file
      for a run that recorded its request (lost before the phases began), or a
      verdict that says they were still running or were stopped. */
   const unfinished = phases === null ? again : phases.status === 'pending' || phases.status === 'cancelled'
-  if (unfinished) return { kind: 'paused', pct: 100, failed: st.failed, phase: null, source: null, clickable: again }
+  if (unfinished) {
+    return stale(s, st, again) ? HIDDEN : { kind: 'paused', pct: 100, failed: st.failed, phase: null, source: null, clickable: again }
+  }
   const failed = st.failed + (phases?.status === 'failed' ? phases.errors.length : 0)
+  const retry = failed > 0 && again
   if (s.dismissed === signature(st)) return HIDDEN
-  return { kind: 'done', pct: 100, failed, phase: null, source: null, clickable: failed > 0 && again }
+  if (stale(s, st, retry)) return HIDDEN
+  return { kind: 'done', pct: 100, failed, phase: null, source: null, clickable: retry }
 }
 
 const failure = (e: unknown): string => {
@@ -127,7 +161,16 @@ function poll(on: boolean): void {
 export async function refresh(): Promise<void> {
   try {
     const status = await source().status()
-    set({ status, error: '' })
+    /* A run in flight is this page's to follow; the read that finds it settled
+       is where following turns into the one run whose row may be drawn. */
+    store.set((prev) => ({
+      ...prev,
+      status,
+      error: '',
+      ...(status.running
+        ? { watching: true }
+        : prev.watching ? { watching: false, followed: signature(status) } : {}),
+    }))
     poll(status.running)
   } catch (e) {
     set({ error: failure(e) })
@@ -135,13 +178,19 @@ export async function refresh(): Promise<void> {
   }
 }
 
-/* Ask for a run and follow it. The wizard's sync step goes through its own
-   source for the same call and lets the close hook bring this store up to date;
-   the rail's own click comes here. */
+/* Ask for a run and follow it. Every caller comes here -- the rail's own click
+   and the wizard's sync step, which reaches it through the seam (src/app/
+   install.ts) rather than calling the same method a second way. A run that
+   starts is the run this page follows, which is what keeps its finished row on
+   the rail afterwards. */
 export async function start(platforms: string[], tier: ImportTier): Promise<ImportStarted> {
   set({ starting: true, error: '' })
   try {
     const r = await source().run(platforms, tier)
+    /* Only a run that started is one to follow. A refusal ("nothing to
+       import") leaves whatever settled run is already on file untouched, and
+       the read below would otherwise adopt it as this page's. */
+    if (r.started) set({ watching: true })
     /* Read after, then report: a refusal is this call's news, and the read
        that follows it clears the transport error slot as every read does. */
     await refresh()
@@ -180,5 +229,5 @@ export function dismiss(): void {
 export function _resetForTests(): void {
   poll(false)
   store._resetForTests()
-  store.set({ ...initial(), dismissed: '' })
+  store.set({ ...initial(), watching: false, followed: '', dismissed: '' })
 }

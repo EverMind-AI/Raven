@@ -209,6 +209,13 @@ def build_runtime(
             extra_hooks=[charter_hook, *(host.hooks or ())],
         ),
     )
+    # Before the loop builds its gate, so every surface this runtime serves --
+    # terminal, page, channels -- names the command family on an approval
+    # prompt the way the ACP editor does. A family only words the prompt; the
+    # tiers still decide whether one is shown.
+    from raven.permissions.shell_policy import declare_default_families
+
+    declare_default_families()
     loop = agent_loop.AgentLoop(
         provider=provider,
         workspace=config.workspace_path,

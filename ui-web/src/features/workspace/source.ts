@@ -50,11 +50,20 @@ export function setShortener(fn: (p: string) => string): void {
    worse than plain text. Two cases are provable without a round trip: the text
    names the workspace, or Raven touched that file this session -- and since the
    viewer is no longer confined to the workspace, the second case now counts
-   wherever the file lives. Everything else stays plain text. */
+   wherever the file lives. Everything else stays plain text.
+
+   Both cases answer with the path as the author wrote it. The workspace case
+   used to answer with it made relative, from when the viewer's route rooted a
+   relative path at agent home; the route roots it at the SESSION's working
+   directory now (raven/rpc/methods/console.py's `_workspace_root`), so a
+   workspace path outside that directory was re-rooted onto it and served a 404
+   -- the chip opened onto "that file is no longer there" for a file that was
+   there. Shortening is the panel's job either way (`shortPath` below), and the
+   other case here has always answered absolute. */
 export const livePathOf = (s: string): string | null => {
   const text = String(s).trim().replace(/:\d+(?::\d+)?$/, '')
   if (!text || /\s/.test(text)) return null
-  if (/(?:^|\/)(?:\.raven\/)?workspace\/./.test(text)) return relToWorkspace(text) || text
+  if (/(?:^|\/)(?:\.raven\/)?workspace\/./.test(text)) return text
   const hit = workspaceChanges().find((c) => c.key === text || shorten(c.key) === text)
   return hit ? hit.key : null
 }
@@ -128,6 +137,9 @@ export const workspaceSource: WorkspaceSource = {
   openIn: (p, app) => gateway().call('fs.open', { path: p, session: sessionCurrent() || '', ...(app ? { app } : {}) }),
   hostIsLocal,
   shortPath,
+  /* Where a new conversation may be pinned. `path` omitted is the reader's home
+     directory, which is where the picker starts (state/workdir.ts). */
+  dirs: (path) => gateway().call('fs.dirs', path ? { path } : {}),
 }
 
 /* Test seam only: the workspace root and the two injected helpers are the
