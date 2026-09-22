@@ -211,8 +211,11 @@ export const STAGES: readonly Stage[] = [
     const took = Date.now() - o.t0
     o.h.done(ok, preview, took, null, p.truncated)
     /* p.diff is the real change on disk -- the only place a whole-file write's
-       previous content survives. */
-    if (typeof wsOnToolDone === 'function') wsOnToolDone(o.name, o.args, ok, preview, took, p.diff)
+       previous content survives; p.file_change says whether there was a file
+       there at all. */
+    if (typeof wsOnToolDone === 'function') {
+      wsOnToolDone(o.name, o.args, ok, preview, took, p.diff, p.file_change)
+    }
   }),
 
   /* Our own cancel already folded and reset the visible turn. The server can

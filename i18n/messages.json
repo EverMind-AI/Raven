@@ -4503,6 +4503,14 @@
       "en": "Edited in place",
       "zh": "局部修改"
     },
+    "gui.ws.chip.add": {
+      "en": "A",
+      "zh": "新"
+    },
+    "gui.ws.chip.add_t": {
+      "en": "New file",
+      "zh": "新建文件"
+    },
     "gui.ws.chip.write": {
       "en": "W",
       "zh": "写"
@@ -6451,9 +6459,9 @@
       "en": "Finished",
       "zh": "已结束"
     },
-    "gui.tasks.artifacts_n": {
-      "en": "{n} products",
-      "zh": "{n} 个产物"
+    "gui.tasks.files_n": {
+      "en": "{n} files changed",
+      "zh": "{n} 个文件改动"
     },
     "gui.tasks.step": {
       "en": "step {i}/{n}",
@@ -6463,9 +6471,9 @@
       "en": "No tasks yet",
       "zh": "还没有任务"
     },
-    "gui.tasks.artifacts_1": {
-      "en": "1 product",
-      "zh": "1 个产物"
+    "gui.tasks.files_1": {
+      "en": "1 file changed",
+      "zh": "1 个文件改动"
     },
     "gui.tasks.graph_tag": {
       "en": "graph",
@@ -7767,9 +7775,9 @@
       "en": "@{instance}, same conversation",
       "zh": "@{instance} 同一会话"
     },
-    "gui.ws.task_output": {
-      "en": "Task output",
-      "zh": "任务产出"
+    "gui.ws.task_changes": {
+      "en": "Task changes",
+      "zh": "任务改动"
     },
     "gui.ws.tasks_running_tab": {
       "en": "{n} running",

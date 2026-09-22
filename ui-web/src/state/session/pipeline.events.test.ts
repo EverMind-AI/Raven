@@ -442,6 +442,7 @@ describe('tool.complete', () => {
         result_preview: '[BEGIN UNTRUSTED CONTENT]\nall good\n[END UNTRUSTED CONTENT]',
         truncated: true,
         diff: '@@ -1 +1 @@',
+        file_change: { path: '/w/a.md', after: 'now' },
       },
     })
 
@@ -456,7 +457,10 @@ describe('tool.complete', () => {
     expect(truncated).toBe(true)
     expect(h.live.open.has('c1')).toBe(false)
     expect(h.did('wsOnToolDone')[0]!.slice(1, 4)).toEqual(['exec', { command: 'ls' }, false])
-    expect(h.did('wsOnToolDone')[0]!.slice(6)).toEqual(['@@ -1 +1 @@'])
+    /* Both halves of what the tool reported about the file: the diff, and the
+       payload that says whether there was a file under the write at all. */
+    expect(h.did('wsOnToolDone')[0]!.slice(6))
+      .toEqual(['@@ -1 +1 @@', { path: '/w/a.md', after: 'now' }])
   })
 })
 

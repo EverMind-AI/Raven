@@ -182,6 +182,25 @@ describe('fileDiffChange', () => {
     expect(change.hunks).toHaveLength(1)
   })
 
+  /* `edit_file` can only touch a file that exists, so an edit is never a
+     creation however few lines it deleted; a whole-file write onto nothing is
+     one, and a write that replaced lines is a rewrite. */
+  it('reads the kind off the file\'s own op, not off its deletion count', () => {
+    expect(store.taskChangeKind({ path: '/w/a.py', op: 'edit', add: 4, del: 0 })).toBe('edit')
+    expect(store.taskChangeKind({ path: '/w/a.py', op: 'edit', add: 4, del: 2 })).toBe('edit')
+    expect(store.taskChangeKind({ path: '/w/a.py', op: 'write', add: 4, del: 0 })).toBe('add')
+    expect(store.taskChangeKind({ path: '/w/a.py', op: 'write', add: 4, del: 2 })).toBe('write')
+  })
+
+  it('carries that kind onto the change it builds', async () => {
+    const taskRow = row({ id: 'r1', kind: 'dag', status: 'completed' })
+    const wrote: TaskFile = { path: '/w/new.md', op: 'write', add: 3, del: 0 }
+    const edited: TaskFile = { path: '/w/a.py', op: 'edit', add: 1, del: 0 }
+
+    expect((await store.fileDiffChange(taskRow, node({ node_id: 'n1' }), wrote)).kind).toBe('add')
+    expect((await store.fileDiffChange(taskRow, node({ node_id: 'n1' }), edited)).kind).toBe('edit')
+  })
+
   it('answers with no hunks rather than throwing when there is no source', async () => {
     resetSources()
     const taskRow = row({ id: 'r1', kind: 'dag', status: 'completed' })

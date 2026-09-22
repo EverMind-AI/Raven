@@ -105,7 +105,7 @@ function stepLine(row: TaskRow): string {
 
 const productsOf = (row: TaskRow): number => row.nodes.reduce((n, node) => n + node.files.length, 0)
 
-const productText = (n: number): string => (n ? t(n === 1 ? 'gui.tasks.artifacts_1' : 'gui.tasks.artifacts_n', { n }) : '')
+const productText = (n: number): string => (n ? t(n === 1 ? 'gui.tasks.files_1' : 'gui.tasks.files_n', { n }) : '')
 
 function humanSize(bytes: number): string {
   if (!bytes) return ''

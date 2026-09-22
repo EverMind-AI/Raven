@@ -1749,7 +1749,7 @@ describe("the turn's delivered files and file changes", () => {
 
   it('keeps explicit deliveries separate from every file the turn created or edited', async () => {
     vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
-    PRODUCED.set(1, [wrote('report.md', '# Report'), wrote('helper.py', 'x = 1', 'edit')])
+    PRODUCED.set(1, [wrote('report.md', '# Report', 'add'), wrote('helper.py', 'x = 1', 'edit')])
     act(() => {
       mount.history([
         { role: 'user', text: 'finish it', timestamp: iso(Date.now() - 9000) },
@@ -1771,6 +1771,22 @@ describe("the turn's delivered files and file changes", () => {
     expect(Array.from(turn.children).map((node) => node.className)).toEqual(['msg ai', 'ansfoot'])
     expect(turn.querySelector('.answer .ansfoot')).toBeNull()
     expect(turn.querySelector(':scope > .ansfoot .turnmeta')?.textContent).toBeTruthy()
+  })
+
+  /* Only a write onto nothing is new. A whole-file write over a file that was
+     already there replaced its contents, and calling that a creation put "New"
+     on every rewrite the turn made. */
+  it('calls a whole-file write over an existing file edited, not new', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    PRODUCED.set(1, [wrote('notes.md', 'redone', 'write')])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'redo it', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.edit'])
   })
 
   /* A file a playbook or a sub-agent wrote landed on another lane, so this

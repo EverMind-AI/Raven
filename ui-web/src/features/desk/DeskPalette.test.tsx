@@ -642,63 +642,72 @@ describe('the desk shelf', () => {
   })
 })
 
-describe('a task\'s own files, on the shelf and in the diff tab', () => {
+describe('a task\'s own files, in the diff tab and not on the shelf', () => {
   const taskWithFile = (id: string, file: TaskFile): TaskRow => ({
     ...task(id),
     nodes: [{ node_id: 'n1', agent: 'raven', status: 'completed', depends_on: [], files: [file] }],
   })
 
-  it('prints the file\'s own extension on the shelf, not the constant "FILE" chip', async () => {
-    taskRows = [taskWithFile('t1', { path: '/w/out.md', op: 'write', add: 5, del: 0, size: 120 })]
-    await shelf()
+  const diffTab = async (): Promise<void> => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
     await act(async () => { await tasksStore.refresh() })
+  }
 
-    const row = document.querySelector('.desk-dlv-row') as HTMLElement
-    expect(row.querySelector('.dlv-kind')?.textContent).toBe('MD')
-    expect(row.querySelector('.desk-name b')?.textContent).toBe('out')
-    expect(row.querySelector('.desk-name s')?.textContent).toBe('out.md · 120 B')
+  /* What a node wrote is a change to the working directory, not something the
+     conversation handed over: only `deliver_files` decides the second, and a
+     sub-agent has no such tool. */
+  it('lists a file a node wrote in the diff tab, under the task heading', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/out.md', op: 'write', add: 5, del: 0, size: 120 })]
+    await diffTab()
+
+    const row = document.querySelector('.desk-diff-row') as HTMLElement
+    expect(row.querySelector('.chgc')?.textContent).toBe('+')
+    expect(row.querySelector('.desk-name')?.textContent).toBe('/w/out.md')
+    expect([...document.querySelectorAll('.desk-grp')].map((n) => n.textContent))
+      .toEqual(['gui.ws.task_changes'])
   })
 
-  it('opens a task-written file as the file itself, not the owning task', async () => {
+  it('leaves the shelf saying nothing was handed over when only a task wrote', async () => {
     taskRows = [taskWithFile('t1', { path: '/w/out.md', op: 'write', add: 5, del: 0 })]
     await shelf()
     await act(async () => { await tasksStore.refresh() })
 
-    await act(async () => {
-      (document.querySelector('.desk-dlv-row') as HTMLElement).click()
-    })
-
-    expect(desk.get().panes.map((p) => p.id)).toEqual(['file:/w/out.md'])
+    expect(document.querySelector('.desk-dlv-row')).toBeNull()
+    expect(document.querySelector('.desk-empty b')?.textContent).toBe('gui.ws.dlv_none')
   })
 
-  it('leads a task diff row with the M/+ chip and names the full path, not the basename', async () => {
+  it('leads a task diff row with the M chip and names the full path, not the basename', async () => {
     taskRows = [taskWithFile('t1', { path: '/w/deep/mod.py', op: 'edit', add: 2, del: 1 })]
-    render(<DeskPalette />)
-    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
-    await act(async () => { await tasksStore.refresh() })
+    await diffTab()
 
     const row = document.querySelector('.desk-diff-row') as HTMLElement
     expect(row.querySelector('.chgc')?.textContent).toBe('M')
     expect(row.querySelector('.desk-name')?.textContent).toBe('/w/deep/mod.py')
   })
 
-  /* The prototype's own check (`d.diff.del ? "M" : "+"`): a pure insertion,
-     nothing deleted, reads as an addition rather than a modification even
-     though the file's op is still 'edit'. */
-  it('chips a deletion-free edit with + rather than M', async () => {
+  /* `edit_file` can only touch a file that is already there, so a pure
+     insertion is still a modification -- the prototype's own
+     `d.diff.del ? "M" : "+"` drew a creation for every edit that happened to
+     delete nothing. */
+  it('chips a deletion-free edit with M, not +', async () => {
     taskRows = [taskWithFile('t1', { path: '/w/new.py', op: 'edit', add: 4, del: 0 })]
-    render(<DeskPalette />)
-    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
-    await act(async () => { await tasksStore.refresh() })
+    await diffTab()
 
-    expect(document.querySelector('.desk-diff-row .chgc')?.textContent).toBe('+')
+    expect(document.querySelector('.desk-diff-row .chgc')?.textContent).toBe('M')
+  })
+
+  /* And a whole-file write that replaced lines is a rewrite, not a creation. */
+  it('chips a write that deleted lines with M, not +', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/old.py', op: 'write', add: 4, del: 3 })]
+    await diffTab()
+
+    expect(document.querySelector('.desk-diff-row .chgc')?.textContent).toBe('M')
   })
 
   it('opens a task diff through the tasks source, the way the pane\'s own chip does', async () => {
     taskRows = [taskWithFile('t1', { path: '/w/deep/mod.py', op: 'edit', add: 2, del: 1 })]
-    render(<DeskPalette />)
-    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
-    await act(async () => { await tasksStore.refresh() })
+    await diffTab()
 
     await act(async () => {
       (document.querySelector('.desk-diff-row') as HTMLElement).click()
@@ -708,6 +717,25 @@ describe('a task\'s own files, on the shelf and in the diff tab', () => {
     expect(panes).toHaveLength(1)
     expect(panes[0]?.kind).toBe('diff')
     expect(panes[0]?.id).toBe('diff:task:spawn:t1:n1:/w/deep/mod.py:0')
+  })
+
+  /* The badge reads the same list the tab draws: a task file the reader has
+     not opened is news on the diff tab, and opening it is what retires it. */
+  it('counts a task file in the diff tab\'s bubble, and drops it once opened', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/deep/mod.py', op: 'edit', add: 2, del: 1 })]
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
+    await act(async () => { await tasksStore.refresh() })
+
+    expect(bubble('diff')).toBe('1')
+
+    await act(async () => { desk.set({ tab: 'diff' }) })
+    await act(async () => {
+      (document.querySelector('.desk-diff-row') as HTMLElement).click()
+    })
+    await act(async () => { desk.set({ tab: 'deliverables' }) })
+
+    expect(bubble('diff')).toBeNull()
   })
 })
 
