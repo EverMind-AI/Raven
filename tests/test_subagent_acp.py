@@ -1106,7 +1106,7 @@ async def test_an_acp_test_is_the_agents_own_answer_and_not_its_handshake(tmp_pa
     # the agent rather than its handshake is that only the agent knows this.
     assert "HTTP 401" in result.detail
     # The half that worked is kept behind the verdict, because "it connected and
-    # then said nothing" is a different finding from "it is not installed".
+    # then said nothing" is a different failure from "it is not installed".
     assert "connected to stub-agent" in result.detail
 
 

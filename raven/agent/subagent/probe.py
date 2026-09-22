@@ -576,8 +576,8 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
         return TestResult(cfg.name, source, "acp", False, snapshot.detail, reply, elapsed())
     answered = await ping_agent(cfg)
     # Verdict first on a failure, the handshake after it: "it connected and then
-    # said nothing" is the finding, and the half that succeeded is the context
-    # that separates it from an agent that is not installed.
+    # said nothing" is what went wrong, and the half that succeeded is the
+    # context that separates it from an agent that is not installed.
     detail = snapshot.detail if answered.ok else f"{answered.detail}; {snapshot.detail}"
     return TestResult(cfg.name, source, "acp", answered.ok, detail, reply, elapsed())
 
