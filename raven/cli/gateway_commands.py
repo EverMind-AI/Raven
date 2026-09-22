@@ -761,7 +761,9 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     # once the cache is warm.
                     from raven.rpc import deck_templates
 
-                    deck_templates.warm_covers_in_background()  # pragma: no cover
+                    deck_templates.warm_covers_in_background(  # pragma: no cover
+                        language=config.language
+                    )
                     # One shared loop, two question surfaces. build_rpc_stack
                     # bound the page's broker over the channel broker wired
                     # above (AskUserTool._broker is process-wide, last write

@@ -1944,6 +1944,28 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
     }
 
 
+def _reader_language() -> str:
+    """The language the page is in, which is the language its templates speak.
+
+    One setting, not a parameter on every call: the picker's covers, the pages
+    behind them and the file a pick hands over are the same reader's, and a
+    caller that could disagree with the page about which language that is would
+    be a way to get a Chinese cover over an English gallery.
+    """
+    from raven.config.loader import load_config
+
+    try:
+        return load_config().language
+    except Exception:  # noqa: BLE001 - an unreadable config is the shipped language
+        return deck_templates_source_language()
+
+
+def deck_templates_source_language() -> str:
+    from raven.rpc import deck_templates
+
+    return deck_templates.SOURCE_LANGUAGE
+
+
 async def deck_templates_list(params: dict, *, agent_loop_factory=None) -> dict:
     """The bundled deck templates, with a cover each where this host has drawn one.
 
@@ -1954,7 +1976,9 @@ async def deck_templates_list(params: dict, *, agent_loop_factory=None) -> dict:
     """
     from raven.rpc import deck_templates
 
-    rows, pending = await deck_templates.listing(with_covers=bool(params.get("covers", True)))
+    rows, pending = await deck_templates.listing(
+        with_covers=bool(params.get("covers", True)), language=_reader_language()
+    )
     return {"templates": rows, "available": deck_templates.templates_dir() is not None, "pending": pending}
 
 
@@ -1966,7 +1990,7 @@ async def deck_templates_pages(params: dict, *, agent_loop_factory=None) -> dict
     template = deck_templates.find(name)
     if template is None:
         raise ConfigValidationError(f"no bundled deck template named {name!r}")
-    pages = await deck_templates.pages_for(template)
+    pages = await deck_templates.pages_for(template, _reader_language())
     return {"pages": [deck_templates.data_url(p) for p in pages]}
 
 
@@ -1985,7 +2009,7 @@ async def deck_templates_pick(params: dict, *, agent_loop_factory=None) -> dict:
     if template is None:
         raise ConfigValidationError(f"no bundled deck template named {name!r}")
     try:
-        target = deck_templates.deposit(template, _upload_root() / _UPLOAD_DIR)
+        target = deck_templates.deposit(template, _upload_root() / _UPLOAD_DIR, _reader_language())
     except OSError as e:
         raise ConfigValidationError(f"cannot place the template under uploads: {e}") from None
     return {"path": f"{_UPLOAD_DIR}/{target.name}", "abs_path": str(target), "size": target.stat().st_size}
