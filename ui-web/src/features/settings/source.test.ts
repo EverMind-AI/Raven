@@ -13,6 +13,9 @@ const opened: string[] = []
 const railReloads: number[] = []
 const permWrites: string[] = []
 let stagedPick: string | null = null
+/* The conversation the page sits under, which is what tells the picker's own
+   provider read apart from the settings page's: one carries it, one does not. */
+let sessionId: string | null = null
 const chipWrites: string[] = []
 
 async function load(answers: Record<string, unknown> = {}): Promise<Source> {
@@ -22,6 +25,7 @@ async function load(answers: Record<string, unknown> = {}): Promise<Source> {
   railReloads.length = 0
   permWrites.length = 0
   chipWrites.length = 0
+  sessionId = null
   const mod = await loadPart(() => import('./source'), {
     fakes: {
       'src/state/toast': { show: (text: string) => { toasts.push(text) } },
@@ -30,6 +34,7 @@ async function load(answers: Record<string, unknown> = {}): Promise<Source> {
       'src/state/banner': { draw: () => {} },
       'src/state/perm': { setFromConfig: (v: string) => { permWrites.push(v) } },
       'src/state/session/staging': { staging: () => ({ model: null, tier: null, perm: stagedPick }) },
+      'src/lib/session': { current: () => sessionId },
       'src/features/model/source': { showModel: (m: string) => { chipWrites.push(m) } },
       'src/i18n/t': { t: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key) },
     },
@@ -163,10 +168,28 @@ describe('settings source', () => {
       ['model.set_fields', { slug: 'openrouter', fields: { extra_headers: { 'X-Title': 'raven' } } }],
       ['settings.get', {}],
       ['model.options', {}],
+      ['model.options', {}],
       ['model.add_models', { slug: 'openrouter', models: ['a', 'b'] }],
       ['settings.get', {}],
       ['model.options', {}],
+      ['model.options', {}],
     ])
+  })
+
+  it('a provider write reloads the picker list too, not only the page that ordered it', async () => {
+    /* Two provider lists, one per scope: this page reads the default-scoped
+       rows and the picker reads the session-scoped ones, and only the first was
+       reloaded here. So a model added on this page reached the list this page
+       draws and no further -- not the composer's picker, and not the role slots
+       on this very page, until a reload or a switch of conversation. */
+    const mod = await load({ 'model.add_models': { provider: {} } })
+    sessionId = 's1'
+    await mod.settingsSource.addModels('deepseek', ['deepseek/deepseek-v9-pro'])
+
+    const scopes = seen.filter(([m]) => m === 'model.options').map(([, params]) => params)
+    expect(scopes).toHaveLength(2)
+    expect(scopes).toContainEqual({})
+    expect(scopes).toContainEqual({ session_id: 's1' })
   })
 
   it('inspectSkill and openSkillFile speak skills.manage with the action and the file', async () => {

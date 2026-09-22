@@ -25,6 +25,7 @@ import {
   defaultModel,
   defaultProvider,
   loadDefaultProviders,
+  loadProviders,
   persistModel,
   defaultProviders,
   setDefaultPair,
@@ -196,8 +197,21 @@ async function run<T>(work: Promise<T>): Promise<T> {
    provider write reloads the config too: the display names and the Azure
    fields are read from the provider's own section, not from model.options. */
 const afterExt = async (): Promise<SettingsSnapshot> => { await loadExt(); return settingsSnapshot() }
+/* Both scopes, because a provider write changes what both of them answer. The
+   settings page reads the default-scoped rows and the picker reads the
+   session-scoped ones (features/model/source.ts), and only the first was
+   reloaded here -- so a model added on this page reached the list the page
+   itself draws and no further. The picker kept whatever it had loaded when the
+   conversation was opened, which is why an id added in settings did not appear
+   in the composer's picker, nor in the role slots on this very page, until a
+   reload or a switch of conversation.
+   In parallel, not in sequence: each is a live read of every configured vendor.
+   The session-scoped one is allowed to fail on its own, like the other. */
 const afterProviders = async (): Promise<SettingsSnapshot> => {
-  await loadSettingsWithProviders()
+  await Promise.all([
+    loadSettingsWithProviders(),
+    loadProviders().catch(() => { /* the picker keeps the list it has */ }),
+  ])
   void pushPermMode()
   return settingsSnapshot()
 }
