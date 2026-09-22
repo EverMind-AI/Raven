@@ -14,7 +14,7 @@ import { t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
-import { switchTo } from '../../state/session/registry'
+import { switchTo, watchListedRunning } from '../../state/session/registry'
 import { replace as sessionReplace, rows as sessionRows, sess } from '../../state/session/rows'
 import { show as toast } from '../../state/toast'
 import { busy } from '../composer/turn'
@@ -141,6 +141,10 @@ export async function loadSessions(): Promise<void> {
      through here. At boot the rail is held, so this draw is inert until
      `releaseRail` paints. */
   sessionDraw()
+  /* The boot's own list is the first one that can carry a conversation another
+     client is answering, and nothing else on this page will hear that turn end
+     -- see watchListedRunning. */
+  watchListedRunning()
 }
 
 /* ── the two writes a row makes for itself ───────────────────────────────── */

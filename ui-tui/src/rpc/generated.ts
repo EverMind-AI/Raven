@@ -188,6 +188,10 @@ export interface SessionInitInfo {
    * A turn is in flight on this session right now.
    */
   running?: boolean;
+  /**
+   * How long the turn in flight has been running, in milliseconds, measured on the server; null when nothing is running or the question carries no readable stamp. The elapsed rather than the stamp it was measured from: that stamp is a server wall clock, and a client in another timezone reading it against its own clock gets the offset between the two back as the turn's age.
+   */
+  running_ms?: number | null;
 }
 /**
  * ``info.usage`` — the boot baseline, refreshed by each turn's completion.

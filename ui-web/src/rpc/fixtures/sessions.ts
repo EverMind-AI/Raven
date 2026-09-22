@@ -144,7 +144,7 @@ const info = (title: string): InitInfo => ({
   model: 'claude-fable-5', model_id: 'claude-fable-5', provider: 'anthropic',
   context_window: 200000, lazy: false, skills: {}, tools: {},
   usage: { input: 0, output: 0, cost_usd: 0, calls: 0, context_max: 200000, context_used: 0, context_percent: 0 },
-  version: '0.1.0', cwd: '~/work/raven', mcp_servers: [], title, running: false,
+  version: '0.1.0', cwd: '~/work/raven', mcp_servers: [], title, running: false, running_ms: null,
 })
 
 export interface SessionsFixture {

@@ -21,7 +21,7 @@ import { plainTitle } from '../../features/rail/title'
 import { leaveDeletedSession } from '../../features/rail/wire'
 import { loadPermMode } from '../../features/settings/source'
 import { killStatus, status as transcriptStatus, stopStream } from '../../features/transcript/mount'
-import { msOfIso, renderHistory } from '../../features/transcript/source'
+import { renderHistory } from '../../features/transcript/source'
 import { wsOnHistory } from '../../features/workspace/record'
 import { wsSetRoot } from '../../features/workspace/source'
 import { loadDeliveries } from '../../features/workspace/store'
@@ -168,6 +168,27 @@ export function forget(key: string): void {
   gateway().call('turn.unsubscribe', { subscription_id: subId }).catch(() => {})
 }
 
+/* ---- the badge on a row this page is not listening to ------------------ */
+
+/* A `run` badge on a row this page holds no subscription for came off
+   `session.list`, and only another `session.list` will ever take it off: that
+   turn's frames go to whoever started it -- a second tab, a cron run, a turn
+   that began before this page loaded -- and both callers of `refreshList` are
+   about a conversation this page IS subscribed to. So while such a row is on
+   the rail, ask again on a clock; the poll stops itself the moment none is
+   left, and a list answer that brings one back arms it again. */
+const LISTED_RUN_POLL_MS = 5000
+let listedRunTimer: ReturnType<typeof setTimeout> | null = null
+
+const anyListedRunning = (): boolean =>
+  sessionRows().some((row: SessRow) => row.status === 'run' && !get(row.id)?.subscriptionId)
+
+/** Keep asking the server while a row says somebody else is answering. */
+export function watchListedRunning(): void {
+  if (listedRunTimer || !anyListedRunning()) return
+  listedRunTimer = setTimeout(() => { listedRunTimer = null; void refreshList() }, LISTED_RUN_POLL_MS)
+}
+
 export async function refreshList(): Promise<void> {
   try {
     const r = await gateway().call('session.list', { channels: SESS_CHANNELS })
@@ -181,6 +202,7 @@ export async function refreshList(): Promise<void> {
     if (currentMissing) await leaveDeletedSession(sessionCurrent() as string)
     else sessionDraw()
   } catch { /* keep the stale list */ }
+  watchListedRunning()
 }
 
 /* ---- the switch -------------------------------------------------------- */
@@ -236,7 +258,16 @@ export function switchToDraft(): void {
   pitch(); sessionDraw(); $('#ta')!.focus()
 }
 
-export async function switchTo(s: SessRow): Promise<void> {
+/* `turnOver` is the re-open below telling the second pass what only the first
+   one can know: the subscription this page already holds has said the turn is
+   finished, and nothing on this side can learn that again -- `subscribe`
+   answers null for a stream it is reusing, and `session.resume` goes on
+   reporting `running` for as long as the gateway takes to unwind the cancelled
+   turn (raven/rpc/methods/turn.py emits the error frame first, and the active
+   slot clears at the worker's unwind). Without it the second pass arms the
+   machine off a `running` that is already false in fact, and the stop button
+   stays up over a finished answer. */
+export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
   endRename()
   const gen = nextToken()
   park()
@@ -322,13 +353,18 @@ export async function switchTo(s: SessRow): Promise<void> {
        being refused as -32003, and the deltas still to come open a step of
        their own. What already streamed is not recoverable and is not pretended
        at -- the reader picks the answer up from where it has got to. */
-    if (r.info && r.info.running) {
-      /* Anchored to the question's own stamp, before anything paints the live
-         row: left to default to `Date.now()`, the clock on it started again
-         from zero at every reload of the same turn. */
-      const asked = (r.messages || []).filter((m) => m && m.role === 'user').pop()
-      const askedAt = asked ? msOfIso(asked.timestamp) : 0
-      if (askedAt) { setLiveAnchor(askedAt); rt.startedAt = askedAt }
+    if (r.info && r.info.running && !turnOver) {
+      /* Anchored before anything paints the live row: left to default to
+         `Date.now()`, the clock on it started again from zero at every reload
+         of the same turn. How long the turn has been running is measured on the
+         server and the age is what travels, so the browser never reads a server
+         wall clock against its own -- in another timezone that is the offset
+         between the two, or a turn that started in the future. */
+      const ran = r.info.running_ms
+      if (typeof ran === 'number' && Number.isFinite(ran)) {
+        const askedAt = Date.now() - ran
+        setLiveAnchor(askedAt); rt.startedAt = askedAt
+      }
       rt.dispatch({ type: 'stream', cancellable: true }); goState()
     }
     /* Every graph this conversation started, oldest first, as the gateway
@@ -363,9 +399,18 @@ export async function switchTo(s: SessRow): Promise<void> {
        conversation again rather than pushing the machine back to idle -- the
        transcript painted above is missing the answer for the same reason, and a
        re-open reads both back off disk. The second pass cannot come back here:
-       resume now reports the turn as finished. */
+       it is told the turn is over, so it never arms the machine this tests. */
     if (r.info && r.info.running && running === false && turn.busy()) {
-      await switchTo(s)
+      /* Disarmed here, before the re-open rather than by it: the second pass is
+         this same switch, and `park` keeps a turn that is still busy -- it
+         would file the armed machine on the runtime, leave `rt.events` truthy,
+         and the kept-turn branch would hand the streaming phase straight back
+         instead of reading the conversation off disk. Idle makes `park` return
+         at its first line; the anchor goes with it because it is island state
+         that outlives an idle machine on every paint this path does not make. */
+      rt.dispatch({ type: 'idle' })
+      setLiveAnchor(0)
+      await switchTo(s, true)
       return
     }
     /* Last, and only on this path. The reader may be arriving here after a
@@ -470,6 +515,7 @@ export { holdsHost } from './hosts'
    are the module's. The runtimes themselves are dropped with them: a case's
    conversation must not be the next case's active one. */
 export function _resetForTests(): void {
+  if (listedRunTimer) { clearTimeout(listedRunTimer); listedRunTimer = null }
   draftRt = null
   activeRt = null
   switches = 0

@@ -738,7 +738,7 @@ export function spawnState(c: CallData): 'ok' | 'bad' | 'run' {
   return c.done ? (c.ok ? 'ok' : 'bad') : 'run'
 }
 
-export const msOfIso = (raw: unknown): number => {
+const msOfIso = (raw: unknown): number => {
   const ms = Date.parse(String(raw || ''))
   return Number.isFinite(ms) ? ms : 0
 }

@@ -8,7 +8,7 @@
  * them wins.
  */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { fakeGateway, loadPart } from '../../../scripts/module-harness.mjs'
 /* The real reducer, so a case can say "busy and stoppable" rather than naming
@@ -24,18 +24,29 @@ type Wiring = typeof import('../../app/install')
 interface Row { id: string; title?: string; status?: string | null }
 interface Staged { model: unknown; tier: string | null; perm: string | null }
 
+interface Listed { id: string; title?: string; message_count?: number; running?: boolean }
+
 async function harness(
-  { rows, deferSubscribe, subscribeRunning }: { rows?: Row[]; deferSubscribe?: boolean; subscribeRunning?: boolean } = {},
+  { rows, deferSubscribe, subscribeRunning, realResidency, listed }: {
+    rows?: Row[]; deferSubscribe?: boolean; subscribeRunning?: boolean
+    realResidency?: boolean; listed?: () => Listed[]
+  } = {},
 ) {
   const calls: unknown[][] = []
   const IDLE: TurnSnapshot = { phase: 'idle', cancellable: false, resume: null }
-  /* Where the island's turn machine has been driven to, read off the events the
-     switch dispatched rather than off the machine itself: the fake below is what
-     stands in for it here, and the switch asks it whether the turn is still
-     busy. */
+  /* Where the island's turn machine has been driven to, read off the traffic
+     the switch put through it rather than off the machine itself: the fake
+     below is what stands in for it here, and the switch asks it whether the
+     turn is still busy. A restore replaces the state outright, which is how a
+     conversation coming back off a park gets its phase again -- so it has to
+     count here too, or a test cannot tell an idle machine from one holding a
+     turn it was handed back. */
   const machine = (): TurnSnapshot => calls
-    .filter((c) => c[0] === 'turnDispatch')
-    .reduce((state, c) => reduce(state, c[1] as TurnEvent), IDLE)
+    .filter((c) => c[0] === 'turnDispatch' || c[0] === 'turnRestore')
+    .reduce(
+      (state, c) => (c[0] === 'turnRestore' ? c[1] as TurnSnapshot : reduce(state, c[1] as TurnEvent)),
+      IDLE,
+    )
   document.body.innerHTML = '<h1 id="title"></h1><div id="stage"></div><div id="flash"></div>'
   const boxes: Record<string, HTMLElement | null | undefined> = {}
   for (const id of ['#title', '#stage', '#flash']) boxes[id] = document.getElementById(id.slice(1))
@@ -88,7 +99,9 @@ async function harness(
       'src/state/session/rows': {
         sess: (id: string) => (rows || []).find((r) => r.id === id),
         open: (s: Row) => api.switchTo!(s as SessRow),
-        replace: () => {},
+        /* In place, so a case that drives a list answer reads the rows it
+           produced back through the same array `sess` and `rows` answer from. */
+        replace: (next: Row[]) => { if (rows) rows.splice(0, rows.length, ...next) },
         rows: () => rows || [],
       },
       'src/features/composer/mount': {
@@ -103,8 +116,9 @@ async function harness(
         setLiveAnchor: (ms: number) => { anchor.ms = ms; calls.push(['setLiveAnchor', ms]) },
         turn: {
           dispatch: (event: TurnEvent) => calls.push(['turnDispatch', event]),
-          busy: () => machine().phase !== 'idle', snapshot: () => ({}),
-          restore: () => {}, reduce: (phase: unknown) => phase,
+          busy: () => machine().phase !== 'idle', snapshot: () => machine(),
+          restore: (phase: TurnSnapshot) => calls.push(['turnRestore', phase]),
+          reduce: (phase: unknown) => phase,
         },
       },
       'src/i18n/t': { t: (key: string) => key },
@@ -118,12 +132,20 @@ async function harness(
       'src/state/perm': { setFromConfig: () => {} },
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/transcript/source': {
-        renderHistory: (messages: Array<{ text: string }>) => { state.fresh = null; calls.push(['renderHistory', messages[0]]) },
+        renderHistory: (messages: Array<{ text: string }>) => {
+          state.fresh = null
+          calls.push(['renderHistory', messages[0], messages])
+        },
       },
-      'src/state/session/residency': {
-        park: () => calls.push(['parkTurn']),
-        resume: () => calls.push(['restoreTurn']),
-      },
+      /* The real one where a case is about what leaving does to the runtime:
+         the stubs below record that the switch called them and nothing else,
+         which is exactly the half of the switch a re-open has to survive. */
+      ...(realResidency ? {} : {
+        'src/state/session/residency': {
+          park: () => calls.push(['parkTurn']),
+          resume: () => calls.push(['restoreTurn']),
+        },
+      }),
       'src/features/workspace/source': { wsSetRoot: (root: string) => calls.push(['wsSetRoot', root]) },
       /* The streaming buffer the turn state resets through. */
       'src/features/transcript/mount': {
@@ -146,6 +168,7 @@ async function harness(
     if (method === 'session.resume') {
       return new Promise((res, rej) => pending.push({ id: params.session_id!, res, rej }))
     }
+    if (method === 'session.list') return Promise.resolve({ sessions: listed ? listed() : [] })
     if (method === 'turn.subscribe') {
       const answer = { subscription_id: `sub:${params.session_key}`, running: !!subscribeRunning }
       if (!deferSubscribe) return Promise.resolve(answer)
@@ -190,6 +213,7 @@ async function harness(
     liveAnchor: () => anchor.ms,
     startedAt: (key: string) => registry.get(key)?.startedAt,
     subscribe: registry.subscribe,
+    refreshList: registry.refreshList,
     startDraft: registry.switchToDraft,
     openLiveSession: (row: Row) => registry.switchTo(row as SessRow),
     /* The handler app/connection.ts runs once the transport says the socket
@@ -243,6 +267,13 @@ async function harness(
 const painted = (calls: unknown[][]) =>
   calls.filter((c) => c[0] === 'renderHistory').map((c) => (c[1] as { text: string } | undefined)?.text)
 
+/** Each transcript the switch painted, whole: what a re-open read back off disk. */
+const bundles = (calls: unknown[][]) =>
+  calls.filter((c) => c[0] === 'renderHistory')
+    .map((c) => (c[2] as Array<{ text: string }>).map((m) => m.text))
+
+afterEach(() => { vi.useRealTimers() })
+
 describe('the live session switch', () => {
   it('paints one conversation when one is opened', async () => {
     const h = await harness({ rows: [{ id: 'a' }] })
@@ -277,34 +308,42 @@ describe('the live session switch', () => {
      and defaults that anchor to now. A reload of a running turn is the one
      opening that has no first paint to be anchored by, so the turn read "0s"
      again at every reload -- of a turn the reader had been watching for ten
-     minutes. The question is the turn's start, and this branch is where its
-     stamp arrives. */
-  it('anchors a resumed turn to the question that started it', async () => {
+     minutes. The bundle carries the age the server measured, so the stamp on
+     the question below is the one thing this branch must NOT read: it is a
+     server wall clock with no offset on it, and parsing it here in the
+     reader's zone dates the turn by the distance between the two.
+     Only `Date` is faked -- the harness settles on a real timer. */
+  it('anchors a resumed turn to the elapsed the server measured', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_700_000_600_000)
     const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: true })
 
     h.openLiveSession({ id: 'a', title: 'Alpha' })
     await h.settle('a', {
       session_id: 'a',
       messages: [
-        { role: 'user', text: 'first', timestamp: '2026-09-22T09:00:00Z' },
+        { role: 'user', text: 'first', timestamp: '2026-09-22T09:00:00' },
         { role: 'assistant', text: 'answered' },
-        { role: 'user', text: 'running', timestamp: '2026-09-22T10:00:00Z' },
+        { role: 'user', text: 'running', timestamp: '2026-09-22T10:00:00' },
       ],
-      info: { running: true },
+      info: { running: true, running_ms: 600_000 },
     })
 
-    const askedAt = Date.parse('2026-09-22T10:00:00Z')
-    expect(h.liveAnchor()).toBe(askedAt)
+    expect(h.liveAnchor()).toBe(1_700_000_000_000)
     /* The fold header's own elapsed, which reads the runtime rather than the
        row: the two must not disagree about when the same turn began. */
-    expect(h.startedAt('a')).toBe(askedAt)
+    expect(h.startedAt('a')).toBe(1_700_000_000_000)
   })
 
-  it('leaves the clock where it was when the question carries no stamp', async () => {
+  it('leaves the clock where it was when the bundle carries no elapsed', async () => {
     const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: true })
 
     h.openLiveSession({ id: 'a', title: 'Alpha' })
-    await h.settle('a', { session_id: 'a', messages: [{ role: 'user', text: 'running' }], info: { running: true } })
+    await h.settle('a', {
+      session_id: 'a',
+      messages: [{ role: 'user', text: 'running', timestamp: '2026-09-22T10:00:00' }],
+      info: { running: true },
+    })
 
     expect(h.calls.filter((c) => c[0] === 'setLiveAnchor')).toEqual([])
     expect(h.liveAnchor()).toBe(0)
@@ -329,6 +368,48 @@ describe('the live session switch', () => {
     expect(h.asked('session.resume')).toHaveLength(2)
     expect(painted(h.calls)).toEqual(['a', 'a+answer'])
     expect(h.turnState().phase).toBe('idle')
+  })
+
+  /* The same disagreement, against the residency module the page actually runs.
+     The case above passes over a `park` that only records the call, and what
+     breaks the re-open is what the real one DOES on the way out: with the
+     machine still armed it files the turn on the runtime and leaves
+     `rt.events` an empty array, which is truthy -- so the second pass skips
+     the turn-state reset and takes the kept-turn branch, which hands the
+     streaming phase back and never reads the conversation off disk. That is
+     the state the re-open exists to escape, and on the page it is a stop button
+     over a finished answer for the life of the tab. */
+  it('reads the conversation back off disk when the real residency runs the re-open', async () => {
+    const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: false, realResidency: true })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', {
+      session_id: 'a',
+      messages: [{ text: 'run the long thing' }],
+      info: { running: true, running_ms: 40_000 },
+    })
+    expect(h.inFlight()).toEqual(['a'])
+    /* What the stop left on disk while the two round trips were in the air --
+       and `running` still true on the way back, because the gateway drops the
+       replay buffer at the error frame and clears its active-turn slot only
+       when the worker has unwound. The subscription already said otherwise,
+       and that is the answer that cannot be stale. */
+    await h.settle('a', {
+      session_id: 'a',
+      messages: [
+        { text: 'run the long thing' },
+        { text: 'I had started to' },
+        { text: 'stopped by the user, what was said is kept' },
+      ],
+      info: { running: true },
+    })
+
+    expect(h.asked('session.resume')).toHaveLength(2)
+    expect(bundles(h.calls)[1]).toEqual([
+      'run the long thing', 'I had started to', 'stopped by the user, what was said is kept',
+    ])
+    expect(h.turnState()).toMatchObject({ phase: 'idle', cancellable: false })
+    expect(h.liveAnchor()).toBe(0)
   })
 
   it('leaves a conversation alone when only the subscription reports the turn', async () => {
@@ -632,6 +713,38 @@ describe('the live session switch', () => {
 
     /* Keyed to the opened id, then to no id at all: a draft runs the default. */
     expect(h.asked('config.get').map((p) => (p as { session_id?: string }).session_id ?? null)).toEqual(['a', null])
+  })
+
+  /* A `run` badge that came off `session.list`, on a conversation this page
+     holds no subscription for: a second tab, a cron run, a turn that started
+     before the reload. No frame of it reaches this page, and the two callers of
+     `refreshList` are both about a conversation this page IS subscribed to --
+     so the badge sat there for the life of the tab over a conversation that had
+     finished answering minutes earlier. */
+  it('keeps asking for the list while a conversation nobody here subscribes to is answering', async () => {
+    const server = { running: true }
+    const h = await harness({
+      rows: [],
+      listed: () => [{ id: 'b', title: 'Bravo', message_count: 1, running: server.running }],
+    })
+    vi.useFakeTimers()
+
+    await h.refreshList()
+    expect(h.env.sess('b')!.status).toBe('run')
+    expect(h.asked('session.list')).toHaveLength(1)
+
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(h.asked('session.list')).toHaveLength(2)
+
+    server.running = false
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(h.asked('session.list')).toHaveLength(3)
+    expect(h.env.sess('b')!.status).toBeNull()
+
+    /* And then it stops: nothing is answering, so there is nothing to wait for
+       and no reason to ask the gateway for the rest of the tab's life. */
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(h.asked('session.list')).toHaveLength(3)
   })
 
   it('refreshes the model for the conversation being opened, not the one left behind', async () => {

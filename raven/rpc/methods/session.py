@@ -213,7 +213,10 @@ async def _default_session_info(
         # other way to learn it: the turn's own events went to the socket this
         # page did not have. Without it the reader gets an idle composer over a
         # conversation that is answering, and a send that is refused as -32003.
-        "running": bool(session_key) and turn_module.is_session_busy(session_key),
+        # Answering rather than busy: a cron or channel turn never passed
+        # through turn.send's bookkeeping, and it is as much in flight as a
+        # typed one.
+        "running": bool(session_key) and turn_module.is_session_answering(session_key),
     }
 
     # Nudge the status bar to run `raven upgrade` when the cached latest release
@@ -489,6 +492,8 @@ async def session_resume(
             raw = mgr.peek(session_key)
             if raw is not None:
                 _fill_resumed_context(info, raw)
+                if info["running"]:
+                    info["running_ms"] = _running_ms(raw.messages)
                 # The banner names what is being resumed. Read from the stored
                 # metadata rather than derived here: whoever named this session
                 # -- a person, `save`, or the naming call -- put the name there.
@@ -594,11 +599,34 @@ def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:
         "updated_at": _ts(info.get("last_message_at")) or _ts(info.get("updated_at")) or started_at,
         "title": title,
         "pinned": bool(meta.get("pinned")),
-        "running": turn_module.is_session_busy(key),
+        # Same question as the resume bundle's, same answer: whoever started it.
+        "running": turn_module.is_session_answering(key),
         # The override session.create stored, and nothing else: a session on the
         # policy default answers null, which is how the rail tells the two apart.
         "workdir": str(meta["workdir"]) if meta.get("workdir") else None,
     }
+
+
+def _running_ms(messages: list[dict[str, Any]]) -> int | None:
+    """How long the turn in flight has been running, measured here.
+
+    Measured rather than handed over as the stamp it starts from: that stamp is
+    written by the loop off the gateway's wall clock, and a client that read it
+    against its own would get the offset between the two zones back as the
+    turn's age. Comparing like with like on this side -- naive against
+    ``datetime.now()``, aware against ``datetime.now(tz)`` -- makes the zone
+    cancel, whatever zone the reader is in.
+    """
+    asked = next((m for m in reversed(messages) if isinstance(m, dict) and m.get("role") == "user"), None)
+    stamp = asked.get("timestamp") if asked else None
+    if not isinstance(stamp, str) or not stamp:
+        return None
+    try:
+        started = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    now = datetime.now(started.tzinfo) if started.tzinfo is not None else datetime.now()
+    return max(0, int((now - started).total_seconds() * 1000))
 
 
 def _as_local_datetime(value: object) -> datetime | None:

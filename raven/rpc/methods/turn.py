@@ -129,6 +129,34 @@ def is_session_busy(session_key: str) -> bool:
     return any(session_of(lane) == session_key for lane in _active_turns)
 
 
+# The spine's scheduler, bound by ``register_turn_methods`` from the same
+# build_rpc_spine bundle the handlers close over. ``_active_turns`` above is
+# this surface's own bookkeeping and knows only the turns ``turn.send``
+# submitted; the scheduler owns every lane, whoever filed the work onto it.
+_scheduler: Scheduler | None = None
+
+
+def bind_scheduler(scheduler: Scheduler | None) -> None:
+    """Hand the spine's scheduler to the module-level readers below."""
+    global _scheduler
+    _scheduler = scheduler
+
+
+def is_session_answering(session_key: str) -> bool:
+    """True if a turn is in flight on this session, whoever started it.
+
+    ``is_session_busy`` reads ``_active_turns``, which only ``turn.send``
+    writes, so a cron run, a channel turn or anything else the runtime submits
+    reads as idle there -- and "is this session answering right now", which is
+    what ``session.list`` and ``session.resume`` report to a page, is a fact
+    about the conversation rather than about which surface filed the work. The
+    scheduler's lane is that fact.
+    """
+    if is_session_busy(session_key):
+        return True
+    return _scheduler is not None and _lane_in_flight(_scheduler, session_key)
+
+
 def clear_active(session_key: str) -> None:
     """Drop a session's active-turn slot. Wired into build_rpc_spine as ``on_turn_end``
     so the slot clears at the end of the turn that owns it (alongside turn_ids)."""
@@ -766,6 +794,8 @@ def register_turn_methods(
     dropped. Defaults to ``"tui"``.
     """
 
+    bind_scheduler(scheduler)
+
     async def _send(params: dict[str, Any]) -> dict[str, Any]:
         return await turn_send(
             params,
@@ -794,6 +824,7 @@ def register_turn_methods(
 
 
 __all__ = [
+    "bind_scheduler",
     "register_turn_methods",
     "register_session_interrupt_method",
     "turn_send",
