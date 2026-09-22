@@ -84,7 +84,6 @@ describe('the page root', () => {
     expect(child('veil')).toBe('sheet')
     expect(document.getElementById('toasts')!.children).toHaveLength(0)
     expect(document.getElementById('menu')!.children).toHaveLength(0)
-    expect(document.getElementById('jobVeil')!.children).toHaveLength(0)
   })
 
   it('renders every id the chrome and the islands reach for, once each', () => {
@@ -93,7 +92,7 @@ describe('the page root', () => {
       'cfTitle', 'cfBody', 'cfNo', 'cfYes',
       'dTitle', 'dClose', 'dBody',
       'setModal', 'snav', 'snavList', 'setTitle', 'setSub', 'setClose', 'spanels',
-      'railShow', 'split', 'jobVeil', 'menu', 'toasts',
+      'railShow', 'split', 'menu', 'toasts',
       'extAgentsPage', 'extAgentsBody',
       'connectionsBody', 'memoryBody', 'cronBody',
     ]) {

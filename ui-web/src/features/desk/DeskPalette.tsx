@@ -58,53 +58,19 @@ function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab
   )
 }
 
-/* One nothing for all three tabs: the tab's own icon, what is not here, and
-   where it would come from. They were two designs -- a line of grey text on
-   Diff, an illustrated block on the shelf -- and an empty tab is the state a
-   reader sees most often, so the two read as two different kinds of nothing. */
-function DeskEmpty({ kind, title, hint, sends }: {
-  kind: DeskTab
-  title: string
-  /* Optional: the prototype's own empty state is icon + one bold line and
-     nothing else -- state the fact, don't sell the reader on where to go
-     next. A hint is for a tab whose nothing needs a second sentence to be
-     legible against its sibling tab's own nothing (deliverables and diff,
-     which count against each other). */
-  hint?: string
-  sends?: { label: string; to: DeskTab }
-}): JSX.Element {
+/* One nothing for all three tabs: the tab's own icon and one line of fact.
+   Nothing else -- an empty tab is there so a reader can see at a glance that
+   there is nothing here, and a second sentence telling them where things come
+   from, or a link to the other tab, makes three tabs' nothing read as three
+   different kinds of nothing. The prototype's own is icon + one bold line. */
+function DeskEmpty({ kind, title }: { kind: DeskTab; title: string }): JSX.Element {
   return (
     <div className="desk-empty">
       <DeskIcon kind={kind} />
       <b>{title}</b>
-      {hint ? <span>{hint}</span> : null}
-      {sends ? (
-        <button type="button" className="desk-empty-to" onClick={() => desk.set({ tab: sends.to })}>
-          {sends.label}
-        </button>
-      ) : null}
     </div>
   )
 }
-
-/* `sends` is the empty state answering the question the reader actually has.
- *
- * `changed` and `delivered` are two different facts about a turn, and only the
- * SELECTED tab shows its label (`.desk-tabs button .lb { display: none }`): the
- * other two are 34px icons. So a bubble reading 1 sits two squares from
- * "Nothing delivered yet" with nothing on screen to say it counts something
- * else, and the reader is left asking whether anything was delivered or not.
- *
- * Naming the other fact and offering to go there is what makes the pair
- * legible: the reader is told what is not here, what IS here, and that the two
- * are not the same thing. Nothing is renamed -- the distinction is real, and
- * collapsing it would lose the only thing that makes the shelf worth having.
- *
- * One of a singular/plural pair, chosen the way `phraseOf` chooses: the plural
- * lives under the same key with `n.` inserted, which is this catalogue's own
- * convention for it (`gui.act.n.*`). */
-const counted = (key: string, n: number): string =>
-  (n === 1 ? t(key) : t(key.replace('gui.ws.', 'gui.ws.n.'), { n: String(n) }))
 
 /* What a task's nodes wrote or changed, across every task -- beside the
    session's own rows rather than instead of them: a sub-agent's writes never
@@ -124,17 +90,8 @@ function DiffNav(): JSX.Element {
   const changes = workspace.shared().changes
   const taskDiffs = taskFileEntries('edit')
   if (!changes.length && !taskDiffs.length) {
-    /* The shelf's own count, so an empty Diff can say what the other bubble is
-       counting. The palette's root already subscribes to the deliveries store,
-       which is why reading it here needs nothing of its own. */
-    const handed = deliveries.list().length
     return (
-      <DeskEmpty
-        kind="diff"
-        title={t('gui.ws.no_changes')}
-        hint={handed ? counted('gui.ws.no_changes_dlv', handed) : t('gui.ws.no_changes_sub')}
-        sends={handed ? { label: t('gui.ws.see_delivered'), to: 'deliverables' } : undefined}
-      />
+      <DeskEmpty kind="diff" title={t('gui.ws.no_changes')} />
     )
   }
   return (
@@ -219,17 +176,8 @@ function DeliverablesNav(): JSX.Element {
   const rows = deliveries.list()
   const taskFiles = taskFileEntries('write')
   if (!rows.length && !taskFiles.length) {
-    /* The changed-file count is the fact the reader is holding against this
-       one. Not the unseen count the bubble shows: what they will find on the
-       other tab is everything there, read or not. */
-    const touched = workspace.shared().changes.length
     return (
-      <DeskEmpty
-        kind="deliverables"
-        title={t('gui.ws.dlv_none')}
-        hint={touched ? counted('gui.ws.dlv_none_kept', touched) : t('gui.ws.dlv_none_sub')}
-        sends={touched ? { label: t('gui.ws.see_changes'), to: 'diff' } : undefined}
-      />
+      <DeskEmpty kind="deliverables" title={t('gui.ws.dlv_none')} />
     )
   }
   const now = workspace.currentTurn()

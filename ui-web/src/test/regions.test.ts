@@ -45,7 +45,6 @@ const REGIONS = [
   ...PAGES.map((page) => page.id),
   'detail',
   'setVeil',
-  'jobVeil',
   'veil',
   'menu',
   'toasts',

@@ -119,6 +119,9 @@ export interface SettingsState {
   provAdd: string | null
   sheet: Sheet | null
   hdrAdd: string | null
+  /* Which provider has its advanced fold open. One at a time, and closed by
+     default: the overrides behind it are not what a reader opened the page for. */
+  adv: string | null
   ovlAdd: string | null
   chatCfg: boolean
   oauth: Oauth | null
@@ -151,6 +154,7 @@ const initial = (): SettingsState => ({
   provAdd: null,
   sheet: null,
   hdrAdd: null,
+  adv: null,
   ovlAdd: null,
   chatCfg: false,
   oauth: null,
@@ -284,7 +288,7 @@ export function setTab(id: string): void {
   if (moved) settingsDialog.leaveSection()
   settingsTab.id = id
   set({
-    tab: curTab(), err: '', provider: null, provQ: '', provFilt: 'all', provAdd: null, sheet: null, hdrAdd: null, ovlAdd: null,
+    tab: curTab(), err: '', provider: null, provQ: '', provFilt: 'all', provAdd: null, sheet: null, hdrAdd: null, ovlAdd: null, adv: null,
     skill: null, detail: null, toolOpen: null, plugOpen: null,
   })
   if (moved) settingsDialog.enterSection(id)

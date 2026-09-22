@@ -222,7 +222,14 @@ function ContextMenu(): JSX.Element | null {
       item === '-' ? (
         <hr key={i} />
       ) : (
-        <button key={i} className={item.bad ? 'bad' : undefined} onClick={() => menu.pick(item)}>{item.label}</button>
+        <button
+          key={i}
+          className={item.bad ? 'bad' : undefined}
+          {...(item.on === undefined ? {} : { role: 'menuitemradio', 'aria-checked': item.on })}
+          onClick={() => menu.pick(item)}
+        >
+          {item.label}
+        </button>
       )
     ),
     s.host
@@ -338,15 +345,6 @@ export function App(): JSX.Element {
       {PAGES.map((page) => <ModulePage key={page.id} page={page} />)}
       <DetailPanel />
       <SettingsModal />
-      {/* The new-job sheet renders here from the cron island
-          (src/features/cron/CronPage.tsx); only the veil is this file's.
-
-          After the settings dialog, because the schedules section raises it
-          from inside that dialog: the two veils share a `--z` step, so which
-          one covers the other is the order they sit in here and nothing else
-          (state/portals.ts). The confirm dialog below stays last, so a delete
-          asked from this sheet stands over it in turn. */}
-      <div className="veil" id="jobVeil" data-open="false" />
       <ConfirmSheet />
       <div className="menu" id="menu" data-open="false" role="menu" />
       <div className="toasts" id="toasts" aria-live="polite" />

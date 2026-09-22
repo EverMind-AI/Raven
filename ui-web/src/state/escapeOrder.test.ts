@@ -46,7 +46,6 @@ const LAYER_IDS = [
   '.lightbox',
   '#veil',
   '#detail',
-  '#jobVeil',
   '#extAgentsPage',
   'setIsOpen()',
   'desk.escapeOpen()',
@@ -66,7 +65,6 @@ const PAGE = [
   '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>',
   '<div class="dock-in"><textarea id="ta"></textarea></div></div></div>',
   '<section class="page" id="extAgentsPage" data-open="false"></section>',
-  '<div class="veil" id="jobVeil" data-open="false"><button id="jobNo"></button></div>',
   '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>',
   '<div class="veil setveil" id="setVeil" data-open="false"><div id="setModal"></div></div>',
   '<div class="veil" id="veil" data-open="false"><button id="cfNo"></button></div>',
@@ -105,7 +103,6 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
   },
   '#veil': { up: flag('veil'), taken: () => cancelled.includes('cfNo') },
   '#detail': { up: flag('detail'), taken: lowered('detail') },
-  '#jobVeil': { up: flag('jobVeil'), taken: () => cancelled.includes('jobNo') },
   '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
   'setIsOpen()': { up: () => settingsDialog.open(), taken: () => !settingsDialog.isOpen() },
   /* Its four-rung retreat (fullscreen -> node -> pane -> collapse) is
@@ -131,7 +128,6 @@ beforeEach(() => {
   document.body.innerHTML = PAGE
   cancelled = []
   document.getElementById('cfNo')!.onclick = () => { cancelled.push('cfNo') }
-  document.getElementById('jobNo')!.onclick = () => { cancelled.push('jobNo') }
   for (const spy of Object.values(spies)) spy.mockClear()
   /* Each layer's own close, stood in for one export at a time: what is under
      test is which one the key reaches, not what any of them does. */
@@ -195,8 +191,8 @@ describe('the Escape priority order', () => {
   const pairs = LAYER_IDS.flatMap((first, i) =>
     LAYER_IDS.slice(i + 1).map((second) => ({ first, second })))
 
-  it('has twenty-eight pairs to answer for', () => {
-    expect(pairs).toHaveLength(28)
+  it('has twenty-one pairs to answer for', () => {
+    expect(pairs).toHaveLength(21)
   })
 
   it.each(pairs)('takes back $first and leaves $second alone', ({ first, second }) => {

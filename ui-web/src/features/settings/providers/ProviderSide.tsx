@@ -14,6 +14,7 @@
  */
 import { ProviderIcon } from '../../../components/ProviderMark'
 import { t } from '../../../i18n/t'
+import { show as menuAt } from '../../../state/menu'
 import * as store from '../store'
 import { groupOf } from './Providers'
 
@@ -60,16 +61,27 @@ export function ProviderSide(): JSX.Element {
           spellCheck={false}
           onChange={(e) => store.set({ provQ: e.currentTarget.value })}
         />
-        {/* A select, not a menu of our own: it is a list of exclusive choices,
-            which is what the element is for, and it arrives keyboard-reachable
-            and screen-reader-labelled without a line of our code. */}
-        <select
-          value={s.provFilt}
+        {/* One square beside the search box, not a control as wide as it: six
+            choices are worth one funnel, and a select spelling out "all
+            providers" took half the column to say the default. The page's own
+            menu draws them as a radio group (state/menu.ts), so they are still
+            keyboard-reachable and still say which one is in force. */}
+        <button
+          type="button"
+          className="settings-iconbtn settings-tp-filt"
           aria-label={t('gui.model.prov_filter_tip')}
-          onChange={(e) => store.set({ provFilt: e.currentTarget.value as ProvFilter })}
+          aria-expanded={false}
+          onClick={(e) => {
+            const b = e.currentTarget.getBoundingClientRect()
+            menuAt(b.left, b.bottom + 6, FILTERS.map(([id, key]) => ({
+              label: t(key),
+              on: s.provFilt === id,
+              fn: () => store.set({ provFilt: id }),
+            })))
+          }}
         >
-          {FILTERS.map(([id, key]) => <option key={id} value={id}>{t(key)}</option>)}
-        </select>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4-2v-4z" /></svg>
+        </button>
       </div>
       {rows.length ? (
         <div className="settings-tp-list">

@@ -58,7 +58,6 @@ function install(rows: CronJob[], over: Partial<CronSource> = {}) {
   setSources({ cron: source })
   document.body.innerHTML =
     '<div id="cronBody"></div>' +
-    '<div class="veil" id="jobVeil" data-open="false"></div>' +
     '<div id="menu" data-open="false"></div>'
   return { source, calls }
 }
@@ -86,19 +85,6 @@ const rowNamed = (name: string): HTMLElement =>
 const listNames = (): Array<string | null> =>
   [...side().querySelectorAll('.two-pane-row .nm')].map((b) => b.textContent)
 
-/* The overflow menu of whichever host drew it, through the shared #menu the page
-   keeps -- the same host production uses. */
-async function pickMenu(open: HTMLElement, label: string): Promise<void> {
-  await act(async () => {
-    open.click()
-  })
-  const item = [...document.querySelectorAll<HTMLElement>('#menu button')].find((b) => b.textContent === label)
-  expect(item, `menu item ${label}`).toBeTruthy()
-  await act(async () => {
-    item!.click()
-  })
-}
-
 afterEach(() => {
   act(() => {
     store.backToList()
@@ -111,6 +97,32 @@ afterEach(() => {
      not leave the page in it. */
   lang._resetForTests()
 })
+
+/* The name box, and leaving it -- which is what commits an edit: the detail
+   saves on the native `change` moment rather than on a button. */
+const nameBox = (): HTMLInputElement =>
+  document.querySelector<HTMLInputElement>('.two-pane-main input.cronname')!
+
+async function retype(value: string): Promise<void> {
+  const box = nameBox()
+  await act(async () => {
+    box.value = value
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => {
+    fireEvent.blur(box)
+  })
+}
+
+/* The frequency dropdown, and a pick on it. */
+const freqSel = (): HTMLSelectElement =>
+  document.querySelector<HTMLSelectElement>('.cronwhen select')!
+
+async function pickFreq(id: string): Promise<void> {
+  await act(async () => {
+    fireEvent.change(freqSel(), { target: { value: id } })
+  })
+}
 
 describe('cron island', () => {
   it('shows every row the source answers, grouped by whether it is on', async () => {
@@ -165,7 +177,11 @@ describe('cron island', () => {
       rowText('morning digest').click()
     })
     expect(screen.queryByText('gui.cron.pick')).toBeNull()
-    expect(screen.getByText('gui.cron.save')).toBeTruthy()
+    /* The four blocks the job is, and no save button: the form writes on the
+       way out of a box. */
+    expect([...document.querySelectorAll('.two-pane-main .two-pane-lab')].map((l) => l.textContent))
+      .toEqual(['gui.job.name', 'gui.job.freq', 'gui.job.what', 'gui.cron.tab_runs'])
+    expect(screen.queryByText('gui.cron.save')).toBeNull()
   })
 
   it('lands a refused save under the schedule control', async () => {
@@ -178,9 +194,7 @@ describe('cron island', () => {
     await act(async () => {
       rowText('morning digest').click()
     })
-    await act(async () => {
-      ;(await screen.findByText('gui.cron.save')).click()
-    })
+    await retype('renamed')
     expect(await screen.findByText('gui.job.need_instant')).toBeTruthy()
   })
 
@@ -191,7 +205,7 @@ describe('cron island', () => {
       screen.getByLabelText('gui.cron_new').click()
     })
     await act(async () => {
-      ;(await screen.findByText('gui.save')).click()
+      ;(await screen.findByText('gui.cron.create')).click()
     })
     expect(await screen.findByText('gui.job.need_name')).toBeTruthy()
     expect(screen.getByText('gui.job.need_what')).toBeTruthy()
@@ -202,7 +216,7 @@ describe('cron island', () => {
      draft there deleted a half-written job to a press that reads like a
      detour. */
   describe('a draft the reader leaves the section with', () => {
-    const sheetUp = (): boolean => !!document.querySelector('#jobVeil .sheet')
+    const draftUp = (): boolean => !!document.querySelector('.two-pane-main button.mini.go')
 
     it('goes off screen and comes back with what was typed in it', async () => {
       install([])
@@ -210,7 +224,7 @@ describe('cron island', () => {
       await act(async () => {
         screen.getByLabelText('gui.cron_new').click()
       })
-      const name = document.querySelector<HTMLInputElement>('#jobVeil input[type="text"]')!
+      const name = nameBox()
       await act(async () => {
         name.value = 'half written'
         name.dispatchEvent(new Event('input', { bubbles: true }))
@@ -218,15 +232,13 @@ describe('cron island', () => {
 
       /* What the link does: the dialog leaves this section. */
       await act(async () => { settingsDialog.leaveSection() })
-      expect(sheetUp(), 'the sheet does not float over the section it left').toBe(false)
+      expect(draftUp(), 'the draft is not drawn in the section it left').toBe(false)
       expect(store.get().sheet, 'the draft is kept').toBeTruthy()
-      expect(document.getElementById('jobVeil')!.dataset.open).toBe('false')
 
       /* And back. */
       await act(async () => { settingsDialog.enterSection('cron') })
-      expect(sheetUp()).toBe(true)
-      expect(document.querySelector<HTMLInputElement>('#jobVeil input[type="text"]')!.value)
-        .toBe('half written')
+      expect(draftUp()).toBe(true)
+      expect(nameBox().value).toBe('half written')
     })
 
     /* Cancel is still cancel: what the reader ends deliberately does not come
@@ -241,23 +253,112 @@ describe('cron island', () => {
         ;(await screen.findByText('gui.cancel')).click()
       })
       await act(async () => { settingsDialog.enterSection('cron') })
-      expect(sheetUp()).toBe(false)
+      expect(draftUp()).toBe(false)
       expect(store.get().sheet).toBeNull()
     })
   })
 
-  it('keeps the reader on the job page after a successful save', async () => {
+  /* Leaving a box is the write, and only where something changed: a reader who
+     tabs through a form they did not touch has saved nothing. */
+  it('writes on the way out of a box, and only where something changed', async () => {
+    const saved: string[] = []
     install([job()], {
-      save: async (d) => ({ ...job(), ...d, name: d.name || 'morning digest' }),
+      save: async (d) => {
+        saved.push(d.name)
+        return { ...job(), ...d, name: d.name || 'morning digest' }
+      },
     })
     await mount()
     await act(async () => {
       rowText('morning digest').click()
     })
+    /* Out of the box with nothing changed: nothing written. */
+    await act(async () => { fireEvent.blur(nameBox()) })
+    expect(saved).toEqual([])
+    await retype('renamed')
+    expect(saved).toEqual(['renamed'])
+    /* And the reader is still on the job. */
+    expect(nameBox()).toBeTruthy()
+  })
+
+  /* A blur starts the save and the answer lands later, so the reader is free
+     to be somewhere else by then. Both of these are the answer overwriting a
+     choice made after the request went out. */
+  function delayedSave(): { land: () => void; source: Partial<CronSource> } {
+    const box: { land: () => void } = { land: () => {} }
+    return {
+      land: () => box.land(),
+      source: {
+        save: async (d) => {
+          /* Snapshotted at the call, the way a server answers the request it
+             was given rather than the reader's later keystrokes. */
+          const answer = { ...job(), ...d }
+          return new Promise<CronJob>((res) => {
+            box.land = () => res(answer)
+          })
+        },
+      },
+    }
+  }
+
+  const settle = async (land: () => void): Promise<void> => {
     await act(async () => {
-      ;(await screen.findByText('gui.cron.save')).click()
+      land()
+      await new Promise((r) => setTimeout(r, 0))
     })
-    expect(screen.getByText('gui.cron.save')).toBeTruthy()
+  }
+
+  it('leaves the reader on the job they picked while another job was saving', async () => {
+    const { land, source } = delayedSave()
+    install([job(), job({ id: 'j2', name: 'weekly report' })], source)
+    await mount()
+    await act(async () => {
+      rowText('morning digest').click()
+    })
+    await retype('renamed')
+    await act(async () => {
+      rowText('weekly report').click()
+    })
+    expect(store.get().viewId).toBe('j2')
+    await settle(land)
+    expect(store.get().viewId).toBe('j2')
+    expect(nameBox().value).toBe('weekly report')
+  })
+
+  it('keeps what was typed after the blur while that save was still in flight', async () => {
+    const { land, source } = delayedSave()
+    install([job()], source)
+    await mount()
+    await act(async () => {
+      rowText('morning digest').click()
+    })
+    await retype('renamed')
+    const say = (): HTMLTextAreaElement =>
+      document.querySelector<HTMLTextAreaElement>('textarea.cronsay')!
+    await act(async () => {
+      say().value = 'and the morning news'
+      say().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await settle(land)
+    expect(say().value).toBe('and the morning news')
+  })
+
+  /* A frequency is picked, not typed, so it commits the moment it is picked. */
+  it('writes a frequency the moment it is picked', async () => {
+    const saved: Array<{ freq: string; every_ms?: number }> = []
+    install([job({ freq: 'hour', every_ms: 3600000 })], {
+      save: async (d) => {
+        saved.push({ freq: d.freq, ...(d.every_ms ? { every_ms: d.every_ms } : {}) })
+        return { ...job(), ...d }
+      },
+    })
+    await mount()
+    await act(async () => {
+      rowText('morning digest').click()
+    })
+    expect(freqSel().value).toBe('hour:1')
+    await pickFreq('hour:6')
+    expect(saved).toEqual([{ freq: 'hour', every_ms: 6 * 3600000 }])
   })
 
   it('refetches the run history when the shell refreshes the page', async () => {
@@ -307,14 +408,17 @@ describe('cron island', () => {
     await act(async () => {
       rowText('morning digest').click()
     })
-    await pickMenu(
-      document.querySelector('.two-pane-head button.mini.ghost') as HTMLElement, 'gui.cron.delete')
-    expect(screen.getByText('gui.cron.save')).toBeTruthy()
+    await act(async () => {
+      ;(screen.getByText('gui.cron.delete') as HTMLElement).click()
+    })
+    /* Still on the job: the source said why, and bouncing the reader to a list
+       where the row is still there would be the second lie. */
+    expect(nameBox()).toBeTruthy()
   })
 
-  /* Destructive verbs are not row verbs and not page-face verbs: the list row
-     and the job page both keep them behind it. */
-  it('keeps delete off both faces', async () => {
+  /* Deleting is not a row verb, and on the job's own page it is at the foot
+     under a hairline rather than among the boxes being filled in. */
+  it('keeps delete off the row and at the foot of the job', async () => {
     install([job()])
     await mount()
     expect([...rowNamed('morning digest').querySelectorAll('button')].map((b) => b.textContent))
@@ -322,48 +426,54 @@ describe('cron island', () => {
     await act(async () => {
       rowText('morning digest').click()
     })
-    const face = [...document.querySelectorAll('.two-pane-main button')].map((b) => b.textContent)
-    expect(face.length).toBeGreaterThan(0)
-    expect(face).not.toContain('gui.cron.delete')
+    const foot = [...document.querySelectorAll('.two-pane-foot button')].map((b) => b.textContent)
+    expect(foot).toEqual(['gui.cron.run_now', 'gui.cron.open_sess', 'gui.cron.delete'])
+    const form = [...document.querySelectorAll('.two-pane-sec button')].map((b) => b.textContent)
+    expect(form).not.toContain('gui.cron.delete')
   })
 
-  /* The hourly interval the backend has always accepted. The form sent the
-     default every time, so "hourly" could only ever mean once an hour. */
-  it('takes an interval for an hourly job', async () => {
-    const saved: unknown[] = []
-    install([job({ freq: 'hour', every_ms: 3600000 })], {
-      save: async (d) => {
-        saved.push({ every_ms: d.every_ms })
-        return { ...job(), ...d }
-      },
-    })
+  /* The hourly interval the backend has always accepted, folded into the
+     frequency list rather than standing as a number box beside it: the box was
+     a control a reader had to notice to use, so "hourly" could only ever mean
+     once an hour. */
+  it('offers the hourly intervals in the frequency list itself', async () => {
+    install([job({ freq: 'hour', every_ms: 3600000 })])
     await mount()
     await act(async () => {
       rowText('morning digest').click()
     })
-    const n = document.querySelector<HTMLInputElement>('.everyn input')!
-    expect(n.value).toBe('1')
-    await act(async () => {
-      n.value = '6'
-      n.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    await act(async () => {
-      ;(await screen.findByText('gui.cron.save')).click()
-    })
-    expect(saved).toEqual([{ every_ms: 6 * 3600000 }])
+    expect([...freqSel().options].map((o) => o.value)).toEqual([
+      'hour:1', 'hour:2', 'hour:3', 'hour:4', 'hour:6', 'hour:12',
+      'day', 'week', 'month', 'once', 'cron',
+    ])
+    expect(document.querySelector('.everyn')).toBeNull()
   })
 
-  /* Delivery is a global setting the save payload never carried, so the page
-     states it and points at the setting rather than offering a choice that
-     gets thrown away. */
-  it('states delivery as a fact, with no per-job control', async () => {
+  /* A schedule set up in a conversation can be an interval none of the eleven
+     says. Dropping it would rewrite the schedule the moment the page opened. */
+  it('keeps a frequency the list cannot say on the list', async () => {
+    install([job({ freq: 'hour', every_ms: 30 * 60000, when: 'every 30 min' })])
+    await mount()
+    await act(async () => {
+      rowText('morning digest').click()
+    })
+    expect(freqSel().value).toBe('hour:1')
+    expect([...freqSel().options][0]!.value).toBe('hour:1')
+  })
+
+  /* Where results go was never a property of one job: `jobToSave` does not
+     read a destination and every row comes back as `app`. The form said so in
+     a block of its own, which is a global setting stated inside a form about
+     one job -- so the block is gone rather than restated. */
+  it('says nothing about where results go', async () => {
     install([job()])
     await mount()
     await act(async () => {
       rowText('morning digest').click()
     })
-    expect(screen.getByText('gui.job.deliver_global')).toBeTruthy()
-    expect(document.querySelector('.two-pane-main select')).toBeNull()
+    expect(screen.queryByText('gui.job.deliver_global')).toBeNull()
+    expect([...document.querySelectorAll('.two-pane-main .two-pane-lab')].map((l) => l.textContent))
+      .not.toContain('gui.job.deliver')
   })
 
   it('asks the source to toggle and refreshes from it', async () => {

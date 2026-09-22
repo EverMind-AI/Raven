@@ -61,7 +61,6 @@ export const BOOT_BODY_ORDER = [
   ...PAGES.map((page) => `section#${page.id}`),
   'aside#detail',
   'div#setVeil',
-  'div#jobVeil',
   'div#veil',
   'div#menu',
   'div#toasts',

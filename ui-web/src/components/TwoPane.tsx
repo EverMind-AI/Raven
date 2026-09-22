@@ -134,16 +134,60 @@ export function TwoPaneHead({ icon, name, meta, aside }: {
   )
 }
 
-/** A labelled block under the header. */
-export function TwoPaneSection({ label, act, children }: {
+/* A labelled block under the header. `tight` is the spacing a run of them
+   takes when the label names one box rather than a section: a form of six
+   credentials at the section's own rhythm reads as six sections. */
+export function TwoPaneSection({ label, act, tight, children }: {
   label?: ReactNode
   act?: ReactNode
+  tight?: boolean
   children: ReactNode
 }): JSX.Element {
   return (
-    <div className="two-pane-sec">
+    <div className={tight ? 'two-pane-sec two-pane-tight' : 'two-pane-sec'}>
       {label || act ? <div className="two-pane-lab">{label}<span className="two-pane-sp" />{act}</div> : null}
       {children}
+    </div>
+  )
+}
+
+/** Controls side by side, inside a section or a foot. */
+export function TwoPaneIn({ children }: { children: ReactNode }): JSX.Element {
+  return <div className="two-pane-in">{children}</div>
+}
+
+/* The controls that belong to the whole of what is picked rather than to one
+   section of it, at the foot of the column over a hairline -- which is where
+   "delete this" belongs, far from the boxes a reader is filling in. */
+export function TwoPaneFoot({ children }: { children: ReactNode }): JSX.Element {
+  return (
+    <div className="two-pane-foot">
+      <div className="two-pane-in">{children}</div>
+    </div>
+  )
+}
+
+/* One labelled box. The human sentence is the label; the raw config key rides
+   beside it in the mono face rather than in a tooltip, because a reader
+   checking a field against a doc needs to see the key without hovering. */
+export function TwoPaneField({ label, keyName, tag, children }: {
+  label: string
+  /* The config key, when it says something the label does not. */
+  keyName?: string
+  /* One word on what is already true of this field -- that it is set. */
+  tag?: string
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <div className="two-pane-sec two-pane-tight">
+      <div className="two-pane-lab">
+        {label}
+        {keyName ? <span className="two-pane-sub">{keyName}</span> : null}
+        {tag ? <span className="two-pane-tag">{tag}</span> : null}
+      </div>
+      <div className="two-pane-in">
+        <span className="two-pane-box">{children}</span>
+      </div>
     </div>
   )
 }

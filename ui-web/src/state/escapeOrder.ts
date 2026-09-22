@@ -65,15 +65,13 @@ const CLOSERS: Record<PageId, () => void> = {
 }
 
 /* The four layers Escape reaches before any page. Two of them are raised from
-   inside the settings dialog now -- the shared drawer and the new-job sheet --
-   which is why they stand above it: the dialog's own layer is in BELOW, so one
-   Escape takes back what a section raised and a second takes back the
-   dialog. */
+   inside the settings dialog now -- the shared drawer -- which is why it
+   stands above it: the dialog's own layer is in BELOW, so one Escape takes
+   back what a section raised and a second takes back the dialog. */
 const ABOVE: readonly EscapeLayer[] = [
   { id: '.lightbox', isOpen: imageOpen, close: closeImage },
   { id: '#veil', isOpen: flagged('veil'), close: cancels('cfNo') },
   { id: '#detail', isOpen: flagged('detail'), close: detail.close },
-  { id: '#jobVeil', isOpen: flagged('jobVeil'), close: cancels('jobNo') },
 ]
 
 /* The desk's own retreat -- fullscreen, then the picked node, then the open

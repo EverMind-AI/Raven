@@ -152,6 +152,18 @@ const SHARED = new Set([
   // the same glyph so the two cannot drift apart, and a reply dock reading a
   // running node's own conversation is the same shape of thing again.
   'go',
+  // The dropdown's own chrome, one rule in styles/page.css: the caret replaces
+  // the native arrow so a select reads as the same control as the boxes beside
+  // it. Settings and schedules each styling it for themselves is exactly how it
+  // came to be 12.5px here and 13px there.
+  'selw', 'sel',
+  // The small text vocabulary of a settings page, one rule each in
+  // styles/page.css: the mono caption over a block of fields, the grey footnote
+  // under one, the amber-ruled how-to, the external link and the fold over a
+  // section's optional half. Every section that fills the settings panel reads
+  // with these, and the copy settings kept of the link had already lost its
+  // icon, its gap and its focus ring.
+  'cap2', 'dnote', 'howto', 'exlink', 'foldcap',
 ])
 
 // Every class two or more domains name, with the number of domains that name
@@ -171,8 +183,8 @@ const SHARED = new Set([
 // shared is gone with them. The page's total debt is unchanged; where it is
 // counted is not.
 const LEGACY_SHARED = {
-  a: 4, body: 2, btn: 3, cap: 2, chev: 2, chgs: 2, cmd: 2, ct: 2, d: 4, foot: 2,
-  gap: 2, 'ghost-ic': 3, h: 2, hd: 2, k: 3, key: 3, lb: 3, n: 3, rm: 2, row: 2,
+  a: 3, btn: 2, cap: 2, chgs: 2, cmd: 2, ct: 2, d: 4, foot: 2, k: 3,
+  gap: 2, 'ghost-ic': 3, h: 2, hd: 2, key: 2, lb: 3, n: 3, rm: 2, row: 2,
   shot: 3, sk: 2, skel: 2, step: 2, sz: 2, tipdn: 2, v: 3, w: 3, wkg: 3,
   wsnote: 2,
 }
@@ -206,13 +218,23 @@ const LEGACY_LOCAL = {
      reader of `.ic`. Down two with the permission sheet's redesign: its own
      parts carry the prefix, and `.note-in` and `.pattern-in` left with the old
      sheet. */
-  composer: 10,
+  /* Up one, and nothing was added: `.body` was shared with the schedules
+     island's new-job sheet, and that sheet is gone -- a job being created
+     stands in the section's own right column now. The name is this domain's
+     alone, so it is counted here rather than on the shared tally. */
+  composer: 11,
   connections: 4,
   /* Down from 17 with the schedules section: the page's hero, its filter
      chips and its own list and row classes went with the two-pane frame
      (src/components/TwoPane.tsx owns those names now), and `.swi` went with
-     the switch that moved into it. */
-  cron: 10,
+     the switch that moved into it.
+
+     Down to 2 with the section redrawn against the prototype: the job's form
+     is the panel's own labelled blocks, its dropdowns are the page's, and its
+     name box, instruction, run list and refusal note are prefixed rules in
+     features/cron/styles.css. The new-job modal went with them, and `.body`,
+     `.chev`, `.btn` and `.key` left the shared tally with it. */
+  cron: 2,
   /* Up from 7, and every one of the six is a class that MOVED here rather than
      a new one: the pan-and-zoom viewport the playbook page carried became
      features/dag/Board.tsx so the task board could read it too, and its
@@ -247,7 +269,10 @@ const LEGACY_LOCAL = {
   onboard: 0,
   rail: 11,
   settings: 0,
-  subagents: 38,
+  /* Up one the same way: `.chev` was shared with the schedules island's run
+     list, whose rows carry a prefixed stamp and note now instead of the
+     page's own names. */
+  subagents: 39,
   /* Down from 8: the node panel's inline "still running" line -- a plain
      `className="dot run"`, the one attribute-form use of `.dot` this domain
      had -- is gone with the line it lived on (the head already says a
@@ -325,7 +350,11 @@ const LEGACY_CHROME = {
      the old settings page shared with the frame, and that page is gone.
      Nothing new is written -- the four move off the borrowed list and on to
      this one. */
-  chrome: 92,
+  /* Up one, and nothing was added: `.body` on the settings dialog was shared
+     with the schedules island's new-job sheet, which is gone -- so the frame's
+     own use of the name is counted here rather than borrowed from the shared
+     tally. */
+  chrome: 93,
   components: 36,
 }
 
@@ -391,7 +420,7 @@ const UNSTYLED = {
 // tell from a class, and it is counted on LEGACY_CHROME_EXPR above.
 const LEGACY_BORROWED = {
   chrome: [
-    'body', 'btn', 'cmd', 'foot', 'ghost-ic', 'hd', 'lb', 'n', 'tipdn',
+    'btn', 'cmd', 'foot', 'ghost-ic', 'hd', 'lb', 'n', 'tipdn',
   ],
   components: ['a', 'cap', 'hd', 'key', 'n', 'skel'],
 }

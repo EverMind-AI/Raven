@@ -261,14 +261,14 @@ describe('a tab with nothing in it', () => {
   it('says the same kind of nothing whichever tab it is', async () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
-    expect(emptyOf()).toEqual({ title: 'gui.ws.no_changes', hint: 'gui.ws.no_changes_sub', icon: true })
+    expect(emptyOf()).toEqual({ title: 'gui.ws.no_changes', hint: '', icon: true })
 
     await act(async () => { desk.set({ tab: 'deliverables' }) })
-    expect(emptyOf()).toEqual({ title: 'gui.ws.dlv_none', hint: 'gui.ws.dlv_none_sub', icon: true })
+    expect(emptyOf()).toEqual({ title: 'gui.ws.dlv_none', hint: '', icon: true })
 
     await act(async () => { desk.set({ tab: 'tasks' }) })
-    /* The tasks tab's own nothing has no hint -- icon and one bold line, the
-       prototype's own rule for an empty state: state the fact, don't sell. */
+    /* Icon and one bold line on all three, the prototype's own rule for an
+       empty state: state the fact, don't sell the reader on where to go. */
     expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: '', icon: true })
     /* And one class, so there is one stylesheet rule to keep them aligned. */
     expect(document.querySelector('.desk-dlv-empty')).toBeNull()
@@ -830,15 +830,12 @@ describe('the reserve the palette publishes', () => {
   })
 })
 
-/* The empty tab saying what the OTHER tab is holding.
- *
- * `changed` and `delivered` are two facts, and only the selected tab carries a
- * label -- so "Nothing delivered yet" sat next to a bubble on an unlabelled
- * icon, with nothing saying the bubble counted something else. These cases are
- * the answer, and the one that matters most is the last: an empty tab with nothing anywhere else must NOT
- * grow a way out, or the fix becomes a permanent nudge to a second empty tab.
- */
-describe('an empty tab points at the other one', () => {
+/* One nothing, three tabs. `changed` and `delivered` are two facts and only
+   the selected tab carries a label, so an empty tab used to name what the
+   other one was holding and offer to go there. Three tabs then had three
+   shapes of nothing -- two sentences and a link on two of them, one line on
+   the third -- which is a worse answer than the plain fact on all three. */
+describe('an empty tab states the fact and nothing else', () => {
   const withChanges = async (...keys: string[]): Promise<void> => {
     await act(async () => {
       workspace.shared().changes.push(...keys.map(change))
@@ -846,54 +843,22 @@ describe('an empty tab points at the other one', () => {
     })
   }
 
-  it('says how many files changed, when none were delivered', async () => {
+  it('says nothing about the other tab, however much it holds', async () => {
     await shelf()
     await withChanges('/w/one.py', '/w/two.py')
 
-    expect(screen.getByText('gui.ws.n.dlv_none_kept {"n":"2"}')).toBeTruthy()
-    /* The label is not counted -- "Show what changed" is true of one file and
-       of five, so it takes no `{n}` and the sentence above it carries the
-       number. */
-    expect(document.querySelector('.desk-empty-to')?.textContent).toBe('gui.ws.see_changes')
+    expect(emptyOf()).toEqual({ title: 'gui.ws.dlv_none', hint: '', icon: true })
+    expect(document.querySelector('.desk-empty-to')).toBeNull()
   })
 
-  it('says it in the singular for one file, the way phraseOf does', async () => {
-    await shelf()
-    await withChanges('/w/one.py')
-
-    expect(screen.getByText('gui.ws.dlv_none_kept')).toBeTruthy()
-    expect(document.querySelector('.desk-empty-to')?.textContent).toBe('gui.ws.see_changes')
-  })
-
-  it('takes the reader to the tab that has them', async () => {
-    await shelf()
-    await withChanges('/w/one.py')
-
-    await act(async () => { (document.querySelector('.desk-empty-to') as HTMLElement).click() })
-
-    expect(desk.get().tab).toBe('diff')
-  })
-
-  it('answers the other way round too, from an empty Diff', async () => {
-    /* The same confusion runs backwards: "No changes yet" beside a bubble on
-       the shelf's icon. One mechanism, both directions. */
+  it('answers the same way round from an empty Diff', async () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
     await act(async () => {
       deliveries.record('', 1, manifest([{ path: 'out/report.md', bytes: 12 }]))
     })
 
-    expect(screen.getByText('gui.ws.no_changes_dlv')).toBeTruthy()
-    await act(async () => { (document.querySelector('.desk-empty-to') as HTMLElement).click() })
-    expect(desk.get().tab).toBe('deliverables')
-  })
-
-  it('offers no way out when the other tab is empty as well', async () => {
-    /* Both empty is the ordinary state of a fresh conversation, and a link to
-       a second empty tab is worse than the plain sentence it replaced. */
-    await shelf()
-
-    expect(screen.getByText('gui.ws.dlv_none_sub')).toBeTruthy()
+    expect(emptyOf()).toEqual({ title: 'gui.ws.no_changes', hint: '', icon: true })
     expect(document.querySelector('.desk-empty-to')).toBeNull()
   })
 })
