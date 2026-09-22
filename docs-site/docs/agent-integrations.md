@@ -1,19 +1,22 @@
 # Agent Integrations
 
-Use this guide to connect an existing agent. To create a new Raven agent, see
-[Building an Agent](building-agent.md). For wire messages and lifecycle details,
+Use this guide to connect and operate existing agents. If you are building a
+new Raven agent, see [Building an Agent](building-agent.md); if you are
+implementing an ACP, CLI, HTTP, or other backend, see [Protocol and Backend
+Integration](protocol-backends.md). For wire messages and lifecycle details,
 see [Agent Protocols](agent-protocols.md).
 
-## Distinguish origin from transport
+## Agent origin and runtime { #agent-origin-and-runtime }
 
 “Raven agent” and “external agent” describe who supplies the agent. `kind`
-describes how Raven runs it. They are different axes: Raven's own specialized
-agents use ACP too.
+describes the runtime backend Raven uses. These are independent axes: a
+Raven-shipped agent can use ACP, and an external agent can use ACP, CLI, or
+HTTP.
 
-| Integration | Configuration | Execution boundary |
+| Integration | Runtime configuration | Execution boundary |
 | --- | --- | --- |
 | In-process backend | `kind: builtin` | A Raven loop in the host process |
-| Shipped specialized agent | Discovered folder, `kind: acp` | Launcher starts Raven with the agent's own configuration |
+| Raven-shipped agent | Discovered folder, `kind: acp` | Launcher starts Raven with the agent's own configuration |
 | External local agent | `kind: acp` or `kind: cli` in `subagents.agents` | Another product's process and native policy |
 | OpenAI-compatible HTTP agent | `kind: openai` in `subagents.agents` | Remote endpoint; no local tool loop in this backend |
 | A2A peer | `a2a.peers` plus `a2a_send` | An independent host, outside the sub-agent roster |
@@ -22,15 +25,15 @@ agents use ACP too.
 label actually advertised by the current tool; a familiar product name alone
 does not install, enable, or authenticate an agent.
 
-## Shipped Raven agents
+## Raven-native agents { #raven-native-agents }
 
-| Agent | Purpose | Configuration concern |
+| Agent | Best for | Important boundary |
 | --- | --- | --- |
-| Raven-Code | Coding, debugging, and verification | Real file edits; partition parallel writers' files |
-| Raven-Design | Visual design and presentation work | Design engine and media-service readiness |
-| Raven-Oncall | Execute and watch operational work | Target-machine access and long-running jobs |
-| Raven-PPT | PowerPoint production | Deck engine, templates, and rendering dependencies |
-| Raven-Research | Research and evidence gathering | Research profile, tools, and model credentials |
+| Raven-Code | Coding, debugging, and verification | Edits real files; partition parallel writers' files, and treat todo completion as a claim rather than test evidence. |
+| Raven-Design | Visual design, review, and presentation work | Requires design/media readiness; routes deck requests to hidden Raven-PPT. |
+| Raven-Oncall | Running and watching multi-round or remote work | Needs target-machine access, budget, and stop conditions; the first response does not mean the job finished. |
+| Raven-PPT | Producing `.pptx` decks | Normally enters through Raven-Design; needs deck engine, templates, rendering, and media requirements. |
+| Raven-Research | Live-web research and sourced reports | Needs the research profile and credentials; it is not a general coding or chat delegate. |
 
 These five definitions are not necessarily five visible roster entries.
 The shipped Raven-PPT manifest is hidden behind Raven-Design's routing; an
@@ -43,46 +46,124 @@ Definitions are discovered from agent folders, including the user-owned
 engine wheel being installed in the interpreter that launches the agent.
 Restart the resident host after changing a definition to ensure its live roster
 is rebuilt. Do not assume that changing a display name creates a new identity.
+Set them up through `raven onboard` or the WebUI agent settings.
 
-## Working safely with Raven-Code
+From a TUI, WebUI, or configured channel, name the desired roster entry in the
+request and state the workspace, allowed side effects, and evidence you expect.
+For a DAG or Playbook, set each node's `subagent` to the advertised name or
+worker label. A display name that is not in the current roster does not select
+an agent.
 
-Raven-Code adds product-specific behavior through `code-flow`, not only a
-different identity prompt. Give it a bound project directory and an explicit
-verification task, then inspect its evidence:
+### Calling the five native agents { #calling-the-five-native-agents }
 
-1. Project instructions such as `AGENTS.md`, `CLAUDE.md`, and `CONTEXT.md`
-   are read from the working directory, subject to configured selection,
-   path confinement, and prompt budget. They are not Agent home bootstrap files.
-2. File tools track versions read by the current session. With read-before-edit
-   enforcement enabled, an unread or externally changed version is refused.
-   Re-read and reconcile instead of blindly retrying.
-3. The `todo` checklist persists per session. A completed item is the model's
-   claim, not a test result; ask for the actual command/output.
-4. The Harness Manifest reports Git facts in ACP response metadata: changes,
-   commits, blockers, and shared-workspace attribution. It is not inferred
-   from the model saying “ready.”
+| Calling surface | Support | Notes |
+| --- | --- | --- |
+| Host delegation through `spawn` | All five, when enabled and ready | Ask from the TUI, WebUI, or a configured channel; use the advertised roster name. Raven-PPT normally enters through Raven-Design's route. |
+| Stateful instance chat | ACP agents that advertise stateful sessions | Continue an instance from the WebUI instance panel or the corresponding RPC; check the live capability snapshot before relying on resume. |
+| `run_subagent_dag` node | Advertised roster agents | Put the roster name in `subagent`; generated Worker Table labels are turn-local and cannot be used in stored Playbooks. |
+| Playbook | Registered roster agents | A Playbook ultimately dispatches through the same DAG registry; use Raven-Design for the normal Raven-PPT route. |
+| Direct ACP over stdio | All five | Start the product launcher and speak newline-delimited JSON-RPC. Raven-Research starts ACP without an `--acp` flag. |
+| One-shot CLI hosting | Raven-Code only | Use its launcher with `--task` or `--prompt-file`; `--session` continues the CLI conversation. |
+| Messaging channels | All host-delegated agents | The channel reaches Raven first; delegation then uses the same roster and permissions. |
+| Direct A2A call to one native agent | Not supported | A2A exposes a Raven host, not five independent native-agent endpoints. |
+
+The first four surfaces are host-level ways to delegate work; only direct ACP
+and Raven-Code's CLI hosting start a native product launcher explicitly. A
+successful readiness probe or delegation receipt is not evidence that the task
+completed; inspect the result, files, and tests or report artifacts.
+
+### Minimal ACP invocation { #minimal-acp-invocation }
+
+Each shipped entry is started by its launcher. Use the corresponding command:
+
+| Agent | Launcher command | Note |
+| --- | --- | --- |
+| Raven-Code | `python agents/raven-code/run.py --acp` | Also supports one-shot CLI hosting. |
+| Raven-Design | `python agents/raven-design/run.py --acp` | Requires the design engine. |
+| Raven-Oncall | `python agents/raven-oncall/run.py --acp` | Requires registered target-machine access for operational work. |
+| Raven-PPT | `python agents/raven-ppt/run.py --acp` | Normally reached through Raven-Design; requires the PPT engine. |
+| Raven-Research | `python agents/raven-research/run.py` | ACP is the default hosting; this launcher has no `--acp` flag. |
+
+Use the interpreter that has Raven and the agent's declared engine wheel
+installed. Request a deck through Raven-Design in normal use rather than
+selecting the hidden Raven-PPT route directly.
+
+For example, start Raven-Code:
+
+```bash
+python /absolute/path/to/Raven/agents/raven-code/run.py --acp
+```
+
+The launcher renders that agent's config and starts `raven acp` over stdin and
+stdout. Send one JSON-RPC object per line; keep logs and wrapper output off
+stdout. After the process starts, the smallest useful request sequence is:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}
+{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/absolute/path/to/project","mcpServers":[]}}
+{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"<session-id-from-session-new>","prompt":[{"type":"text","text":"Reply with one sentence; do not edit files."}]}}
+```
+
+| Field or argument | Meaning |
+| --- | --- |
+| `--acp` | Serve the agent over stdio ACP; it is not an HTTP listener. |
+| `python` | Use the interpreter that has Raven and the agent's declared engine wheel installed. |
+| `protocolVersion` | ACP protocol version requested during the handshake; Raven currently uses `1`. |
+| `clientCapabilities` | Features the caller can handle; `{}` is the minimal declaration. |
+| `cwd` | Absolute task workspace for the session; it is not the agent's ACP home. |
+| `mcpServers` | Per-session stdio MCP attachments; use `[]` when none are needed. |
+| `sessionId` | The identifier returned by `session/new`; reuse it for later prompts. |
+| `prompt` | An array of content blocks; the minimal block has `type: "text"` and `text`. |
+
+The server may emit `session/update` notifications between these requests. Read
+them, and handle permission or question requests before waiting for the final
+prompt response. The full lifecycle and negotiated capabilities are in [Agent
+Protocols](agent-protocols.md#serve-raven-over-acp).
+
+### Task prompt templates { #task-prompt-templates }
+
+Use the advertised roster name and state the scope, allowed side effects, and
+evidence you expect. These one-line templates are starting points, not proof
+that a task can run or has completed:
+
+| Agent | Example request |
+| --- | --- |
+| Raven-Code | `Raven-Code: inspect the parser in src/parser.py; edit only the parser files; run the matching tests; report the command output. Do not commit or push.` |
+| Raven-Design | `Raven-Design: review this dashboard for hierarchy and accessibility; propose concrete visual changes and save the feedback to the project workspace.` |
+| Raven-Oncall | `Raven-Oncall: run this parameter sweep on the registered lab machine; use a two-hour budget; stop failed workers; compare each round and report the final artifacts.` |
+| Raven-PPT | `Raven-PPT: create a .pptx product-review deck from these notes; use Raven-Design when possible; render every slide and return unresolved issues.` |
+| Raven-Research | `Raven-Research: compare these approaches using sources from the last year; cite material claims with URLs and write the report to the requested workspace file.` |
+
+For every agent, verify readiness before a real task and inspect the final
+answer, generated files, and task evidence afterward. ACP readiness or a listed
+roster row proves that the process can be started; it does not prove that the
+task completed successfully.
+
+### Raven-Code: workspace and verification boundaries { #raven-code-workspace-and-verification }
+
+Raven-Code's `code-flow` adds product behavior beyond an identity prompt. Give
+each task a bound project directory, explicit file ownership, allowed side
+effects, and a verification command; inspect the files, command output, and
+Harness Manifest afterward.
+
+| Area | Boundary |
+| --- | --- |
+| Project instructions | `AGENTS.md`, `CLAUDE.md`, and `CONTEXT.md` are read from the working directory under configured selection, path confinement, and prompt budget; they are not Agent-home bootstrap files. |
+| File and workspace state | File tools track versions read by the session; with read-before-edit, unread or externally changed versions are refused. Shared checkouts expose the same HEAD and changes; notices and the read ledger are not file locks or worktree isolation, and full writes are not universally guarded. |
+| Task state | `todo` persists per session; completion is a model claim, not test evidence. Existing sessions restore their checklist, while a new task needs a genuinely new session; in-place `/new` retains the session key and may not reset this product checklist. |
+| Git evidence | The Harness Manifest reports changes, commits, blockers, and shared-workspace attribution in ACP response metadata; do not infer Git facts from “ready”. |
+| Product configuration | The Raven-Code launcher enables its product configuration. Installing `code-flow` elsewhere does not enable every capability; notices/reports and the replacement tool face have separate gates. |
 
 Request example: “Inspect project instructions, fix this parser bug in the
 owned files only, run matching tests, and report remaining changes or blockers.
 Do not commit or push.”
 
-Two sessions sharing a directory observe the same HEAD and changes.
-Concurrency notices and the read ledger are not file locks or automatic
-worktree isolation. A shared manifest cannot be attributed to one session,
-and full writes are not universally guarded by read-before-edit.
+For follow-ups read [Working with sub-agents](agent-collaboration.md); for
+background jobs read [Long-running work (Oncall)](oncall.md). See the
+[implementation case study](building-agent.md#case-study-raven-code) for the
+launcher and harness details.
 
-An existing session restores its checklist. A new task should use a genuinely
-new session; the host's in-place `/new` retains its key and does not guarantee
-this separate product checklist is reset.
-
-The Raven-Code launcher enables its product configuration. Installing
-`code-flow` elsewhere does not enable everything: notices/reports and the
-replacement tool face have separate gates. See the
-[implementation case study](building-agent.md#case-study-raven-code).
-For follow-ups read [Working with sub-agents](agent-collaboration.md);
-for background jobs read [Long-running work (Oncall)](oncall.md).
-
-## External presets
+## Connect external agents { #connect-external-agents }
 
 The following presets are declared in the current source. This is a list of
 supported configuration paths, **not** a claim that every vendor release or

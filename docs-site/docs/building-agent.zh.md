@@ -100,7 +100,7 @@ Launcher 的 `CODE_PROJECT_FILES` 选择项目文件，`off` 表示不读取。
 相关测试包括 `tests/test_agents_code_flow_read_state.py`、
 `test_agents_code_flow_todo.py`、`test_agents_code_flow_project_files.py`、
 `test_agents_code_flow_manifest.py` 和 `test_agents_code_tools_plugin.py`。
-[使用说明](agent-integrations.md#working-safely-with-raven-code)介绍操作者能从这些机制推断什么。
+[使用说明](agent-integrations.md#raven-code-workspace-and-verification)介绍操作者能从这些机制推断什么。
 
 ## 增加工具与行为 { #add-tools-and-behaviour }
 
