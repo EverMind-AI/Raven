@@ -1,6 +1,7 @@
 import { t } from '../../i18n/t'
 import { I18N } from '../../i18n/t'
 import { argPath, firstErrLine, phraseOf, shortArg, splitMcp, verbIngOf, verbOf } from '../../lib/actVerbs'
+import { splitAttachments } from '../../lib/attachments'
 import { formatDuration } from '../../lib/duration'
 import * as hunks from '../../lib/hunks'
 import { md } from '../../lib/prose'
@@ -1926,20 +1927,19 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
 /* The composer bakes an "[attachments]" note plus "- path" bullets into the
    message; the reader gets chips instead. Parsed against both language
    variants, since history may have been written under the other one. */
+/* A question as the reader asked it, with its files as chips.
+ *
+ * Both the live send and a replay come through here, and only one of them is
+ * the text the composer built: a message that carried a picture comes back from
+ * `session.resume` with the engine's own lines in it, written for the model.
+ * Reading those as the question is what a reload used to show -- the note, the
+ * paths and the engine's line, all as prose (src/lib/attachments.ts). */
 export function askText(
   lane: Lane, text: string, when?: string | null, opts?: { midTurn?: boolean } | null,
 ): AskData {
-  const notes = Object.values((I18N.ui['gui.att.note'] ?? {}) as Record<string, string>)
-  const s = String(text)
-  for (const noteWord of notes) {
-    if (!noteWord) continue
-    const ix = s.lastIndexOf('\n\n' + noteWord + '\n')
-    if (ix < 0) continue
-    const tail = s.slice(ix + noteWord.length + 3).split('\n')
-    if (!tail.length || !tail.every((l) => !l.trim() || /^- /.test(l))) continue
-    return ask(lane, s.slice(0, ix), tail.filter((l) => /^- /.test(l)).map((l) => l.slice(2).trim()), when, opts)
-  }
-  return ask(lane, s, [], when, opts)
+  const notes = Object.values((I18N.ui['gui.att.note'] ?? {}) as Record<string, string>).filter(Boolean)
+  const { body, atts } = splitAttachments(String(text), notes)
+  return ask(lane, body, atts, when, opts)
 }
 
 /* ── the agent stage: a delegated run drawn with this same renderer ─────
