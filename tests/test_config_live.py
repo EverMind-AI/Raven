@@ -19,6 +19,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from raven.config import live as live_module
 from raven.config.live import (
     LiveConfig,
@@ -879,3 +881,86 @@ class TestTheRestOfWhatAWriteDidNotReach:
 
         assert keys["exa"] == "", "the cleared vendor must not fall back to the boot credential"
         assert keys["serper"] == "serper-boot", "a vendor the file says nothing about keeps its boot value"
+
+
+class TestLiveVendorKeyFollowsTheCanonicalOrder:
+    """``live_vendor_key`` answers what ``WebToolsConfig.vendor_key`` answers for
+    the same file, so a tool reading its key live never loses a key the process
+    booted with. Review measured the Jina leaf falling out the moment any
+    ``providers`` subtree appeared: the schema-backed slot reader answers an
+    empty key for a vendor the subtree does not name, and that empty was read
+    as a revocation before the leaf or the boot value was consulted."""
+
+    ROWS = {
+        "the jina leaf alone": ({"jinaApiKey": "sk-jina-paid"}, "jina", "sk-jina-paid"),
+        "the jina leaf beside providers.serper": (
+            {"jinaApiKey": "sk-jina-paid", "providers": {"serper": {"apiKey": "sk-serper"}}},
+            "jina",
+            "sk-jina-paid",
+        ),
+        "the serper leaf beside providers.firecrawl": (
+            {"search": {"apiKey": "sk-serper-legacy"}, "providers": {"firecrawl": {"apiKey": "fc"}}},
+            "serper",
+            "sk-serper-legacy",
+        ),
+        "a cleared slot beside the serper leaf": (
+            {"search": {"apiKey": "sk-serper-legacy"}, "providers": {"serper": {"apiKey": ""}}},
+            "serper",
+            "sk-serper-legacy",
+        ),
+        "a cleared slot with no leaf": ({"providers": {"tavily": {"apiKey": ""}}}, "tavily", ""),
+        "a slot wins over its leaf": (
+            {"jinaApiKey": "sk-jina-legacy", "providers": {"jina": {"apiKey": "sk-jina-slot"}}},
+            "jina",
+            "sk-jina-slot",
+        ),
+    }
+
+    @pytest.mark.parametrize("row", sorted(ROWS))
+    def test_the_live_key_is_the_canonical_key(self, tmp_path: Path, row: str) -> None:
+        from raven.config.live import live_vendor_key
+        from raven.config.schema import WebToolsConfig
+
+        web, vendor, expected = self.ROWS[row]
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"web": web}})
+        boot = WebToolsConfig.model_validate(web).vendor_key(vendor)
+
+        assert boot == expected, "the canonical resolver is the oracle"
+        assert live_vendor_key(LiveConfig(path), vendor, boot=boot) == expected
+
+    def test_a_vendor_the_file_says_nothing_about_keeps_its_boot_key(self, tmp_path: Path) -> None:
+        """A ``providers`` subtree naming other vendors says nothing about this
+        one, so the key a harness passed through with no file entry behind it
+        stays; a subtree naming it with an empty key revokes it."""
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"web": {"providers": {"serper": {"apiKey": "sk-serper"}}}}})
+        live = LiveConfig(path)
+
+        assert live_vendor_key(live, "tavily", boot="tv-harness") == "tv-harness"
+        _write(path, {"tools": {"web": {"providers": {"serper": {"apiKey": "sk-serper"}, "tavily": {"apiKey": ""}}}}})
+        assert live_vendor_key(live, "tavily", boot="tv-harness") == ""
+
+    def test_a_revoked_leaf_is_an_answer_not_a_miss(self, tmp_path: Path) -> None:
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"web": {"jinaApiKey": ""}}})
+
+        assert live_vendor_key(LiveConfig(path), "jina", boot="sk-jina-boot") == ""
+
+    def test_a_leaf_the_schema_rejects_dispenses_no_new_answer(self, tmp_path: Path) -> None:
+        from raven.config.live import web_jina_key
+
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"web": {"jinaApiKey": "sk-jina-paid"}}})
+        live = LiveConfig(path)
+        assert web_jina_key(live) == "sk-jina-paid"
+
+        _write(path, {"tools": {"web": {"jinaApiKey": ["not", "a", "key"]}}})
+        assert web_jina_key(live) == "sk-jina-paid", "the last admitted key keeps serving"
+
+        _write(path, {"tools": {"web": {"search": {"apiKey": "x"}}}})
+        assert web_jina_key(live) is None, "no leaf is no answer"

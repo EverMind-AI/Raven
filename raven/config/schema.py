@@ -2602,6 +2602,24 @@ def live_web_search_key(section: Any) -> str | None:
         return None
 
 
+def live_web_jina_key(section: Any) -> str | None:
+    """The Jina key from a raw ``tools.web`` subtree, or ``None``.
+
+    The pre-vendor leaf ``tools.web.jinaApiKey`` is a scalar on the section
+    rather than a subtree of its own, so the leaf is validated alone, the way
+    ``set_web_provider_key`` validates one slot: a neighbouring field the
+    schema rejects does not take the credential with it. ``None`` is "no
+    usable answer" -- no leaf, or one the schema rejects; an empty leaf is a
+    real answer, which is how the key gets revoked without a restart.
+    """
+    if not isinstance(section, dict) or "jinaApiKey" not in section:
+        return None
+    try:
+        return WebToolsConfig.model_validate({"jinaApiKey": section["jinaApiKey"]}).jina_api_key
+    except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
+        return None
+
+
 def live_web_provider_key(section: Any, vendor: str) -> str | None:
     """One vendor's key from a raw ``tools.web.providers`` subtree, or ``None``.
 

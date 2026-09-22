@@ -262,6 +262,23 @@ def web_search_key(live: LiveConfig) -> str | None:
     return _admit(live, "web_search_key", present=True, value=live_web_search_key(raw))
 
 
+def web_jina_key(live: LiveConfig) -> str | None:
+    """The Jina key at the pre-vendor leaf ``tools.web.jinaApiKey``, or None for "no answer".
+
+    :func:`web_search_key`'s twin for the other pre-vendor leaf. The leaf is a
+    scalar on ``tools.web`` rather than a section, so "present" is the leaf
+    itself being in the file. Same contract otherwise: a present and valid
+    leaf governs entirely, including an empty value, and one the schema
+    rejects dispenses no new answer.
+    """
+    from raven.config.schema import live_web_jina_key
+
+    raw = live.get("tools.web")
+    if not isinstance(raw, dict) or "jinaApiKey" not in raw:
+        return _admit(live, "web_jina_key", present=False, value=None)
+    return _admit(live, "web_jina_key", present=True, value=live_web_jina_key(raw))
+
+
 def web_provider_keys(live: LiveConfig) -> dict[str, str]:
     """Every per-vendor web key the file holds now, keyed by vendor.
 
@@ -313,22 +330,36 @@ def live_vendor_key(live: LiveConfig, vendor: str, *, boot: str | None) -> str:
 
     Resolved in the order ``WebToolsConfig.vendor_key`` uses: the canonical
     ``tools.web.providers.<vendor>.apiKey`` slot, then the pre-vendor leaf that
-    is Serper's alone, then ``boot``. An empty-but-present slot is a revocation,
-    not a miss: the boot value serves only when the file answers nothing at all.
-    A tool that reads its key through this on every call sees a key the user
-    sets or rotates in the file without a restart -- which is what an error
-    message telling them to set one has to be able to promise.
+    is Serper's (``tools.web.search.apiKey``) or Jina's (``tools.web.jinaApiKey``),
+    then ``boot``. A vendor the file names with an empty key is revoked, not
+    missed. The boot value serves only when the file says nothing about the
+    vendor at all -- no slot of its own and no leaf -- which is the lane a
+    harness passes a key through with no file behind it; a ``providers``
+    subtree that names other vendors says nothing about this one. A tool that
+    reads its key through this on every call sees a key the user sets or
+    rotates in the file without a restart -- which is what an error message
+    telling them to set one has to be able to promise.
     """
     slot = web_provider_key(live, vendor)
     if slot:
         return slot
-    if vendor == "serper":
-        leaf = web_search_key(live)
-        if leaf is not None:
-            return leaf
-    if slot == "":
+    leaf = web_search_key(live) if vendor == "serper" else web_jina_key(live) if vendor == "jina" else None
+    if leaf is not None:
+        return leaf
+    if slot == "" and _names_vendor(live, vendor):
         return ""
     return boot or ""
+
+
+def _names_vendor(live: LiveConfig, vendor: str) -> bool:
+    """Whether the file's ``tools.web.providers`` subtree has an entry for ``vendor``.
+
+    The schema-backed reader answers an empty key for a vendor the subtree
+    does not name (``WebProvidersConfig.key_for``), the same answer it gives
+    for one named with an empty key; only the second is a revocation.
+    """
+    raw = live.get("tools.web.providers")
+    return isinstance(raw, dict) and vendor in raw
 
 
 def media_tool_config(live: LiveConfig, kind: str):

@@ -287,6 +287,56 @@ async def test_a_reader_key_set_after_a_refusal_reaches_the_next_call(workspace,
 
 
 @pytest.mark.asyncio
+async def test_a_reader_whose_key_is_cleared_in_the_file_reads_through_jina(workspace, tmp_path: Path, monkeypatch) -> None:
+    """Clearing ``tools.web.providers.<vendor>.apiKey`` is the edit the refusal
+    text points the user at. The reader registered on that vendor then runs on
+    Jina, keyless, from the next call, rather than sending an empty credential."""
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"tools": {"web": {"providers": {"tavily": {"apiKey": "sk-boot"}}}}}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    monkeypatch.setattr("raven.agent.tools.web.validate_url_target", lambda url: (True, ""))
+    sent: list[tuple[str, dict]] = []
+
+    class _Reader:
+        def __call__(self, *a, **k):
+            return self
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def post(self, url, **kwargs):
+            import httpx
+
+            sent.append((url, kwargs.get("headers") or {}))
+            payload = {"results": [{"url": url, "raw_content": "TAVILY"}]}
+            return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+        async def get(self, url, **kwargs):
+            import httpx
+
+            sent.append((url, kwargs.get("headers") or {}))
+            return httpx.Response(200, text="JINA", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", _Reader())
+    loop = _loop(workspace, web_fetch_provider="tavily", web_provider_keys={"tavily": "sk-boot"})
+    tool = loop.tools.get("web_fetch")
+
+    first = json.loads(await tool.execute("https://a.example"))
+    cfg.write_text(json.dumps({"tools": {"web": {"providers": {"tavily": {"apiKey": ""}}}}}), encoding="utf-8")
+    second = json.loads(await tool.execute("https://b.example"))
+
+    assert first["extractor"] == "tavily-extract" and sent[0][1]["Authorization"] == "Bearer sk-boot"
+    assert second["extractor"] == "jina-reader" and second["text"] == "JINA"
+    assert sent[1][0].startswith("https://r.jina.ai/") and "Authorization" not in sent[1][1]
+    assert tool.provider == "jina"
+
+
+@pytest.mark.asyncio
 async def test_the_subagent_lanes_web_tools_read_their_keys_live_too(tmp_path: Path, monkeypatch) -> None:
     """All three tools carry the advice to set a key at the config slot, so all
     three read it there; a boot-snapshot key on two of them made that advice

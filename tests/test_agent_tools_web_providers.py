@@ -547,6 +547,57 @@ async def test_a_key_rotated_while_a_request_is_in_flight_is_tried_before_it_is_
     assert reads == ["KEY-NEW"]
 
 
+class _TwoReaders:
+    """Stands in for ``httpx.AsyncClient``: Tavily answers a page as JSON, Jina as text; both are recorded."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> "_TwoReaders":
+        return self
+
+    async def __aenter__(self) -> "_TwoReaders":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def post(self, url: str, **kwargs: Any) -> httpx.Response:
+        self.calls.append((url, kwargs.get("headers") or {}))
+        payload = {"results": [{"url": "https://a.example", "raw_content": "TAVILY PAGE"}]}
+        return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        self.calls.append((url, kwargs.get("headers") or {}))
+        return httpx.Response(200, text="JINA PAGE", request=httpx.Request("GET", url))
+
+
+async def test_a_keyed_reader_whose_key_is_cleared_falls_back_to_jina_per_call(
+    monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    """The key is live, so the Jina substitution has to be too: a keyed
+    backend whose key is cleared in the file would otherwise stay registered
+    and send an empty ``Authorization: Bearer`` on every call, and the 401 it
+    got back could arm no pause, there being no key to record it against.
+    The substitution is decided per call from the same read as the key."""
+    keys = {"tavily": "sk-tavily"}
+    reader = _TwoReaders()
+    monkeypatch.setattr(web_mod.httpx, "AsyncClient", reader)
+    tool = WebFetchTool(api_key=lambda: keys["tavily"], provider="tavily")
+
+    first = json.loads(await tool.execute("https://a.example"))
+    keys["tavily"] = ""
+    second = json.loads(await tool.execute("https://b.example"))
+
+    assert first["extractor"] == "tavily-extract" and first["text"] == "TAVILY PAGE"
+    assert reader.calls[0][0] == "https://api.tavily.com/extract"
+    assert reader.calls[0][1]["Authorization"] == "Bearer sk-tavily"
+    assert second["extractor"] == "jina-reader" and second["text"] == "JINA PAGE"
+    assert reader.calls[1][0] == "https://r.jina.ai/https://b.example"
+    assert "Authorization" not in reader.calls[1][1], "no credential is sent for a keyless read"
+    assert not [h for _, h in reader.calls if h.get("Authorization") == "Bearer "], "an empty key is never sent"
+
+
 async def test_a_refusal_by_one_vendor_pauses_no_other(monkeypatch: pytest.MonkeyPatch, _open_gate: None) -> None:
     """The vendor is live too (``tools.web.<kind>.provider`` is read per call),
     so the pause is recorded against the (vendor, key) pair the request carried:
