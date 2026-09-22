@@ -207,7 +207,7 @@ export function fileKind(p: string): string {
   if (TEXT_EXT.has(ext)) return 'code'
   return 'bin'
 }
-export const RENDERED: Record<string, 1> = { md: 1, img: 1, svg: 1, pdf: 1, html: 1, csv: 1, json: 1 }
+export const RENDERED: Record<string, 1> = { md: 1, img: 1, svg: 1, pdf: 1, html: 1, csv: 1, json: 1, pptx: 1 }
 
 /* ── which application gets a file the page cannot render ──────────────
    Per EXTENSION, not one global default, because that is the shape of the

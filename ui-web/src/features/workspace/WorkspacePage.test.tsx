@@ -424,11 +424,14 @@ describe('workspace island', () => {
     expect(screen.queryByText('gui.ws.file_rendering')).not.toBeNull()
     await act(async () => { frame.dispatchEvent(new Event('load')) })
     expect(screen.queryByText('gui.ws.file_rendering')).toBeNull()
-    /* Two controls, in words: the deck's own bytes, and its folder. */
+    /* The bar a deck gets is the bar every other file gets: the rendered and
+       source pair, then the folder. Nothing of the deck's own. */
     expect(screen.queryByLabelText('gui.ws.file_newtab')).toBeNull()
-    const save = screen.getByText('gui.ws.download') as HTMLAnchorElement
-    expect(save.getAttribute('href')).toBe('/file?path=%2Frepo%2Fdeck.pptx')
-    expect(save.getAttribute('download')).toBe('deck.pptx')
+    expect(screen.queryByLabelText('gui.ws.download')).toBeNull()
+    expect(document.querySelector('.fbar .mini')).toBeNull()
+    expect(document.querySelector('.fbar .kseg')).not.toBeNull()
+    expect(screen.getByText('gui.ws.file_rendered')).toBeTruthy()
+    expect(screen.getByText('gui.ws.file_source')).toBeTruthy()
     expect(screen.getByRole('button', { name: /gui\.ws\.reveal_/ })).toBeTruthy()
     expect(screen.queryByText('gui.ws.open')).toBeNull()
   })
@@ -454,23 +457,24 @@ describe('workspace island', () => {
     expect(again).toContain('&v=2000#')
   })
 
-  it('prefers the delivery route for saving a delivered deck', async () => {
+  it('gives a delivered deck the same bar as any other file', async () => {
     install(emptyWs({ file: { ...deckFile } }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
     deliveries.seed([{ path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck',
                        download_path: '/files/download?token=deck', size: 9 }])
     await mount()
-    const save = screen.getByText('gui.ws.download') as HTMLAnchorElement
-    expect(save.getAttribute('href')).toBe('/files/download?token=deck')
+    expect(screen.queryByLabelText('gui.ws.download')).toBeNull()
+    expect(document.querySelector('.fbar .kseg')).not.toBeNull()
   })
 
-  it('keeps the deck bar to download and the folder even when the gateway is this desktop', async () => {
+  it('keeps the deck bar as it is even when the gateway is this desktop', async () => {
     install(emptyWs({ file: { ...deckFile } }), {
       canBrowse: true,
       hostIsLocal: () => true,
       openIn: async () => ({}),
     }, { tab: 'file', open: true, picked: true })
     await mount()
-    expect(screen.getByText('gui.ws.download')).toBeTruthy()
+    expect(screen.queryByLabelText('gui.ws.download')).toBeNull()
+    expect(document.querySelector('.fbar .kseg')).not.toBeNull()
     expect(screen.getByRole('button', { name: /gui\.ws\.reveal_/ })).toBeTruthy()
     expect(screen.queryByText('gui.ws.open')).toBeNull()
     expect(screen.queryByLabelText('gui.ws.open_with_pick')).toBeNull()

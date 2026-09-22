@@ -3035,9 +3035,6 @@ textarea:focus, textarea:focus-visible,
 .fview.workspace-fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .fview.workspace-fill iframe { flex: 1; height: auto; min-height: 0; }
 .fview.workspace-fill .vspin { flex: none; }
-.fbar .workspace-deck-acts { display: flex; align-items: center; gap: 6px; flex: none; }
-.fbar .workspace-deck-acts .mini { display: inline-flex; align-items: center; padding: 3px 9px;
-  font-size: 11.5px; line-height: 1.3; text-decoration: none; }
 .fview .csvw { overflow-x: auto; padding: 12px 14px 26px; }
 .fview table.csvt { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
 .fview table.csvt th, .fview table.csvt td {
