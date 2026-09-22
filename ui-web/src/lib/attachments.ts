@@ -9,19 +9,22 @@
  * how they came to disagree.
  *
  * What made them disagree is the runtime's own annotations. A message that
- * carried a picture comes back from `session.resume` with more in it than the
- * composer sent: the engine appends a line per image saying what it could see
+ * carried files comes back from `session.resume` with more in it than the
+ * composer sent: the engine appends a line per file saying what it made of it
  * (`[Image: shot.png (path: /...) | 1312x732px, downscaled from 5312x2964 --
- * re-read it with read_file if you need another look]`), and a flattened image
- * part leaves `[image]` at the front. Both are written for the model. Neither
- * is the person's words, and the old reader -- which required every line after
- * the note to be blank or a `- ` path -- refused the whole message because of
- * them, so a reloaded page drew the note, the paths and the engine's line as
- * the question itself.
+ * re-read it with read_file if you need another look]`, or for one it cannot
+ * inline `[Attachment: slides.pptx (path: /...) -- use the understand_media
+ * tool to read its contents]`), and a flattened image part leaves `[image]` at
+ * the front. All of it is written for the model. None of it is the person's
+ * words, and the old reader -- which required every line after the note to be
+ * blank or a `- ` path -- refused the whole message because of them, so a
+ * reloaded page drew the note, the paths and the engine's lines as the
+ * question itself.
  *
  * So the grammar is: strip what the runtime wrote, then read the note. The
  * markers are matched by their own shape rather than by position, because the
- * engine writes five of them (unreadable, too large, budget, failed, shown)
+ * engine writes seven of them -- five about a picture (unreadable, too large,
+ * budget, failed, shown) and two about anything else (named, unreadable) --
  * and they share only the opening.
  *
  * The note's own heading is passed in rather than read here, in every language
@@ -29,12 +32,19 @@
  * another still has to be read.
  */
 
-/* A line the engine wrote about a picture, which the person did not type.
-   Matched on the three parts every one of the five shares -- the opening, the
-   path it names, the closing bracket -- rather than on what comes between
-   them: they differ there (a size, or one of four refusals), and one of them
-   ends the sentence with an em dash the person's own keyboard may well not. */
-const IMAGE_NOTE = /^\[Image: .*\(path: .+?\).*\]$/
+/* A line the engine wrote about a file the message carried, which the person
+   did not type. It writes one per file and not one per picture: a file it can
+   inline is reported as `[Image: ...]` in one of five shapes, and one it
+   cannot -- a document, or a file that went unreadable between the resolve and
+   the read -- as `[Attachment: ...]` in one of two. All seven share only the
+   opening, the path they name and the closing bracket, so those are what this
+   matches; what sits between differs (a size, or one of six refusals), and
+   several end the sentence with an em dash the person's keyboard may well not.
+   Reading only the picture's spelling is what made a message that carried a
+   document come back as its own transcript: the document's lines survived the
+   strip, the tail after the note was then neither blank nor a path, and the
+   reader handed the whole thing back as the question. */
+const FILE_NOTE = /^\[(?:Image|Attachment): .*\(path: .+?\).*\]$/
 
 /* The flattening of the image parts, left at the head of a multimodal message.
    One per picture: the runtime writes a text part per inlined image and the
@@ -47,10 +57,11 @@ const IMAGE_PART = /^(?:\[image\]\s*)+/
    to the workspace it uploaded into -- and the file route resolves a relative
    path against the SESSION's own root, which is not always that workspace: a
    conversation whose root is elsewhere asked for `uploads/x.png` under its own
-   root and got a 404, so the picture fell back to its file name on every
-   reload. The engine's line carries the absolute path of the same file, and
-   that one resolves wherever the session is rooted. */
-const IMAGE_PATH = /^\[Image: .*?\(path: (.+?)\).*\]$/
+   root and got a 404, so the file fell back to its name on every reload. The
+   engine's line carries the absolute path of the same file, and that one
+   resolves wherever the session is rooted -- for a document as much as for a
+   picture, since the chip is a link to it. */
+const FILE_PATH = /^\[(?:Image|Attachment): .*?\(path: (.+?)\).*\]$/
 
 export interface Attachments {
   /** The person's own words. */
@@ -59,11 +70,11 @@ export interface Attachments {
   atts: string[]
 }
 
-/** The absolute path of every picture the engine named, in the order named. */
+/** The absolute path of every file the engine named, in the order named. */
 export function runtimePaths(text: string): string[] {
   const out: string[] = []
   for (const line of String(text).split('\n')) {
-    const hit = IMAGE_PATH.exec(line.trim())
+    const hit = FILE_PATH.exec(line.trim())
     if (hit && hit[1]) out.push(hit[1])
   }
   return out
@@ -73,7 +84,7 @@ export function runtimePaths(text: string): string[] {
 export function stripRuntimeNotes(text: string): string {
   const kept: string[] = []
   for (const line of String(text).split('\n')) {
-    if (IMAGE_NOTE.test(line.trim())) continue
+    if (FILE_NOTE.test(line.trim())) continue
     kept.push(line)
   }
   /* Only at the head: `[image]` is a word a person may well type further down,

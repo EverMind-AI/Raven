@@ -2300,10 +2300,13 @@ describe('transcript island, streaming', () => {
       for (let i = 0; i < 100; i += 1) st.sayDelta(`word${i} `)
     })
     /* The store batched everything behind ONE frame callback and nothing
-       rendered yet -- not the prose, not the list. */
+       rendered yet -- not the prose, not the list. Not even the box around
+       them: a step with no thought, no sentence and no call draws nothing at
+       all, so the card appears with its first painted word rather than
+       standing empty for as long as the model takes. */
     expect(rafQ).toHaveLength(1)
     expect(seen.md).toBe(0)
-    expect($('.say')?.textContent).toBe('')
+    expect($('.say')).toBeNull()
     act(() => { rafQ.forEach((cb) => cb(0)) })
     /* One flush, one render of the streaming leaf; the ask bubble above it
        was not remounted or re-rendered. */

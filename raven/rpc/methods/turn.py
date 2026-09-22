@@ -144,16 +144,17 @@ def bind_scheduler(scheduler: Scheduler | None) -> None:
 
 
 def is_session_answering(session_key: str) -> bool:
-    """True if a turn is in flight on this session, whoever started it.
+    """True if the conversation's own lane has a turn in flight, whoever started it.
 
-    ``is_session_busy`` reads ``_active_turns``, which only ``turn.send``
-    writes, so a cron run, a channel turn or anything else the runtime submits
-    reads as idle there -- and "is this session answering right now", which is
-    what ``session.list`` and ``session.resume`` report to a page, is a fact
-    about the conversation rather than about which surface filed the work. The
-    scheduler's lane is that fact.
+    The main lane exactly, not ``is_session_busy``'s any-lane view: this is
+    what ``session.list`` and ``session.resume`` report to a page, and a page
+    arms its main composer on it. A sub-agent's direct chat runs on a lane of
+    its own and its events are routed to that chat, so counting it here left
+    the main composer with a stop button that cancelled the wrong lane.
+    ``_active_turns`` knows only the turns ``turn.send`` submitted; a cron run
+    or a channel turn is on the scheduler's lane and nowhere else.
     """
-    if is_session_busy(session_key):
+    if is_turn_active(session_key):
         return True
     return _scheduler is not None and _lane_in_flight(_scheduler, session_key)
 

@@ -1110,3 +1110,105 @@ describe('the node panel', () => {
     })
   })
 })
+
+/** Where the reader is left when a running node's record is read again.
+ *
+ * happy-dom lays nothing out, so the geometry is defined rather than measured
+ * -- which is the point: what these assert is the number the panel wrote to
+ * `scrollTop`, and the number it did NOT write. The same shape the thought
+ * box's own cases use (features/transcript/TranscriptPage.test.tsx).
+ */
+describe('a node record still being written', () => {
+  const sized = (el: HTMLElement, scrollHeight: number, clientHeight: number): void => {
+    Object.defineProperty(el, 'scrollHeight', { value: scrollHeight, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: clientHeight, configurable: true })
+  }
+  const body = (): HTMLElement => document.querySelector('.tkbody') as HTMLElement
+
+  /* A running node open on its context tab, with its first read already in. */
+  const opened = async (over: Partial<NodeRecord> = {}): Promise<void> => {
+    const running = task({
+      id: 'r1', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'running' })],
+    })
+    rows = [running]
+    record = { dispatch: 'count the files', steps: [], answer: 'first', outputTruncated: false, ...over }
+    store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
+    render(<TaskPane task={running} full />)
+    fireEvent.click(document.querySelectorAll('.daggraph .nd')[0] as Element)
+    await act(async () => {})
+  }
+
+  /* The live frame the pane re-reads on, carrying more of the answer. */
+  const readAgain = async (answer: string): Promise<void> => {
+    record = { ...record, answer }
+    await act(async () => { store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'running', tool_call_id: 'c1' }) })
+  }
+
+  it('keeps a reader who dragged to the end there, read after read', async () => {
+    /* The bug. The record is re-read every second and re-rendered whole, and
+       a paint that passes through a shorter box leaves the browser's clamped
+       `scrollTop` behind -- so a reader parked at the end was dropped a block
+       above it and had to drag back down, every single time. */
+    await opened()
+    sized(body(), 5090, 687)
+    body().scrollTop = 4403
+    act(() => { body().dispatchEvent(new Event('scroll')) })
+
+    await readAgain('second')
+    expect(body().scrollTop).toBe(5090)
+
+    sized(body(), 6200, 687)
+    await readAgain('third')
+    expect(body().scrollTop).toBe(6200)
+  })
+
+  it('leaves a reader who scrolled up where they are', async () => {
+    /* The thing a naive fix breaks: they are reading the step above, and the
+       next read is not an invitation to go anywhere. */
+    await opened()
+    sized(body(), 5090, 687)
+    body().scrollTop = 900
+    act(() => { body().dispatchEvent(new Event('scroll')) })
+
+    await readAgain('second')
+    expect(body().scrollTop).toBe(900)
+  })
+
+  it('opens a record at its beginning rather than its end', async () => {
+    /* Following is something the reader asks for by going there. A record
+       opened and never scrolled is one to read from the top, including the
+       one read that lands right after it opens. */
+    await opened()
+    sized(body(), 5090, 687)
+
+    await readAgain('second')
+    expect(body().scrollTop).toBe(0)
+  })
+
+  it('leaves a reader who opened a fold where they opened it', async () => {
+    /* The pin is scoped to a read landing, not to every render: this panel
+       reads the task store and every fold in the record writes to it, so a
+       reader parked at the end who opens a step above must be left there,
+       reading what they opened, rather than sent to the end of it. */
+    await opened({ steps: [{ kind: 'think', text: 'first, check the dates' }] })
+    sized(body(), 5090, 687)
+    body().scrollTop = 4403
+    act(() => { body().dispatchEvent(new Event('scroll')) })
+
+    fireEvent.click(document.querySelector('.tkprock') as Element)
+    expect(body().scrollTop).toBe(4403)
+  })
+
+  it('stops following when the reader turns to the work order', async () => {
+    /* Another tab is a different thing to read, not a continuation: carrying
+       the end over would open the order somewhere down its middle. */
+    await opened()
+    sized(body(), 5090, 687)
+    body().scrollTop = 4403
+    act(() => { body().dispatchEvent(new Event('scroll')) })
+
+    fireEvent.click(document.querySelectorAll('.tktabs button')[1] as Element)
+    await readAgain('second')
+    expect(body().scrollTop).toBe(4403)
+  })
+})
