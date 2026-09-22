@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 199 methods, 115 component schemas.
+// 201 methods, 116 component schemas.
 
 /* eslint-disable */
 /**
@@ -32,6 +32,7 @@ export type DagSnapshotNodeStatus =
  */
 export type TurnEvent =
   | MessageStartEvent
+  | MessageInjectedEvent
   | TurnStartedEvent
   | EpisodeStartEvent
   | NoticeEvent
@@ -145,6 +146,14 @@ export interface SessionInitInfo {
    * The resumed session's name, when it has one. Absent on a fresh session, which has nothing to name yet. Carried on the bundle rather than fetched separately because a client resuming a session is already being told what it is resuming.
    */
   title?: string;
+  /**
+   * A turn is in flight on this session right now.
+   */
+  running?: boolean;
+  /**
+   * How long the turn in flight has been running, in milliseconds, measured on the server; null when nothing is running or the question carries no readable stamp. The elapsed rather than the stamp it was measured from: that stamp is a server wall clock, and a client in another timezone reading it against its own clock gets the offset between the two back as the turn's age.
+   */
+  running_ms?: number | null;
 }
 /**
  * ``info.usage`` — the boot baseline, refreshed by each turn's completion.
@@ -205,6 +214,10 @@ export interface TranscriptMessage {
    */
   origin?: string;
   delegated?: TranscriptDelegated;
+  /**
+   * Set on a user entry merged into a turn already running, not the prompt that opened one. A reader draws it INSIDE the turn: no new turn number, no fold closed over the narration above it, and the text before it is still that turn's narration rather than its answer.
+   */
+  mid_turn?: boolean;
 }
 export interface TranscriptToolCall {
   id: string;
@@ -389,15 +402,21 @@ export interface ToolUsageCount {
 }
 export interface EverosSection {
   /**
-   * Empty when the shipped placeholder is still in place.
+   * Empty when nothing is pinned for this role.
    */
   model: string;
-  base_url: string;
+  /**
+   * The vendor serving `model`. Empty when nothing is pinned.
+   */
   provider: string;
   /**
-   * Whether a key is stored; the value never goes on the wire.
+   * Whether that provider has a usable credential -- the same question the memory gate answers, so the card and the gate cannot disagree. No key ever goes on the wire.
    */
   api_key_set: boolean;
+  /**
+   * The endpoint came from exported EVEROS_<ROLE>__* variables, which outrank raven. The slot is read-only: raven cannot edit a shell.
+   */
+  env_managed?: boolean;
 }
 export interface ChannelField {
   key: string;
@@ -638,6 +657,10 @@ export interface SessionListItem {
    */
   pinned?: boolean;
   /**
+   * A turn is in flight on this session right now.
+   */
+  running?: boolean;
+  /**
    * The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by.
    */
   workdir?: string;
@@ -804,7 +827,7 @@ export interface SubagentRow {
     group?: string;
   }[];
   /**
-   * What subagents.update accepts for model on this row, by kind -- not ownership, which is own: raven for the built-in row, picking from raven's own provider catalogue; agent for an acp row, raven's own or not, picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all.
+   * What subagents.update accepts for model on this row, by rule rather than by kind, and not ownership, which is own: raven for the built-in row and for one of raven's own acp rows whose handshake advertised no menu -- both pick from raven's own provider catalogue; agent for an acp row picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all. The menu, not the whole vocabulary: one of raven's own acp rows also accepts a host-qualified id under either rule, since it runs on raven's providers whatever it advertised.
    */
   model_source?: 'raven' | 'agent' | 'fixed';
 }
@@ -1113,6 +1136,20 @@ export interface MessageStartEvent {
      * The message that started the turn. Present so a client that did not send it can draw the question: the user entry reaches the transcript only at turn end.
      */
     content?: string;
+    target?: DirectTarget;
+  };
+}
+export interface MessageInjectedEvent {
+  type: 'message.injected';
+  /**
+   * A message merged into the turn already running on this conversation. `message.start` cannot say this: that event opens a turn, and an inject joins one. `target` names the conversation this event belongs to; absent is the main agent.
+   */
+  payload: {
+    /**
+     * The id minted for this text, not the running turn's. It is what the fallback turn's events carry if the host ends before draining it, which is how a client tells the two views of one message apart.
+     */
+    turn_id: string;
+    content: string;
     target?: DirectTarget;
   };
 }
@@ -2249,6 +2286,10 @@ export interface TurnSubscribeParams {
 }
 export interface TurnSubscribeResult {
   subscription_id: string;
+  /**
+   * A turn is in flight on this session, and this subscription receives the rest of it.
+   */
+  running?: boolean;
 }
 export interface TurnUnsubscribeParams {
   subscription_id: string;
@@ -3365,23 +3406,42 @@ export interface SettingsEverosResult {
    * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
    */
   note?: string | null;
-}
-export interface SettingsEverosSetParams {
-  section: string;
   /**
-   * Merged into the section; ignored when clearing.
+   * Whether raven manages this EverOS root. False makes the role slots read-only: raven neither writes that install's config nor starts or stops its server.
    */
-  fields?: {
-    [k: string]: string;
+  owned?: boolean;
+  /**
+   * Which roles each vendor can serve, so a slot does not offer a provider that cannot do the job. Keyed by provider name.
+   */
+  supports?: {
+    [k: string]: string[];
   };
   /**
-   * Drop the section; refused for llm and embedding.
+   * Roles that cannot be cleared, so the page knows which slots get a clear control. Sent rather than mirrored: a mirrored copy drew one on a slot whose clear the write refuses.
    */
-  clear?: boolean;
+  required?: string[];
+}
+export interface SettingsEverosSetParams {
   /**
-   * Take api_key and base_url from this connected provider, copied not referenced. Wins over the same keys in `fields`, which cannot carry a real key: the page only ever sees a redacted one.
+   * Which EverOS role: llm, embedding, rerank or multimodal.
    */
-  borrow_from?: string;
+  section: string;
+  /**
+   * Model id, as the provider names it.
+   */
+  model?: string | null;
+  /**
+   * Which configured provider serves `model`. Its address and key are what the call goes out on, resolved at spawn time rather than copied -- so rotating a key is one edit in the provider and every role serving on it follows.
+   */
+  provider?: string | null;
+  /**
+   * Rerank only, and only for a self-hosted endpoint: which request shape EverOS must post (`deepinfra` / `vllm` / `dashscope`). A curated vendor's shape comes from the vendor table and this is ignored; somebody's own server is the one case nothing but the operator can answer.
+   */
+  protocol?: string | null;
+  /**
+   * Drop the role; refused for llm and embedding.
+   */
+  clear?: boolean | null;
 }
 export interface SettingsEverosSetResult {
   applied: boolean;
@@ -3873,6 +3933,36 @@ export interface ApprovalRespondResult {
    * False for an unknown, expired or mis-bound request; the caller fails closed.
    */
   ok: boolean;
+}
+export interface ApprovalRevokeParams {
+  /**
+   * The answered request whose grant to take back.
+   */
+  approval_id: string;
+}
+export interface ApprovalRevokeResult {
+  /**
+   * False when that answer wrote no rule of its own, the undo came twice, or the file could not be written.
+   */
+  ok: boolean;
+}
+export interface ApprovalPendingParams {
+  /**
+   * One conversation's requests; every conversation's when absent.
+   */
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+export interface ApprovalPendingResult {
+  /**
+   * Each open request's approval.request params, exactly as they were first sent.
+   */
+  requests: {
+    [k: string]: JsonValue;
+  }[];
 }
 export interface ClarifyRespondParams {
   answer: string;
@@ -4915,6 +5005,8 @@ export interface RpcMethods {
   'playbooks.run': { params: PlaybooksRunParams; result: PlaybooksRunResult };
   'playbooks.create': { params: PlaybooksCreateParams; result: PlaybooksCreateResult };
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult };
+  'approval.revoke': { params: ApprovalRevokeParams; result: ApprovalRevokeResult };
+  'approval.pending': { params: ApprovalPendingParams; result: ApprovalPendingResult };
   'clarify.respond': { params: ClarifyRespondParams; result: ClarifyRespondResult };
   'confirm.respond': { params: ConfirmRespondParams; result: ConfirmRespondResult };
   'slash.exec': { params: SlashExecParams; result: SlashExecResult };
@@ -4989,7 +5081,9 @@ export type ResultOf<M extends RpcMethod> = RpcMethods[M]['result'];
 
 /** Method names present in the contract, for a runtime guard at the edges. */
 export const RPC_METHODS = [
+  "approval.pending",
   "approval.respond",
+  "approval.revoke",
   "browser.close",
   "browser.frame",
   "browser.input",
