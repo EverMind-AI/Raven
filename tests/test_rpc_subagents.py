@@ -1764,6 +1764,55 @@ async def test_a_write_that_lands_during_the_ping_window_is_not_reverted(
     )
 
 
+async def test_a_write_that_lands_during_an_updates_ping_is_not_reverted(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The re-key gate opens the window the switch and the add both close.
+
+    `subagents.update` reads the agent list, mutates one row inside it, and
+    writes the whole list back. A changed key on a live row now sends a prompt
+    in between, for up to a minute, which puts this handler in exactly the
+    position the other two re-read to escape: the list it writes is the list it
+    read, so every other `subagents.*` write that landed during the ping is
+    reverted, after that call already answered success to its own client.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    _gate_answers(monkeypatch)
+    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
+
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hangs_until_released(cfg):
+        in_flight.set()
+        await release.wait()
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _hangs_until_released)
+
+    pinged = asyncio.ensure_future(subagents_update({"name": "Researcher", "api_key": "sk-rotated"}))
+    await in_flight.wait()
+    # A description carries nothing the agent could answer, so this write is
+    # never gated -- which is what lets it run while the gate is held open.
+    assert await subagents_update({"name": "Coder", "description": "mid-flight"}) == {
+        "updated": True,
+        "name": "Coder",
+    }
+    mid = {e["name"]: e.get("description") for e in _stored(config_path)}
+    assert mid["Coder"] == "mid-flight", "the concurrent write must reach disk"
+
+    release.set()
+    assert await pinged == {"updated": True, "name": "Researcher"}
+
+    after = {e["name"]: e for e in _stored(config_path)}
+    assert after["Researcher"].get("apiKey") == "sk-rotated", "the pinged update's own write must survive"
+    assert after["Coder"].get("description") == "mid-flight", (
+        "the write made during the ping must survive the update's write"
+    )
+
+
 async def test_toggle_still_refuses_a_name_nothing_knows(config_path: Path) -> None:
     """The materializing branch must not turn an unknown name into a success."""
     with pytest.raises(SubagentNotFoundError):

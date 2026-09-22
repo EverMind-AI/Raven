@@ -628,9 +628,13 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
     # Read before anything below moves them: the two fields whose new value the
     # agent has never been asked about. Everything else this call can change is
-    # presentation or policy, which cannot alter what the agent answers.
+    # presentation or policy, which cannot alter what the agent answers. The
+    # name goes with them because a rename moves it too, and the re-read below
+    # has to find the row this call started from under whichever spelling it
+    # was stored as.
     key_before = target.get("apiKey")
     model_before = target.get("model")
+    name_before = target.get("name")
     new_name = _clean_name(params.get("new_name"), field="new_name")
     if new_name:
         if materialized_discovered and new_name != name:
@@ -729,6 +733,13 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
     # already gated, so asking here would buy the same answer twice.
     if bool(target.get("enabled")) and (target.get("apiKey") != key_before or target.get("model") != model_before):
         await _refuse_unless_it_answers(entries, str(target["name"]), refusal="so it was not changed")
+        # Re-read over the ping, the way the switch and the add do: the list
+        # read before it would revert every other `subagents.*` write that
+        # landed during the minute this gate can hold. Only this call's own row
+        # is carried across -- under both spellings, since a rename in the same
+        # call means the row on disk is still under the old one.
+        entries = [e for e in _read_agents() if e.get("name") not in {name_before, target.get("name")}]
+        entries.append(target)
     try:
         reject_unsupported_openai_fields([target])
         set_agents(entries, config_path=get_config_path())
