@@ -20,11 +20,18 @@ import pytest
 import raven.agent.loop.turn_path as agent_loop_main
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
+from raven.config.raven import ContextConfig
+from raven.contracts.llm_provider import ToolCallRequest
+from raven.contracts.token_strategy import UsageSnapshot
+from raven.contracts.tool import Tool
 from raven.providers import rates
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding, use_binding
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
+from raven.token_wise import usage_context
+from raven.token_wise.registry import StrategyRegistry
+from raven.token_wise.usage_tracker import UsageTracker
 
 # The real fetch, captured before conftest's autouse guard stubs it to {}.
 _REAL_FETCH = rates._fetch_openrouter_models
@@ -72,10 +79,22 @@ def _reset_openrouter_cache():
     rates.reset_openrouter_cache()
 
 
-def _make_agent(workspace: Path, provider: LLMProvider, model: str, window: int | None) -> AgentLoop:
+def _make_agent(
+    workspace: Path,
+    provider: LLMProvider,
+    model: str,
+    window: int | None,
+    *,
+    strategies: StrategyRegistry | None = None,
+    context_config: ContextConfig | None = None,
+) -> AgentLoop:
     kwargs: dict = {}
-    if window is not None:
-        kwargs["engine"] = EngineWiring(context_window_tokens=window)
+    if window is not None or strategies is not None or context_config is not None:
+        kwargs["engine"] = EngineWiring(
+            context_window_tokens=window,
+            strategies=strategies,
+            context_config=context_config,
+        )
     return AgentLoop(
         provider=provider,
         workspace=workspace,
@@ -447,3 +466,206 @@ async def test_no_configured_effort_sends_none(workspace, monkeypatch):
     )
 
     assert provider.efforts == [None]
+
+
+# --------------------------------------------------------------------------- #
+# the cost is the turn's: every iteration, and every call it delegated          #
+# --------------------------------------------------------------------------- #
+
+
+def _usage(cost: float | None) -> dict:
+    usage: dict = {"prompt_tokens": 1000, "completion_tokens": 200, "total_tokens": 1200}
+    if cost is not None:
+        usage["cost_usd"] = cost
+    return usage
+
+
+def _says(text: str, cost: float | None) -> LLMResponse:
+    return LLMResponse(content=text, finish_reason="stop", usage=_usage(cost))
+
+
+def _asks_for(tool: str, cost: float | None, **arguments) -> LLMResponse:
+    return LLMResponse(
+        content="",
+        tool_calls=[ToolCallRequest(id="c1", name=tool, arguments=arguments)],
+        usage=_usage(cost),
+    )
+
+
+class ScriptedProvider(LLMProvider):
+    """One scripted reply per call; the last entry answers any call after it."""
+
+    def __init__(self, model: str, script: list[LLMResponse]):
+        super().__init__(api_key="test")
+        self._model = model
+        self._script = script
+        self.calls = 0
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        reply = self._script[min(self.calls, len(self._script) - 1)]
+        self.calls += 1
+        return reply
+
+    def get_default_model(self) -> str:
+        return self._model
+
+
+class DelegatingTool(Tool):
+    """Spends the way a dispatched sub-agent does: in a session of its own,
+    naming the delegating turn's session as its root (``usage_owner``, which
+    is what the ACP prompt carries over and the sub-agent's turn binds)."""
+
+    def __init__(self, tracker: UsageTracker, root: str, cost: float | None):
+        self._tracker = tracker
+        self._root = root
+        self._cost = cost
+
+    @property
+    def name(self) -> str:
+        return "delegate"
+
+    @property
+    def description(self) -> str:
+        return "Hand the task to a sub-agent."
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **_kwargs) -> str:
+        with usage_context.bind("acp:child", {"root_session_key": self._root}):
+            await self._tracker.after_llm_call({}, UsageSnapshot(model="child/model", cost_usd=self._cost))
+        return "the sub-agent answered"
+
+
+def _costing_agent(
+    workspace: Path,
+    script: list[LLMResponse],
+    *,
+    strategies: StrategyRegistry | None = None,
+) -> AgentLoop:
+    """An agent whose every billed call is the loop's own.
+
+    The Curator is dropped because its Slow Path is a bounded agent loop of its
+    own on the same provider, and a scripted provider cannot tell its calls from
+    the turn's. Neither its calls nor the watch-work judgement's reach the usage
+    recorder at all, so neither is part of what this file pins.
+    """
+    return _make_agent(
+        workspace,
+        ScriptedProvider("stub", script),
+        model="stub",
+        window=40000,
+        strategies=strategies,
+        context_config=ContextConfig(drop_segments=["curator"]),
+    )
+
+
+async def _turn(agent: AgentLoop, sink: dict, session_key: str = "s1") -> None:
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key=session_key,
+        usage_sink=sink,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_turn_costs_every_iteration_it_ran(workspace):
+    """Two model calls, two prices, one turn: the bar shows their sum.
+
+    The sink used to carry the final iteration's cost, so a turn that called a
+    tool and then answered reported only the answer.
+    """
+    agent = _costing_agent(workspace, [_asks_for("list_dir", 0.002, path="."), _says("done", 0.003)])
+    sink: dict = {}
+
+    await _turn(agent, sink)
+
+    assert sink["cost_usd"] == pytest.approx(0.005), "the tool-calling iteration, plus the one that answered"
+    assert sink["cost_missing_calls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_delegating_turn_costs_what_it_delegated(workspace):
+    """The sub-agent's spend is the turn's spend.
+
+    A sub-agent bills in its own session, so nothing on the delegating turn's
+    own calls can see it; it names this turn's session as its root, and the
+    recorder every billed call passes bills it here as well.
+    """
+    tracker = UsageTracker(persist=False)
+    agent = _costing_agent(
+        workspace,
+        [_asks_for("delegate", 0.002), _says("done", 0.003)],
+        strategies=StrategyRegistry([tracker]),
+    )
+    agent.tools.register(DelegatingTool(tracker, root="s1", cost=0.02))
+    sink: dict = {}
+
+    await _turn(agent, sink)
+
+    assert sink["cost_usd"] == pytest.approx(0.025), "0.002 + 0.003 of its own, plus the 0.02 it delegated"
+    assert sink["cost_missing_calls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_ends_unpriced_still_reports_what_it_knows(workspace):
+    """An unpriced call is unknown cost, not free, and it does not erase the
+    price of the calls beside it -- theirs is a sum, its own is a count."""
+    agent = _costing_agent(workspace, [_asks_for("list_dir", 0.002, path="."), _says("done", None)])
+    sink: dict = {}
+
+    await _turn(agent, sink)
+
+    assert sink["cost_usd"] == pytest.approx(0.002)
+    assert sink["cost_missing_calls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_delegation_that_reports_no_price_is_counted_not_dropped(workspace):
+    """The sub-agent ran on a model with no published price: the turn says how
+    many calls it cannot price rather than billing them as zero."""
+    tracker = UsageTracker(persist=False)
+    agent = _costing_agent(
+        workspace,
+        [_asks_for("delegate", 0.002), _says("done", 0.003)],
+        strategies=StrategyRegistry([tracker]),
+    )
+    agent.tools.register(DelegatingTool(tracker, root="s1", cost=None))
+    sink: dict = {}
+
+    await _turn(agent, sink)
+
+    assert sink["cost_usd"] == pytest.approx(0.005)
+    assert sink["cost_missing_calls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_turn_is_not_billed_for_a_delegation_of_another_session(workspace):
+    """The scope is found by root session key, so a sub-agent working for a
+    turn in another conversation bills that one and not this one."""
+    tracker = UsageTracker(persist=False)
+    agent = _costing_agent(
+        workspace,
+        [_asks_for("delegate", 0.002), _says("done", 0.003)],
+        strategies=StrategyRegistry([tracker]),
+    )
+    agent.tools.register(DelegatingTool(tracker, root="another-session", cost=0.02))
+    sink: dict = {}
+
+    await _turn(agent, sink)
+
+    assert sink["cost_usd"] == pytest.approx(0.005)

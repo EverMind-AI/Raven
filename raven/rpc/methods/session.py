@@ -31,14 +31,16 @@ import json
 import os
 import re
 from contextlib import suppress
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from raven.config.loader import drain_migration_notices, load_config
+from raven.config.loader import drain_migration_notices, load_config, raven_home
 from raven.config.raven import load_raven_config
 from raven.providers.rates import resolve_context_window
+from raven.providers.usage import reported_cost, token_count
 from raven.rpc.errors import ConfigValidationError, SessionTitleTooLongError, TurnInProgressError
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.system import _raven_version
@@ -108,6 +110,7 @@ def _enumerate_skills(agent_loop: "AgentLoop | None") -> dict[str, list[str]]:
 async def _baseline_usage(
     agent_loop: "AgentLoop | None",
     config: "Config",
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Banner ``info.usage`` subfield — boot baseline (no turn has run yet).
 
@@ -128,10 +131,18 @@ async def _baseline_usage(
     OpenRouter model can reach for a synchronous 10s HTTP call; this handler
     runs on the event loop (an RPC method), so that call is pushed to a
     thread rather than blocking every other session in flight.
+
+    ``model`` is whose window this is, and a caller that has a session passes
+    that session's own (:func:`_session_model`): a percentage is only a
+    percentage of the window the model being reported actually has. Read off
+    the default binding instead, a session switched from a 100k model to a 200k
+    one was reported on the model it switched to and measured against the
+    window it left. Omitted -- a session being created, which has not switched
+    anything yet -- the loop's own binding stands, as it always did.
     """
     from raven.providers.rates import is_plan_billed
 
-    model = getattr(agent_loop, "model", None)
+    model = model or getattr(agent_loop, "model", None)
     configured = config.agents.defaults.context_window_tokens
     if configured:
         context_max = configured
@@ -171,6 +182,22 @@ def _session_cwd(agent_loop: "AgentLoop | None", session_key: str | None) -> str
     return os.getcwd()
 
 
+def _session_model(agent_loop: "AgentLoop | None", config: "Config", session_key: str | None) -> str:
+    """The model a session runs on: its own when it has one, else the default.
+
+    A session that switched models has its own, and reporting the default would
+    show every other session's user the wrong model. With no ``session_key`` (a
+    session being created) the default is the right answer, because that is what
+    a new session starts on.
+    """
+    model_id = config.agents.defaults.model
+    if session_key and agent_loop is not None:
+        session_model = getattr(agent_loop, "session_model", None)
+        if callable(session_model):
+            model_id = session_model(session_key)
+    return model_id
+
+
 async def _default_session_info(
     agent_loop: "AgentLoop | None",
     config: "Config",
@@ -182,17 +209,14 @@ async def _default_session_info(
     zero usage, ``lazy=True``); version is always real (cached at module load).
 
     The model reported is the one this session runs on, not the configured
-    default: a session that switched has its own, and reporting the default
-    would show every other session's user the wrong model. With no
-    ``session_key`` (a session being created) the default is the right answer,
-    because that is what a new session starts on.
+    default: see :func:`_session_model`.
     """
-    model_id = config.agents.defaults.model
-    if session_key and agent_loop is not None:
-        session_model = getattr(agent_loop, "session_model", None)
-        if callable(session_model):
-            model_id = session_model(session_key)
-    usage = await _baseline_usage(agent_loop, config)
+    model_id = _session_model(agent_loop, config, session_key)
+    # Only for a session that exists: created, this bundle reports the
+    # configured default while the turn will run on the loop's binding, and
+    # sizing the window off the report would be a second change to a path this
+    # is not about.
+    usage = await _baseline_usage(agent_loop, config, model_id if session_key else None)
     info: dict[str, Any] = {
         "model": model_id,
         "model_id": model_id,
@@ -495,7 +519,7 @@ async def session_resume(
             mgr = manager_for(agent_loop, config)
             raw = mgr.peek(session_key)
             if raw is not None:
-                _fill_resumed_context(info, raw)
+                _fill_resumed_context(info["usage"], raw)
                 if info["running"]:
                     info["running_ms"] = _running_ms(raw.messages)
                 # The banner names what is being resumed. Read from the stored
@@ -522,8 +546,8 @@ async def session_resume(
     }
 
 
-def _fill_resumed_context(info: dict[str, Any], session: Any) -> None:
-    """Estimate how full the context window is for a session being resumed.
+def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
+    """Estimate how full the context window is, into a caller's usage mapping.
 
     Estimation, not measurement: no provider has been called yet in this
     process, so the only honest number available is what the next call would
@@ -538,8 +562,7 @@ def _fill_resumed_context(info: dict[str, Any], session: Any) -> None:
     -- argument included -- is the one the next turn makes, which is what the
     number claims to be.
     """
-    usage = info.get("usage")
-    if not isinstance(usage, dict) or session is None:
+    if session is None:
         return
     try:
         # max_messages=0 is "all of it", which is what both places that build or
@@ -550,14 +573,14 @@ def _fill_resumed_context(info: dict[str, Any], session: Any) -> None:
         # the meter would go quiet exactly as it started to matter.
         messages = session.get_history(max_messages=0)
     except Exception:
-        logger.exception("session.resume: could not read the session history")
+        logger.exception("session.*: could not read the session history")
         return
     if not messages:
         return
     try:
         used = estimate_prompt_tokens(messages)
     except Exception:
-        logger.exception("session.resume: context estimate failed")
+        logger.exception("session.*: context estimate failed")
         return
     context_max = usage.get("context_max") or 0
     usage["context_used"] = used
@@ -1060,7 +1083,7 @@ async def session_compress(
         # old one is stale.
         try:
             info = await _default_session_info(agent_loop, config, session_key)
-            _fill_resumed_context(info, session)
+            _fill_resumed_context(info["usage"], session)
             result["info"] = info
             result["messages"] = _map_to_wire(survivors, session_key)
             usage = info.get("usage")
@@ -1068,6 +1091,140 @@ async def session_compress(
                 result["usage"] = usage
         except Exception:
             logger.warning("session.compress: compacted {} but could not build the redraw payload", session_key)
+    return result
+
+
+def _usage_days(session: Any) -> list[date]:
+    """The telemetry days a session's calls can be in: its first day to today.
+
+    Rows name the root session and are filed under the day they were written, so
+    nothing filed before the session existed can be about it and nothing after
+    today can exist yet. A session that was neither cached nor on disk gets the
+    settings page's own 90-day window, rather than a silent walk of every file
+    the install ever wrote.
+    """
+    today = date.today()
+    created = getattr(session, "created_at", None)
+    first = min(created.date(), today) if isinstance(created, datetime) else today - timedelta(days=89)
+    return [first + timedelta(days=offset) for offset in range((today - first).days + 1)]
+
+
+def _usage_rows(path: Path) -> list[dict[str, Any]]:
+    """Parsed rows of one telemetry file.
+
+    A line that does not parse is skipped rather than raised on: the recorder
+    flushes per call, so a process killed mid-write leaves a partial line, and
+    that is not a reason to fail a report about the calls that did land.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _scan_usage(root: str, days: list[date]) -> dict[str, Any]:
+    """Sum every call recorded under ``root`` over ``days``.
+
+    Tool rows carry no tokens and no price, so they are skipped the way the
+    settings page skips them. Attribution is by root session -- the session
+    itself for a turn run directly, the delegating session for a sub-agent's own
+    turn -- which is what makes one conversation's panel count what it spent
+    through every agent it dispatched.
+
+    Cost counts only what a provider reported (schema version 2). A row from
+    before that carries a locally estimated figure, which is not a bill; it is
+    counted missing like any other unpriced call, and ``cost_usd`` stays None
+    until some call reports a price.
+    """
+    tel_dir = raven_home() / "telemetry"
+    calls = 0
+    fresh = 0
+    output = 0
+    cache_read = 0
+    cache_write = 0
+    cost_usd: float | None = None
+    cost_missing = 0
+    for day in days:
+        path = tel_dir / f"usage-{day.isoformat()}.jsonl"
+        if not path.is_file():
+            continue
+        for row in _usage_rows(path):
+            if row.get("_type") == "tool_call":
+                continue
+            if (row.get("root_session_key") or row.get("session_key")) != root:
+                continue
+            calls += 1
+            fresh += token_count(row.get("input_tokens")) or 0
+            output += token_count(row.get("output_tokens")) or 0
+            cache_read += token_count(row.get("cache_read_tokens")) or 0
+            cache_write += token_count(row.get("cache_write_tokens")) or 0
+            cost = reported_cost(row.get("cost_usd")) if row.get("schema_version") == 2 else None
+            if cost is None:
+                cost_missing += 1
+            else:
+                cost_usd = (cost_usd or 0.0) + cost
+    return {
+        "calls": calls,
+        "input": fresh,
+        "output": output,
+        "cache_read": cache_read,
+        "cache_write": cache_write,
+        "total": fresh + output + cache_read + cache_write,
+        "cost_usd": cost_usd,
+        "cost_status": "exact" if cost_missing == 0 else "estimated",
+        "cost_missing_calls": cost_missing,
+    }
+
+
+async def session_usage(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``session.usage`` — what this conversation has spent, delegations included.
+
+    The footer counts the turn that just finished; this counts the session, and
+    the two agree because both attribute a call to the session at the root of
+    its delegation chain. A sub-agent's calls are recorded under its own key
+    with the parent as root, so the parent's panel includes them and a worker
+    that asks about itself sees none of them -- the "worker sees zeros" the
+    slash command has always promised. The key asked about is the root of the
+    sum, never a delegation the RPC happens to run under, so the answer does not
+    depend on where the call was made.
+
+    Read from the recorder's telemetry, the only account that outlives the
+    process: one row per call, from the day this session first existed to today.
+    The counters are a flow -- summed over the session, ``total`` being the four
+    the panel prints -- while ``context_*`` is a gauge: how full the window is
+    now, estimated the way ``session.resume`` estimates it.
+    """
+    session_key = str(params.get("session_id") or "")
+    if not session_key:
+        raise ConfigValidationError(
+            "session.usage requires params.session_id",
+            data={"field": "session_id"},
+        )
+
+    agent_loop = _safe_invoke_factory(agent_loop_factory)
+    config = load_config()
+    session = manager_for(agent_loop, config).peek(session_key)
+    result = _scan_usage(session_key, _usage_days(session))
+    result["model"] = _session_model(agent_loop, config, session_key)
+    baseline = await _baseline_usage(agent_loop, config, result["model"])
+    result["context_max"] = baseline["context_max"]
+    result["context_used"] = 0
+    result["context_percent"] = 0
+    result["context_estimated"] = False
+    _fill_resumed_context(result, session)
     return result
 
 
@@ -1214,7 +1371,7 @@ def register_session_methods(
     *,
     agent_loop_factory: "AgentLoopFactory | None" = None,
 ) -> None:
-    """Register the 15 session handlers on a dispatcher.
+    """Register the 16 session handlers on a dispatcher.
 
     Mirrors :func:`raven.rpc.methods.turn.register_turn_methods` —
     wraps the module-level handlers in single-argument closures that pre-bind
@@ -1258,6 +1415,9 @@ def register_session_methods(
     async def _compress(params: dict) -> dict:
         return await session_compress(params, agent_loop_factory=agent_loop_factory)
 
+    async def _usage(params: dict) -> dict:
+        return await session_usage(params, agent_loop_factory=agent_loop_factory)
+
     async def _branch(params: dict) -> dict:
         return await session_branch(params, agent_loop_factory=agent_loop_factory)
 
@@ -1279,6 +1439,7 @@ def register_session_methods(
     dispatcher.register("session.clear", _clear)
     dispatcher.register("session.undo", _undo)
     dispatcher.register("session.compress", _compress)
+    dispatcher.register("session.usage", _usage)
     dispatcher.register("session.branch", _branch)
     dispatcher.register("session.export", _export)
     dispatcher.register("session.set_mode", _set_mode)
@@ -1298,6 +1459,7 @@ __all__ = [
     "session_clear",
     "session_undo",
     "session_compress",
+    "session_usage",
     "session_branch",
     "session_export",
     "session_set_mode",

@@ -3941,17 +3941,68 @@ export interface SessionSteerResult {
   hint?: string;
 }
 export interface SessionUsageParams {
-  session_id?: string;
+  /**
+   * Full session_key to report on.
+   */
+  session_id: string;
 }
 export interface SessionUsageResult {
   /**
-   * Human-readable explanation of why this method is not supported in v0.1.
+   * Recorded calls under this session's root.
    */
-  error: string;
+  calls: number;
   /**
-   * Optional hint to the user (e.g., 'Press Ctrl+C').
+   * The model this session runs on now.
    */
-  hint?: string;
+  model: string;
+  /**
+   * Fresh input tokens; cache excluded.
+   */
+  input: number;
+  /**
+   * Output tokens.
+   */
+  output: number;
+  /**
+   * Cache-read tokens.
+   */
+  cache_read: number;
+  /**
+   * Cache-write tokens.
+   */
+  cache_write: number;
+  /**
+   * input + output + cache_read + cache_write.
+   */
+  total: number;
+  /**
+   * Sum of provider-reported USD; null when no call reported a price.
+   */
+  cost_usd?: number | null;
+  /**
+   * exact when every call reported a price; estimated when some did not.
+   */
+  cost_status: 'estimated' | 'exact';
+  /**
+   * Calls with no reported price, left out of cost_usd.
+   */
+  cost_missing_calls: number;
+  /**
+   * Context window of the session's model; 0 when unknown.
+   */
+  context_max: number;
+  /**
+   * Estimated tokens the next call would send.
+   */
+  context_used: number;
+  /**
+   * context_used as a percentage of context_max.
+   */
+  context_percent: number;
+  /**
+   * True when context_used is a tiktoken estimate.
+   */
+  context_estimated: boolean;
 }
 export interface SkillsReloadParams {}
 export interface SkillsReloadResult {

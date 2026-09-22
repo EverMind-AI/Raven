@@ -292,3 +292,61 @@ async def test_the_row_carries_the_reasoning_count_and_why_the_call_ended(tmp_pa
     assert [row["reasoning_tokens"] for row in rows] == [235, 0]
     assert [row["finish_reason"] for row in rows] == ["tool_calls", None]
     assert tracker.snapshot("sess1").reasoning_tokens == 235
+
+
+async def test_a_delegated_call_bills_the_turn_that_delegated_it(tmp_path: Path):
+    """The recorder is the seam: a sub-agent's call reaches the delegating
+    turn's scope, a turn's own call does not (its loop bills that one, and
+    billing it here would double it), and a scope that has closed -- a
+    delegation outliving the turn -- bills nobody."""
+    from raven.token_wise import usage_context
+    from raven.token_wise.turn_spend import TurnSpend
+
+    tracker = UsageTracker(telemetry_dir=tmp_path, persist=False)
+    spend = TurnSpend("parent")
+    with spend.collecting():
+        with usage_context.bind("parent"):
+            await tracker.after_llm_call({}, UsageSnapshot(model="parent/model", cost_usd=0.5))
+        with usage_context.bind("child", {"root_session_key": "parent"}):
+            await tracker.after_llm_call({}, UsageSnapshot(model="child/model", cost_usd=0.02))
+            await tracker.after_llm_call({}, UsageSnapshot(model="child/model", cost_usd=None))
+
+    assert spend.cost_usd == pytest.approx(0.02)
+    assert spend.cost_missing_calls == 1
+
+    with usage_context.bind("child", {"root_session_key": "parent"}):
+        await tracker.after_llm_call({}, UsageSnapshot(model="child/model", cost_usd=0.04))
+    assert spend.cost_usd == pytest.approx(0.02), "the turn had ended; its total is final"
+
+
+async def test_a_turn_with_no_session_key_bills_only_its_own_calls():
+    """A loop run outside a session -- no key -- is not listed as a root, so no
+    delegation can name it; the calls it makes itself still count."""
+    from raven.token_wise import turn_spend
+
+    spend = turn_spend.TurnSpend(None)
+    with spend.collecting() as scope:
+        assert scope is spend
+        turn_spend.note_delegated(None, 0.5)
+        turn_spend.note_delegated("", 0.5)
+        spend.note(0.01)
+
+    assert spend.cost_usd == pytest.approx(0.01)
+    assert spend.cost_missing_calls == 0
+
+
+async def test_two_overlapping_turns_of_one_session_each_bill_what_ran_under_them():
+    """Two turns of one session can overlap -- a relay re-entering the
+    conversation it was delegated from -- so each is billed for the delegations
+    that ran while it did, and the first to close leaves the other listed."""
+    from raven.token_wise import turn_spend
+
+    outer = turn_spend.TurnSpend("s1")
+    inner = turn_spend.TurnSpend("s1")
+    with outer.collecting():
+        with inner.collecting():
+            turn_spend.note_delegated("s1", 0.5)
+        turn_spend.note_delegated("s1", 0.25)
+
+    assert outer.cost_usd == pytest.approx(0.75)
+    assert inner.cost_usd == pytest.approx(0.5)

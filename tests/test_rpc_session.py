@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -44,6 +44,7 @@ from raven.rpc.methods.session import (
     session_resume,
     session_set_mode,
     session_title,
+    session_usage,
 )
 from raven.session.manager import SessionManager
 
@@ -251,6 +252,34 @@ async def test_session_resume_reports_where_the_session_actually_runs(
     result = await session_resume({"session_id": session_key}, agent_loop_factory=lambda: _loop_with_resolver(tmp_path))
 
     assert result["info"]["cwd"] == str(pinned)
+
+
+async def test_session_resume_sizes_the_banner_by_the_model_the_session_switched_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The banner reports the session's model, so it must report that model's
+    window: the pair is what the context bar divides. The same baseline serves
+    ``session.usage``, and both used to read the window off the default
+    binding.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.agents.defaults.context_window_tokens = None
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    windows = {"boot/model": 100_000, "switched/model": 200_000}
+    monkeypatch.setattr(session_module, "resolve_context_window", lambda model: windows.get(model, 0))
+
+    session_key = "tui:20260610_143052_switched"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": "hello"}])
+    loop = _loop_with_resolver(tmp_path)
+    loop.model = "boot/model"
+    loop.session_model = lambda _key: "switched/model"
+
+    result = await session_resume({"session_id": session_key}, agent_loop_factory=lambda: loop)
+
+    assert result["info"]["model"] == "switched/model"
+    assert result["info"]["context_window"] == 200_000
+    assert result["info"]["usage"]["context_max"] == 200_000
 
 
 async def test_session_resume_reports_the_policy_default_not_the_launch_dir(
@@ -3196,3 +3225,238 @@ def test_append_metadata_patch_is_a_no_op_for_a_missing_or_headless_file_and_upd
     mgr.save(live)
     mgr.append_metadata_patch("tui:cached", {"archived": True, "archivedBy": "auto"})
     assert live.metadata["archived"] is True and live.metadata["archivedBy"] == "auto"
+
+
+# ---------------------------------------------------------------------------
+# session.usage — what one conversation has spent, its delegations included
+# ---------------------------------------------------------------------------
+
+
+def _usage_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the handler at a throwaway workspace and a throwaway raven home."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    # Pinned, so context_max is the number this test chose rather than whatever
+    # the provider table says about the default model today.
+    cfg.agents.defaults.context_window_tokens = 200_000
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    home = tmp_path / "home"
+    monkeypatch.setattr(session_module, "raven_home", lambda: home)
+    return home
+
+
+def _usage_row(
+    session_key: str,
+    *,
+    root: str | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cost_usd: float | None = None,
+    schema_version: int = 2,
+) -> dict:
+    """One telemetry row, carrying the fields the scanner reads."""
+    row: dict = {
+        "ts": "2026-09-22T10:00:00+08:00",
+        "model": "claude-sonnet-5",
+        "schema_version": schema_version,
+        "session_key": session_key,
+        "root_session_key": root if root is not None else session_key,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cache_write_tokens": cache_write_tokens,
+        "finish_reason": "stop",
+    }
+    if cost_usd is not None:
+        row["cost_usd"] = cost_usd
+    return row
+
+
+def _write_telemetry(home: Path, day: date, rows: list[dict]) -> None:
+    telemetry = home / "telemetry"
+    telemetry.mkdir(parents=True, exist_ok=True)
+    with (telemetry / f"usage-{day.isoformat()}.jsonl").open("a", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row) + "\n")
+
+
+async def test_session_usage_sums_the_sessions_calls_its_delegations_included(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _usage_setup(tmp_path, monkeypatch)
+    root = "tui:20260922_101500_aabbcc"
+    _write_session(tmp_path, root, [{"role": "user", "content": "hello"}])
+    _write_telemetry(
+        home,
+        date.today(),
+        [
+            _usage_row(
+                root,
+                input_tokens=1000,
+                output_tokens=200,
+                cache_read_tokens=300,
+                cache_write_tokens=50,
+                cost_usd=0.01,
+            ),
+            _usage_row("agent:sub_1", root=root, input_tokens=500, output_tokens=100, cost_usd=0.005),
+            _usage_row("tui:20260922_090000_deadbe", input_tokens=9999, cost_usd=1.0),
+            {**_usage_row(root, input_tokens=4000), "_type": "tool_call", "tool_name": "read"},
+        ],
+    )
+
+    result = await session_usage({"session_id": root})
+
+    assert result["calls"] == 2
+    assert result["input"] == 1500
+    assert result["output"] == 300
+    assert result["cache_read"] == 300
+    assert result["cache_write"] == 50
+    assert result["total"] == 2150
+    assert result["cost_usd"] == pytest.approx(0.015)
+    assert result["cost_status"] == "exact" and result["cost_missing_calls"] == 0
+    assert result["model"]
+    assert result["context_max"] == 200_000
+    assert 0 < result["context_used"] < result["context_max"]
+    assert result["context_estimated"] is True
+
+
+async def test_session_usage_for_a_worker_that_only_delegated_reports_zeros(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sub-agent's own calls are recorded under the session that dispatched it."""
+    home = _usage_setup(tmp_path, monkeypatch)
+    parent = "tui:20260922_101500_aabbcc"
+    _write_session(tmp_path, parent, [{"role": "user", "content": "hello"}])
+    _write_telemetry(home, date.today(), [_usage_row("agent:sub_1", root=parent, input_tokens=500, cost_usd=0.005)])
+
+    result = await session_usage({"session_id": "agent:sub_1"})
+
+    assert result["calls"] == 0 and result["total"] == 0
+    assert result["cost_usd"] is None
+
+
+async def test_session_usage_ignores_the_days_before_the_session_existed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _usage_setup(tmp_path, monkeypatch)
+    root = "tui:20260922_101500_aabbcc"
+    _seed_session_file(SessionManager(tmp_path), root, days_ago=2)
+    _write_telemetry(home, date.today() - timedelta(days=5), [_usage_row(root, input_tokens=77, cost_usd=0.5)])
+    _write_telemetry(home, date.today() - timedelta(days=2), [_usage_row(root, input_tokens=30, cost_usd=0.002)])
+    _write_telemetry(home, date.today(), [_usage_row(root, input_tokens=100, cost_usd=0.01)])
+
+    result = await session_usage({"session_id": root})
+
+    assert result["calls"] == 2 and result["input"] == 130
+
+
+async def test_session_usage_counts_only_provider_reported_costs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy row's local estimate is not a bill; it is counted missing."""
+    home = _usage_setup(tmp_path, monkeypatch)
+    priced = "tui:20260922_101500_aabbcc"
+    unpriced = "tui:20260922_101501_bbccdd"
+    _write_session(tmp_path, priced, [{"role": "user", "content": "hello"}])
+    _write_session(tmp_path, unpriced, [{"role": "user", "content": "hello"}])
+    _write_telemetry(
+        home,
+        date.today(),
+        [
+            _usage_row(priced, input_tokens=10, cost_usd=0.02),
+            {**_usage_row(priced, input_tokens=10, schema_version=1), "estimated_cost_usd": 0.5},
+            _usage_row(unpriced, input_tokens=10, schema_version=1),
+        ],
+    )
+
+    priced_result = await session_usage({"session_id": priced})
+    assert priced_result["cost_usd"] == pytest.approx(0.02)
+    assert priced_result["cost_status"] == "estimated" and priced_result["cost_missing_calls"] == 1
+
+    unpriced_result = await session_usage({"session_id": unpriced})
+    assert unpriced_result["cost_usd"] is None and unpriced_result["cost_missing_calls"] == 1
+    assert unpriced_result["total"] == 10
+
+
+async def test_session_usage_measures_the_window_of_the_model_the_session_runs_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gauge divides by the window of the model this session switched to.
+
+    Read off the default binding instead, a session moved from a 100k model to
+    a 200k one is reported on the model it switched to and measured against the
+    window it left, so the percentage is wrong by the ratio between them.
+    """
+    home = _usage_setup(tmp_path, monkeypatch)
+    # No pin, so the model is what answers: the pin outranks it either way and
+    # would hide which model was asked.
+    session_module.load_config().agents.defaults.context_window_tokens = None
+    windows = {"boot/model": 100_000, "switched/model": 200_000}
+    monkeypatch.setattr(session_module, "resolve_context_window", lambda model: windows.get(model, 0))
+    root = "tui:20260922_101500_aabbcc"
+    _write_session(tmp_path, root, [{"role": "user", "content": "hello"}])
+    _write_telemetry(home, date.today(), [_usage_row(root, input_tokens=42, cost_usd=0.001)])
+    loop = SimpleNamespace(model="boot/model", session_model=lambda _key: "switched/model")
+
+    result = await session_usage({"session_id": root}, agent_loop_factory=lambda: loop)
+
+    assert result["model"] == "switched/model"
+    assert result["context_max"] == 200_000
+    assert result["context_percent"] == round(100 * result["context_used"] / 200_000)
+
+
+async def test_session_usage_answers_a_null_cost_its_published_schema_accepts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unpriced session answers ``cost_usd: null``, and the wire contract has
+    to accept the value the handler returns -- both generated clients type
+    themselves off this schema, and a consumer that validates rejects the whole
+    result, not the one field."""
+    import jsonschema
+
+    home = _usage_setup(tmp_path, monkeypatch)
+    root = "tui:20260922_101500_aabbcc"
+    _write_session(tmp_path, root, [{"role": "user", "content": "hello"}])
+    _write_telemetry(home, date.today(), [_usage_row(root, input_tokens=42)])
+
+    result = await session_usage({"session_id": root})
+
+    assert result["cost_usd"] is None
+    schema = json.loads((Path(__file__).resolve().parent.parent / "rpc-schema" / "openrpc.json").read_text())
+    method = next(entry for entry in schema["methods"] if entry["name"] == "session.usage")
+    jsonschema.validate(result, {**method["result"]["schema"], "components": schema["components"]})
+
+
+async def test_session_usage_requires_a_session_id() -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError) as exc:
+        await session_usage({})
+    assert exc.value.data == {"field": "session_id"}
+
+
+async def test_session_usage_is_no_longer_a_stub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The promoted handler answers ``session.usage`` end to end."""
+    from raven.rpc.methods import register_aligned_methods
+    from raven.rpc.methods._stubs import HERMES_ONLY_STUB_METHODS
+    from raven.rpc.models import METHOD_MODELS
+
+    assert "session.usage" not in HERMES_ONLY_STUB_METHODS
+
+    home = _usage_setup(tmp_path, monkeypatch)
+    root = "tui:20260922_101500_aabbcc"
+    _write_session(tmp_path, root, [{"role": "user", "content": "hello"}])
+    _write_telemetry(home, date.today(), [_usage_row(root, input_tokens=42, cost_usd=0.001)])
+
+    dispatcher = Dispatcher()
+    register_aligned_methods(dispatcher)
+    assert "session.usage" in dispatcher.methods()
+    response = await dispatcher.dispatch(
+        {"jsonrpc": "2.0", "id": 1, "method": "session.usage", "params": {"session_id": root}}
+    )
+
+    assert "error" not in response, response
+    METHOD_MODELS["session.usage"][1].model_validate(response["result"])
+    assert response["result"]["input"] == 42

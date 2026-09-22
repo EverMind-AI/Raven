@@ -1425,6 +1425,45 @@ class SessionExportResult(_Strict):
     )
 
 
+class SessionUsageParams(_Strict):
+    """Params for session.usage — report on the named session."""
+
+    session_id: str = Field(..., description="Full session_key to report on.")
+
+
+class SessionUsageResult(_Strict):
+    """What one conversation has spent, its delegations included.
+
+    Token counters are sums over every call recorded under the session's root
+    key, so ``total`` is those four added up rather than a provider's own total.
+    Cost sums the amounts providers reported and stays None when none of them
+    reported one (a plan-billed model), which is a client's cue to draw no cost
+    row at all; ``cost_missing_calls`` is how many calls went unpriced, and
+    ``cost_status`` says whether the sum is the whole bill or part of it.
+    """
+
+    calls: int = Field(..., description="Recorded calls under this session's root.")
+    model: str = Field(..., description="The model this session runs on now.")
+    input: int = Field(..., description="Fresh input tokens; cache excluded.")
+    output: int = Field(..., description="Output tokens.")
+    cache_read: int = Field(..., description="Cache-read tokens.")
+    cache_write: int = Field(..., description="Cache-write tokens.")
+    total: int = Field(..., description="input + output + cache_read + cache_write.")
+    cost_usd: float | None = Field(
+        default=None,
+        description="Sum of provider-reported USD; null when no call reported a price.",
+    )
+    cost_status: Literal["estimated", "exact"] = Field(
+        ...,
+        description="exact when every call reported a price; estimated when some did not.",
+    )
+    cost_missing_calls: int = Field(..., description="Calls with no reported price, left out of cost_usd.")
+    context_max: int = Field(..., description="Context window of the session's model; 0 when unknown.")
+    context_used: int = Field(..., description="Estimated tokens the next call would send.")
+    context_percent: int = Field(..., description="context_used as a percentage of context_max.")
+    context_estimated: bool = Field(..., description="True when context_used is a tiktoken estimate.")
+
+
 class SessionHistoryParams(_Strict):
     session_key: str
     max_messages: int | None = Field(
@@ -3972,10 +4011,6 @@ class SessionSteerParams(_Strict):
     text: str | None = None
 
 
-class SessionUsageParams(_Strict):
-    session_id: str | None = None
-
-
 class SkillsReloadParams(_Strict):
     pass
 
@@ -4953,6 +4988,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "session.close": (SessionCloseParams, SessionCloseResult),
     "session.branch": (SessionBranchParams, SessionBranchResult),
     "session.compress": (SessionCompressParams, SessionCompressResult),
+    "session.usage": (SessionUsageParams, SessionUsageResult),
     "session.status": (SessionStatusParams, SessionStatusResult),
     "session.set_mode": (SessionSetModeParams, SessionSetModeResult),
     # ext.list / cron.* / settings.* / channels.status / fs.* -- the console
@@ -5089,7 +5125,6 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "voice.record": (VoiceRecordParams, StubResult),
     "session.save": (SessionSaveParams, StubResult),
     "session.steer": (SessionSteerParams, StubResult),
-    "session.usage": (SessionUsageParams, StubResult),
     "skills.reload": (SkillsReloadParams, StubResult),
     "reload.env": (ReloadEnvParams, StubResult),
     "sudo.respond": (SudoRespondParams, StubResult),
@@ -5146,6 +5181,8 @@ __all__ = [
     "SessionUndoResult",
     "SessionExportParams",
     "SessionExportResult",
+    "SessionUsageParams",
+    "SessionUsageResult",
     "MessageStartEvent",
     "SessionNamingEndedEvent",
     "SessionNamingEndedPayload",
