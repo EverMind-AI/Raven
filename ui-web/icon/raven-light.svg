@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <title>Raven — Sacred Watcher, White and Gold</title>
+  <desc>An ink-charcoal raven with an antique-gold solar halo and iris on a white background.</desc>
+  <rect width="64" height="64" fill="#FFFFFF"/>
+  <circle cx="31" cy="29" r="22" stroke="#B08D4F" stroke-width="1.6"/>
+  <path d="M13 53C14.5 45.5 19 42 22 36.5C24 32.8 22.9 29.7 23.8 25.5C25 19.8 29.4 16 35 16C40.1 16 44 19.1 45.8 23.5C50.2 24.5 54.1 27.4 56 31.5C51.5 30.2 47.7 29.8 43.5 30.7C41.5 31.2 40.3 33 40.1 35.5C39.5 42 42.1 48 46 53H13Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M13 53C14.5 45.5 19 42 22 36.5C24 32.8 22.9 29.7 23.8 25.5C25 19.8 29.4 16 35 16C40.1 16 44 19.1 45.8 23.5C50.2 24.5 54.1 27.4 56 31.5C51.5 30.2 47.7 29.8 43.5 30.7C41.5 31.2 40.3 33 40.1 35.5C39.5 42 42.1 48 46 53H13Z" fill="#252923"/>
+  <path d="M34.8 24.6Q38.6 20.7 42.4 24.6Q38.6 28.5 34.8 24.6Z" fill="#FFFFFF"/>
+  <circle cx="38.6" cy="24.6" r="1.5" fill="#B08D4F"/>
+  <circle cx="38.6" cy="24.6" r="0.65" fill="#252923"/>
+  <path d="M18 53C22 46 27 41.8 33 38C30.4 43.3 29.8 47.8 30 53H18Z" fill="#FFFFFF"/>
+</svg>

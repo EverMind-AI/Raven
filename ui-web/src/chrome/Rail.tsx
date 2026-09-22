@@ -57,7 +57,7 @@ function RailTop(): JSX.Element {
     <div className="railtop">
       {/* The name is the product's, not a translated string: it reads the same
           in every language the page has. */}
-      <span className="wordmark"><RavenMark />RAVEN</span>
+      <span className="wordmark"><RavenMark slot="rail" />RAVEN</span>
       {/* aria-expanded is what paints it as engaged: the toggle never moves, so
           its own state is the only thing that says whether the rail is open.
           Nothing has ever written it, so the served value stands. */}

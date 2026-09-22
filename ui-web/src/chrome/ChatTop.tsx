@@ -123,7 +123,7 @@ export function ChatTop(): JSX.Element {
         aria-label={lang.attr('gui.resize_ws')}
       />
       <div id="brand" aria-hidden="true">
-        <span className="mk"><RavenMark height={52} /></span>
+        <span className="mk"><RavenMark slot="brand" height={52} /></span>
         <span className="wl">{t('gui.brand.hi')}</span>
       </div>
     </>

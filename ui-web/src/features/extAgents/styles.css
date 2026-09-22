@@ -47,8 +47,12 @@
 /* The brand mark is the tile: the shared component, sized inside this box. */
 .extAgents-tile { flex: none; display: grid; place-items: center; }
 .extAgents-tile .agent-mark { width: 36px; height: 36px; border-radius: 10px; background: var(--paper); border: 1px solid var(--line); }
-.extAgents-tile .agent-mark img, .extAgents-tile .agent-mark svg { width: 23px; height: 23px; }
-.extAgents-tile-own .agent-mark img { width: 21px; height: 26px; }
+/* One box for every mark, our own included. The exception that used to sit
+   here was 21x26, cut for a portrait drawing this roster no longer carries:
+   against a square mark `object-fit: contain` spent the width and left the
+   extra height empty, so the one row that is this installation came out the
+   smallest on the page. */
+.extAgents-tile .agent-mark img, .extAgents-tile .agent-mark svg { width: 26px; height: 26px; }
 
 .extAgents-who { flex: 1; min-width: 0; }
 .extAgents-nm { display: flex; align-items: center; gap: 7px; min-width: 0; }
@@ -99,8 +103,7 @@
 .extAgents-sheet { width: 100%; flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .extAgents-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 20px 48px 0 20px; }
 .extAgents-head .extAgents-tile .agent-mark { width: 46px; height: 46px; border-radius: 12px; }
-.extAgents-head .extAgents-tile .agent-mark img, .extAgents-head .extAgents-tile .agent-mark svg { width: 29px; height: 29px; }
-.extAgents-head .extAgents-tile-own .agent-mark img { width: 26px; height: 33px; }
+.extAgents-head .extAgents-tile .agent-mark img, .extAgents-head .extAgents-tile .agent-mark svg { width: 32px; height: 32px; }
 .extAgents-meta { flex: 1; min-width: 0; }
 .extAgents-meta h3 { margin: 0; font-family: var(--mono); font-size: 16px; font-weight: 600; letter-spacing: -.02em; }
 .extAgents-by { font-size: 11.5px; color: var(--faint); margin-top: 1px; display: flex; align-items: center; gap: 6px; }

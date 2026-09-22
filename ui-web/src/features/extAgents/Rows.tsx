@@ -62,10 +62,9 @@ function Led({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | 
 }
 
 export function Tile({ row }: { row: ExtAgentRow }): JSX.Element {
-  const own = isOwnRow(row)
   return (
-    <span className={'extAgents-tile' + (own ? ' extAgents-tile-own' : '')}>
-      <AgentMark preset={row.preset} own={own} />
+    <span className="extAgents-tile">
+      <AgentMark preset={row.preset} own={isOwnRow(row)} />
     </span>
   )
 }

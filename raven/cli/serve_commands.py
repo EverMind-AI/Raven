@@ -100,7 +100,14 @@ def resolve_ui_dist() -> Optional[Path]:
 
 
 _PAGE_SOURCE_SKIP = frozenset({"test", "__snapshots__", "__golden__"})
-_PAGE_BUILD_FILES = ("build.py", "vite.config.ts", "package.json", "package-lock.json", "icon/raven.svg")
+_PAGE_BUILD_FILES = (
+    "build.py",
+    "vite.config.ts",
+    "package.json",
+    "package-lock.json",
+    "icon/raven.svg",
+    "icon/raven-light.svg",
+)
 
 
 def page_behind_sources(dist: Optional[Path]) -> bool:
@@ -111,7 +118,7 @@ def page_behind_sources(dist: Optional[Path]) -> bool:
     would -- a pull that touches ``ui-web/src`` or the message catalogue leaves
     those files newer than ``dist/index.html`` until the next build. The
     build's own files count too (the assembler, the bundler config, the
-    dependency lock, the icon it copies): a pull that moves only those changes
+    dependency lock, the icons it copies): a pull that moves only those changes
     the page as surely as a source edit. Tests, the test harness layer and
     snapshots are left out: they change without changing the page.
     """

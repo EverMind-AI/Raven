@@ -3,15 +3,19 @@ div.app
     div.railtop
       span.wordmark
         svg
-          rect
-          path
+          defs
+            path#rv-body-rail
+            mask#rv-halo-rail
+              rect
+              use
+            mask#rv-cuts-rail
+              rect
+              path
+              path
           circle
-          ellipse
-          ellipse
+          use
           circle
           circle
-          path
-          path
       button#railBtn.ghost-ic.tipdn
         svg
           rect
@@ -78,15 +82,19 @@ div.app
         div#brand
           span.mk
             svg
-              rect
-              path
+              defs
+                path#rv-body-brand
+                mask#rv-halo-brand
+                  rect
+                  use
+                mask#rv-cuts-brand
+                  rect
+                  path
+                  path
               circle
-              ellipse
-              ellipse
+              use
               circle
               circle
-              path
-              path
           span.wl
         div.dock
           div#sheetRack.sheets

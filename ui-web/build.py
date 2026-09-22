@@ -138,7 +138,12 @@ def main() -> None:
         out_assets = dist / "assets"
         shutil.rmtree(out_assets, ignore_errors=True)
         shutil.copytree(src_assets, out_assets)
-        shutil.copy2(ROOT / "icon" / "raven.svg", out_assets / "raven.svg")
+        # The two tab marks live in icon/ rather than src/assets because the
+        # dark one is also what the processor row wears, and a row asset that
+        # a browser caches as a favicon is worth keeping out of the tree the
+        # page imports from. Same drawing on two grounds; see page.html.
+        for mark in ("raven.svg", "raven-light.svg"):
+            shutil.copy2(ROOT / "icon" / mark, out_assets / mark)
         total = sum(p.stat().st_size for p in out_assets.rglob("*") if p.is_file())
         print(f"copied dist/assets ({total:,} bytes)", flush=True)
     for url, golden in _BOOT_SNAPSHOTS:

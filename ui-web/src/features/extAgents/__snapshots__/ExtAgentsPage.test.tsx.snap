@@ -9,7 +9,7 @@ section.extAgents-sec
     span.extAgents-n
   div.extAgents-set
     div.extAgents-row
-      span.extAgents-tile.extAgents-tile-own
+      span.extAgents-tile
         span.agent-mark
           img
       div.extAgents-who

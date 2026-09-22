@@ -4,15 +4,22 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Raven</title>
-<!-- Two, because the mark is a silhouette rather than a drawing with its own
-     palette: the bird is one solid black body with the eyes cut out of it, which
-     measures 21:1 on a light tab strip and 1.25:1 on a dark one.
-     assets/raven-dark.png is the same file with its RGB inverted and its alpha
-     kept, which is the treatment the splash takes in CSS and the one the page's
-     own mono marks take (`.agent-mark[data-tone="mono"]`). The dark candidate
-     is second because the last matching link is the one that wins. -->
-<link rel="icon" type="image/png" href="assets/raven.png" />
-<link rel="icon" type="image/png" href="assets/raven-dark.png" media="(prefers-color-scheme: dark)" />
+<!-- Two, because each drawing carries its own ground instead of an alpha
+     silhouette, and each is paired with the strip it stands out against rather
+     than the one it sinks into: raven.svg is the ivory bird on ink and takes
+     the light strip, raven-light.svg the charcoal bird on white and takes the
+     dark one. So the tab holds a tile either way instead of a bird floating
+     with no edge. One file inverted would not do what the pair does -- the halo
+     is the same warm gold on both, and inverting gold lands on blue. The dark
+     candidate is second because the last matching link is the one that wins.
+     assets/raven.svg is also the mark the processor row wears
+     (`ravenIconPath`), so a redraw there redraws the tab: they have been one
+     file since the mark was first cut, and nothing yet wants them apart.
+     The splash draws a third file, assets/agents/raven.svg: the same bird on
+     no ground at all, which is what a mark standing on the page's own surface
+     wants and what these two, carrying a ground each, cannot be. -->
+<link rel="icon" type="image/svg+xml" href="assets/raven.svg" />
+<link rel="icon" type="image/svg+xml" href="assets/raven-light.svg" media="(prefers-color-scheme: dark)" />
 <style>
 /*__STYLE__*/
 </style>
@@ -31,7 +38,7 @@
      load; live mode keeps it up until the boot sequence has real data. -->
 <div id="splash" aria-hidden="true">
   <div class="sp-in">
-    <img class="sp-rv" src="assets/raven.png" alt="" width="86" height="86" decoding="async">
+    <img class="sp-rv" src="assets/agents/raven.svg" alt="" width="64" height="64" decoding="async">
     <div class="sp-wl">Raven Agent</div>
     <div class="sp-bar"><i></i></div>
   </div>

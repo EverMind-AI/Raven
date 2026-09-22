@@ -4,15 +4,19 @@ div.app[data-rail=on]
     div.railtop
       span.wordmark
         svg
-          rect
-          path
+          defs
+            path#rv-body-rail
+            mask#rv-halo-rail
+              rect
+              use
+            mask#rv-cuts-rail
+              rect
+              path
+              path
           circle
-          ellipse
-          ellipse
+          use
           circle
           circle
-          path
-          path
       button#railBtn.ghost-ic.tipdn
         svg
           rect
@@ -79,15 +83,19 @@ div.app[data-rail=on]
         div#brand
           span.mk
             svg
-              rect
-              path
+              defs
+                path#rv-body-brand
+                mask#rv-halo-brand
+                  rect
+                  use
+                mask#rv-cuts-brand
+                  rect
+                  path
+                  path
               circle
-              ellipse
-              ellipse
+              use
               circle
               circle
-              path
-              path
           span.wl
         div.dock
           div#cpElsewhere.cp-elsewhere
