@@ -198,6 +198,9 @@ describe('a phase change on a background conversation', () => {
     h.pipeline.notify('tui:open', { type: 'wait' })
 
     expect(h.seen.turns).toEqual([['tui:open', 'wait']])
+    /* No stored mark and no list re-read: this conversation is on screen and
+       already drawn. What the rail shows for it while a question of its own is
+       standing is the rail's to derive -- see RailPage's `askingIn`. */
     expect(h.rows[0]!.status).toBeUndefined()
     expect(h.seen.refreshes).toBe(0)
   })

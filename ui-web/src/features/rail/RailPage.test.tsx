@@ -11,6 +11,7 @@ import {
 } from '../../lib/session'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
+import { add as rackAdd, remove as rackRemove } from '../../state/sheetRack'
 import { resetSources, setSources, sources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import { RailApp } from './RailPage'
@@ -259,9 +260,8 @@ describe('rail island', () => {
 
   /* A conversation that is asking something says so from the same slot, and says
      it even while its turn is busy. Its sheet only mounts on its own screen, so
-     the row is one of the two places the reader can learn a request is waiting
-     (the other is the line above the composer), and the turn behind it waits
-     for the person rather than expiring. */
+     this row is the whole of the notice, and the turn behind it waits for the
+     person rather than expiring. */
   it('shows the asking tail, and it outranks a busy turn', () => {
     const h = install({ rows: [row({ status: 'ask' })], busy: true })
     const host = mount()
@@ -269,6 +269,23 @@ describe('rail island', () => {
     const w = rowByTitle(host, 'GTM research').querySelector('.w')!
     expect(w.getAttribute('data-sig')).toBe('ask')
     expect(w.getAttribute('aria-label')).toBe('gui.sess.asking')
+    expect(h).toBeTruthy()
+  })
+
+  it('shows it for a standing question even when no mark was stored', () => {
+    /* The stored mark is cleared by opening the row and overwritten by leaving
+       it, so a reader who watched the question appear and then walked away
+       would have been left with a row reading like any other running turn. What
+       the rack is holding answers that without a mark to defend. */
+    const h = install({ rows: [row()], busy: true })
+    const sheet = document.createElement('div')
+    sheet.dataset.asks = '1'
+    rackAdd(sheet, 'a')
+
+    const host = mount()
+
+    expect(rowByTitle(host, 'GTM research').querySelector('.w')!.getAttribute('data-sig')).toBe('ask')
+    rackRemove(sheet)
     expect(h).toBeTruthy()
   })
 

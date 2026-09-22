@@ -58,6 +58,15 @@ const SHEETS = new Map<string, Set<HTMLElement>>()
    collectable. */
 const TEARDOWN = new WeakMap<HTMLElement, () => void>()
 
+/* How many of a conversation's sheets are asking something. Read by the rail,
+   which paints the conversation's row: a turn blocked on an approval is still a
+   running turn, and every writer of the row's own status says so, so the one
+   thing the reader needs -- that this one is waiting on THEM -- has to be
+   derived from the questions actually standing rather than stored and then
+   defended against each of those writers in turn. */
+export const askingIn = (key: string): number =>
+  [...(SHEETS.get(key) || [])].filter((el) => el.dataset.asks === '1').length
+
 /* Who is waiting on the reader, per conversation.
  *
  * A sheet that ASKS something -- an approval, a clarification -- interrupts:
