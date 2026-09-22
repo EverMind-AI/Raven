@@ -278,7 +278,7 @@ raven web
 <p align="center"><em>新建任务：一个输入框，技能、剧本、知识库与记忆都在一侧。</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/7963b116-7dfb-4493-890c-b26a0be65850"><img src="https://github.com/user-attachments/assets/7963b116-7dfb-4493-890c-b26a0be65850" alt="Raven WebUI subagents page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/886eb14c-cb8c-4de9-a7c2-741a4b93b002"><img src="https://github.com/user-attachments/assets/886eb14c-cb8c-4de9-a7c2-741a4b93b002" alt="Raven WebUI subagents page" width="90%"></a>
 </p>
 
 <p align="center"><em>子智能体：内置与第三方 Agent 汇总在同一张花名册里。</em></p>

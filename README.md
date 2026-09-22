@@ -288,7 +288,7 @@ The command opens the WebUI in your browser and keeps Raven running in the backg
 <p align="center"><em>New task: one composer, with skills, playbooks, knowledge and memory a click away.</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/3364d731-c842-428e-a0a2-239c70add4de"><img src="https://github.com/user-attachments/assets/3364d731-c842-428e-a0a2-239c70add4de" alt="Raven WebUI subagents page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/a3ac242b-302f-41ea-b5d4-a3873ea43811"><img src="https://github.com/user-attachments/assets/a3ac242b-302f-41ea-b5d4-a3873ea43811" alt="Raven WebUI subagents page" width="90%"></a>
 </p>
 
 <p align="center"><em>Subagents: every connected agent in one roster, built-in and third-party alike.</em></p>
