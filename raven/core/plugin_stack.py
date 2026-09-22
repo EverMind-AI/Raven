@@ -33,6 +33,7 @@ import asyncio
 import logging
 import sys
 from collections.abc import Callable
+from contextlib import suppress
 from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -683,9 +684,11 @@ def _plugin_id_for_backend(
     return None
 
 
-# Held so a detached start cannot be collected mid-flight, and so one place
-# can retire them. asyncio keeps only a weak reference to a running task.
-_PENDING_BACKEND_STARTS: set[asyncio.Task] = set()
+# Held so a detached start cannot be collected mid-flight, and so one place can
+# retire them. asyncio keeps only a weak reference to a running task. Paired
+# with the backend it belongs to: a generation retires its own start, not one
+# belonging to the generation replacing it.
+_PENDING_BACKEND_STARTS: list[tuple[Any, asyncio.Task]] = []
 
 
 def start_backend_detached(backend: Any, *, logger: Any) -> None:
@@ -718,20 +721,36 @@ def start_backend_detached(backend: Any, *, logger: Any) -> None:
             logger.exception("memory backend start failed; continuing with legacy memory path")
 
     task = asyncio.create_task(_start(), name="memory-backend-start")
-    _PENDING_BACKEND_STARTS.add(task)
-    task.add_done_callback(_PENDING_BACKEND_STARTS.discard)
+    entry = (backend, task)
+    _PENDING_BACKEND_STARTS.append(entry)
+
+    def _release(_done: asyncio.Task) -> None:
+        with suppress(ValueError):
+            _PENDING_BACKEND_STARTS.remove(entry)
+
+    task.add_done_callback(_release)
 
 
-def cancel_pending_backend_starts() -> None:
-    """Retire any start still in flight, before the backend is stopped.
+async def cancel_pending_backend_starts(backend: Any) -> None:
+    """Retire ``backend``'s start, and wait for it to leave, before stopping it.
 
-    A start left running across teardown polls an address nothing will answer
-    and then reports a failure for a generation that no longer exists; on
-    process exit it is also what raises "Task was destroyed but it is pending".
-    Cancelling is idempotent -- a finished task drops itself from the set.
+    Awaited rather than fired: ``Task.cancel`` only requests cancellation, so
+    returning at that point lets ``stop()`` run while ``start()`` is still
+    inside the backend. The contract asks a backend to survive ``stop()``
+    *after* a failed start, not concurrently with one -- a plugin that finishes
+    wiring after teardown, or touches what ``stop`` has just closed, is the
+    failure that buys. Reproduced as ``start-enter -> stop -> start-exit`` and
+    pinned in tests/test_core_runtime_swap.py.
+
+    Scoped to one backend by identity: a generation retires the start it owns,
+    never one belonging to the generation taking its place. Idempotent -- a
+    finished task has already dropped itself.
     """
-    for task in list(_PENDING_BACKEND_STARTS):
+    mine = [task for held, task in _PENDING_BACKEND_STARTS if held is backend]
+    for task in mine:
         task.cancel()
+    if mine:
+        await asyncio.gather(*mine, return_exceptions=True)
 
 
 __all__ = [

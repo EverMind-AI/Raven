@@ -603,7 +603,7 @@ class TestStartBackendDetached:
 
         plugin_stack.start_backend_detached(_Backend(), logger=logging.getLogger(__name__))
         gc.collect()
-        assert plugin_stack._PENDING_BACKEND_STARTS, "the in-flight start was not held"
+        assert any(t is not None for _b, t in plugin_stack._PENDING_BACKEND_STARTS), "the in-flight start was not held"
         gate.set()
         await asyncio.wait_for(ran.wait(), timeout=2)
         await asyncio.sleep(0)
@@ -660,7 +660,8 @@ class TestStartBackendDetached:
                     cancelled.set()
                     raise
 
-        plugin_stack.start_backend_detached(_Hanging(), logger=logging.getLogger(__name__))
+        backend = _Hanging()
+        plugin_stack.start_backend_detached(backend, logger=logging.getLogger(__name__))
         await asyncio.wait_for(entered.wait(), timeout=2)
-        plugin_stack.cancel_pending_backend_starts()
-        await asyncio.wait_for(cancelled.wait(), timeout=2)
+        await plugin_stack.cancel_pending_backend_starts(backend)
+        assert cancelled.is_set(), "cancel returned before the start had left"

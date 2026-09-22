@@ -99,9 +99,11 @@ class RavenRuntime:
         # under that call whenever the process later exits.
         self.loop.context.skills.stop_file_watcher()
         if self.backend is not None:
-            # Before the drain: a start still polling for readiness would
-            # otherwise outlive the generation it belongs to.
-            plugin_stack.cancel_pending_backend_starts()
+            # Awaited, and before the drain: a start still polling for
+            # readiness would otherwise outlive the generation it belongs to,
+            # and returning at ``cancel()`` would let ``stop()`` run while
+            # ``start()`` is still inside the backend.
+            await plugin_stack.cancel_pending_backend_starts(self.backend)
             await self.loop.drain_backend_stores()
             try:
                 await self.backend.stop()
