@@ -68,6 +68,32 @@ describe('usage page', () => {
     expect(screen.getByText('exec').nextElementSibling!.textContent).toBe('2')
   })
 
+  /* A catalogue with no rates prices nothing, and every cost surface then read
+     $0.00 -- a number where the honest answer is that there is none. The whole
+     range unpriced takes the cost tile, the per-day bars and the cost column
+     off the page; the counts and the cache hit stay, because those are
+     measured rather than priced. */
+  it('drops every cost surface when nothing in the range was priced', async () => {
+    const none = stats(['2026-09-10', '2026-09-11'])
+    none.llm.total = { ...none.llm.total, cost_usd: null, cost_missing_calls: none.llm.total.calls }
+    none.llm.models = none.llm.models.map((m) => ({ ...m, cost_usd: null, cost_missing_calls: m.calls }))
+    install(undefined, { usage: async () => none })
+    await mount('usage')
+    expect(screen.queryByText('gui.settings.usage.cost')).toBeNull()
+    expect(document.querySelectorAll('.settings-bb')).toHaveLength(0)
+    expect(screen.queryByText('gui.settings.usage.no_price')).toBeNull()
+    expect(screen.getByText('12')).toBeTruthy()
+    expect(screen.getByText('20.0%')).toBeTruthy()
+    expect(screen.getByText('gui.settings.usage.by_model')).toBeTruthy()
+  })
+
+  it('keeps the cost surfaces while one model in the range still has a price', async () => {
+    install(undefined, { usage: async () => stats(['2026-09-10']) })
+    await mount('usage')
+    expect(screen.getAllByText('gui.settings.usage.cost').length).toBeGreaterThan(0)
+    expect(screen.getByText('gui.settings.usage.no_price')).toBeTruthy()
+  })
+
   it('shows the cache write column once any model wrote cache', async () => {
     install(undefined, { usage: async () => stats(['2026-09-10'], true) })
     await mount('usage')
