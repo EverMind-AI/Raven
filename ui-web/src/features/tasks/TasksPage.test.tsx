@@ -1091,8 +1091,8 @@ describe('the node panel', () => {
     })
   })
 
-  describe('the reply dock\'s send control', () => {
-    it('is an icon button, not a text pill', async () => {
+  describe('a node of a stateful agent with a live handle', () => {
+    it('offers nowhere to write back to it', async () => {
       roster = [{
         name: 'raven', kind: 'builtin', description: '', enabled: true, configured: true, group: 'builtin',
         probe_status: 'ready', probe_detail: '', has_api_key: false, mcps: [], allow_mcp_secrets: false,
@@ -1104,10 +1104,9 @@ describe('the node panel', () => {
       })
       pick(withInstance)
       await act(async () => {})
-      const send = document.querySelector('.tkdock button') as HTMLButtonElement
-      expect(send.className).toContain('go')
-      expect(send.textContent).toBe('')
-      expect(send.querySelector('svg')).not.toBeNull()
+      expect(document.querySelector('.tkcard')).not.toBeNull()
+      expect(document.querySelector('.tkdock')).toBeNull()
+      expect(document.querySelector('.tkcard input')).toBeNull()
     })
   })
 })
