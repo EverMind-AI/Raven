@@ -28,15 +28,31 @@ export interface Pending {
   args: ExtAgentActArgs
 }
 
-/* Whether the server answers this write by running the agent. Only a write that
-   switches a row on reaches the enable gate, and that gate sends one real prompt
-   through the agent's own backend and waits up to 60s for the reply -- so the
-   reader is waiting on a test, not on a connection being opened. Every other
-   write (switching off, a rename, a key, a model) is bookkeeping and returns at
-   once. `migrate` counts because it is a remove plus an add from the preset, so
-   it goes through the same gate any other add does. */
+/* Whether the server may answer this write by running the agent. The gate sends
+   one real prompt through the agent's own backend and waits up to 60s for the
+   reply, so the reader is waiting on a test rather than on a connection being
+   opened, and the row should say so.
+
+   `may`, not `will`: the server also asks whether the row is on and whether the
+   value actually moved, and neither fact travels with the write -- the page
+   posts what is in the field, and only the stored row knows what was there
+   before. Mirroring that here would put the same condition in two layers with
+   nothing holding them together. The two wrong answers do not cost the same:
+   answering yes for a write the server settles without asking puts a word on
+   something that returns in milliseconds, while answering no for one it does
+   ask leaves "connecting" on the row for the length of a real ping. So this
+   errs towards yes.
+
+   `migrate` counts because it is a remove plus an add from the preset, so it
+   goes through the same gate any other add does. A credential and a model are
+   the two fields an update can change that the agent has never been asked
+   about; a rename or a description cannot change what it answers. */
 export const probes = (p: Pending): boolean =>
-  p.op === 'connect' || p.op === 'migrate' || (p.op === 'toggle' && p.args.enabled === true)
+  p.op === 'connect' ||
+  p.op === 'migrate' ||
+  p.op === 'model' ||
+  (p.op === 'toggle' && p.args.enabled === true) ||
+  (p.op === 'update' && !!p.args.api_key)
 
 /* The other write that changes whether the agent is on the roster. It reaches no
    gate -- the server pings on the way on and not on the way off -- so it waits

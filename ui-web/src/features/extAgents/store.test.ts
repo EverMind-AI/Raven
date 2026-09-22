@@ -212,3 +212,26 @@ describe('the model verbs', () => {
     })
   })
 })
+
+/* The page cannot know whether the server will actually reach the agent: that
+   turns on whether the value moved and whether the row is on, neither of which
+   the write itself carries. So the question is "may this one be answered by
+   running the agent", and the cost of the two wrong answers is not symmetric --
+   over-answering puts a word on a write that returns at once, under-answering
+   leaves "connecting" on a row for the length of a real ping. */
+describe('probes', () => {
+  it('covers every write the enable gate can answer by running the agent', () => {
+    expect(store.probes({ op: 'connect', args: {} })).toBe(true)
+    expect(store.probes({ op: 'migrate', args: {} })).toBe(true)
+    expect(store.probes({ op: 'toggle', args: { enabled: true } })).toBe(true)
+    expect(store.probes({ op: 'model', args: { model: 'v/m2' } })).toBe(true)
+    expect(store.probes({ op: 'model', args: { clear_model: true } })).toBe(true)
+    expect(store.probes({ op: 'update', args: { api_key: 'sk-new' } })).toBe(true)
+  })
+
+  it('leaves the writes that cannot reach the agent alone', () => {
+    expect(store.probes({ op: 'toggle', args: { enabled: false } })).toBe(false)
+    expect(store.probes({ op: 'update', args: { description: 'new words' } })).toBe(false)
+    expect(store.probes({ op: 'update', args: { new_name: 'Renamed' } })).toBe(false)
+  })
+})
