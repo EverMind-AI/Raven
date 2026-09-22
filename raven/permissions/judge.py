@@ -83,6 +83,8 @@ def _review_tool_schema() -> list[dict[str, Any]]:
 
 def _extract(response: Any) -> JudgeOutcome | None:
     for call in getattr(response, "tool_calls", None) or []:
+        if getattr(call, "name", None) != _TOOL_NAME:
+            continue
         args = getattr(call, "arguments", None)
         if isinstance(args, str):
             try:
