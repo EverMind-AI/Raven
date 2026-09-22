@@ -1813,6 +1813,86 @@ async def test_a_write_that_lands_during_an_updates_ping_is_not_reverted(
     )
 
 
+async def test_a_write_to_the_same_row_during_an_updates_ping_is_not_reverted(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-reading the list is not enough: the row itself has to be re-read too.
+
+    Carrying this call's own row across the ping is what keeps its change,
+    and carrying it *whole* is what loses everybody else's -- the copy was
+    taken before the await, so every field another call wrote to this row in
+    between is restored to what it was. The neighbouring test cannot see it:
+    it edits a different row, which is the half a fresh list read already
+    fixes.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    _gate_answers(monkeypatch)
+    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
+
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hangs_until_released(cfg):
+        in_flight.set()
+        await release.wait()
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _hangs_until_released)
+
+    pinged = asyncio.ensure_future(subagents_update({"name": "Researcher", "api_key": "sk-rotated"}))
+    await in_flight.wait()
+    assert await subagents_update({"name": "Researcher", "description": "mid-flight"}) == {
+        "updated": True,
+        "name": "Researcher",
+    }
+
+    release.set()
+    assert await pinged == {"updated": True, "name": "Researcher"}
+
+    after = next(e for e in _stored(config_path) if e["name"] == "Researcher")
+    assert after.get("apiKey") == "sk-rotated", "the pinged update's own field must survive"
+    assert after.get("description") == "mid-flight", "a field written to this same row during the ping must survive too"
+
+
+async def test_an_update_refuses_a_row_removed_while_it_was_being_proved(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row deleted during the ping has nothing left to merge onto.
+
+    Re-reading the list is what makes this reachable: the row this call read
+    is no longer in it. Appending the pre-await copy would resurrect an entry
+    somebody removed, and answering success would say a change landed on a row
+    that is gone -- so the call refuses instead, under the error its published
+    contract already declares.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    _gate_answers(monkeypatch)
+    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
+
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hangs_until_released(cfg):
+        in_flight.set()
+        await release.wait()
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _hangs_until_released)
+
+    pinged = asyncio.ensure_future(subagents_update({"name": "Researcher", "api_key": "sk-rotated"}))
+    await in_flight.wait()
+    assert await subagents_remove({"name": "Researcher"}) == {"removed": True}
+
+    release.set()
+    with pytest.raises(SubagentNotFoundError, match="renamed or removed"):
+        await pinged
+    assert all(e["name"] != "Researcher" for e in _stored(config_path)), "the removal must stand"
+
+
 async def test_toggle_still_refuses_a_name_nothing_knows(config_path: Path) -> None:
     """The materializing branch must not turn an unknown name into a success."""
     with pytest.raises(SubagentNotFoundError):

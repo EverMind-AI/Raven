@@ -635,6 +635,7 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
     key_before = target.get("apiKey")
     model_before = target.get("model")
     name_before = target.get("name")
+    row_before = dict(target)
     new_name = _clean_name(params.get("new_name"), field="new_name")
     if new_name:
         if materialized_discovered and new_name != name:
@@ -733,13 +734,7 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
     # already gated, so asking here would buy the same answer twice.
     if bool(target.get("enabled")) and (target.get("apiKey") != key_before or target.get("model") != model_before):
         await _refuse_unless_it_answers(entries, str(target["name"]), refusal="so it was not changed")
-        # Re-read over the ping, the way the switch and the add do: the list
-        # read before it would revert every other `subagents.*` write that
-        # landed during the minute this gate can hold. Only this call's own row
-        # is carried across -- under both spellings, since a rename in the same
-        # call means the row on disk is still under the old one.
-        entries = [e for e in _read_agents() if e.get("name") not in {name_before, target.get("name")}]
-        entries.append(target)
+        entries, target = _merged_over_the_ping(target, row_before, name_before, materialized=materialized_discovered)
     try:
         reject_unsupported_openai_fields([target])
         set_agents(entries, config_path=get_config_path())
@@ -747,6 +742,48 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
         _raise_config_error(exc)
     _hot_apply(agent_loop_factory)
     return {"updated": True, "name": target["name"]}
+
+
+def _merged_over_the_ping(
+    target: dict, before: dict, stored_name: str | None, *, materialized: bool
+) -> tuple[list[dict], dict]:
+    """Re-read the agent list across the gate's await, keeping both authors.
+
+    The list read before a ping of up to a minute is stale in two ways, and
+    they want different answers.
+
+    Rows this call never touched are simply whatever disk says now, so the list
+    is read again -- writing back the one read before the ping would revert
+    every other `subagents.*` write that landed during it.
+
+    The row this call *is* editing has two authors by then: this call, whose
+    fields are the point of the write, and whoever else wrote to the same row
+    while the agent was being asked. Carrying the pre-await copy across keeps
+    the first and silently restores the second over the top of a call that has
+    already answered success. So only the fields this call actually changed are
+    replayed onto the freshly read row. `subagents.update` only ever sets
+    fields, never removes one, which is what makes a comparison against the
+    pre-mutation copy a complete account of what it did; a removal added later
+    would have to be replayed here too.
+
+    A row that is gone under the name this call read it as was renamed or
+    removed meanwhile, and there is nothing left to merge onto: the change is
+    refused rather than resurrecting a row somebody deleted. The exception is a
+    row this call materialized itself -- a discovered folder or a built-in
+    getting its first stored entry -- which was never on disk to be found.
+    """
+    entries = _read_agents()
+    current = next((e for e in entries if e.get("name") == stored_name), None)
+    if current is None:
+        if materialized:
+            entries.append(target)
+            return entries, target
+        raise SubagentNotFoundError(
+            f"sub-agent {stored_name!r} was renamed or removed while it was being proved, so it was not changed",
+            data={"name": stored_name, "field": "name"},
+        )
+    current.update({key: value for key, value in target.items() if before.get(key) != value})
+    return entries, current
 
 
 def _is_switch_row(stored: dict, discovered: dict) -> bool:
