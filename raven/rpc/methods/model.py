@@ -488,6 +488,16 @@ async def model_options(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     ``agents.defaults`` would star the wrong row for every session that has
     switched -- the picker would disagree with the status bar it sits under.
     """
+    from raven.providers.rates import warm_catalog_in_background
+
+    # The windows below are read from whatever catalogue is already in hand
+    # (``_model_labels`` never fetches on a UI call), and nothing else on this
+    # page would ever fill it: the warm otherwise runs only when a vision probe
+    # misses, so a home whose models all answer that question keeps showing the
+    # figures it cached weeks ago -- or none at all. Asking here is what makes
+    # the window a picker shows follow the vendor's published one. Guarded
+    # inside against a fresh table and against retry storms, and off the loop.
+    warm_catalog_in_background()
     parsed = _parse(ModelOptionsParams, params)
     current_model, current_provider = _current_selection()
     session_model = _session_model(agent_loop_factory, getattr(parsed, "session_id", None))

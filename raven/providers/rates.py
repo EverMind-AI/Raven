@@ -33,7 +33,19 @@ from raven.providers import model_catalog_cache
 
 #: One home for the window ladder's documented fallback: an unknown model gets
 #: this many tokens of headroom rather than a number invented at the call site.
-DEFAULT_CONTEXT_WINDOW_TOKENS = 65_536
+#:
+#: 200000 was 65536, inherited from the legacy per-agent setting the config
+#: migration retired (``config/loader.py``). The two ways a guess is wrong are
+#: not symmetric -- too small over-trims, which degrades silently, and too large
+#: lets a request exceed the real window, which the vendor refuses outright --
+#: and 65536 was chosen against the second. Which models actually reach here
+#: made the first the one that kept happening: only a model NO catalogue knows
+#: is sized by this number, and that is in practice a model newer than the
+#: pinned LiteLLM table rather than a small one. A genuinely smaller deployment
+#: is sized wrong by any guess and has the knob that outranks every catalogue,
+#: ``agents.defaults.contextWindowTokens``; a million-token model cut to a
+#: sixteenth had nothing but this line.
+DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000
 
 # How much room one call is given to answer when *nothing* can answer for the
 # model. A declaration is honoured as declared (see
@@ -578,10 +590,13 @@ def _dotted_version_variants(key: str) -> list[str]:
     return variants
 
 
-def _lookup_openrouter_entry(model: str, *, allow_fetch: bool = True, table: dict | None = None) -> dict | None:
+def _lookup_openrouter_entry(
+    model: str, *, allow_fetch: bool = True, table: dict | None = None, by_vendor: bool = False
+) -> dict | None:
     """This model's row in OpenRouter's catalogue, or None.
 
-    Only for ids that name OpenRouter. The table was once consulted for every id,
+    For ids that name OpenRouter, plus what ``by_vendor`` admits below. The
+    table was once consulted for every id,
     which reads across vendors: a self-hosted ``hosted_vllm/qwen3-32b`` matched
     OpenRouter's ``qwen/qwen3-32b`` and was reported at a price and a context
     window belonging to somebody else's deployment. What made it wrong was asking
@@ -589,19 +604,38 @@ def _lookup_openrouter_entry(model: str, *, allow_fetch: bool = True, table: dic
     alias, which stays because within OpenRouter's own namespace a bare id names
     the same model the full one does.
 
+    ``by_vendor`` admits an id served by the vendor itself -- ``anthropic/
+    claude-opus-4.8`` reaching Anthropic directly, which this table files under
+    exactly that key. It is what the bare alias is not: the vendor half is
+    matched rather than dropped, so ``hosted_vllm/qwen3-32b`` finds nothing
+    (the row is ``qwen/qwen3-32b``) and the incident above cannot come back
+    through it. Only the window asks for it, because a window is a fact about
+    the model: a price is a fact about whose account serves it, and OpenRouter's
+    is not the vendor's. What it still cannot tell apart is a local deployment
+    named after the model it was quantized from -- pin that one's window with
+    ``agents.defaults.contextWindowTokens``, which outranks every catalogue.
+
+    Such an id reads whatever table is on hand and never fetches one, whatever
+    ``allow_fetch`` says: a request routed to the vendor must not be the thing
+    that waits out a 10s call to a gateway it is not using, and unlike an
+    ``openrouter/`` id it has no expired-price tier to trigger. Filling the
+    table is somebody else's errand -- ``warm_catalog_in_background``, which the
+    picker asks for on every read.
+
     ``allow_fetch=False`` reaches ``_cache_only_openrouter_models`` directly
     rather than ``_fetch_openrouter_models(allow_fetch=False)`` -- the latter is
     the name a test double stands in for with the fetch's old zero-argument
     signature, and that double does not declare ``allow_fetch``.
     """
-    if not model.startswith("openrouter/"):
+    own = model.startswith("openrouter/")
+    if not own and not (by_vendor and "/" in model):
         return None
     key = model.removeprefix("openrouter/")
     if table is None:
-        table = _fetch_openrouter_models() if allow_fetch else _cache_only_openrouter_models()
+        table = _fetch_openrouter_models() if allow_fetch and own else _cache_only_openrouter_models()
     for candidate in (key, *_dotted_version_variants(key)):
         entry = table.get(candidate)
-        if entry is None and "/" in candidate:
+        if entry is None and own and "/" in candidate:
             entry = table.get(candidate.split("/", 1)[1])
         if entry is not None:
             return entry
@@ -907,8 +941,8 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
     that carry no ``max_input_tokens``. Not because the two mean the same
     thing, but because a model's window is never smaller than what it is
     allowed to emit, so the output ceiling is a safe lower bound -- and a lower
-    bound only over-trims, where this module's documented default (65536) would
-    over-estimate an 8k model by a factor of eight.
+    bound only over-trims, where this module's documented default (200000) would
+    over-estimate an 8k model by a factor of twenty-five.
 
     ``allow_import=False`` answers only from a LiteLLM that has already
     finished importing (see ``_litellm_ready``): importing it costs ~2-7s, and
@@ -948,11 +982,17 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
 def resolve_context_window(model: str, *, allow_fetch: bool = True) -> int | None:
     """Return a model's real context window in tokens, or None.
 
-    LiteLLM's static metadata first, then OpenRouter's catalogue for ids that
-    name OpenRouter. The snapshot is deliberately not a source: a window sizes
-    trimming, so a community-maintained file that goes stale or wrong would
-    shape the next request rather than cost a label. Unknown models return None
-    so the caller keeps its configured default.
+    LiteLLM's static metadata first, then OpenRouter's catalogue -- for ids that
+    name OpenRouter, and for vendor-qualified ids reaching the vendor directly
+    (``by_vendor``). LiteLLM's table ships pinned with the dependency, so it
+    knows nothing about a model released after that pin: every model this repo's
+    own registry describes as million-token was running on the fallback above
+    while the catalogue carrying its real window sat unread on disk, because the
+    id was ``deepseek/deepseek-v4-pro`` rather than ``openrouter/...``. The
+    snapshot is deliberately not a source: a window sizes trimming, so a
+    community-maintained file that goes stale or wrong would shape the next
+    request rather than cost a label. Unknown models return None so the caller
+    keeps its configured default.
 
     ``allow_fetch=False`` means "answer from what is already on hand": it
     passes through to the OpenRouter tier (see ``_fetch_openrouter_models``)
@@ -964,7 +1004,7 @@ def resolve_context_window(model: str, *, allow_fetch: bool = True) -> int | Non
     if window:
         return window
 
-    entry = _lookup_openrouter_entry(model, allow_fetch=allow_fetch)
+    entry = _lookup_openrouter_entry(model, allow_fetch=allow_fetch, by_vendor=True)
     if entry:
         try:
             length = int(entry.get("context_length") or 0)
@@ -1004,9 +1044,9 @@ def effective_context_window(model: str, configured: int | None, *, allow_fetch:
     # Said once per model, and only when the catalogues were actually asked
     # (``allow_fetch=False`` callers take the cheap tiers and would report a
     # miss the next call may fill). The default is a guess that is wrong in
-    # both directions -- 2026-09-11 it gave a 1,048,576-token model one
-    # sixteenth of its window and the history was trimmed until every request
-    # carried an orphan tool result -- so a guess is not taken silently.
+    # both directions -- 2026-09-11 the 65536 it then was gave a 1,048,576-token
+    # model one sixteenth of its window and the history was trimmed until every
+    # request carried an orphan tool result -- so a guess is not taken silently.
     if allow_fetch and model and model not in _DEFAULT_WINDOW_WARNED:
         _DEFAULT_WINDOW_WARNED.add(model)
         logger.warning(

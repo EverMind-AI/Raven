@@ -165,6 +165,48 @@ async def test_model_labels_carry_a_kind(fake_home: Path) -> None:
     assert all("kind" in v for v in labels.values())
 
 
+async def test_a_window_is_shown_for_an_id_the_vendor_serves_itself(fake_home: Path, monkeypatch) -> None:
+    """The badge a person reads to size a conversation. LiteLLM's table ships
+    pinned with the dependency, so every model added by hand is unknown to it,
+    and the catalogue that does carry the window files the row under the
+    vendor's own id -- which the lookup used to refuse for anything but an
+    ``openrouter/`` route. The row then had nothing to show at all: a model
+    nothing describes and nothing sizes is left out of the labels entirely.
+    """
+    from raven.providers import rates
+
+    rates.reset_openrouter_cache()
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE", {"deepseek/deepseek-v9-pro": {"context_length": 1_048_576}})
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": "deepseek/deepseek-v9-pro"}},
+            "providers": {"deepseek": {"apiKey": "sk-xxx", "models": ["deepseek/deepseek-v9-pro"]}},
+        },
+    )
+
+    result = await model_options({})
+    labels = _entry(result, "deepseek")["model_labels"]
+    assert labels["deepseek/deepseek-v9-pro"]["context_window"] == 1_048_576
+
+
+async def test_options_asks_for_a_fresh_catalogue(fake_home: Path, monkeypatch) -> None:
+    """Nothing else on this page would ever fill the table the windows are read
+    from: the warm runs on a vision probe that misses, so a home whose models
+    never raise that question keeps whatever it cached, or nothing. The picker
+    is the surface those figures are for, so it is the surface that asks.
+    """
+    from raven.providers import rates
+
+    calls: list[int] = []
+    monkeypatch.setattr(rates, "warm_catalog_in_background", lambda: calls.append(1))
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+
+    await model_options({})
+    assert calls == [1]
+
+
 async def test_options_oauth_provider_warning_and_auth_type(fake_home: Path) -> None:
     _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
     result = await model_options({})

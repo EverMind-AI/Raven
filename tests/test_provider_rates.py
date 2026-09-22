@@ -366,14 +366,24 @@ def test_an_openrouter_window_falls_back_to_the_live_table(monkeypatch):
     assert resolve_context_window("openrouter/deepseek-v4-pro") == 163840
 
 
-def test_a_direct_route_gets_no_window_from_the_gateways_table(monkeypatch):
-    """The window half of the hijack. A direct ``deepseek/`` route is not an
-    OpenRouter request, so OpenRouter's context length does not describe it."""
+def test_a_direct_route_reads_the_gateways_table_without_fetching_it(monkeypatch):
+    """The window half of the hijack, as it stands now. A direct ``deepseek/``
+    route is still not an OpenRouter request, so it never sends one -- the
+    counter is the assertion that matters here. What it may read is a row filed
+    under its own vendor and id, because that row states the model's window and
+    the model is the same one either way. Reading it is what stopped a home
+    running ``deepseek/deepseek-v4-pro`` from being sized against the fallback
+    while the row naming it sat in the table on disk.
+    """
     _patch_litellm_blind(monkeypatch)
     counter = _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
 
-    assert resolve_context_window("deepseek/deepseek-v4-pro") is None
+    assert resolve_context_window("deepseek/deepseek-v4-pro") is None, "nothing on hand, and nothing fetched"
     assert counter["calls"] == 0
+
+    _seed_catalog(monkeypatch, {"deepseek/deepseek-v4-pro": {"context_length": 163_840}})
+    assert resolve_context_window("deepseek/deepseek-v4-pro") == 163_840
+    assert counter["calls"] == 0, "a table on hand is read; one that is not there is not sent for"
 
 
 def test_the_snapshot_is_not_a_window_source(monkeypatch):
@@ -728,7 +738,7 @@ def test_resolve_context_window_allow_fetch_false_also_forwards_allow_import_fal
         return None
 
     monkeypatch.setattr(rates, "_try_litellm_context_window", _fake_litellm_tier)
-    monkeypatch.setattr(rates, "_lookup_openrouter_entry", lambda model, *, allow_fetch=True: None)
+    monkeypatch.setattr(rates, "_lookup_openrouter_entry", lambda model, **_: None)
 
     rates.resolve_context_window("openrouter/deepseek/deepseek-v4-pro", allow_fetch=False)
 
@@ -998,7 +1008,7 @@ def test_a_model_the_catalogue_does_not_know_gets_the_one_fallback(monkeypatch):
 
     assert rates.DEFAULT_MAX_OUTPUT_TOKENS == 64_000
     assert not hasattr(rates, "CLAUDE_MAX_OUTPUT_TOKENS"), "the claude half of the fallback is gone, not renamed"
-    assert rates.DEFAULT_CONTEXT_WINDOW_TOKENS - rates.MIN_PROMPT_TOKENS == 49_152, (
+    assert rates.DEFAULT_CONTEXT_WINDOW_TOKENS - rates.MIN_PROMPT_TOKENS == 183_616, (
         "the reserve alone would leave this much, and the per-iteration bound is what actually answers"
     )
     assert rates.resolve_max_output_tokens("probe/unknown") == rates.MAX_OUTPUT_TOKENS_PER_ITERATION
@@ -1245,6 +1255,60 @@ def test_only_one_boundary_is_dotted_at_a_time(monkeypatch):
     assert rates._lookup_openrouter_entry("openrouter/meta-llama/llama-3-3-70b-nope") is None
 
 
+def test_a_vendors_own_id_reads_the_catalogue_row_filed_under_it(monkeypatch):
+    """LiteLLM's table ships pinned with the dependency, so a model published
+    after that pin is unknown to it -- which is every model a person adds by
+    hand. The catalogue that does carry the window files it under the vendor's
+    own id, and the lookup admitted ``openrouter/`` ids only: a home running
+    ``deepseek/deepseek-v4-pro`` was sized against the fallback while the row
+    naming that exact id sat in the table on its own disk.
+    """
+    _patch_litellm_blind(monkeypatch)
+    _seed_catalog(monkeypatch, {"deepseek/deepseek-v4-pro": {"context_length": 1_048_576}})
+
+    assert rates.resolve_context_window("deepseek/deepseek-v4-pro", allow_fetch=False) == 1_048_576
+    assert rates.effective_context_window("deepseek/deepseek-v4-pro", None, allow_fetch=False) == 1_048_576
+
+
+def test_a_deployment_named_after_somebody_elses_model_still_reads_nothing(monkeypatch):
+    """Why the door was shut in the first place, and why matching the vendor
+    half rather than dropping it is what reopens it safely: a self-hosted
+    ``hosted_vllm/qwen3-32b`` used to match OpenRouter's ``qwen/qwen3-32b``
+    through the bare alias and was reported at another operator's window.
+    """
+    _patch_litellm_blind(monkeypatch)
+    _seed_catalog(
+        monkeypatch,
+        {"qwen/qwen3-32b": {"context_length": 262_144}, "qwen3-32b": {"context_length": 262_144}},
+    )
+
+    assert rates.resolve_context_window("hosted_vllm/qwen3-32b", allow_fetch=False) is None
+    assert rates.resolve_context_window("qwen3-32b", allow_fetch=False) is None, (
+        "a bare id names no vendor, so nothing vouches for the row it happens to spell"
+    )
+
+
+def test_the_vendors_own_id_buys_a_window_and_not_a_price(monkeypatch):
+    """A window is a fact about the model. A price is a fact about whose account
+    serves it, and OpenRouter's is not the vendor's -- so only the window tier
+    passes ``by_vendor``.
+    """
+    _patch_litellm_blind(monkeypatch)
+    _seed_catalog(
+        monkeypatch,
+        {
+            "deepseek/deepseek-v4-pro": {
+                "context_length": 1_048_576,
+                "pricing": {"prompt": "0.000001", "completion": "0.000002"},
+            }
+        },
+    )
+
+    assert rates._lookup_openrouter_entry("deepseek/deepseek-v4-pro", allow_fetch=False) is None
+    assert rates._lookup_openrouter_entry("deepseek/deepseek-v4-pro", allow_fetch=False, by_vendor=True) is not None
+    assert rates._try_openrouter_rates("deepseek/deepseek-v4-pro") is None
+
+
 def test_dotted_variants_are_a_fallback_not_a_rewrite():
     """No digit boundary, nothing to try; and the exact key is always preferred,
     so a wrong guess can only ever degrade to the None it replaced."""
@@ -1286,7 +1350,7 @@ def test_falling_back_to_the_default_window_warns_once_per_model(monkeypatch):
 
     mine = [line for line in lines if "nobody/unmapped-model" in line]
     assert len(mine) == 1
-    assert "65,536" in mine[0]
+    assert "200,000" in mine[0]
     assert "agents.defaults.contextWindowTokens" in mine[0]
 
 

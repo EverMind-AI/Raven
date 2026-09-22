@@ -320,7 +320,7 @@ def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
         # budget is sized against a default that fits no model in particular.
         health.findings.append(
             f"No catalogue knows the context window of {model}, so history is sized against the "
-            f"{DEFAULT_CONTEXT_WINDOW_TOKENS:,}-token default -- one sixteenth of a 1M-token model. "
+            f"{DEFAULT_CONTEXT_WINDOW_TOKENS:,}-token default -- a fifth of a 1M-token model. "
             f"Pin the real window with agents.defaults.contextWindowTokens."
         )
 
