@@ -1397,6 +1397,14 @@ def test_serve_starts_the_litellm_warm_up_at_boot() -> None:
     assert "warm_up_in_background()" in inspect.getsource(serve_commands._serve_main)
 
 
+def test_serve_warms_the_deck_template_covers_at_boot() -> None:
+    """The template gallery's covers are drawn once the gateway is up, not on the
+    click that opens the gallery; pinned by source for the same reason as above."""
+    import inspect
+
+    assert "deck_templates.warm_covers_in_background()" in inspect.getsource(serve_commands._serve_main)
+
+
 # ---------------------------------------------------------------------------
 # _ServedStack -- the stack a loop-less start still owes
 # ---------------------------------------------------------------------------

@@ -91,6 +91,13 @@ def is_renderable(path: Path) -> bool:
     return path.suffix.lower() in RENDERABLE_SUFFIXES
 
 
+def has_thumb(path: Path) -> bool:
+    """Whether a first-page picture can be made of ``path``: every Office source
+    LibreOffice renders, and a PDF, which is its own rendering and only needs
+    rasterising."""
+    return is_renderable(path) or path.suffix.lower() == ".pdf"
+
+
 def cache_dir() -> Path:
     from raven.config.paths import get_cache_dir
 
@@ -240,8 +247,87 @@ async def png_for(source: Path, *, timeout_s: float | None = None) -> Path:
     async with lock:
         if cached.is_file():
             return _touched(cached)
-        await asyncio.to_thread(_render, source, cached, budget, "png")
+        if source.suffix.lower() == ".pdf":
+            await asyncio.to_thread(_rasterise_pdf_page, source, cached, THUMB_WIDTH_PX)
+        else:
+            await asyncio.to_thread(_render, source, cached, budget, "png")
     return cached
+
+
+#: The width of a PDF's first page as a tile picture. LibreOffice's PNG export
+#: of a deck is the slide at screen size; a PDF page is drawn to about the same.
+THUMB_WIDTH_PX = 1280
+
+
+def _rasterise_pdf_page(source: Path, target: Path, width: int) -> None:
+    """The first page of a PDF as a PNG ``width`` wide, written atomically.
+
+    A PDF is already a rendering, so LibreOffice has nothing to convert (and its
+    Draw import refuses most of them). PyMuPDF draws the page when it is
+    installed -- it rides with either deck engine, so an install that makes
+    decks has it -- and poppler's ``pdftoppm`` is the fallback for one that
+    does not. Neither is a dependency of this package; both are probed.
+    """
+    root = cache_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix="render-", dir=root))
+    try:
+        staged = scratch / "page.png"
+        try:
+            import pymupdf  # type: ignore[import-not-found]
+        except ImportError:
+            try:
+                import fitz as pymupdf  # type: ignore[import-not-found, no-redef]
+            except ImportError:
+                pymupdf = None
+        if pymupdf is not None:
+            with pymupdf.open(source) as doc:
+                if doc.page_count == 0:
+                    raise PdfPreviewError(f"{source.name} has no pages")
+                page = doc[0]
+                zoom = width / max(page.rect.width, 1.0)
+                page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False).save(str(staged))
+        else:
+            pdftoppm = shutil.which("pdftoppm")
+            if pdftoppm is None:
+                raise PdfPreviewUnavailableError(
+                    f"no PDF rasteriser on the gateway host, so {source.name} has no picture: "
+                    "install a deck engine (PyMuPDF) or poppler (pdftoppm)"
+                )
+            import subprocess
+
+            prefix = scratch / "p"
+            subprocess.run(
+                [
+                    pdftoppm,
+                    "-f",
+                    "1",
+                    "-l",
+                    "1",
+                    "-scale-to-x",
+                    str(width),
+                    "-scale-to-y",
+                    "-1",
+                    "-png",
+                    str(source),
+                    str(prefix),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=CONVERT_TIMEOUT_S,
+            )
+            made = sorted(scratch.glob("p-*.png"))
+            if not made:
+                raise PdfPreviewError(f"pdftoppm drew nothing for {source.name}")
+            os.replace(made[0], staged)
+        _sweep(root)
+        os.replace(staged, target)
+    except (OSError, ValueError, RuntimeError) as exc:
+        if isinstance(exc, PdfPreviewError):
+            raise
+        raise PdfPreviewError(f"{source.name} could not be drawn: {exc}") from exc
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _render(source: Path, target: Path, timeout_s: float, fmt: str = "pdf") -> None:

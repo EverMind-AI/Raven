@@ -114,6 +114,19 @@ def test_run_starts_the_litellm_warm_up_before_the_first_request() -> None:
     assert "warm_up_in_background()" in run_body
 
 
+def test_run_warms_the_deck_template_covers_once_the_page_is_mounted() -> None:
+    """`raven web` is `raven gateway --page-port` underneath, so the gallery's
+    covers are drawn from here, after the page mount, not from `raven serve`
+    alone; pinned by source for the same reason as above."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    page_branch = src.split("if page_mount is not None:", 1)[1]
+    assert "deck_templates.warm_covers_in_background()" in page_branch
+
+
 def test_gateway_refuses_second_instance(tmp_config: Path, monkeypatch) -> None:
     """When the instance lock is already held, gateway exits 1 with a clear
     message and never builds the agent/channel stack."""

@@ -257,6 +257,35 @@ async def listing(*, with_covers: bool = True) -> tuple[list[dict], bool]:
     return rows, pending
 
 
+#: How long after the gateway is up the missing covers start drawing. The
+#: roster and the page come first; LibreOffice can have the machine afterwards.
+WARM_COVERS_AFTER_S = 15.0
+
+
+def warm_covers_in_background(*, delay_s: float = WARM_COVERS_AFTER_S) -> asyncio.Task | None:
+    """Draw every bundled template's missing cover once the gateway has settled.
+
+    The first cold gallery used to be built on the click that opened it: ten
+    LibreOffice conversions, three at a time, a picker that filled in over half
+    a minute. Drawn here instead, at start and through the same gate, a picker
+    opened later finds its covers on disk. None where there is no engine or no
+    rasteriser, and a no-op start to start once the cache is warm.
+    """
+    if templates_dir() is None or not _rasteriser_available():
+        return None
+
+    async def warm() -> None:
+        await asyncio.sleep(delay_s)
+        missing = [template for template in bundled() if cached_cover(template) is None]
+        if not missing:
+            return
+        logger.info("deck templates: drawing {} missing cover(s) in the background", len(missing))
+        for template in missing:
+            _draw_in_background(template)
+
+    return asyncio.ensure_future(warm())
+
+
 def deposit(template: Template, uploads: Path) -> Path:
     """Copy the template under ``uploads`` as an attachment would land, never overwriting."""
     uploads.mkdir(parents=True, exist_ok=True)
@@ -282,4 +311,5 @@ __all__ = [
     "listing",
     "pages_for",
     "templates_dir",
+    "warm_covers_in_background",
 ]

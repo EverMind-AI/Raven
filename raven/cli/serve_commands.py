@@ -461,6 +461,15 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     except Exception as exc:  # never let a version check keep the gateway down
         logger.debug("serve: update check skipped ({})", exc)
 
+    # The deck template gallery's covers, drawn now rather than on the click that
+    # opens the gallery; a no-op without the engine or once the cache is warm.
+    try:
+        from raven.rpc import deck_templates
+
+        deck_templates.warm_covers_in_background()
+    except Exception as exc:  # the gallery is optional, starting is not
+        logger.debug("serve: deck template covers not warmed ({})", exc)
+
     base_url = f"http://127.0.0.1:{bound_port}"
     typer.echo(f"raven serve listening on {base_url} (rpc: {base_url}/rpc)")
     state_path = _write_serve_state(bound_port, gateway.session_token, gateway.session_cookie)

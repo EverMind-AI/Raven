@@ -240,3 +240,47 @@ async def test_a_cover_on_its_way_is_not_started_twice(templates: Path, monkeypa
     release.set()
     await asyncio.gather(*deck_templates._drawing.values())
     assert deck_templates._drawing == {}, "a finished draw leaves the ledger"
+
+
+# --- the covers drawn at start, not on the click -----------------------------------
+
+
+async def test_warming_draws_only_the_covers_that_are_missing(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "tpl"
+    root.mkdir()
+    for name in ("one", "two", "three"):
+        (root / f"{name}.pptx").write_bytes(b"PK" + name.encode())
+    monkeypatch.setattr(deck_templates, "templates_dir", lambda: root)
+    monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "_failed", set())
+    monkeypatch.setattr(deck_templates, "_drawing", {})
+    two = deck_templates.find("two")
+    assert two is not None
+    (tmp_path / "covers").mkdir()
+    (tmp_path / "covers" / f"{deck_templates._cover_key(two.path)}.jpg").write_bytes(b"\xff\xd8")
+    drawn: list[str] = []
+
+    async def draw(template):
+        drawn.append(template.name)
+        return None
+
+    monkeypatch.setattr(deck_templates, "cover_for", draw)
+
+    task = deck_templates.warm_covers_in_background(delay_s=0)
+    assert task is not None
+    await task
+    await asyncio.gather(*deck_templates._drawing.values())
+    assert sorted(drawn) == ["one", "three"], "the cover already on disk is left alone"
+
+
+def test_warming_is_a_no_op_without_an_engine_or_a_rasteriser(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(deck_templates, "templates_dir", lambda: None)
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    assert deck_templates.warm_covers_in_background(delay_s=0) is None
+
+    root = tmp_path / "tpl"
+    root.mkdir()
+    monkeypatch.setattr(deck_templates, "templates_dir", lambda: root)
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: False)
+    assert deck_templates.warm_covers_in_background(delay_s=0) is None

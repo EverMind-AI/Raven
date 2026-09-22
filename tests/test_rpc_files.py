@@ -377,6 +377,93 @@ async def test_the_thumb_and_the_pdf_are_cached_apart(client: TestClient, tmp_pa
     assert sum("--convert-to png" in c for c in calls) == 1 and sum("--convert-to pdf" in c for c in calls) == 1
 
 
+async def test_a_pdf_tile_gets_its_first_page_without_libreoffice(
+    client: TestClient, tmp_path: Path, soffice: FakeSoffice, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A PDF is already a rendering: its tile picture comes from rasterising page one,
+    not from LibreOffice, which cannot load most PDFs anyway. The pdf render route
+    still refuses it, since there is nothing to convert."""
+    from raven.rpc import pdf_preview
+
+    drawn: list[tuple[Path, int]] = []
+
+    def rasterise(source: Path, target: Path, width: int) -> None:
+        drawn.append((source, width))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(FAKE_PNG)
+
+    monkeypatch.setattr(pdf_preview, "_rasterise_pdf_page", rasterise)
+    report = _deck(tmp_path, "report.pdf", FAKE_PDF)
+
+    thumb = await _thumb(client, report)
+    again = await _thumb(client, report)
+    as_pdf = await _render(client, report)
+
+    assert thumb.status == again.status == 200
+    assert thumb.headers["Content-Type"] == "image/png"
+    assert await thumb.read() == FAKE_PNG
+    assert drawn == [(report, pdf_preview.THUMB_WIDTH_PX)], "drawn once, then read from the cache"
+    assert soffice.calls() == [], "LibreOffice is not asked about a PDF"
+    assert as_pdf.status == 400
+
+
+def test_a_pdf_page_is_drawn_by_pymupdf_when_it_is_installed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pymupdf = pytest.importorskip("pymupdf")
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=225)
+    page.draw_rect(pymupdf.Rect(20, 20, 380, 205), color=(0, 0, 1), fill=(0.9, 0.9, 1))
+    source = tmp_path / "one.pdf"
+    doc.save(source)
+    target = tmp_path / "cache" / "one.png"
+
+    pdf_preview._rasterise_pdf_page(source, target, 640)
+
+    drawn = pymupdf.Pixmap(str(target))
+    assert (drawn.width, drawn.height) == (640, 360)
+    assert not list((tmp_path / "cache").glob("render-*")), "the scratch directory is gone"
+
+
+def test_a_pdf_page_falls_back_to_pdftoppm_and_then_says_what_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import builtins
+    import sys
+
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    real_import = builtins.__import__
+
+    def no_pymupdf(name, *args, **kwargs):
+        if name in ("pymupdf", "fitz"):
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_pymupdf)
+    monkeypatch.delitem(sys.modules, "pymupdf", raising=False)
+    monkeypatch.delitem(sys.modules, "fitz", raising=False)
+    source = tmp_path / "one.pdf"
+    source.write_bytes(FAKE_PDF)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    script = fake_bin / "pdftoppm"
+    script.write_text('#!/bin/bash\nout="${@: -1}"\nprintf "PNGfake" > "$out-1.png"\n')
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin))
+
+    target = tmp_path / "cache" / "one.png"
+    pdf_preview._rasterise_pdf_page(source, target, 640)
+    assert target.read_bytes() == b"PNGfake"
+
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    with pytest.raises(pdf_preview.PdfPreviewUnavailableError, match="no PDF rasteriser"):
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "two.png", 640)
+
+
 async def test_a_second_click_reads_the_cache(client: TestClient, tmp_path: Path, soffice: FakeSoffice) -> None:
     deck = _deck(tmp_path)
 

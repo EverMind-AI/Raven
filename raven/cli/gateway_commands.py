@@ -761,6 +761,16 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     except OSError as exc:
                         logger.warning("page mount failed ({}); gateway continues without the page", exc)
                 if page_mount is not None:
+                    # The page is what shows the deck template gallery, so its
+                    # covers are drawn now, in the background, rather than on
+                    # the click that opens it; a no-op without the engine or
+                    # once the cache is warm.
+                    try:
+                        from raven.rpc import deck_templates
+
+                        deck_templates.warm_covers_in_background()
+                    except Exception as exc:  # the gallery is optional, the gateway is not
+                        logger.debug("gateway: deck template covers not warmed ({})", exc)
                     # One shared loop, two question surfaces. build_rpc_stack
                     # bound the page's broker over the channel broker wired
                     # above (AskUserTool._broker is process-wide, last write

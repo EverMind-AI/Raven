@@ -1379,10 +1379,11 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview }: {
       setShot('broken')
       void askIfGone(url).then((gone) => { if (gone) setState('missing') })
     }} />
-  ) : kind === 'pptx' && shot === 'draw' ? (
-    /* The first page, as the gateway renders it. A render the host cannot
-       make (no LibreOffice, a timeout) arrives as a failed <img>, and the
-       tile shows the document face: the file is there, only the picture
+  ) : (kind === 'pptx' || kind === 'pdf') && shot === 'draw' ? (
+    /* The first page, as the gateway renders it: a deck through LibreOffice,
+       a PDF straight from its own pages. A render the host cannot make (no
+       LibreOffice, no rasteriser, a timeout) arrives as a failed <img>, and
+       the tile shows the document face: the file is there, only the picture
        of it is not, so nothing is asked about the file itself. */
     <DeliveryShot row={row} src={thumbURL(row.path)} broken={() => setShot('broken')} />
   ) : preview?.head ? <ArtMini name={row.name} head={preview.head} />
