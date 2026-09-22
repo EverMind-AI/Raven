@@ -26,7 +26,7 @@ import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harne
 type Runtime = typeof import('./runtime')
 type Registry = typeof import('./registry')
 
-interface Row { id: string; title: string; last: string; persisted: boolean }
+interface Row { id: string; title: string; last: string; persisted: boolean; workdir?: string | null }
 interface Staged { model: { model: string; provider: string } | null; tier: string | null; perm: string | null }
 
 /* What a staged pick writes, named by the call it becomes: `config.set` carries
@@ -112,10 +112,15 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
      reset just produced, not from a binding held across it. */
   const { generation } = await import('./generation')
   const { staging } = await import('./staging')
+  /* The draft's working directory is its own module (state/workdir.ts), for
+     the reason its header gives; the promotion reads it the same way. */
+  const workdir = await import('../workdir')
 
+  const created: object[] = []
   await fakeGateway(async (method: string, params: { key?: string } = {}) => {
     log.push(traffic(method, params))
     if (method === 'session.create') {
+      created.push(params)
       minted += 1
       if (bumpOnCreate) bumpOnCreate()
       return { session_id: `made-${minted}`, info: { cwd: '/w' } }
@@ -152,6 +157,8 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
     log,
     rows,
     pointer: () => current,
+    created,
+    workdir,
   }
 }
 
@@ -184,6 +191,33 @@ describe('getting a conversation to work in', () => {
     const h = await harness(true)
     await h.openConversation('do the thing')
     expect(h.rows[0]!.last).toBe('do the thing')
+  })
+
+  it('hands the folder the draft picked to the create, and to the row', async () => {
+    /* The create is the only moment the engine takes a working directory, so
+       the pick rides it; the row carries it too, so the rail groups the new
+       conversation before the list is read back; and the pick is spent, so the
+       next draft starts on the default. */
+    const h = await harness(true)
+    h.workdir.pick('/w/thesis')
+    await h.openConversation()
+    expect(h.created).toEqual([{ workdir: '/w/thesis' }])
+    expect(h.rows[0]!.workdir).toBe('/w/thesis')
+    expect(h.workdir.staged()).toBeNull()
+  })
+
+  it('creates on the default, and says nothing about a folder, when none was picked', async () => {
+    const h = await harness(true)
+    await h.openConversation()
+    expect(h.created).toEqual([{}])
+    expect(h.rows[0]!.workdir).toBeNull()
+  })
+
+  it('drops a picked folder with the draft it was picked on', async () => {
+    const h = await harness(true)
+    h.workdir.pick('/w/thesis')
+    h.enterDraft()
+    expect(h.workdir.staged()).toBeNull()
   })
 
   it('runs the caller hook once the pointer has moved and before the settings go up', async () => {

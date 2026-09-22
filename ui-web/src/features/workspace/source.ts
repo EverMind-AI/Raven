@@ -128,6 +128,9 @@ export const workspaceSource: WorkspaceSource = {
   openIn: (p, app) => gateway().call('fs.open', { path: p, session: sessionCurrent() || '', ...(app ? { app } : {}) }),
   hostIsLocal,
   shortPath,
+  /* Where a new conversation may be pinned. `path` omitted is the reader's home
+     directory, which is where the picker starts (state/workdir.ts). */
+  dirs: (path) => gateway().call('fs.dirs', path ? { path } : {}),
 }
 
 /* Test seam only: the workspace root and the two injected helpers are the

@@ -45,8 +45,9 @@ import { close as closeSettings, isOpen as settingsIsOpen } from './settings'
 import { onDblClick as shellZoom, onMouseDown as shellDrag } from './shellWindow'
 import { close as closeTierPopover } from './tier'
 import * as tip from './tooltip'
+import { close as closeWorkdirPopover } from './workdir'
 
-/* The two composer popovers have no close button and no Escape branch: a
+/* The three composer popovers have no close button and no Escape branch: a
    pointer landing outside one is the way back out. Capture, because the row
    under the pointer may stop the event.
 
@@ -56,6 +57,7 @@ function awayFromPopovers(event: PointerEvent): void {
   const target = event.target as Element
   if (!target.closest('#permPop') && !target.closest('#permChip')) closePermPopover()
   if (!target.closest('#tierPop') && !target.closest('#tierChip')) closeTierPopover()
+  if (!target.closest('#wdPop') && !target.closest('#wdChip')) closeWorkdirPopover()
 }
 
 /* Code blocks come and go with every answer, so the click is caught once here
