@@ -792,11 +792,17 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    widening the header past where the title already sat, and the floor keeps a
    field you have just emptied from collapsing to a sliver you cannot aim at.
    Without `field-sizing` an input falls back to its default intrinsic width,
-   which is narrower than the slot this replaces rather than wider. */
+   which is narrower than the slot this replaces rather than wider.
+
+   Everything else here is the heading's, to the pixel: same size and weight,
+   and a border plus padding adding up to the heading's own padding over the
+   same negative margin. The field then opens around the name instead of
+   shoving it right -- the frame lands exactly where the hover fill was, and
+   the word does not move at all. */
 .top .titin {
   field-sizing: content; min-width: 7ch; max-width: min(420px, 52%); background: var(--ink);
-  border: 1px solid var(--faint); border-radius: 7px; padding: 4px 9px; outline: 0;
-  font-size: var(--step-0); font-weight: 600; color: var(--text); font-family: inherit;
+  border: 1px solid var(--faint); border-radius: 6px; margin: 0 0 0 -6px; padding: 1px 5px; outline: 0;
+  font-size: 15px; font-weight: 500; color: var(--text); font-family: inherit;
 }
 .top .spacer { flex: 1; min-width: 0; }
 /* The workspace toggle is the rail toggle mirrored -- same icon, divider on the
