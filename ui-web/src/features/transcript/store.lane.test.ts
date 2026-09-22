@@ -345,3 +345,156 @@ describe('a delegated lane draws the payload in order', () => {
     expect(folds.map((f) => f.kind === 'fold' && f.open)).toEqual([true, true])
   })
 })
+
+
+/* A message merged into a turn already running, replayed. Live it is one
+   bubble inside the turn (state/session/stages.ts); a reload has only the
+   stored entry, and an unmarked user entry is a question -- which closed the
+   fold over the work still running, spent a turn number, and promoted the
+   sentence the model had just written to the answer of a turn that had not
+   finished. Three assertions rather than one, because the three guards that
+   keep them true are three separate reads of the same mark. */
+describe('a mid-turn message on the conversation lane', () => {
+  interface StepLike { say: string; calls: Array<{ name: string }> }
+  const flow = (lane: ReturnType<typeof store.newLane>): string[] => {
+    const out: string[] = []
+    const step = (st: StepLike): void => {
+      if (st.say) out.push(`say:${st.say}`)
+      st.calls.forEach((c) => out.push(`call:${c.name}`))
+    }
+    lane.segs.forEach((s) => {
+      if (s.kind === 'ask') out.push(`ask:${s.body}`)
+      else if (s.kind === 'answer') out.push(`answer:${s.text}`)
+      else if (s.kind === 'step') step(s)
+      else if (s.kind === 'fold') s.steps.forEach(step)
+    })
+    return out
+  }
+  const TURN = [
+    { role: 'user' as const, text: 'summarise the report' },
+    { role: 'assistant' as const, text: 'let me look', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+    { role: 'tool' as const, tool_call_id: 'c1', text: 'body' },
+    { role: 'user' as const, text: 'Q4 only', mid_turn: true },
+    {
+      role: 'tool' as const,
+      name: 'deliver_files',
+      tool_call_id: 'c2',
+      text: 'ok',
+      metadata: { raven_delivery: { files: [{ path: 'q4.md', name: 'q4.md' }] } },
+    },
+    { role: 'assistant' as const, text: 'here is Q4' },
+  ]
+
+  it('draws it inside the turn, above the answer', () => {
+    const lane = store.newLane('s1', true)
+
+    store.history(lane, TURN)
+
+    expect(flow(lane)).toEqual([
+      'ask:summarise the report', 'say:let me look', 'call:read_file',
+      'ask:Q4 only', 'call:deliver_files', 'answer:here is Q4',
+    ])
+  })
+
+  it('leaves the narration above it as narration', () => {
+    /* The look-ahead that decides which assistant text is the turn's answer
+       stops at the next user message. Counting this one stopped it early, and
+       the line that introduced the tool call was promoted to the answer of a
+       turn that was still working. */
+    const lane = store.newLane('s2', true)
+
+    store.history(lane, TURN)
+
+    expect(lane.segs.filter((s) => s.kind === 'answer').map((s) => s.kind === 'answer' && s.text))
+      .toEqual(['here is Q4'])
+  })
+
+  it('spends no turn number and closes no fold', () => {
+    /* One turn, so one fold and one turn key: a file delivered after the
+       mid-turn message belongs to the turn it was delivered in. */
+    const lane = store.newLane('s3', true)
+
+    store.history(lane, TURN)
+
+    expect(lane.segs.filter((s) => s.kind === 'fold')).toHaveLength(1)
+    expect(store.deliveriesOf(lane, 1).map((r) => r.path)).toEqual(['q4.md'])
+    expect(store.deliveriesOf(lane, 2)).toEqual([])
+  })
+})
+
+
+/* The same turn as the reader watches it arrive. The replay above has the
+   stored entries to read a mark off; live there is only what was drawn, so the
+   bubble carries the mark itself -- and every scan that walks back to find
+   where a turn began has to honour it. Without that, the work the model did
+   for the mid-turn message was merged with the work before it and filed at the
+   FIRST one's place (above the bubble), which left nothing loose below the
+   bubble for the fold to close over: the turn also lost its header. */
+describe('a mid-turn message on the live path', () => {
+  const flow = (lane: ReturnType<typeof store.newLane>): string[] => {
+    const out: string[] = []
+    lane.segs.forEach((s) => {
+      if (s.kind === 'ask') out.push(`ask:${s.body}`)
+      else if (s.kind === 'answer') out.push(`answer:${s.text}`)
+      else if (s.kind === 'step') s.calls.forEach((c) => out.push(`call:${c.name}`))
+      else if (s.kind === 'fold') {
+        out.push(`fold:${s.time || ''}`)
+        s.steps.forEach((st) => st.calls.forEach((c) => out.push(`call:${c.name}`)))
+      }
+    })
+    return out
+  }
+  const ran = (lane: ReturnType<typeof store.newLane>, name: string) => {
+    const st = store.newStep(lane)
+    st.tool(name, {}, name, `c-${name}`).done(true, 'ok', 5)
+    return st
+  }
+
+  it('keeps the work it asked for below it, under the turn\'s own fold', () => {
+    /* Two silent steps with the bubble between them: merged as one run they
+       became a single row at the first one\'s place, so the call the reader
+       asked for was drawn above the message asking for it. */
+    const lane = store.newLane('live:1', true)
+    store.askText(lane, 'summarise the report')
+    const first = ran(lane, 'run_command')
+    store.askText(lane, 'Q4 only', null, { midTurn: true })
+    const second = ran(lane, 'read_file')
+    const last = store.newStep(lane)
+    last.sayDelta('here is Q4')
+
+    store.finishTurn(lane, last, [first.seg, second.seg, last.seg], '47s')
+
+    expect(flow(lane)).toEqual([
+      'ask:summarise the report', 'call:run_command',
+      'ask:Q4 only', 'fold:47s', 'call:read_file', 'answer:here is Q4',
+    ])
+  })
+
+  it('folds the work above it when the turn ended before it was merged', () => {
+    /* The fallback: the message never reached a gap, so the turn under it is
+       the one that just ended and its work is all ABOVE the bubble. Stopping
+       the scan at the bubble left that work loose and the turn unheaded. */
+    const lane = store.newLane('live:2', true)
+    store.askText(lane, 'summarise the report')
+    const first = ran(lane, 'run_command')
+    first.sayDelta('done')
+    store.askText(lane, 'Q4 only', null, { midTurn: true })
+
+    store.finishTurn(lane, first, [first.seg], '31s')
+
+    expect(flow(lane)).toEqual([
+      'ask:summarise the report', 'fold:31s', 'call:run_command', 'answer:done', 'ask:Q4 only',
+    ])
+  })
+
+  it('still promises the output above a stop that lands after one', () => {
+    /* `turnKept` reads the same scan: a stop pressed just after a mid-turn
+       message said "nothing to keep" over the work the reader was watching. */
+    const lane = store.newLane('live:3', true)
+    store.askText(lane, 'summarise the report')
+    ran(lane, 'run_command')
+    store.askText(lane, 'Q4 only', null, { midTurn: true })
+
+    expect(store.turnKept(lane)).toBe(true)
+  })
+})

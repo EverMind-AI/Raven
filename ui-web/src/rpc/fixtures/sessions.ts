@@ -72,6 +72,9 @@ const SESSION_FIXTURES: Fixture[] = [
 const STORED: Record<string, ResultOf<'session.resume'>['messages']> = {
   g: [
     { role: 'user', text: '把支付回调那块拆成两个 handler' },
+    /* Sent while that turn was already running, so the replay draws it inside
+       the turn rather than as a question of its own. */
+    { role: 'user', text: '先别碰测试，只拆 handler', mid_turn: true },
     { role: 'assistant', text: '找不到模块 stripe（internal/pay/callback.go:12）\n\n装上依赖或改用内置 http 客户端后重试。' },
   ],
 }

@@ -59,6 +59,7 @@ from raven.agent.loop._shared import (
     json,
     logger,
     loop_break_nudge,
+    merge_mid_turn,
     monotonic,
     replace,
     resolve_context_window,
@@ -750,13 +751,21 @@ class TurnPathMixin:
                     fallback=None,
                 )
 
-            # Merge any INJECT-ed user messages (BusyPolicy.INJECT) before this
-            # iteration's LLM call. Media-carrying injects keep their file
-            # paths in the text so nothing is silently dropped.
+            # Take any INJECT-ed user messages (BusyPolicy.INJECT) into this
+            # iteration before its LLM call. Media-carrying injects keep their
+            # file paths in the text so nothing is silently dropped. They are
+            # appended one per message here and labelled for the provider at the
+            # call seam below, so every reader of ``messages`` sees the shape
+            # they arrived in.
             if drain is not None:
                 for inj in drain():
                     inj_text = inj.text or ""
-                    inj_paths = [m.path for m in inj.media]
+                    # Only the paths the message does not already name. A send
+                    # from the page bakes its own attachment note into the text
+                    # and derives ``media`` from it, so naming them again put a
+                    # second, raw copy of the path into the reader's own bubble
+                    # once the stored entry was drawn.
+                    inj_paths = [m.path for m in inj.media if m.path not in inj_text]
                     if inj_paths:
                         prefix = inj_text + "\n" if inj_text else ""
                         inj_text = f"{prefix}[injected message; attached files: {', '.join(inj_paths)}]"
@@ -764,7 +773,17 @@ class TurnPathMixin:
                         # Marked because the queue has now given this up: it was
                         # delivered once, to a turn that may yet be thrown away and
                         # run again. The mark is what lets the rerun carry it.
-                        messages.append({"role": "user", "content": inj_text, _MID_TURN_USER_KEY: True})
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": inj_text,
+                                # When it arrived, not when the turn happened to
+                                # reach a gap: the wait is the whole point of an
+                                # inject, and a long turn is where they are sent.
+                                "timestamp": inj.received_at or self._now_fn().isoformat(),
+                                _MID_TURN_USER_KEY: True,
+                            }
+                        )
                         logger.info("inject: merged a mid-turn user message")
 
             # The two window passes, before the snapshot and the hooks below so
@@ -870,6 +889,10 @@ class TurnPathMixin:
                 iteration=iteration,
                 fallback=(messages, tool_defs, effective_model),
             )
+            # Last, and on the payload only: the strategies above decide against
+            # the shape the messages arrived in, and the prompt-cache prefix
+            # stays stable because the same arrivals always fold the same way.
+            call_messages = merge_mid_turn(call_messages)
             # A hook can send this whole response back, and a rollback pops the
             # history the stream has already left -- so where hooks are installed
             # the deltas are held until something keeps the response. The draft
@@ -2552,6 +2575,12 @@ class TurnPathMixin:
                 # the delegated identity says WHICH run came back, so the two
                 # coexist.
                 entry["delegated"] = delegated
+            if entry.pop(_MID_TURN_USER_KEY, None):
+                # Same rename as the origin above: the underscore kept it out of
+                # the provider payload, the plain name is what session.resume
+                # puts on the wire so a reload draws this message inside the
+                # turn it was merged into rather than as one of its own.
+                entry["mid_turn"] = True
             if notice := entry.pop(_NOTICE_KEY, None):
                 # Same rename as the diff below, for the same reason. Without
                 # it a reload draws this runtime prose as the model's answer,

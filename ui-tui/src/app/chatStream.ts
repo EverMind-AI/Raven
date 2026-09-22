@@ -431,6 +431,13 @@ const dispatch = (
       // "every variant was considered", not "every variant the union happened
       // to list when this was written".
       return
+    case 'message.injected':
+      // A message another window sent into the turn that is running. This
+      // surface queues its own follow-ups rather than injecting them, and it
+      // draws no user row for a message it did not send: putting one on screen
+      // here is a product call for the terminal, not a consequence of the wire
+      // event. Named for the same reason `turn.started` is.
+      return
     default: {
       // Exhaustiveness — if a new TurnEvent variant lands the type-checker
       // will complain here, forcing this file to be updated.

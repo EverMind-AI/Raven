@@ -20,8 +20,13 @@ Code table (server-defined range -32000..-32099):
 | -32015 | not_dispatch_compatible       | interactive Rich widget rejected |
 | -32017 | subagent_not_found            | subagent name unknown            |
 
-JSON-RPC pre-defined codes (-32700/-32600/-32601/-32602) are emitted directly
-by the dispatcher and have no dedicated exception class.
+JSON-RPC pre-defined codes (-32700/-32600/-32601) are emitted directly by the
+dispatcher and have no dedicated exception class.
+
+-32602 ``invalid_params`` is dispatcher-emitted for a frame it can reject on
+sight, and has an ``InvalidParamsError`` class for the handlers that validate
+their own params -- without it a malformed ``turn.send`` reached the client as
+an internal error with a traceback.
 
 -32603 ``internal_error`` is also dispatcher-emitted for uncaught handler
 exceptions, but it has a dedicated ``InternalError`` class so non-dispatcher
@@ -160,6 +165,15 @@ class SubagentNotReadyError(RpcError):
     MESSAGE = "subagent_not_ready"
 
 
+# JSON-RPC pre-defined ``invalid_params`` (-32602). Class added for the same
+# reason as the one below: a handler that validates its own params answers the
+# caller with the code for a bad request, instead of letting the pydantic
+# failure escape as an internal error with a traceback in it.
+class InvalidParamsError(RpcError):
+    CODE = -32602
+    MESSAGE = "invalid_params"
+
+
 # JSON-RPC pre-defined ``internal_error`` (-32603). Class added so non-dispatcher
 # code-paths can raise typed -32603 cross-module — see ``_build_agent_loop``
 # which runs outside any handler context yet needs to surface init crashes
@@ -199,6 +213,7 @@ JSONRPC_ERROR_REGISTRY: dict[int, type[RpcError]] = {
         SubscriptionCapacityExceededError,
         SubagentNotFoundError,
         SubagentNotReadyError,
+        InvalidParamsError,
         InternalError,
     )
 }
@@ -223,6 +238,7 @@ __all__ = [
     "SubscriptionCapacityExceededError",
     "SubagentNotFoundError",
     "SubagentNotReadyError",
+    "InvalidParamsError",
     "InternalError",
     "JSONRPC_ERROR_REGISTRY",
     "PARSE_ERROR",

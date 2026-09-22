@@ -340,6 +340,48 @@ _HOOK_INJECTED_KEY = "_hook_injected"
 #: given up -- from the research it is entitled to discard.
 _MID_TURN_USER_KEY = "_mid_turn_user"
 
+#: Introduces the mid-turn arrivals on the way to the provider. Without it the
+#: model reads a correction the reader typed while it worked as a fresh question
+#: and answers it instead of steering, because nothing in the payload says the
+#: two arrived out of band.
+_MID_TURN_HEADER = "[Mid-turn messages — sent by the user while this turn was already running]"
+
+
+def merge_mid_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One user message per adjacent run of mid-turn arrivals, under the header.
+
+    Applied at the call seam, on the payload only: history keeps one entry per
+    message, so a reader and a re-run still see what was sent when. The mark
+    rides the merged message because the re-run seed reads it to find the
+    mid-turn messages again.
+
+    Only the private spelling counts. A replayed transcript carries the plain
+    ``mid_turn`` of an entry already saved, and labelling that again would put
+    the header on a question the model answered turns ago.
+    """
+    if not any(m.get(_MID_TURN_USER_KEY) for m in messages):
+        return messages
+    out: list[dict[str, Any]] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if not run:
+            return
+        body = "\n\n".join(run)
+        out.append({"role": "user", "content": f"{_MID_TURN_HEADER}\n\n{body}", _MID_TURN_USER_KEY: True})
+        run.clear()
+
+    for m in messages:
+        if m.get(_MID_TURN_USER_KEY):
+            # The merged message keeps the mark, so a second pass over the same
+            # list must not stack a second header onto its own output.
+            run.append(str(m.get("content") or "").removeprefix(f"{_MID_TURN_HEADER}\n\n"))
+            continue
+        flush()
+        out.append(m)
+    flush()
+    return out
+
 
 @dataclass(frozen=True)
 class SessionPolicy:

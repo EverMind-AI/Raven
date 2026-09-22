@@ -81,6 +81,15 @@ export class SessionRuntime {
   /* Only read while off screen, same as `phase`. */
   queue: string[] = []
 
+  /* The mid-turn messages already drawn from `message.injected`, by turn id,
+     each with the bubble drawn for it. Kept past the end of the turn on
+     purpose: the fallback -- the host turn ended before its next drain -- runs
+     the same message as a turn of its own and opens it with `message.start`
+     under the same id, which arrives after this turn has been reset. The
+     bubble is what that frame re-files, from inside the ended turn to the head
+     of the turn now opening. */
+  injected = new Map<string, number>()
+
   /* The message a retry would re-send. Held here rather than read back off the
      last `.ask` bubble, which is markup and may belong to another
      conversation. */
@@ -219,8 +228,43 @@ export const mediaOf = (text: unknown): { media?: string[] } => {
   return paths.length ? { media: paths } : {}
 }
 
-/** Send, or queue behind the turn that is running. */
+/* Into the turn that is already running: the server merges it at that turn's
+   next gap, so the reader can correct it while it works instead of waiting for
+   the answer to a question they have already changed their mind about.
+
+   Nothing here touches the runtime. The turn under way is still the turn, its
+   clock and its retry text are still its own, and no bubble is drawn from this
+   side -- `message.injected` draws it, in every window at once, which is the
+   only way the sender and a second tab can agree on where it sits.
+
+   Any refusal falls back to the queue the composer has always had: an old
+   gateway that does not know the field (-32602), a lane that went idle between
+   the busy check and the call (-32003), and a socket that dropped all look the
+   same to the reader, and the message is still in front of them either way. */
+export function sendMidTurn(text: string): void {
+  const current = sessionCurrent()
+  /* No conversation, no turn to merge into: the caller's guard reads the
+     registry, this one reads the key actually being sent, and a send with none
+     is refused by the gateway rather than queued. */
+  if (!current) { queuePush(text); return }
+  gateway().call('turn.send', { session_key: current, content: text, busy: 'inject', ...mediaOf(text) })
+    .catch((e: unknown) => {
+      queuePush(text)
+      const err = e as { message?: string }
+      noteRow(t('gui.err.send'), err.message === 'not connected' ? t('gui.err.disconnected') : (err.message || String(e)),
+        { retry: () => send(text) })
+    })
+}
+
+/** Send, into the turn that is running or as one of its own. */
 export function send(text: string): void {
+  /* There is no turn to merge into until the conversation exists. A draft's
+     first message is still being turned into one -- `registryIsDraft` is
+     already false while `promoting` runs its staged writes -- so a second
+     message typed a moment later would call the gateway with no session key at
+     all, which is a refusal the reader sees as a red row over a message the
+     queue then delivers anyway. It waits in the queue, as it always has. */
+  if (turn.busy() && !registryIsDraft() && !promoting) { sendMidTurn(text); return }
   if (turn.busy()) { queuePush(text); return }
   const rt = viewRuntime()
   /* What a retry re-sends. Recorded after the attachment note is folded in, so

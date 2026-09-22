@@ -286,6 +286,9 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
       answers ran. Absent on anything written before they were recorded, and
       absent means unknown: a client must draw the bare header rather than a
       zero, which would claim the turn thought for no time at all.
+    * ``mid_turn`` — set on a user entry the runtime merged into a turn that was
+      already running, so a reload draws it inside that turn rather than opening
+      a new one around it.
     """
     out = []
     for m in messages:
@@ -312,6 +315,7 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
             "notice",
             "origin",
             "delegated",
+            "mid_turn",
             "reasoning_ms",
             "duration_ms",
             "metadata",

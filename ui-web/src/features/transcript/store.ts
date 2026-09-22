@@ -379,14 +379,29 @@ function push(lane: Lane, seg: Seg): void {
 
 function ask(
   lane: Lane, body: string, atts: string[], when?: string | null,
-  auto?: { origin: string; note: string },
-): void {
-  push(lane, {
-    v: 0, id: nextId(), kind: 'ask', ...(auto ? { auto } : {}), body, atts,
+  opts?: { auto?: { origin: string; note: string }; midTurn?: boolean } | null,
+): AskData {
+  const o = opts || {}
+  const seg: AskData = {
+    v: 0, id: nextId(), kind: 'ask', ...(o.auto ? { auto: o.auto } : {}),
+    ...(o.midTurn ? { midTurn: true } : {}), body, atts,
     when: when != null ? when : stamp(Date.now()), expanded: false,
     clipped: body.length > 640 || body.split('\n').length > 12,
     clipOpen: false,
-  } satisfies AskData)
+  }
+  push(lane, seg)
+  return seg
+}
+
+/* Take a segment back off the stage. The one caller is the mid-turn bubble
+   whose message the host turn never merged: it runs as a turn of its own, and
+   that turn's own opening draws the question where the turn begins. */
+export function dropSeg(lane: Lane, id: number): boolean {
+  const i = lane.segs.findIndex((s) => s.id === id)
+  if (i < 0) return false
+  lane.segs.splice(i, 1)
+  bumpList(lane)
+  return true
 }
 
 /* The header of the reminder a cron turn carries, and the two lines inside it
@@ -435,7 +450,7 @@ export function cronReminder(text: string): { note: string; said: string } | nul
    own that nothing here reads, so the row is the chip alone. */
 export function askAuto(lane: Lane, origin: string, text: string, when?: string | null): void {
   const said = origin === 'cron' ? cronReminder(text) : null
-  ask(lane, said ? said.said : '', [], when, { origin, note: said ? said.note : '' })
+  ask(lane, said ? said.said : '', [], when, { auto: { origin, note: said ? said.note : '' } })
 }
 
 export function note(lane: Lane, label: string, detail: string, opts?: { quiet?: boolean; retry?: (() => void) | null } | null): NoteHandle {
@@ -1329,7 +1344,14 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
        typed, so a scan that only stopped at `ask` walked back over it into the
        previous turn, folded this turn's work into that turn's fold and wrote
        this turn's clock onto it. The reader then saw one fold whose header
-       said 20s over a thought inside it that said 21s. */
+       said 20s over a thought inside it that said 21s.
+
+       A mid-turn bubble opens nothing: it was merged into the turn under way.
+       What is below it is that turn's tail and folds under it, which is where
+       the reader's correction put it; with nothing below it -- the message
+       never reached a gap and runs as a turn of its own -- the turn's work is
+       all ABOVE, and stopping here would leave it loose and unheaded. */
+    if (s.kind === 'ask' && (s as AskData).midTurn) { if (loose.length) break; continue }
     if (s.kind === 'ask' || s.kind === 'sdlv') break
     if (s.kind === 'fold') { fold = s; break }
     if (s.kind === 'step') { loose.unshift(s); firstAt = i }
@@ -1386,6 +1408,9 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
 export function openLastFold(lane: Lane): void {
   for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
     const s = lane.segs[i] as Seg
+    /* Not an opening, same as in collapse: the fold this scan is after may be
+       the one over the work that came before the reader's correction. */
+    if (s.kind === 'ask' && (s as AskData).midTurn) continue
     if (s.kind === 'ask' || s.kind === 'sdlv') return
     if (s.kind !== 'fold') continue
     s.open = true
@@ -1398,6 +1423,17 @@ export function openLastFold(lane: Lane): void {
 const isSilent = (s: StepData): boolean =>
   !s.hasSay && !s.hasThink && !s.hasQA && !s.failed && s.calls.length > 0
 
+/* Whether a question stands between these two steps on the stage. Inside one
+   turn that is a mid-turn bubble, and the steps on either side of it are the
+   work before the reader's correction and the work it asked for: merging them
+   would file both under one row at the FIRST one's place, above the bubble. */
+function parted(lane: Lane, a: StepData, b: StepData): boolean {
+  const from = lane.segs.indexOf(a)
+  const to = lane.segs.indexOf(b)
+  if (from < 0 || to < 0) return false
+  return lane.segs.slice(from + 1, to).some((s) => s.kind === 'ask')
+}
+
 /* Consecutive silent steps read as one stretch: their rows merge under one
    summary line. Operates on the turn's own steps, wherever they now sit. */
 export function foldRuns(lane: Lane, steps: StepData[]): void {
@@ -1405,7 +1441,8 @@ export function foldRuns(lane: Lane, steps: StepData[]): void {
   while (i < steps.length) {
     if (!isSilent(steps[i] as StepData)) { i += 1; continue }
     let j = i
-    while (j < steps.length && isSilent(steps[j] as StepData)) j += 1
+    while (j < steps.length && isSilent(steps[j] as StepData)
+      && (j === i || !parted(lane, steps[j - 1] as StepData, steps[j] as StepData))) j += 1
     if (j - i >= MIN_RUN_STEPS) mergeRun(lane, steps.slice(i, j))
     i = j
   }
@@ -1438,7 +1475,8 @@ function foldThoughts(lane: Lane, steps: StepData[]): void {
   while (i < steps.length) {
     if (!isThoughtOnly(steps[i] as StepData)) { i += 1; continue }
     let j = i
-    while (j < steps.length && isThoughtOnly(steps[j] as StepData)) j += 1
+    while (j < steps.length && isThoughtOnly(steps[j] as StepData)
+      && (j === i || !parted(lane, steps[j - 1] as StepData, steps[j] as StepData))) j += 1
     if (j - i >= MIN_RUN_STEPS) mergeThoughts(lane, steps.slice(i, j))
     i = j
   }
@@ -1526,7 +1564,10 @@ export function finishTurn(lane: Lane, st: StepHandle | null, steps: StepData[],
 export function turnKept(lane: Lane): boolean {
   for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
     const s = lane.segs[i] as Seg
-    if (s.kind === 'ask') return false
+    /* A mid-turn bubble is not where the turn began, so what stands above it
+       is this turn's output: a stop pressed just after one was answered with
+       "nothing to keep" over the work the reader was watching. */
+    if (s.kind === 'ask') { if ((s as AskData).midTurn) continue; return false }
     if (s.kind === 'note' || s.kind === 'status') continue
     return true
   }
@@ -1687,7 +1728,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
     if (lastWord && worked(m)) return false
     for (let j = i + 1; j < ahead.length; j += 1) {
       const n = ahead[j] as HistoryMessage
-      if (n && n.role === 'user' && n.text && n.text.trim()) return true
+      if (n && n.role === 'user' && !n.mid_turn && n.text && n.text.trim()) return true
       if (spoken(n)) return false
       if (lastWord && worked(n)) return false
     }
@@ -1788,6 +1829,20 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
       }
       return
     }
+    if (m.role === 'user' && m.mid_turn && m.text && m.text.trim()) {
+      /* Merged into the turn that was already running, so the turn it belongs
+         to is the one being drawn: nothing is sealed, nothing folded, no
+         products filed and no turn number spent. What a live client draws from
+         `message.injected`, one bubble inside the turn.
+
+         The open step is let go of rather than sealed, which is what the live
+         arm does with its own: the work that follows the message belongs below
+         it, and appending it to the step above would put the reader's
+         correction after the calls it asked for. */
+      askText(lane, m.text, stamp(m.timestamp as string), { midTurn: true })
+      toolRun = null
+      return
+    }
     if (m.role === 'user' && m.text && m.text.trim()) {
       sealTools()
       closeTurn(msOf(m.timestamp))
@@ -1871,7 +1926,9 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
 /* The composer bakes an "[attachments]" note plus "- path" bullets into the
    message; the reader gets chips instead. Parsed against both language
    variants, since history may have been written under the other one. */
-export function askText(lane: Lane, text: string, when?: string | null): void {
+export function askText(
+  lane: Lane, text: string, when?: string | null, opts?: { midTurn?: boolean } | null,
+): AskData {
   const notes = Object.values((I18N.ui['gui.att.note'] ?? {}) as Record<string, string>)
   const s = String(text)
   for (const noteWord of notes) {
@@ -1880,10 +1937,9 @@ export function askText(lane: Lane, text: string, when?: string | null): void {
     if (ix < 0) continue
     const tail = s.slice(ix + noteWord.length + 3).split('\n')
     if (!tail.length || !tail.every((l) => !l.trim() || /^- /.test(l))) continue
-    ask(lane, s.slice(0, ix), tail.filter((l) => /^- /.test(l)).map((l) => l.slice(2).trim()), when)
-    return
+    return ask(lane, s.slice(0, ix), tail.filter((l) => /^- /.test(l)).map((l) => l.slice(2).trim()), when, opts)
   }
-  ask(lane, s, [], when)
+  return ask(lane, s, [], when, opts)
 }
 
 /* ── the agent stage: a delegated run drawn with this same renderer ─────

@@ -113,6 +113,15 @@ class TestTranslatedFrames:
         assert translate({"type": "token.delta", "payload": {"text": ""}}).updates == ()
         assert translate({"type": "token.delta", "payload": {}}).updates == ()
 
+    def test_a_mid_turn_message_produces_no_frame(self):
+        """The client's own steer request is the record that it sent a message
+        mid-turn, the way ``session/prompt`` is the record that a turn began; an
+        update echoing the text would be a second one."""
+        result = translate({"type": "message.injected", "payload": {"turn_id": "t1", "content": "only Q4"}})
+
+        assert result.updates == ()
+        assert result.stop is None
+
     def test_a_tool_start_is_in_progress_not_pending(self):
         """``pending`` means "not started -- streaming input or awaiting
         approval". By the time this event exists the call is running, and a
@@ -1081,6 +1090,7 @@ class TestTerminationIsExactlyOnce:
         "tool.start": {"tool_call_id": "t", "name": "exec", "arguments": {"command": "ls"}},
         "tool.complete": {"tool_call_id": "t", "result_preview": "ok"},
         "message.start": {"turn_id": "t"},
+        "message.injected": {"turn_id": "t", "content": "only Q4"},
         "turn.started": {"turn_id": "t"},
         "message.complete": {"turn_id": "t", "usage": {}},
         # turn_id is part of the shape now: the sink stamps the ending turn's own

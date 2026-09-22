@@ -18,6 +18,7 @@ single-argument dispatcher handlers.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -25,7 +26,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from raven.rpc.connection import claim_conversation, declared_surface
-from raven.rpc.errors import RpcError, TurnInProgressError
+from raven.rpc.errors import InvalidParamsError, RpcError, TurnInProgressError
 from raven.rpc.models import (
     TurnCancelParams,
     TurnSendParams,
@@ -402,14 +403,19 @@ async def turn_send(
     this owns the turn_id.
 
     Errors:
+      -32602 (InvalidParamsError) — params do not fit TurnSendParams.
       -32003 (TurnInProgressError) — session already has an active turn.
       -32008 (ModelNotAvailableError) — no provider/model routable.
     """
     try:
         parsed = TurnSendParams.model_validate(params)
     except ValidationError as exc:
-        # Re-raise as-is; dispatcher will catch and emit -32603 internal_error.
-        raise exc
+        # The caller sent the wrong shape, which is a -32602 and not a server
+        # fault: escaping as -32603 put a traceback in the log and a red
+        # "internal_error" row in front of a reader whose page had simply raced
+        # itself (a second send while the conversation was still being made).
+        first = exc.errors()[0] if exc.errors() else {}
+        raise InvalidParamsError(str(first.get("msg", "invalid params"))) from exc
 
     # Fail-fast: model availability before the active-turn slot, so a -32008
     # reject does not lock the session out of subsequent sends.
@@ -566,6 +572,12 @@ async def _inject_into_running(
     reach it after the host has released those slots, and so the sink can
     promote the fallback turn into them when it starts. The id answered is that
     one: it is what the fallback turn's events will carry.
+
+    The merge path announces itself with ``message.injected``: this call is the
+    only place that knows the text, and every window -- the sender's included --
+    draws its bubble from that one frame. The fallback path still opens with
+    ``message.start`` (``RpcOutlet.emit_start``), under the same id, so a client
+    can tell that it is the same message and not draw it twice.
     """
     turn_id = uuid4().hex
     target = _target_payload(parsed)
@@ -584,6 +596,10 @@ async def _inject_into_running(
         direct_target=(parsed.target.agent, parsed.target.handle) if parsed.target is not None else None,
         busy=BusyPolicy.INJECT,
         turn_id=turn_id,
+        # The text waits for the running turn's next gap, which is minutes away
+        # on exactly the turns people correct; the stored entry is stamped from
+        # here so it keeps the moment it was sent.
+        received_at=datetime.now().isoformat(),
     )
     try:
         handle = scheduler.submit(req)
@@ -594,6 +610,13 @@ async def _inject_into_running(
             await _emit_start_then_error(emitter, parsed.session_key, turn_id, _TURN_FAILED_CODE, "turn_failed", target)
         return {"turn_id": turn_id, "accepted": True, "naming": False}
     _pending_injects.setdefault(lane, {})[turn_id] = (handle, parsed.content)
+    if emitter is not None:
+        # After the submit and the registration: a frame drawn for text the
+        # scheduler refused would leave a bubble no turn ever answers.
+        await emitter.emit(
+            parsed.session_key,
+            {"type": "message.injected", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
+        )
 
     async def _forget_when_done() -> None:
         # Merged, ran, or cancelled: the future resolves on every exit.

@@ -242,10 +242,14 @@ describe('the wiring between turn.send and the placeholder', () => {
     expect(sends.length).toBeGreaterThan(0)
   })
 
+  /* `target`-carrying sends are an instance's own lane and never name the
+     session; a `busy: 'inject'` send joins a turn already running, and the
+     conversation it joins was named when that turn opened. Neither is expected
+     to carry the branch. */
+  const composerSends = sends.filter((s) => !s.includes('target:') && !s.includes("busy: 'inject'"))
+
   it('settles the placeholder on every composer send that can be declined', () => {
-    /* `target`-carrying sends are an instance's own lane and never name the
-       session, so they are not expected to carry the branch. */
-    const composer = sends.filter((s) => !s.includes('target:'))
+    const composer = composerSends
     expect(composer.length).toBe(2)
     for (const site of composer) expect(site).toContain('namingDeclined')
   })
@@ -254,7 +258,7 @@ describe('the wiring between turn.send and the placeholder', () => {
     /* A gateway too old to carry the field omits it. Falsy would then read as
        "no title is coming" and tear the placeholder down while one is on the
        way. */
-    const composer = sends.filter((s) => !s.includes('target:'))
+    const composer = composerSends
     for (const site of composer) {
       expect(site).toMatch(/naming === false/)
       expect(site).not.toMatch(/!\w*\.naming|naming\s*==\s*false/)

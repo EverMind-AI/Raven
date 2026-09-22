@@ -47,6 +47,7 @@ export type DagSnapshotNodeStatus =
  */
 export type TurnEvent =
   | MessageStartEvent
+  | MessageInjectedEvent
   | TurnStartedEvent
   | EpisodeStartEvent
   | NoticeEvent
@@ -258,6 +259,10 @@ export interface TranscriptMessage {
    */
   origin?: string;
   delegated?: TranscriptDelegated;
+  /**
+   * Set on a user entry merged into a turn already running, not the prompt that opened one. A reader draws it INSIDE the turn: no new turn number, no fold closed over the narration above it, and the text before it is still that turn's narration rather than its answer.
+   */
+  mid_turn?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1420,6 +1425,24 @@ export interface MessageStartEvent {
      * The message that started the turn. Present so a client that did not send it can draw the question: the user entry reaches the transcript only at turn end.
      */
     content?: string;
+    target?: DirectTarget;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MessageInjectedEvent".
+ */
+export interface MessageInjectedEvent {
+  type: 'message.injected';
+  /**
+   * A message merged into the turn already running on this conversation. `message.start` cannot say this: that event opens a turn, and an inject joins one. `target` names the conversation this event belongs to; absent is the main agent.
+   */
+  payload: {
+    /**
+     * The id minted for this text, not the running turn's. It is what the fallback turn's events carry if the host ends before draining it, which is how a client tells the two views of one message apart.
+     */
+    turn_id: string;
+    content: string;
     target?: DirectTarget;
   };
 }
