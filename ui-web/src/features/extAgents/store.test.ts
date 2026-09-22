@@ -70,12 +70,12 @@ describe('act', () => {
     const r = row()
     let seen: string[] = []
     install([r], () => {
-      seen = [...store.get().joining]
+      seen = Object.keys(store.get().joining)
       return null
     })
     await store.act(r, 'connect')
     expect(seen).toEqual(['claude_code'])
-    expect(store.get().joining).toEqual([])
+    expect(store.get().joining).toEqual({})
     expect(store.get().failed).toEqual({})
   })
 
@@ -89,7 +89,7 @@ describe('act', () => {
       detail: 'it did not answer a test message',
     })
     expect(toastWriter.items).toEqual([])
-    expect(store.get().joining).toEqual([])
+    expect(store.get().joining).toEqual({})
   })
 
   it('sends the refused write again on retry, and clears the refusal once it lands', async () => {
@@ -184,7 +184,7 @@ describe('the model verbs', () => {
     await store.setModel(r, 'v/bogus')
     expect(toastWriter.items).toEqual([])
     expect(store.get().failed.claude_code).toEqual({ op: 'model', args: { model: 'v/bogus' }, detail: 'it offers 3' })
-    expect(store.get().joining).toEqual([])
+    expect(store.get().joining).toEqual({})
   })
 
   it('repaints from the listing when a pick is refused, so the sheet leaves the menu that failed behind', async () => {
@@ -210,5 +210,28 @@ describe('the model verbs', () => {
       args: { model: 'openrouter/anthropic/claude-opus-5', provider: 'openrouter' },
       detail: 'it offers 55',
     })
+  })
+})
+
+/* The page cannot know whether the server will actually reach the agent: that
+   turns on whether the value moved and whether the row is on, neither of which
+   the write itself carries. So the question is "may this one be answered by
+   running the agent", and the cost of the two wrong answers is not symmetric --
+   over-answering puts a word on a write that returns at once, under-answering
+   leaves "connecting" on a row for the length of a real ping. */
+describe('probes', () => {
+  it('covers every write the enable gate can answer by running the agent', () => {
+    expect(store.probes({ op: 'connect', args: {} })).toBe(true)
+    expect(store.probes({ op: 'migrate', args: {} })).toBe(true)
+    expect(store.probes({ op: 'toggle', args: { enabled: true } })).toBe(true)
+    expect(store.probes({ op: 'model', args: { model: 'v/m2' } })).toBe(true)
+    expect(store.probes({ op: 'model', args: { clear_model: true } })).toBe(true)
+    expect(store.probes({ op: 'update', args: { api_key: 'sk-new' } })).toBe(true)
+  })
+
+  it('leaves the writes that cannot reach the agent alone', () => {
+    expect(store.probes({ op: 'toggle', args: { enabled: false } })).toBe(false)
+    expect(store.probes({ op: 'update', args: { description: 'new words' } })).toBe(false)
+    expect(store.probes({ op: 'update', args: { new_name: 'Renamed' } })).toBe(false)
   })
 })

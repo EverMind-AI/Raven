@@ -245,9 +245,11 @@ export const extAgentsSource: ExtAgentsSource = {
         source: row.vendored ? 'vendored' : row.configured ? 'config' : 'preset',
       })
     } else if (op === 'test_cancel') {
-      /* Kills the agent's process group server-side. The test's own call is
-         still open on another connection and answers `cancelled: true` from
-         there, so this one has nothing to report and only has to arrive. */
+      /* Cancels the test server-side, where the interrupted measurement reaps
+         its own child -- a process-group kill for a cli agent, a connection
+         close for an acp one. The test's own call is still open on another
+         connection and answers `cancelled: true` from there, so this one has
+         nothing to report and only has to arrive. */
       await gateway().call('subagents.test_cancel', { name: row.name })
     } else if (op === 'build') {
       /* Returns as soon as the build is under way, not when it is done: it is a

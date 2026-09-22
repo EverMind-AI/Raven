@@ -1085,6 +1085,50 @@ async def test_an_explicit_test_retries_past_a_stale_recorded_failure(tmp_path: 
     assert (await probe_one(cfg, source="config")).status == "ready"
 
 
+async def test_an_acp_test_is_the_agents_own_answer_and_not_its_handshake(tmp_path: Path, monkeypatch) -> None:
+    """The handshake cannot answer whether the agent works, so it is not the verdict.
+
+    ACP carries no authenticated-state field, so an agent that defers its
+    credential to the first model call opens a session happily and fails
+    afterwards -- six of the thirteen registry agents measured on 2026-09-07 did
+    exactly that. The stub's ``empty_turn`` is that agent: ``initialize`` and
+    ``session/new`` both succeed, and the prompt comes back empty with the
+    provider's 401 on stderr.
+    """
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
+    cfg = stub_config("defers-its-credential", mode="empty_turn")
+
+    assert (await verify_agent(cfg)).usable is True, "the premise: the handshake is happy about this agent"
+
+    result = await run_test(cfg, source="config")
+    assert result.ok is False, "the handshake passed but the agent cannot run a turn"
+    # The provider's own refusal reaches the operator: the whole point of asking
+    # the agent rather than its handshake is that only the agent knows this.
+    assert "HTTP 401" in result.detail
+    # The half that worked is kept behind the verdict, because "it connected and
+    # then said nothing" is a different failure from "it is not installed".
+    assert "connected to stub-agent" in result.detail
+
+
+async def test_recording_capabilities_never_prompts_the_agent(tmp_path: Path, monkeypatch) -> None:
+    """The seam that keeps every writer but the Test button free of a model call.
+
+    An explicit Test spends one on purpose. Nothing else may: the boot backfill
+    runs once per installed preset per boot, and a connect has already paid for
+    its own ping by the time it records. Both write through
+    ``record_capabilities``, so the line lives here rather than in each caller.
+    """
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
+
+    async def refuse_to_ping(_cfg: Any) -> Any:
+        raise AssertionError("record_capabilities must reach its verdict without prompting the agent")
+
+    monkeypatch.setattr("raven.agent.subagent.probe.ping_agent", refuse_to_ping)
+
+    snapshot = await record_capabilities(stub_config("recorded-for-free"))
+    assert snapshot.usable is True
+
+
 # ---- dispatch --------------------------------------------------------------
 
 

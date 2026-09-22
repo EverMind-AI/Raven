@@ -22,6 +22,44 @@ export interface Failure {
   detail: string
 }
 
+/* A write in flight, kept the way a refused one is: which write, with what. */
+export interface Pending {
+  op: ExtAgentOp
+  args: ExtAgentActArgs
+}
+
+/* Whether the server may answer this write by running the agent. The gate sends
+   one real prompt through the agent's own backend and waits up to 60s for the
+   reply, so the reader is waiting on a test rather than on a connection being
+   opened, and the row should say so.
+
+   `may`, not `will`: the server also asks whether the row is on and whether the
+   value actually moved, and neither fact travels with the write -- the page
+   posts what is in the field, and only the stored row knows what was there
+   before. Mirroring that here would put the same condition in two layers with
+   nothing holding them together. The two wrong answers do not cost the same:
+   answering yes for a write the server settles without asking puts a word on
+   something that returns in milliseconds, while answering no for one it does
+   ask leaves "connecting" on the row for the length of a real ping. So this
+   errs towards yes.
+
+   `migrate` counts because it is a remove plus an add from the preset, so it
+   goes through the same gate any other add does. A credential and a model are
+   the two fields an update can change that the agent has never been asked
+   about; a rename or a description cannot change what it answers. */
+export const probes = (p: Pending): boolean =>
+  p.op === 'connect' ||
+  p.op === 'migrate' ||
+  p.op === 'model' ||
+  (p.op === 'toggle' && p.args.enabled === true) ||
+  (p.op === 'update' && !!p.args.api_key)
+
+/* The other write that changes whether the agent is on the roster. It reaches no
+   gate -- the server pings on the way on and not on the way off -- so it waits
+   on its own write and nothing else, and it is the one write that must not
+   borrow the connect's word. */
+export const disconnects = (p: Pending): boolean => p.op === 'toggle' && p.args.enabled === false
+
 export interface ExtAgentsState {
   rows: ExtAgentRow[]
   /* The one flag only the page can answer: which card is open. It is about what
@@ -41,12 +79,13 @@ export interface ExtAgentsState {
      what lets the wizard's agents step draw a scanning placeholder before the
      first answer lands, and the sheet's re-check button its ring. */
   loading: boolean
-  /* Names with a connect or disconnect write in flight. `run` repaints every
-     row from one shared refetch, which cannot tell two rows apart while both
-     are mid-write -- this is what a caller checks to disable one row's own
-     button rather than the whole list. The enable gate pings a cli or acp
-     agent for up to 60s, so this is also the length of "connecting". */
-  joining: string[]
+  /* The write in flight on each row, by name. `run` repaints every row from one
+     shared refetch, which cannot tell two rows apart while both are mid-write --
+     this is what a caller checks to disable one row's own button rather than the
+     whole list. It keeps *which* write rather than just the name because the two
+     kinds wait on different things, and the row says which it is waiting for:
+     see `probes`. */
+  joining: Record<string, Pending>
   /* The last write that failed, per row. A failure is a state the row is in
      -- red text where the summary was, Retry where Connect was -- rather than
      a toast that is gone before the reader looks up. Cleared by the next
@@ -68,7 +107,7 @@ const store = makeStore<ExtAgentsState>({
   epoch: 0,
   testing: [],
   loading: false,
-  joining: [],
+  joining: {},
   failed: {},
   drafts: {},
   stillMissing: [],
@@ -158,7 +197,7 @@ export async function run(
   return failedWith
 }
 
-const without = (map: Record<string, Failure>, name: string): Record<string, Failure> => {
+const without = <T>(map: Record<string, T>, name: string): Record<string, T> => {
   if (!(name in map)) return map
   const next = { ...map }
   delete next[name]
@@ -169,12 +208,12 @@ const without = (map: Record<string, Failure>, name: string): Record<string, Fai
    when it does not land. Every verb -- the hub's and the wizard's -- comes
    through here. */
 export async function act(row: ExtAgentRow, op: ExtAgentOp, args: ExtAgentActArgs = {}): Promise<void> {
-  set({ joining: [...get().joining, row.name], failed: without(get().failed, row.name) })
+  set({ joining: { ...get().joining, [row.name]: { op, args } }, failed: without(get().failed, row.name) })
   try {
     const detail = await run(op, row, args, { quiet: true })
     if (detail !== null) set({ failed: { ...get().failed, [row.name]: { op, args, detail } } })
   } finally {
-    set({ joining: get().joining.filter((name) => name !== row.name) })
+    set({ joining: without(get().joining, row.name) })
   }
 }
 

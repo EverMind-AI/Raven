@@ -9,7 +9,7 @@ import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
 import { offered } from '../model/types'
 import { byOf, installOf, isOwnRow } from './catalogue'
-import { SectionBlock, Spin, Tile, connect, ordered, shownOf } from './Rows'
+import { SectionBlock, Spin, Tile, connect, ordered, pendingLabel, shownOf } from './Rows'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
@@ -32,9 +32,9 @@ import './styles.css'
  * one is needed; how to install one that is absent; and the actions its state
  * calls for, in one bar.
  *
- * Connecting is the server's readiness ping -- up to a minute for a cli or acp
- * agent -- so the row and the sheet both say "connecting" for its length and
- * offer nothing else meanwhile; a refusal stays on the row as red text with a
+ * Connecting is the server's readiness ping -- one real prompt through the
+ * agent, up to a minute -- so the row and the sheet both say "testing" for its
+ * length and offer nothing else meanwhile; a refusal stays on the row as red text with a
  * Retry, rather than as a toast that is gone before the reader looks up.
  */
 
@@ -173,6 +173,23 @@ function shownModel(row: ExtAgentRow): { id: string; by: string; provider: strin
 
 const slugOf = (name: string): string => name.toLowerCase().replace(/-/g, '_')
 
+/* The row as the pill should draw it while a model write is in flight: what the
+   write is asking for, rather than what the row still holds. The server proves a
+   new model by running it now, so that write can take a minute, and a row
+   reading "Testing" beside the model it is leaving reads as though the old one
+   is the one under test.
+
+   No rollback is needed and none is written: the pending entry goes when the
+   write does, so a refusal puts the row's own value back on screen by itself.
+   Handing the patched row to `shownModel` rather than reimplementing it keeps
+   the choice lookup and the provider split in one place. */
+function asAsked(row: ExtAgentRow, s: ExtAgentsState): ExtAgentRow {
+  const write = s.joining[row.name]
+  if (!write || write.op !== 'model') return row
+  if (write.args.clear_model) return { ...row, model: null }
+  return write.args.model ? { ...row, model: write.args.model } : row
+}
+
 /* The model a row answers with, and the picker that changes it. Unset reads by
    ownership: one of Raven's own follows the main Raven, a third party runs on
    its own default. A row with no menu wears the pill disabled: an openai or
@@ -270,7 +287,7 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
     return (
       <div className="extAgents-by">
         <Spin />
-        {t(testing ? 'gui.agent.testing_head' : 'gui.agent.setup_connecting')}
+        {t(testing ? 'gui.agent.testing_head' : pendingLabel(row, s))}
       </div>
     )
   }
@@ -282,7 +299,12 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
       </div>
     )
   }
-  if (shown === 'on' && row.last_test_ok === false) {
+  /* Not only when connected: the sheet offers Test from the unauthorized state
+     too, and a test pressed there can now fail on the agent's own answer while
+     the handshake passes -- which clears the label and leaves nothing saying the
+     test failed. `missing` keeps its own line, since "not found" outranks a
+     verdict measured before the executable went away. */
+  if (row.last_test_ok === false && shown !== 'missing') {
     return (
       <div className="extAgents-by extAgents-by-bad">
         <span className="extAgents-led extAgents-led-bad" />
@@ -377,7 +399,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
     actions = (
       <button className="mini go" disabled={primaryDisabled} onClick={primary}>
         {shown === 'pending' ? <Spin /> : null}
-        {t(shown === 'pending' ? 'gui.agent.setup_connecting' : shown === 'failed' ? 'gui.retry' : 'gui.agent.connect')}
+        {t(shown === 'pending' ? pendingLabel(row, s) : shown === 'failed' ? 'gui.retry' : 'gui.agent.connect')}
       </button>
     )
   }
@@ -407,7 +429,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
               row={row}
               saved={(!row.configured && !row.vendored && store.draftOf(row.name)) || row.description || ''}
             />
-            <ModelPill busy={shown === 'pending'} row={row} />
+            <ModelPill busy={shown === 'pending'} row={asAsked(row, s)} />
             {needsKey ? (
               <label className="extAgents-fld">
                 <span className="extAgents-k">{t('gui.agent.key')}</span>

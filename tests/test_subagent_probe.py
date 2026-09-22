@@ -494,7 +494,16 @@ async def test_stateful_cli_test_leaves_the_real_registry_untouched(
     assert instances_mod._registry.list_instances() == []
 
 
-async def test_openai_test_never_sends_a_completion() -> None:
+async def test_an_openai_test_asks_the_endpoint_to_answer() -> None:
+    """Both halves, in this order, and the order is the whole economy of it.
+
+    The free models probe goes first and refuses on its own when the endpoint
+    does not know the credential, so nothing is spent on one that cannot answer.
+    Past it, the endpoint is asked the same prompt every other kind is asked,
+    because knowing the credential is not the same as being able to serve the
+    model behind it.
+    """
+
     async def models(request: web.Request) -> web.Response:
         return web.json_response({"data": [{"id": "m1"}]})
 
@@ -519,9 +528,54 @@ async def test_openai_test_never_sends_a_completion() -> None:
         res = await run_test(_openai(f"http://127.0.0.1:{port}/v1", model="m1"), source="config")
         assert res.ok is True
         assert res.reply is None
-        assert seen == ["/v1/models"]
+        assert seen == ["/v1/models", "/v1/chat/completions"]
     finally:
         await runner.cleanup()
+
+
+async def test_an_openai_test_asks_an_endpoint_that_serves_no_model_list() -> None:
+    """The free probe vetoes only when it has proved there is nothing to send to.
+
+    `/models` is optional: the backend only ever POSTs `/chat/completions`, so an
+    endpoint that serves completions and answers 404 for the list is a working
+    agent. Letting the probe veto it would fail a Test that Connect accepts --
+    the very disagreement this gate exists to remove -- so anything reachable is
+    settled by asking it.
+    """
+    seen: list[str] = []
+    port = _free_port()
+    app = web.Application()
+
+    async def no_model_list(request: web.Request) -> web.Response:
+        seen.append(request.path)
+        return web.json_response({"error": "not found"}, status=404)
+
+    async def record_completion(request: web.Request) -> web.Response:
+        seen.append(request.path)
+        return web.json_response({"choices": [{"message": {"content": "PONG"}}]})
+
+    app.router.add_get("/v1/models", no_model_list)
+    app.router.add_post("/v1/chat/completions", record_completion)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", port).start()
+    try:
+        res = await run_test(_openai(f"http://127.0.0.1:{port}/v1", model="m1"), source="config")
+        assert res.ok is True, res.detail
+        assert seen == ["/v1/models", "/v1/chat/completions"]
+    finally:
+        await runner.cleanup()
+
+
+async def test_an_openai_test_spends_nothing_on_an_endpoint_it_cannot_reach() -> None:
+    """The one verdict the free probe can reach alone: nothing is listening, so
+    there is no request to make and no quota to consider."""
+    port = _free_port()
+
+    res = await run_test(_openai(f"http://127.0.0.1:{port}/v1", model="m1"), source="config")
+
+    assert res.ok is False
+    assert "unreachable" in res.detail
 
 
 async def test_test_result_wire_shape_is_camel_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

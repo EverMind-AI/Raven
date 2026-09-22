@@ -49,6 +49,32 @@ def _stored(path: Path) -> list[dict]:
     return json.loads(path.read_text())["subagents"]["agents"]
 
 
+def _gate_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the agent the re-key gate asks before the write lands.
+
+    Every acp row in this file is enabled, and changing a live row's model now
+    sends it one real prompt -- so a test about what this handler *validates*
+    would otherwise launch `hermes acp` for real. A test about the gate itself
+    belongs in `test_rpc_subagents.py`, which installs its own stub.
+
+    Both halves are stood in for, not just the ping: an acp row that answers is
+    then measured, and leaving that live spent sixteen seconds per test waiting
+    on a handshake with an agent that is not installed. The gate swallows that
+    failure by design, so the only sign was the idle ceiling.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    async def _ok(cfg):
+        return PingResult(True, "it ran and replied")
+
+    async def _measured(cfg):
+        return None
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _ok)
+    monkeypatch.setattr(subagents_mod, "record_capabilities", _measured)
+
+
 def _fake_agent_meta(choices: tuple[str, ...]):
     """A stand-in for ``agent_meta`` reporting a fixed acp model menu.
 
@@ -68,6 +94,7 @@ def _fake_agent_meta(choices: tuple[str, ...]):
 async def test_update_accepts_a_model_the_acp_row_advertises(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _gate_answers(monkeypatch)
     monkeypatch.setattr("raven.rpc.methods.subagents.agent_meta", _fake_agent_meta(("vendor/a", "vendor/b")))
     out = await subagents_update({"name": "Hermes Agent", "model": "vendor/a"})
     assert out == {"updated": True, "name": "Hermes Agent"}
@@ -255,11 +282,12 @@ def _acp_row_with_snapshot(
 
 
 async def test_update_lets_one_of_ravens_own_acp_rows_with_no_menu_pick_from_ravens_providers(
-    config_path: Path, store_path: Path
+    config_path: Path, store_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A product raven installed beside itself inherits raven's providers, so a
     handshake that advertised nothing leaves the row on raven's own catalogue --
     the alternative is a row nothing can ever set a model on."""
+    _gate_answers(monkeypatch)
     _with_providers(config_path, {"openai": {"apiKey": "sk-test"}})
     _acp_row_with_snapshot(config_path, store_path, "Raven-PPT", agent_name="raven")
 
@@ -283,13 +311,14 @@ async def test_update_refuses_an_own_acp_row_a_model_no_provider_of_ravens_serve
 
 
 async def test_update_takes_either_vocabulary_for_an_own_acp_row_that_did_advertise_a_menu(
-    config_path: Path, store_path: Path
+    config_path: Path, store_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One of raven's own runs on this host's providers whatever it advertised,
     so both vocabularies land: the menu is what the page draws, not a gate. It
     is also what keeps a pick honest across a re-measure -- the listing a reader
     picked from is one rule behind the moment the boot backfill writes a menu.
     """
+    _gate_answers(monkeypatch)
     _with_providers(config_path, {"openai": {"apiKey": "sk-test"}})
     _acp_row_with_snapshot(config_path, store_path, "Raven-Code", agent_name="raven", menu=("vendor/a",))
 
@@ -391,6 +420,7 @@ async def test_update_refuses_to_rename_a_materialized_builtin_override(config_p
 async def test_update_clear_model_wins_over_a_model_sent_beside_it(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _gate_answers(monkeypatch)
     monkeypatch.setattr("raven.rpc.methods.subagents.agent_meta", _fake_agent_meta(("vendor/a",)))
     await subagents_update({"name": "Hermes Agent", "model": "vendor/a"})
     await subagents_update({"name": "Hermes Agent", "model": "vendor/a", "clear_model": True})

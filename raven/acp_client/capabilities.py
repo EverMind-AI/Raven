@@ -699,8 +699,10 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             command=getattr(cfg, "command", "") or "",
             cwd=getattr(cfg, "cwd", None),
             env=dict(getattr(cfg, "env", None) or {}),
-            # The probe dispatches a real task, so it meets real permission
-            # requests and has to answer them the way a dispatch would.
+            # Nothing here is prompted, so no permission request is expected.
+            # One that arrives anyway still has to be answered, or the agent
+            # waits for a reply that never comes and the handshake stalls behind
+            # its own timeout.
             on_request=auto_approver(name),
         )
         try:

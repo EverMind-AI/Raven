@@ -5,10 +5,11 @@
  * a heading, a count and its rows. What differs between the two callers is
  * only whether a row opens the sheet, which is the caller's `onOpen`.
  *
- * Connecting is the server's readiness ping -- up to a minute for a cli or acp
- * agent -- so the row says "connecting" for its length and offers nothing else
- * meanwhile; a refusal stays on the row as red text with a Retry, rather than
- * as a toast that is gone before the reader looks up.
+ * Connecting is the server's readiness ping -- one real prompt through the
+ * agent, up to a minute -- so the row says "testing" for
+ * its length and offers nothing else meanwhile; a refusal stays on the row as
+ * red text with a Retry, rather than as a toast that is gone before the reader
+ * looks up.
  */
 
 import { AgentMark } from '../../components/AgentMark'
@@ -38,8 +39,21 @@ const kindText = (kind: string): string =>
    section the server's facts put the row in. */
 export type Shown = 'pending' | 'failed' | 'missing' | 'on' | 'off'
 
+/* The word a row wears while its own write is in flight. One `pending` covers
+   every write this page makes, so the word comes from the write rather than
+   from the state: a switch-on waits on the readiness ping and says it is
+   testing, a switch-off waits on its own write alone and says it is
+   disconnecting, and the rest -- a key, a model, a description -- keep the
+   older word, being neither. */
+export function pendingLabel(row: ExtAgentRow, s: ExtAgentsState): string {
+  const write = s.joining[row.name]
+  if (!write) return 'gui.agent.setup_connecting'
+  if (store.probes(write)) return 'gui.agent.testing'
+  return store.disconnects(write) ? 'gui.agent.disconnecting' : 'gui.agent.setup_connecting'
+}
+
 export function shownOf(row: ExtAgentRow, s: ExtAgentsState): Shown {
-  if (s.joining.includes(row.name)) return 'pending'
+  if (row.name in s.joining) return 'pending'
   if (s.failed[row.name]) return 'failed'
   const section = sectionOf(row)
   return section === 'missing' ? 'missing' : section === 'on' ? 'on' : 'off'
@@ -104,8 +118,8 @@ export function connect(row: ExtAgentRow): void {
 
 /* The one control a row carries. Exactly one, or none for the built-in loop,
    which is always on and has nothing to do. */
-function RowControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
-  if (shown === 'pending') return <span className="extAgents-state">{t('gui.agent.setup_connecting')}</span>
+function RowControl({ row, s, shown }: { row: ExtAgentRow; s: ExtAgentsState; shown: Shown }): JSX.Element | null {
+  if (shown === 'pending') return <span className="extAgents-state">{t(pendingLabel(row, s))}</span>
   if (shown === 'failed') {
     return (
       <button className="mini danger" onClick={() => store.retry(row)}>
@@ -178,7 +192,7 @@ function AgentRow({
         {shown === 'pending' ? (
           <div className="extAgents-one extAgents-one-work">
             <Spin />
-            {t('gui.agent.setup_connecting')}
+            {t(pendingLabel(row, s))}
           </div>
         ) : shown === 'failed' && failed ? (
           <div className="extAgents-one extAgents-one-bad">{failed.detail}</div>
@@ -189,7 +203,7 @@ function AgentRow({
       {/* The control stops the click here: pressing Connect must not also open
           the sheet. */}
       <div className="extAgents-ctl" onClick={(e) => e.stopPropagation()}>
-        <RowControl row={row} shown={shown} />
+        <RowControl row={row} s={s} shown={shown} />
       </div>
     </div>
   )

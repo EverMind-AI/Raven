@@ -319,7 +319,7 @@ describe('connecting', () => {
     expect(sheetName()).toBe('mirothinker')
   })
 
-  it('shows the row connecting for the length of the write, with nothing else to press', async () => {
+  it('shows the row testing for the length of a switch-on, with nothing else to press', async () => {
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -334,9 +334,9 @@ describe('connecting', () => {
     })
     await mount()
     await click(buttonOf('off_one'))
-    expect(controlOf('off_one')).toBe('gui.agent.setup_connecting')
+    expect(controlOf('off_one')).toBe('gui.agent.testing')
     expect(buttonOf('off_one')).toBeNull()
-    expect(lineOf('off_one')).toBe('gui.agent.setup_connecting')
+    expect(lineOf('off_one')).toBe('gui.agent.testing')
     expect(ledOf('off_one')).toBe('extAgents-led extAgents-led-busy')
     await act(async () => {
       release()
@@ -344,6 +344,55 @@ describe('connecting', () => {
     })
     expect(sectionOf('off_one')).toBe('gui.agent.g_on')
     expect(controlOf('off_one')).toBe('gui.agent.disconnect')
+  })
+
+  it('says testing on the sheet button too, since that is what the wait is', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const rows = [row({ name: 'off_one', enabled: false })]
+    install(rows, {
+      act: async (op, r, args) => {
+        await gate
+        if (op === 'toggle') r.enabled = !!(args as { enabled?: boolean } | undefined)?.enabled
+        return rows
+      },
+    })
+    await mount()
+    await openSheet('off_one')
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(sheetActs()).toEqual(['gui.agent.testing'])
+    await act(async () => {
+      release()
+      await gate
+    })
+  })
+
+  /* The same `pending` covers every write this page makes, so the word has to
+     come from which write it is. A disconnect reaches no gate at all -- the
+     server pings only on the way on -- so it is neither testing the agent nor
+     connecting to it. */
+  it('says disconnecting while a disconnect is in flight', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const rows = [row({ name: 'on_one', configured: true, enabled: true })]
+    install(rows, {
+      act: async (op, r, args) => {
+        await gate
+        if (op === 'toggle') r.enabled = !!(args as { enabled?: boolean } | undefined)?.enabled
+        return rows
+      },
+    })
+    await mount()
+    await click(buttonOf('on_one'))
+    expect(controlOf('on_one')).toBe('gui.agent.disconnecting')
+    await act(async () => {
+      release()
+      await gate
+    })
   })
 
   it('keeps a refusal on the row in red with a retry, and does not toast it', async () => {
@@ -552,6 +601,31 @@ describe('the sheet', () => {
     await openSheet('claude_code')
     expect(domSnapshot(document.getElementById('dBody')!)).toMatchSnapshot()
   })
+
+  /* A test that failed has to say so wherever it was pressed. The sheet offers
+     Test from two states, and only one of them used to render the verdict: an
+     unauthorized row whose handshake now passes but whose agent still cannot
+     answer would drop the label, offer a plain Connect, and say nothing about
+     the test that had just failed. */
+  it('says a failed test failed on a row that is not connected', async () => {
+    const r = row({ name: 'ua', configured: false, enabled: false, needs_auth: true, probe_status: 'attention' })
+    const rows = [r]
+    install(rows, {
+      act: async (op) => {
+        if (op === 'test') {
+          r.needs_auth = false
+          r.probe_status = 'ready'
+          r.last_test_ok = false
+          r.last_test_detail = 'it connected and then answered nothing'
+        }
+        return rows
+      },
+    })
+    await mount()
+    await openSheet('ua')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.test_label'))
+    expect(sheetStatus()).toBe('gui.agent.hd_test_bad {"detail":"it connected and then answered nothing"}')
+  })
 })
 
 describe('the model pill', () => {
@@ -573,6 +647,62 @@ describe('the model pill', () => {
       ...over,
     })
   const pill = (): HTMLButtonElement | null => sheet()?.querySelector('.extAgents-pm') ?? null
+
+  /* The write can take a minute now that the server proves a new model, and a
+     row reading "Testing" beside the model it is leaving reads as though the
+     old one is what is being tested. */
+  it('shows the model it is switching to while the write is in flight', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const r = row({ name: 'Coded', kind: 'acp', model_source: 'agent', model: 'v/opus', model_choices: choices })
+    const rows = [r]
+    install(rows, {
+      act: async (op) => {
+        if (op === 'model') await gate
+        return rows
+      },
+    })
+    await mount()
+    await openSheet('Coded')
+    expect(pill()!.textContent).toContain('Opus')
+
+    await click(pill())
+    await click(modelButton('Sonnet'))
+
+    expect(pill()!.textContent).toContain('Sonnet')
+    await act(async () => {
+      release()
+      await gate
+    })
+  })
+
+  it('shows the model cleared while the clear is in flight', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const r = row({ name: 'Coded', kind: 'acp', model_source: 'agent', model: 'v/opus', model_choices: choices })
+    const rows = [r]
+    install(rows, {
+      act: async (op) => {
+        if (op === 'model') await gate
+        return rows
+      },
+    })
+    await mount()
+    await openSheet('Coded')
+
+    await click(sheet()!.querySelector('.extAgents-pill button[aria-label="gui.agent.model_clear"]'))
+
+    expect(pill()!.textContent).not.toContain('Opus')
+    expect(pill()!.textContent).toContain('gui.agent.model_own_default')
+    await act(async () => {
+      release()
+      await gate
+    })
+  })
   const picker = (): HTMLElement | null => sheet()?.querySelector('.model-picker') ?? null
   const modelButton = (label: string): HTMLButtonElement | undefined =>
     [...(picker()?.querySelectorAll<HTMLButtonElement>('.model-picker-model') ?? [])].find((b) => b.textContent!.includes(label))

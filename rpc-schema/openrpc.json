@@ -2036,7 +2036,7 @@
     },
     {
       "name": "subagents.add",
-      "summary": "Install a sub-agent from a preset into the running config. A cli or acp preset that would land enabled first has one real prompt sent through that agent, and the add is refused, reporting why, when it does not answer: that spends one call on the agent's own quota, can take up to 60s, and a refusal stores nothing at all. An openai preset and force: true are exempt.",
+      "summary": "Install a sub-agent from a preset into the running config. A preset that would land enabled first has one real prompt sent through that agent, and the add is refused, reporting why, when it does not answer: that spends one call on the agent's own quota, can take up to 60s, and a refusal stores nothing at all. Only a builtin preset and force: true are exempt.",
       "params": [
         {
           "name": "preset",
@@ -2124,7 +2124,7 @@
     },
     {
       "name": "subagents.update",
-      "summary": "Rename / redescribe / re-key an already-configured sub-agent.",
+      "summary": "Rename / redescribe / re-key an already-configured sub-agent. Changing the key or the model of a row that is already enabled first sends one real prompt through it, and the change is refused, reporting why, when it does not answer: that spends one call on the agent's own quota and can take up to 60s. A row that is off is exempt, as is every other field.",
       "params": [
         {
           "name": "name",
@@ -2220,6 +2220,9 @@
         },
         {
           "$ref": "#/components/errors/ConfigValidationError"
+        },
+        {
+          "$ref": "#/components/errors/SubagentNotReady"
         }
       ]
     },
@@ -2301,7 +2304,7 @@
     },
     {
       "name": "subagents.toggle",
-      "summary": "Enable or disable a configured sub-agent. Switching a cli or acp sub-agent on first sends one real prompt through that agent and refuses the enable, reporting why, when it does not answer: that spends one call on the agent's own quota and can take up to 60s. Switching off, an openai row and force: true are exempt.",
+      "summary": "Enable or disable a configured sub-agent. Switching a sub-agent on first sends one real prompt through that agent and refuses the enable, reporting why, when it does not answer: that spends one call on the agent's own quota and can take up to 60s. Switching off, a builtin row and force: true are exempt.",
       "params": [
         {
           "name": "name",

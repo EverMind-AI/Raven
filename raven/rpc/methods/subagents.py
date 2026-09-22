@@ -626,6 +626,16 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             entries.append(target)
         else:
             raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
+    # Read before anything below moves them: the two fields whose new value the
+    # agent has never been asked about. Everything else this call can change is
+    # presentation or policy, which cannot alter what the agent answers. The
+    # name goes with them because a rename moves it too, and the re-read below
+    # has to find the row this call started from under whichever spelling it
+    # was stored as.
+    key_before = target.get("apiKey")
+    model_before = target.get("model")
+    name_before = target.get("name")
+    row_before = dict(target)
     new_name = _clean_name(params.get("new_name"), field="new_name")
     if new_name:
         if materialized_discovered and new_name != name:
@@ -714,6 +724,17 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                         data={"field": "model", "name": name},
                     )
                 target["model"] = stored
+    # A credential or a model swapped under a row that is already on is a
+    # connect nobody gated: the row goes on serving dispatches with something
+    # nothing has tried, and the first real task is what discovers the typo. So
+    # it is asked here, the same question the switch asks, and only when one of
+    # the two actually moved -- the sheet posts whatever is in its field, so an
+    # unchanged form would otherwise spend a call on every save. A row that is
+    # off is left alone: nothing is serving, and the switch that turns it on is
+    # already gated, so asking here would buy the same answer twice.
+    if bool(target.get("enabled")) and (target.get("apiKey") != key_before or target.get("model") != model_before):
+        await _refuse_unless_it_answers(entries, str(target["name"]), refusal="so it was not changed")
+        entries, target = _merged_over_the_ping(target, row_before, name_before, materialized=materialized_discovered)
     try:
         reject_unsupported_openai_fields([target])
         set_agents(entries, config_path=get_config_path())
@@ -721,6 +742,48 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
         _raise_config_error(exc)
     _hot_apply(agent_loop_factory)
     return {"updated": True, "name": target["name"]}
+
+
+def _merged_over_the_ping(
+    target: dict, before: dict, stored_name: str | None, *, materialized: bool
+) -> tuple[list[dict], dict]:
+    """Re-read the agent list across the gate's await, keeping both authors.
+
+    The list read before a ping of up to a minute is stale in two ways, and
+    they want different answers.
+
+    Rows this call never touched are simply whatever disk says now, so the list
+    is read again -- writing back the one read before the ping would revert
+    every other `subagents.*` write that landed during it.
+
+    The row this call *is* editing has two authors by then: this call, whose
+    fields are the point of the write, and whoever else wrote to the same row
+    while the agent was being asked. Carrying the pre-await copy across keeps
+    the first and silently restores the second over the top of a call that has
+    already answered success. So only the fields this call actually changed are
+    replayed onto the freshly read row. `subagents.update` only ever sets
+    fields, never removes one, which is what makes a comparison against the
+    pre-mutation copy a complete account of what it did; a removal added later
+    would have to be replayed here too.
+
+    A row that is gone under the name this call read it as was renamed or
+    removed meanwhile, and there is nothing left to merge onto: the change is
+    refused rather than resurrecting a row somebody deleted. The exception is a
+    row this call materialized itself -- a discovered folder or a built-in
+    getting its first stored entry -- which was never on disk to be found.
+    """
+    entries = _read_agents()
+    current = next((e for e in entries if e.get("name") == stored_name), None)
+    if current is None:
+        if materialized:
+            entries.append(target)
+            return entries, target
+        raise SubagentNotFoundError(
+            f"sub-agent {stored_name!r} was renamed or removed while it was being proved, so it was not changed",
+            data={"name": stored_name, "field": "name"},
+        )
+    current.update({key: value for key, value in target.items() if before.get(key) != value})
+    return entries, current
 
 
 def _is_switch_row(stored: dict, discovered: dict) -> bool:
@@ -769,12 +832,23 @@ def _discovered_entry(name: str) -> dict | None:
     return None
 
 
-_PINGED_KINDS = ("cli", "acp")
-"""Kinds whose readiness can only be settled by running them.
+_PINGED_KINDS = ("cli", "acp", "openai")
+"""Kinds whose readiness is settled by running them, which is every kind but one.
 
-`openai` is an endpoint, and the free `/models` probe already answers whether its
-credential works, so charging a completion for the switch would buy nothing.
-`builtin` is this process. Neither can fail the way these two do.
+`builtin` is the only name absent, because it is this process: no command to
+launch, no endpoint to reach, and no connect to gate. Every other kind is asked
+the same question in the same way -- one prompt, and an answer required -- since
+nothing short of that separates an agent that is configured from one that works.
+
+`openai` was exempt on the grounds that the free `/models` probe had already
+settled its credential. That probe runs on the listing and on an explicit test,
+never on this path, so the key an add carries has not been probed: it did not
+exist when the listing last ran. The exemption was reasoning about a check that
+happens somewhere else.
+
+The cost is bounded by who reaches the gate: only a write that leaves the row
+enabled, which for an endpoint means one that came with a key. A keyless openai
+add lands disabled and is never asked.
 """
 
 
@@ -926,13 +1000,12 @@ def _resolve_toggle(entries: list[dict], name: Any, enabled: bool) -> tuple[list
 async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """Set `enabled` on one entry - the flag the roster filter reads.
 
-    Switching a `cli` or `acp` row *on* first sends one real prompt through that
-    row's own backend and refuses the enable, in the agent's own words, when
-    nothing answers: for those kinds the roster's entry criterion is that the
-    agent works now, not that it is installed. So this spends one call on that
-    agent's own quota and can hold the switch for up to
-    `_ENABLE_PING_TIMEOUT_SECONDS`. Exempt: switching off, an `openai` row
-    (whose credential the free `/models` probe already settles), and
+    Switching a row *on* first sends one real prompt through that row's own
+    backend and refuses the enable, in the agent's own words, when nothing
+    answers: the roster's entry criterion is that the agent works now, not that
+    it is installed. So this spends one call on that agent's own quota and can
+    hold the switch for up to `_ENABLE_PING_TIMEOUT_SECONDS`. Exempt: switching
+    off, a `builtin` row (this process, with no backend to reach), and
     `force: true`, the operator's override for an agent whose provider is
     briefly down. A refusal writes nothing.
     """
@@ -1112,7 +1185,13 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
 
 
 async def subagents_test_cancel(params: dict) -> dict:
-    """Cancel an in-flight test, killing the agent's process group."""
+    """Cancel an in-flight test. Only the asyncio task is cancelled here.
+
+    What that reaps belongs to the measurement it interrupts: a cli test unwinds
+    into the backend, which kills the agent's process group; an acp test unwinds
+    into the closes its handshake and its ping each hold, and each of those ends
+    the child it launched. Neither leaves a process behind.
+    """
     task = _RUNNING.get(params.get("name", ""))
     if task is None or task.done():
         return {"cancelled": False}

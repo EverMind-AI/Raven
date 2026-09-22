@@ -108,8 +108,9 @@ class TestResult:
     """One subagent's explicit verdict.
 
     ``kind`` is ``None`` only for the unknown-name failure, which has no config
-    to read a kind from. ``reply`` is the agent's own answer for a cli test and
-    always ``None`` for openai, which sends no completion.
+    to read a kind from. ``reply`` is the agent's own answer for a cli test, the
+    model menu its handshake advertised for acp, and ``None`` for openai, whose
+    prompt is sent but whose answer is not carried back.
     """
 
     name: str
@@ -393,8 +394,15 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
     transcript parser and the CLI's own auth. **This spends the agent's own
     quota**, which is why it is only ever reached by an explicit request.
 
-    openai: runs the same free ``/models`` probe and sends no completion, so
-    nothing is billed.
+    acp: the same bar, reached the same way, after a free handshake that can
+    refuse first. **Also spends the agent's own quota** -- see `_test_acp` for
+    why the handshake alone could not stand in for it.
+
+    openai: the same bar, after the free ``/models`` probe, which decides alone
+    only when nothing is listening. **Otherwise spends the endpoint's own
+    quota**, like the two above -- a reachable endpoint is settled by asking it,
+    because the probe cannot tell a rejected key from an endpoint that simply
+    serves no model list, and the second of those works.
 
     The verdict is "exited 0 and returned something", not "the reply contains
     PONG": asserting content would flake on an agent that answers with a
@@ -428,7 +436,19 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
         return await _test_acp(cfg, source=source, elapsed=elapsed)
     probe = await probe_one(cfg, source=source)
     if kind == "openai":
-        return TestResult(cfg.name, source, "openai", probe.status == "ready", probe.detail, None, elapsed())
+        # The free probe runs first but decides alone only when it has proved
+        # there is nothing to send to. `/models` is optional -- the backend only
+        # ever POSTs `/chat/completions` -- so "reachable, but no model list" is
+        # a working agent, and it shares the `attention` verdict with a rejected
+        # key. Vetoing on that verdict would fail a Test that Connect accepts,
+        # which is the disagreement this whole gate exists to remove, so
+        # anything reachable is settled by asking it. A rejected key then costs
+        # one POST the endpoint refuses before it infers anything.
+        if probe.status == "missing":
+            return TestResult(cfg.name, source, "openai", False, probe.detail, None, elapsed())
+        answered = await ping_agent(cfg)
+        detail = probe.detail if answered.ok else f"{answered.detail}; {probe.detail}"
+        return TestResult(cfg.name, source, "openai", answered.ok, detail, None, elapsed())
     if probe.status != "ready":
         return TestResult(cfg.name, source, "cli", False, probe.detail, None, elapsed())
 
@@ -529,14 +549,30 @@ async def ping_agent(cfg: Any) -> PingResult:
 
 
 async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
-    """Verify an acp agent by connecting to it, and remember what it reported.
+    """Run an acp agent to reach its verdict, and remember what its handshake said.
 
-    Cheaper *and* stronger than the cli test, which is why the two differ. The cli
-    test has to dispatch a real task -- spending the agent's own quota -- because
-    nothing short of that exercises its auth. ACP answers the same question in the
-    handshake, so this costs no tokens and still reaches a real verdict; and unlike
-    the cli test it produces something reusable, since the snapshot it records is
-    what the roster later reads statefulness from.
+    Two measurements, in that order, because they answer different questions.
+
+    The handshake -- ``initialize`` plus ``session/new`` -- answers whether the
+    agent is installed, speaks ACP and will open a session, and it is free. So it
+    goes first, and a refusal there is the verdict: no prompt is spent on an
+    agent that cannot take one.
+
+    What it cannot answer is whether the agent *works*. ACP carries no
+    authenticated-state field, so one that defers its credential to the first
+    model call opens a session happily and fails afterwards; six of thirteen
+    registry agents measured on 2026-09-07 did exactly that, and this test called
+    every one of them ready. So the verdict is the agent's own answer to
+    ``PROBE_PROMPT`` -- the bar `cli` has always had, and the one the enable gate
+    already holds a connect to, which is what makes a green Test and a successful
+    Connect mean the same thing.
+
+    Two consequences worth stating. It **spends one call on the agent's own
+    quota**, which this test did not before; it is reached only from an explicit
+    press, since `subagents.test` is `run_test`'s one caller, and never from a
+    listing or the boot backfill. And it launches the agent twice, because the
+    handshake and the ping have different reuse rules -- the ping runs on a pool
+    of its own so that it cannot retire a connection a real run is holding.
 
     Always connects live, deliberately skipping the probe: the probe reports the
     *recorded* snapshot, so consulting it here would replay a stale failure (one
@@ -547,10 +583,19 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     # preset row's verdict from it -- a recorded credential refusal is what puts
     # "Unauthorized" there -- so Test is that row's only way back. The store
     # keys on a fingerprint of the launch fields, so a record under a preset's
-    # name is returned only to a config that launches the same way.
+    # name is returned only to a config that launches the same way. Recorded off
+    # the handshake either way, and never off the ping: the ping answers one
+    # minute, while the menu and the statefulness it holds are launch facts.
     snapshot = await record_capabilities(cfg)
     reply = ", ".join(snapshot.available_models[:5]) or None
-    return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
+    if not snapshot.usable:
+        return TestResult(cfg.name, source, "acp", False, snapshot.detail, reply, elapsed())
+    answered = await ping_agent(cfg)
+    # Verdict first on a failure, the handshake after it: "it connected and then
+    # said nothing" is what went wrong, and the half that succeeded is the
+    # context that separates it from an agent that is not installed.
+    detail = snapshot.detail if answered.ok else f"{answered.detail}; {snapshot.detail}"
+    return TestResult(cfg.name, source, "acp", answered.ok, detail, reply, elapsed())
 
 
 async def record_capabilities(cfg: Any) -> Any:

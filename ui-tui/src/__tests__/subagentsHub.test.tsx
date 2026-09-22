@@ -15,7 +15,8 @@ import {
   flattenSubagentRows,
   mergeProbeColumns,
   runningTestNames,
-  SubagentsHub
+  SubagentsHub,
+  switchLabel
 } from '../components/subagentsHub.js'
 import { DEFAULT_THEME } from '../theme.js'
 
@@ -1854,6 +1855,67 @@ describe('SubagentsHub test_running survival across close/reopen', () => {
     const runningRow: SubagentRow = { ...CODER_ROW, test_running: true }
     const h = mount({ rows: [runningRow] })
     await waitForFrame(h, 'Esc cancels the running test')
+
+    h.unmount()
+  })
+})
+
+/* The switch waits on the server's enable gate, which runs one real prompt
+ * through the agent and can take a minute. The Test key beside it has always
+ * held the row and drawn a clock for exactly that reason; the switch did not. */
+describe('a switch in flight', () => {
+  it('marks the row and refuses a second switch until the first lands', async () => {
+    const h = mount({
+      requestImpl: method => (method === 'subagents.toggle' ? new Promise(() => {}) : undefined),
+      rows: [{ ...ROWS[0]!, enabled: false }]
+    })
+    await waitForFrame(h, 'Coder')
+
+    h.gw.request.mockClear()
+    await h.type(' ')
+    await waitForRpcCall(h.gw.request, 'subagents.toggle')
+
+    await h.type(' ')
+    expect(h.gw.request.mock.calls.filter(c => c[0] === 'subagents.toggle')).toHaveLength(1)
+
+    h.unmount()
+  })
+
+  /* The rendered frame cannot answer this one: ink re-emits only the characters
+     that changed, so a frame that did switch to `[...]` contains `...` and never
+     the whole label. The slot's own function is what a test can hold. */
+  it('draws the switch slot as working, not as the state it is leaving', () => {
+    const off = { ...ROWS[0]!, enabled: false }
+
+    expect(switchLabel(off, undefined)).toBe('[off]')
+    expect(switchLabel(off, Date.now())).toBe('[...]')
+    expect(switchLabel({ ...ROWS[0]!, enabled: true }, Date.now())).toBe('[...]')
+    expect(switchLabel({ ...ROWS[0]!, kind: 'builtin' }, undefined)).toBe('[core]')
+    expect(switchLabel({ ...ROWS[0]!, configured: false }, undefined)).toBe('[new]')
+  })
+
+  it('does not spend a ping switching on a row that asked to be signed in', async () => {
+    const h = mount({ rows: [{ ...ROWS[0]!, enabled: false, needs_auth: true }] })
+    await waitForFrame(h, 'Coder')
+
+    h.gw.request.mockClear()
+    await h.type(' ')
+    await waitForFrame(h, 'signed in')
+
+    expect(h.gw.request.mock.calls.filter(c => c[0] === 'subagents.toggle')).toHaveLength(0)
+
+    h.unmount()
+  })
+
+  it('still lets a row that asked to be signed in be switched off', async () => {
+    const h = mount({ rows: [{ ...ROWS[0]!, enabled: true, needs_auth: true }] })
+    await waitForFrame(h, 'Coder')
+
+    h.gw.request.mockClear()
+    await h.type(' ')
+    await waitForRpcCall(h.gw.request, 'subagents.toggle')
+
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.toggle', { enabled: false, name: 'Coder' })
 
     h.unmount()
   })

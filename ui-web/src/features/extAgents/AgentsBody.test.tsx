@@ -233,7 +233,7 @@ describe('the onboarding wizard\'s agents step', () => {
       fireEvent.click(control('preset_a'))
     })
     expect(control('preset_a').tagName).toBe('SPAN')
-    expect(control('preset_a').textContent).toBe('gui.agent.setup_connecting')
+    expect(control('preset_a').textContent).toBe('gui.agent.testing')
     expect(rowNamed('preset_a').querySelector('.extAgents-one-work')).not.toBeNull()
 
     await act(async () => {
