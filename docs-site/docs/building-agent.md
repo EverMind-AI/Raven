@@ -117,7 +117,7 @@ Reuse a contract rather than copying the product. Test:
 Relevant tests include `tests/test_agents_code_flow_read_state.py`,
 `test_agents_code_flow_todo.py`, `test_agents_code_flow_project_files.py`,
 `test_agents_code_flow_manifest.py`, and `test_agents_code_tools_plugin.py`.
-The [usage guide](agent-integrations.md#working-safely-with-raven-code)
+The [usage guide](agent-integrations.md#raven-code-workspace-and-verification)
 explains what operators can infer from these mechanisms.
 
 ## Add tools and behaviour
