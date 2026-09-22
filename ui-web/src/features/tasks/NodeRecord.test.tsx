@@ -534,9 +534,11 @@ describe('the folded summary row', () => {
     expect(container.querySelector('.tkwrow.tksum')?.className).not.toContain('tkbusy')
   })
 
-  it('reads a result-less call in a settled node as not run, and does not breathe', () => {
-    /* A run cancelled mid-round leaves a record advertising every call of
-       that round; the ones it never reached are not in flight any more. */
+  it('reads a result-less call in a settled node as having no result, and does not breathe', () => {
+    /* A run cancelled mid-round leaves a record with calls that have no
+       result: some it never reached, some it had started (an acp tool_call
+       is an initiated call). Neither is in flight any more, and the label
+       says only what is known. */
     const { container } = render(
       <StepList
         steps={[tool({ name: 'exec', id: 'c1', args: JSON.stringify({ command: 'sleep 15' }), result: null, ok: null })]}
@@ -544,9 +546,9 @@ describe('the folded summary row', () => {
       />,
     )
     const cls = container.querySelector('.tkwrow')?.className.split(' ') ?? []
-    expect(cls).toContain('tknotrun')
+    expect(cls).toContain('tknoresult')
     expect(cls).not.toContain('tkbusy')
-    expect(container.querySelector('.tknotrunchip')?.textContent).toBe('not run')
+    expect(container.querySelector('.tknoresultchip')?.textContent).toBe('no result')
   })
 
   it('still breathes for the same call while the node runs', () => {
@@ -558,11 +560,11 @@ describe('the folded summary row', () => {
     )
     const cls = container.querySelector('.tkwrow')?.className.split(' ') ?? []
     expect(cls).toContain('tkbusy')
-    expect(cls).not.toContain('tknotrun')
-    expect(container.querySelector('.tknotrunchip')).toBeNull()
+    expect(cls).not.toContain('tknoresult')
+    expect(container.querySelector('.tknoresultchip')).toBeNull()
   })
 
-  it('counts the calls a settled node never reached on the folded summary', () => {
+  it('counts the calls a settled node got no result for on the folded summary', () => {
     const { container } = render(
       <StepList
         steps={[
@@ -575,7 +577,7 @@ describe('the folded summary row', () => {
     )
     const sum = container.querySelector('.tkwrow.tksum')
     expect(sum?.className).not.toContain('tkbusy')
-    expect(sum?.querySelector('.tknotrunchip')?.textContent).toBe('2 not run')
+    expect(sum?.querySelector('.tknoresultchip')?.textContent).toBe('2 with no result')
   })
 })
 
