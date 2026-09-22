@@ -1930,6 +1930,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .prose li.tk::before { content: '○'; color: var(--faint); margin-right: 7px; }
 .prose li.tk.on::before { content: '✓'; color: var(--moss); }
 .prose del { color: var(--faint); }
+/* A picture is content too, and the only prose content with an intrinsic
+   width of its own: a table scrolls inside its wrapper and a code block inside
+   itself, but an image or an inline svg was laid out at its natural size and
+   pushed whichever box held it wide. In a delegation card that box is the
+   run's own scroll pane, which then grew a horizontal scrollbar under a
+   report of a 1400px banner. Fit to the column; height follows so the aspect
+   ratio survives an attribute-sized image. The artifact chip's icon keeps its
+   own 15px rule below, which is the more specific of the two. */
+.prose img, .prose svg { max-width: 100%; height: auto; }
 /* quoted lines keep the muted voice and a hairline, same family as .cot */
 .prose blockquote {
   margin: 10px 0; padding: 2px 0 2px 13px; color: var(--muted);
@@ -3359,7 +3368,13 @@ details[open] summary { margin-bottom: 8px; }
    own `.pic` chrome, so a generated image and a delivered one are the same
    object to look at -- they are the same file, one of them handed over. */
 .gshots { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
-.gshots .pic.shot img { cursor: zoom-in; max-height: 260px; width: auto; }
+/* Capped by height so a batch reads as a row, but a wide picture scaled to
+   260px tall is still wider than the card -- a 1600x400 banner comes out at
+   1040px and hands the card a horizontal scrollbar. So the column caps the
+   width too; `min-width: 0` on the flex item is what lets the cap apply, since
+   a flex item otherwise refuses to shrink below its content. */
+.gshots .pic.shot { min-width: 0; max-width: 100%; }
+.gshots .pic.shot img { cursor: zoom-in; max-height: 260px; max-width: 100%; width: auto; height: auto; }
 .gshots.set .pic.shot img { max-height: 160px; }
 .pmtool {
   font-family: var(--mono); font-size: 11px; color: var(--muted);
