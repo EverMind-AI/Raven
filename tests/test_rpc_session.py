@@ -648,6 +648,41 @@ async def test_session_resume_says_whether_the_session_is_answering_right_now(
     assert busy["info"]["running"] is True
 
 
+async def test_a_direct_chat_alone_does_not_report_the_conversation_as_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sub-agent's direct chat runs on ``session#agent/handle``, a lane of its
+    own whose events are routed to that chat. Reported as the conversation's
+    running turn, a reload during it armed the main composer with a stop button
+    that cancelled the wrong lane and queued every message until the chat ended
+    and the reader reloaded again. The main lane is the fact the page reads."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    session_key = "tui:20260610_143052_direct"
+    s = mgr.get_or_create(session_key)
+    s.add_message("user", "ask the coder")
+    mgr.save(s)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    turn_module._active_turns.clear()
+    try:
+        turn_module._active_turns[f"{session_key}#raven-code/h1"] = object()
+        assert turn_module.is_session_busy(session_key) is True
+        chatting = await session_resume({"session_id": session_key})
+        listed = await session_list({})
+        turn_module._active_turns[session_key] = object()
+        answering = await session_resume({"session_id": session_key})
+    finally:
+        turn_module._active_turns.clear()
+
+    assert chatting["info"]["running"] is False
+    assert {item["id"]: item["running"] for item in listed["sessions"]} == {session_key: False}
+    assert answering["info"]["running"] is True
+
+
 class _LaneScheduler:
     """The spine's scheduler as these readers ask it: one lane in flight."""
 
