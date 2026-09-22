@@ -158,3 +158,80 @@ class TestWhatALayoutLeavesBehind:
 
         (project / ".stint" / "backlog.json").write_text(json.dumps({"tasks": []}), encoding="utf-8")
         assert lay_out(project, "stint").backlog == 0
+
+
+class TestWhatTheBuilderMayWrite:
+    """The grant has to cover the work the round's own check measures."""
+
+    def test_a_greenfield_project_grants_the_tests_directory(self, tmp_path: Path) -> None:
+        """Measured on a greenfield run: the brief asked for `tests/test_x.py`
+        by name, the round's own check ran `compileall src tests`, and the
+        Builder's grant stopped at the source -- so it wrote the code, wrote the
+        tests for it, and had the tests undone as a write it may not make. The
+        layout was refusing the write its own check depended on."""
+        from raven.stint.bootstrap import source_dirs
+
+        granted = source_dirs(_repo(tmp_path))
+
+        assert "tests/**" in granted, granted
+
+    def test_a_project_with_only_tests_is_still_greenfield(self, tmp_path: Path) -> None:
+        """A test directory is somebody's work but not the thing being built, so
+        having one says nothing about where the source will live."""
+        from raven.stint.bootstrap import source_dirs
+
+        project = _repo(tmp_path)
+        (project / "tests").mkdir()
+
+        granted = source_dirs(project)
+
+        assert "src/**" in granted and "tests/**" in granted, granted
+
+    def test_a_project_that_keeps_its_code_elsewhere_still_gets_its_own_dirs(self, tmp_path: Path) -> None:
+        from raven.stint.bootstrap import source_dirs
+
+        project = _repo(tmp_path)
+        (project / "lib").mkdir()
+
+        granted = source_dirs(project)
+
+        assert "lib/**" in granted
+        assert "project/**" not in granted, "a detected source tree is not widened by the greenfield set"
+
+    def test_what_an_interpreter_leaves_beside_the_files_it_read_is_nobodys(self, tmp_path: Path) -> None:
+        """A role that runs the tests has caches written for it. Graded as its
+        writes they are a violation it can neither avoid nor undo."""
+        from raven.stint.bootstrap import BYPRODUCT_GLOBS
+
+        lay_out(_repo(tmp_path), "stint")
+        guard = (tmp_path / "project" / ".stint" / "builder.md").read_text(encoding="utf-8")
+
+        for glob in BYPRODUCT_GLOBS:
+            assert glob in guard, f"{glob} is not declared as an artifact"
+
+
+class TestARecipeAndTheRolesThatNameIt:
+    def test_a_playbook_whose_roles_the_recipe_does_not_know_is_told_so(self, tmp_path: Path) -> None:
+        """The recipe writes a guard file per role and knows three. A playbook
+        naming others got those three written anyway -- files belonging to
+        nobody in the run -- and found out later, if at all, when a `{{ref:}}`
+        to its own guard resolved to nothing."""
+        project = _repo(tmp_path)
+
+        found = lay_out(project, "stint", roles=["writer", "checker"])
+
+        assert not found.ready
+        assert "writer, checker" in found.missing
+        assert "planner, builder, verifier" in found.missing
+        assert not (project / ".stint").exists(), "nothing is written when the recipe cannot serve the roles"
+
+    def test_the_roles_the_recipe_knows_are_laid_out_as_before(self, tmp_path: Path) -> None:
+        found = lay_out(_repo(tmp_path), "stint", roles=["planner", "builder", "verifier"])
+
+        assert found.ready, found.missing
+        assert (tmp_path / "project" / ".stint" / "builder.md").is_file()
+
+    def test_a_caller_that_names_no_roles_is_laid_out_as_before(self, tmp_path: Path) -> None:
+        """The check is on what a playbook declares; a caller with nothing to
+        declare -- `stint init` on a terminal -- is not refused for it."""
+        assert lay_out(_repo(tmp_path), "stint").ready

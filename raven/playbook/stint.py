@@ -457,7 +457,7 @@ class StintDriver:
             # Before the checkout, because a project that cannot hold a stint
             # should be told so before one is opened on it, and because what
             # this writes has to exist for the checkout to carry it.
-            layout = lay_out(project, spec.setup)
+            layout = lay_out(project, spec.setup, roles=[role.label for role in spec.roles or []])
             if not layout.ready:
                 return f"Error: {layout.missing}"
             if problem := self._left_in_the_tree(spec, record, layout):

@@ -22,9 +22,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Sequence
 
 from raven.stint.backlog import BACKLOG_FILE, STINT_DIR
 from raven.stint.bootstrap import InitError, find_spec, init
+from raven.stint.roster import DEFAULT_ROLES
 
 __all__ = ["Layout", "RECIPES", "lay_out"]
 
@@ -70,15 +72,30 @@ class Layout:
         return not self.missing
 
 
-def lay_out(project: Path, recipe: str) -> Layout:
+def lay_out(project: Path, recipe: str, *, roles: Sequence[str] = ()) -> Layout:
     """Give ``project`` the layout ``recipe`` names, and say what it still lacks.
 
     Idempotent by path: a project that already has the layout gets nothing
     written and the same answer, so saying "run it again" costs a person
     nothing and a second stint on a set-up project is not a second setup.
+
+    ``roles`` is the calling playbook's own, and is checked against what the
+    recipe can write. The `stint` recipe lays out a guard file per role, and it
+    knows three: a playbook that names others got those three written anyway --
+    files belonging to nobody in the run -- and found out later, if at all, when
+    a `{{ref:}}` to its own guard resolved to nothing. Said here instead, where
+    the caller already reads `missing` before anything is written.
     """
     if recipe not in RECIPES:
         return Layout(missing=f"no setup recipe named {recipe!r}; this build has {', '.join(RECIPES)}")
+    if recipe == "stint" and (unknown := [name for name in roles if name not in DEFAULT_ROLES]):
+        return Layout(
+            missing=(
+                f"the {recipe!r} setup recipe lays out a guard file for {', '.join(DEFAULT_ROLES)} and this "
+                f"playbook names {', '.join(unknown)}. Either name the roles the recipe knows, or drop "
+                f"`setup:` and give the project what your own roles read."
+            )
+        )
     project = Path(project).expanduser().resolve()
     if not (project / ".git").exists():
         # Said here rather than left to the checkout step, because the checkout

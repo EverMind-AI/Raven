@@ -452,6 +452,47 @@ promptTemplate: |
 
 ---
 
+## 14.5 通用化：留给后续，不在本批
+
+内置的 `long-horizon-dev-stint` 是一套 planner/builder/verifier 的方法，
+`mode: stint` 是跑它的机器。两者现在有两处粘连，自定义流程会撞上；都不难解，
+但都不该塞进这一批。
+
+| 粘连处 | 现状 | 自定义流程的后果 |
+|---|---|---|
+| `setup:` 的 recipe | `RECIPES = ("stint",)`，`bootstrap._slots()` 里 planner/builder/verifier 三份读写清单写死 | 永远铺那三个 guard 文件。角色叫别的名字就是铺错东西 |
+| `backlog` 的转移表 | `TRANSITIONS` 里 `by` 直接写角色常量 | 自定义角色调不动任何转移 |
+
+**不粘连的部分已经通用**：边界强制读的是 playbook 的 `roles[]`（见
+`roster_from` 的 docstring —— 「what a grade means is not the business of where
+it was written down」），所以角色名、owns/appends/artifacts、打回、检查、
+journal、预算、中断恢复，自定义流程全都能用。`backlog` 文件不存在时整段跳过。
+
+### setup 怎么通用
+
+红线是 setup.py 已经写明的那条：playbook 是会传播的文件，**不能让它在 yaml 里
+指定「往哪写什么内容」**。两条都不越线的路径：
+
+* **布局跟着 playbook 走** —— playbook 本就是一个目录，允许它带 `layout/`
+  子目录，`setup:` 只说「铺我自己带的」，宿主负责怎么铺（相对路径、不含 `..`、
+  落在项目内、已存在的不覆盖）。它只能铺安装时就看得见的东西；
+* **guard 文件从 spec 渲染** —— `roster_from` 已经证明边界声明不需要 guard
+  文件。`rounds` 要它是因为想要一份人能编辑的声明，那是这个方法的选择，不是
+  stint 的要求。
+
+### backlog 怎么通用
+
+**通用角色名，不通用协议。** backlog 的价值不是「有个待办列表」，是那条不变式：
+只有裁决者能说做完了，而且必须是别人提交过的东西 —— 这正是无人看管的多轮里
+最容易出的问题。开放成自定义状态机，第一个人就会写出
+`{"by": (WORKER,), "from": (ASSIGNED,), "to": DONE}`，价值当场归零、复杂度全留下。
+
+该做的是让 playbook 声明谁担任哪个职能（调度 / 执行 / 裁决），转移表里的三个
+常量改成查这个映射，状态和转移一条不改。不是三元结构的流程，明确告诉它 backlog
+不适用，用 journal 传递。
+
+---
+
 ## 15. 待拍板
 
 | # | 问题 | 卡在哪 |

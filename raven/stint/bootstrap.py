@@ -68,7 +68,15 @@ _ENOUGH_TO_PLAN_FROM = 200
 #: Detected rather than assumed: a guard that hands the Builder ``src/**`` in a
 #: project whose code is in ``project/`` gives it ownership of nothing it writes,
 #: and every write it makes is then undone as a violation.
-SOURCE_DIRS = ("src", "project", "lib", "app", "pkg", "cmd", "tools", "scripts", "assets")
+#:
+#: The test directories are here for the same reason and not as an afterthought:
+#: what the Builder is asked for is a check that passes, and on most projects the
+#: check runs the tests. A grant that stops at the source has it write the code
+#: and then have the tests it wrote for that code undone -- measured on a
+#: greenfield run of this playbook, where the brief asked for tests by name and
+#: the round's own check compiled `src tests`, so the layout was refusing the
+#: write its own check depended on.
+SOURCE_DIRS = ("src", "project", "lib", "app", "pkg", "cmd", "tools", "scripts", "assets", "tests", "test", "spec")
 
 #: Where a round's work lands rather than where the source lives. Not owned by
 #: anyone: a build directory and a program's own log are written by whichever role
@@ -77,6 +85,12 @@ SOURCE_DIRS = ("src", "project", "lib", "app", "pkg", "cmd", "tools", "scripts",
 #: to the Builder meant Verifier's measurements were reverted for having been made,
 #: so they are declared as artifacts and left ungraded.
 OUTPUT_DIRS = ("build", "builds", "dist", "out", "demo_outputs", "replays")
+
+#: The same answer for what a *runtime* leaves behind rather than a build: a
+#: role that runs the tests has its interpreter write caches beside the files it
+#: read, and those are nobody's work. Graded as writes they are a violation the
+#: role cannot avoid and cannot undo, reported every round it runs anything.
+BYPRODUCT_GLOBS = ("**/__pycache__/**", "**/*.pyc", "**/.pytest_cache/**")
 
 
 class InitError(RuntimeError):
@@ -202,7 +216,12 @@ def project_documents(project: Path, *, spec: Path | None = None) -> list[str]:
 #: normal way a stint starts, and its first round is the one that creates the
 #: source -- so a guard listing only what exists today would have the Builder's
 #: very first write undone as a violation.
-GREENFIELD_DIRS = ("src/**", "project/**", "tools/**")
+GREENFIELD_DIRS = ("src/**", "project/**", "tools/**", "tests/**")
+
+#: Directories that are somebody's work but not the thing being built, so having
+#: one says nothing about where the source lives. A repository holding only
+#: `tests/` is still a greenfield handover and gets the conventional set.
+_NOT_SOURCE_BY_ITSELF = ("tools", "scripts", "tests", "test", "spec")
 
 
 def source_dirs(project: Path) -> list[str]:
@@ -216,7 +235,7 @@ def source_dirs(project: Path) -> list[str]:
     """
     project = Path(project)
     found = [f"{name}/**" for name in SOURCE_DIRS if (project / name).is_dir()]
-    has_source = any(f"{name}/**" in found for name in SOURCE_DIRS if name not in ("tools", "scripts"))
+    has_source = any(f"{name}/**" in found for name in SOURCE_DIRS if name not in _NOT_SOURCE_BY_ITSELF)
     return found if has_source else sorted(set(found) | set(GREENFIELD_DIRS))
 
 
@@ -347,7 +366,10 @@ def _slots(project: Path, role: str, *, enforce_read: str, enforce_write: str, s
     }[role]
     # Declared on every guard rather than one: the paths are the project's, and
     # a set one role could write and another could not is the same trap again.
-    artifacts = [f"  - {name}/**" for name in OUTPUT_DIRS]
+    # Quoted, unlike the directory entries: a YAML scalar that opens with `*` is
+    # an alias reference, so an unquoted `**/__pycache__/**` is a parse error in
+    # the guard file this writes rather than the glob it reads as here.
+    artifacts = [f"  - {name}/**" for name in OUTPUT_DIRS] + [f'  - "{glob}"' for glob in BYPRODUCT_GLOBS]
     session = {"planner": "fresh", "builder": "continue", "verifier": "fresh"}[role]
     del session  # named above for the reader; the note it chose now lives in the template
     return {
