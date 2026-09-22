@@ -6338,25 +6338,6 @@ export interface ImportStopResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "MemoryDeleteParams".
- */
-export interface MemoryDeleteParams {
-  kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
-  id: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "MemoryDeleteResult".
- */
-export interface MemoryDeleteResult {
-  ok: boolean;
-  /**
-   * Deleting an episode also drops its derived facts and foresight.
-   */
-  removed: number;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "PlaybooksStintsListParams".
  */
 export interface PlaybooksStintsListParams {}
@@ -6380,6 +6361,10 @@ export interface PlaybooksStintsGetParams {
  */
 export interface PlaybooksStintsStopParams {
   stint_id: string;
+  /**
+   * Cut the round in flight short instead of letting it finish. Reaches only a round this process is running.
+   */
+  now?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

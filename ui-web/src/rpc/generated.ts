@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 200 methods, 115 component schemas.
+// 199 methods, 115 component schemas.
 
 /* eslint-disable */
 /**
@@ -4694,17 +4694,6 @@ export interface ImportStopParams {}
 export interface ImportStopResult {
   stopped: boolean;
 }
-export interface MemoryDeleteParams {
-  kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
-  id: string;
-}
-export interface MemoryDeleteResult {
-  ok: boolean;
-  /**
-   * Deleting an episode also drops its derived facts and foresight.
-   */
-  removed: number;
-}
 export interface PlaybooksStintsListParams {}
 export interface PlaybooksStintsListResult {
   stints: StintRow[];
@@ -4722,6 +4711,10 @@ export interface PlaybooksStintsGetResult {
 }
 export interface PlaybooksStintsStopParams {
   stint_id: string;
+  /**
+   * Cut the round in flight short instead of letting it finish. Reaches only a round this process is running.
+   */
+  now?: boolean;
 }
 /**
  * One plan, whole: every round it ran and everything it is waiting on.
@@ -4979,7 +4972,6 @@ export interface RpcMethods {
   'import.run': { params: ImportRunParams; result: ImportRunResult };
   'import.status': { params: ImportStatusParams; result: ImportStatusResult };
   'import.stop': { params: ImportStopParams; result: ImportStopResult };
-  'memory.delete': { params: MemoryDeleteParams; result: MemoryDeleteResult };
   'playbooks.stints.list': { params: PlaybooksStintsListParams; result: PlaybooksStintsListResult };
   'playbooks.stints.get': { params: PlaybooksStintsGetParams; result: PlaybooksStintsGetResult };
   'playbooks.stints.stop': { params: PlaybooksStintsStopParams; result: PlaybooksStintsStopResult };
@@ -5066,7 +5058,6 @@ export const RPC_METHODS = [
   "mcp.list",
   "mcp.test",
   "mcp.tools",
-  "memory.delete",
   "memory.list",
   "memory.stats",
   "model.add_endpoint",

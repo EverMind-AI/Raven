@@ -9216,52 +9216,6 @@
       "errors": []
     },
     {
-      "name": "memory.delete",
-      "summary": "Delete one memory; an episode takes its derived rows with it.",
-      "params": [
-        {
-          "name": "kind",
-          "required": true,
-          "schema": {
-            "enum": [
-              "episode",
-              "profile",
-              "agent_case",
-              "agent_skill"
-            ],
-            "type": "string"
-          }
-        },
-        {
-          "name": "id",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "result": {
-        "name": "MemoryDeleteResult",
-        "schema": {
-          "additionalProperties": false,
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            },
-            "removed": {
-              "description": "Deleting an episode also drops its derived facts and foresight.",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "ok",
-            "removed"
-          ],
-          "type": "object"
-        }
-      }
-    },
-    {
       "name": "playbooks.stints.list",
       "summary": "Every multi-round run this machine has started, newest first.",
       "params": [],
@@ -9307,13 +9261,21 @@
     },
     {
       "name": "playbooks.stints.stop",
-      "summary": "Open no further rounds. A round already running finishes and reports first.",
+      "summary": "Open no further rounds. A round already running finishes and reports first, unless now is set.",
       "params": [
         {
           "name": "stint_id",
           "required": true,
           "schema": {
             "type": "string"
+          }
+        },
+        {
+          "name": "now",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Cut the round in flight short instead of letting it finish. Reaches only a round this process is running."
           }
         }
       ],
