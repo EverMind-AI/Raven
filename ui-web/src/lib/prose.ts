@@ -219,9 +219,16 @@ export function md(src: string): string {
        The gate that counts those reaches reads the file as text, so the
        escaped spelling registers as one. */
     /* The display pair first, or the single-dollar rule below would match the
-       inner two of `$$x$$` and leave the outer two standing as text. */
+       inner two of `$$x$$` and leave the outer two standing as text.
+
+       Set inline, not displayed, and this is the one place the two spellings
+       part: a pair standing alone on its line is a block and never reaches
+       here, so what does reach here has a sentence around it. Setting it
+       displayed put it on a line of its own and broke that sentence in three
+       -- the words before, the formula, the words after. Where it was written
+       is what says which it is. */
     t_ = t_.replace(/(^|[^\\])[$][$]([^\n]+?)[$][$]/g, (whole: string, lead: string, tex: string) => {
-      const html = mathHtml(unesc(tex), true)
+      const html = mathHtml(unesc(tex), false)
       return html ? lead + keep(html) : whole
     })
     t_ = t_.replace(/(^|[^\\])[$]([^\s$][^$\n]*?[^\s$]|[^\s$])[$](?!\d)/g,
@@ -399,6 +406,16 @@ export function md(src: string): string {
         /* An indented fence is a block that belongs to the item, not more of its
            text: breaking here hands it to the fence scanner. */
         if (/^[ \t]*(?:```|~~~)/.test(L[i]!)) break
+        /* And a displayed formula on its own line, for exactly the same reason
+           and by the same route. Without this the scanner below took all three
+           lines of the open-formula-close spelling as item text and handed
+           them to the inline pass one at a time, where a bare pair of markers
+           matches nothing -- so the item showed the delimiters and the source.
+           Both spellings break, so a formula standing alone under an item is a
+           block wherever it is written; a pair inside a sentence is not this
+           shape and is still read inline, because an item's own line is
+           claimed by the item rule above before it reaches here. */
+        if (/^[ \t]*[$][$]([^]*?[$][$][ \t]*)?$/.test(L[i]!)) break
         /* A blank line between items is a spacing habit, not the end of the
            list: only a blank followed by something that is not an item closes
            it. Getting this wrong splits one list into several <ul>s, which

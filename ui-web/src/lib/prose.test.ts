@@ -289,6 +289,42 @@ describe('prose renderer, mathematics', () => {
     expect(one).toContain('<p>after</p>')
   })
 
+  it('reaches a displayed formula written under a list item', () => {
+    wire()
+    /* The list scanner takes the indented lines under an item as more of its
+       text and hands them to the inline pass one at a time, where a bare pair
+       of markers matches nothing -- so the item showed the delimiters and the
+       source. A formula standing alone under an item is a block belonging to
+       the item, and leaves the list the way an indented fence already does. */
+    const out = md('- derivation\n  $$\n  x^2 + y^2\n  $$')
+    expect(out).toContain('<div class="mathblk">')
+    expect(out).toContain('display="block"')
+    expect(out).not.toContain('$')
+    expect(out).toContain('<li>derivation</li>')
+
+    /* Both spellings, so where it is written does not decide what it is. */
+    const one = md('- derivation\n  $$x^2 + y^2$$')
+    expect(one).toContain('<div class="mathblk">')
+    expect(one).not.toContain('$')
+
+    /* A pair inside the item's own sentence is not that shape: it stays in the
+       item, and it is set inline, or it takes a line of its own and breaks the
+       sentence in three. Where it was written says which it is. */
+    const inside = md('- when $$x$$ holds we win')
+    expect(inside).not.toContain('mathblk')
+    expect(inside).toContain('<li>when <math')
+    expect(inside).toContain('holds we win</li>')
+    expect(inside).not.toContain('display="block"')
+  })
+
+  it('leaves the list scanner alone otherwise', () => {
+    wire()
+    /* The break above must fire on a formula line and nothing else. */
+    expect(md('- one\n  more of one')).toBe('<ul><li>one more of one</li></ul>')
+    expect(md('- one\n  - two')).toContain('<li>one<ul><li>two</li></ul></li>')
+    expect(md('- code\n  ```js\n  let a = 1\n  ```')).toContain('cblk')
+  })
+
   it('leaves TeX it cannot read as the author wrote it', () => {
     wire()
     /* A formula rendered wrong is worse than a formula not rendered: the
