@@ -663,6 +663,104 @@ describe('the sheet', () => {
   })
 })
 
+/* A refusal the server could classify arrives with its fix as data. The sheet
+   says it in the reader's language -- what is missing, the command on a line of
+   its own, the button to press after -- and folds the server's English sentence
+   under it. Every expectation spells the key and its arguments, so a fix drawn
+   with the wrong words, the wrong agent or the wrong button fails here. */
+describe('a refusal that names its fix', () => {
+  const say = (key: string, vars: Record<string, string>): string => `${key} ${JSON.stringify(vars)}`
+  const fix = (): Element | null => sheet()?.querySelector('.extAgents-fix') ?? null
+  const hermesSaid =
+    'connected, but no session could be opened: Internal error: Hermes is not connected to any AI provider yet. ' +
+    'Run `hermes model` to pick one (auth methods: hermes-setup)'
+
+  it('says what a failed test needs, the command on its own line, and folds the English under it', async () => {
+    install([
+      row({
+        name: 'Hermes Agent',
+        preset: 'hermes',
+        configured: false,
+        enabled: false,
+        needs_auth: true,
+        probe_status: 'attention',
+        last_test_ok: false,
+        last_test_at_ms: 1,
+        last_test_detail: hermesSaid,
+        last_test_remedy: { kind: 'setup', command: 'hermes model' },
+      }),
+    ])
+    await mount()
+    await openSheet('Hermes Agent')
+    const lead = say('gui.agent.fix_setup', { agent: 'Hermes Agent', button: 'gui.agent.test_label' })
+    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.hd_test_bad', { detail: lead }))
+    expect(fix()!.querySelector('.extAgents-cmd code')!.textContent).toBe('hermes model')
+    expect(fix()!.querySelector('.extAgents-raw summary')!.textContent).toBe('gui.agent.fix_raw')
+    expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain(hermesSaid)
+    expect((fix()!.querySelector('.extAgents-raw') as HTMLDetailsElement).open).toBe(false)
+    expect(sheet()!.querySelector('.extAgents-by')!.className).toContain('extAgents-by-fix')
+  })
+
+  it('says a refused connect needs a sign-in, names Retry, and copies the command', async () => {
+    const r = row({ name: 'Codex', preset: 'codex', configured: false, enabled: false })
+    const said = 'sub-agent Codex did not answer a test message: it is installed but has no usable credential'
+    install([r], {
+      act: async (op) => {
+        if (op === 'connect') throw { data: { detail: said, remedy: { kind: 'sign_in', command: 'npx -y @openai/codex login' } } }
+        return [r]
+      },
+    })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    await mount()
+    await openSheet('Codex')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_sign_in', { agent: 'Codex', button: 'gui.retry' }))
+    expect(sheetActs()).toEqual(['gui.retry'])
+    expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain(said)
+    await click(fix()!.querySelector('.extAgents-cmd button'))
+    expect(writeText).toHaveBeenCalledWith('npx -y @openai/codex login')
+    expect(fix()!.querySelector('.extAgents-cmd button')!.textContent).toBe('gui.agent.copied')
+  })
+
+  it('gives an endpoint row no command, since its key is fixed here and not in a terminal', async () => {
+    install([
+      row({
+        name: 'MiroThinker',
+        preset: 'mirothinker',
+        kind: 'openai',
+        last_test_ok: false,
+        last_test_at_ms: 1,
+        last_test_detail: 'it has no usable API key',
+        last_test_remedy: { kind: 'api_key', command: '' },
+      }),
+    ])
+    await mount()
+    await openSheet('MiroThinker')
+    const lead = say('gui.agent.fix_api_key', { agent: 'MiroThinker', button: 'gui.agent.test_label' })
+    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.hd_test_bad', { detail: lead }))
+    expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
+  })
+
+  it('says to sign in, and offers nothing to run, when no command is known for the agent', async () => {
+    install([
+      row({
+        name: 'opencode',
+        preset: 'opencode',
+        last_test_ok: false,
+        last_test_at_ms: 1,
+        last_test_detail: 'it is installed but has no usable credential',
+        last_test_remedy: { kind: 'sign_in', command: '' },
+      }),
+    ])
+    await mount()
+    await openSheet('opencode')
+    const lead = say('gui.agent.fix_sign_in_bare', { agent: 'opencode', button: 'gui.agent.test_label' })
+    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.hd_test_bad', { detail: lead }))
+    expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
+  })
+})
+
 describe('the model pill', () => {
   const choices = [
     { value: 'v/opus', name: 'Opus', group: 'Anthropic' },

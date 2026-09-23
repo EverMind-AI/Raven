@@ -1472,6 +1472,13 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.hd_on_by': 'Connected · {by}',
     'gui.agent.hd_missing_by': 'Not installed · {by}',
     'gui.agent.hd_test_bad': 'Test failed: {detail}',
+    'gui.agent.fix_sign_in':
+      'Sign in to {agent} first. Run this command in a terminal and sign in when it opens your browser, then press {button}:',
+    'gui.agent.fix_sign_in_bare': 'Sign in to {agent} first, then press {button}.',
+    'gui.agent.fix_setup':
+      '{agent} has no model provider it can use yet. Run this command in a terminal and follow its prompts to choose one, then press {button}:',
+    'gui.agent.fix_api_key': '{agent} could not use its API key. Change it to a valid key, then press {button}.',
+    'gui.agent.fix_raw': 'Original error',
     'gui.agent.short_raven': 'General assistant, takes a bit of everything',
     'gui.agent.short_raven_code': 'Writes code, runs it, fixes bugs',
     'gui.agent.short_raven_design': 'Produces UI drafts, visual revisions and artwork',
@@ -3852,6 +3859,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.hd_on_by': '已接入 · {by}',
     'gui.agent.hd_missing_by': '本机未安装 · {by}',
     'gui.agent.hd_test_bad': '测试没通过：{detail}',
+    'gui.agent.fix_sign_in': '需要先登录 {agent}。在终端运行下面这条命令，按提示在浏览器里登录，完成后点「{button}」：',
+    'gui.agent.fix_sign_in_bare': '需要先登录 {agent}，登录后点「{button}」。',
+    'gui.agent.fix_setup':
+      '{agent} 还没有可用的模型服务商。在终端运行下面这条命令，按提示选择服务商，完成后点「{button}」：',
+    'gui.agent.fix_api_key': '{agent} 的 API key 不可用，换一个有效的 key 后点「{button}」。',
+    'gui.agent.fix_raw': '原始报错',
     'gui.agent.short_raven': '通用助手，什么活都能接一点',
     'gui.agent.short_raven_code': '写代码、跑代码、修 bug',
     'gui.agent.short_raven_design': '出界面稿、改视觉、做图',

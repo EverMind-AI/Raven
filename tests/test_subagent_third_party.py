@@ -4282,7 +4282,10 @@ def test_the_shim_row_that_reported_this_gets_its_command(monkeypatch: pytest.Mo
     cfg = SimpleNamespace(preset="codex")
     hint = SIGN_IN_HINTS["codex"]
 
-    assert hint == ("codex", "codex login", "npx -y @openai/codex login"), "read from codex's own help"
+    assert (hint.exe, hint.local, hint.anywhere) == ("codex", "codex login", "npx -y @openai/codex login"), (
+        "read from codex's own help"
+    )
+    assert hint.does == "sign_in", "codex login signs in through a browser"
 
     monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
     clean = probe_mod._refusal_detail(cfg, said)
@@ -4554,6 +4557,59 @@ async def test_the_connect_path_reads_the_answer_whole(monkeypatch: pytest.Monke
     assert result.ok is False
     assert "no usable credential; sign in with `hermes model`" in result.detail
     assert "not connected to any AI provider" in result.detail
+
+
+def test_each_agent_s_fix_is_named_as_data_from_the_one_decision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The page's fix and the terminal's sentence come out of the same call.
+
+    For every agent the table knows, and for one it does not: the remedy says
+    which kind of fix and the command this machine can run, and the sentence
+    returned beside it is exactly the one `_refusal_detail` has always written --
+    so the page and a terminal cannot disagree about what one refusal needs.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    said = "Failed to authenticate: OAuth session expired and could not be refreshed."
+    on_path = {"claude"}  # measured: claude on PATH, codex not, hermes installed locally
+    monkeypatch.setattr(
+        probe_mod.shutil, "which", lambda exe, path=None: f"/usr/local/bin/{exe}" if exe in on_path else None
+    )
+    cases = [
+        (SimpleNamespace(preset="claude_code", kind="acp"), Remedy("sign_in", "claude auth login")),
+        (SimpleNamespace(preset="codex", kind="acp"), Remedy("sign_in", "npx -y @openai/codex login")),
+        (SimpleNamespace(preset="hermes", kind="acp"), Remedy("setup", "hermes model")),
+        (SimpleNamespace(preset="opencode", kind="acp"), Remedy("sign_in")),
+        (SimpleNamespace(preset="mirothinker", kind="openai"), Remedy("api_key")),
+    ]
+    for cfg, expected in cases:
+        text, remedy = probe_mod._refusal(cfg, said)
+        assert remedy == expected, cfg.preset
+        assert text == probe_mod._refusal_detail(cfg, said), f"{cfg.preset}: one decision, one sentence"
+
+    # Not about a credential: no fix, and the words pass through as they came.
+    assert probe_mod._refusal(SimpleNamespace(preset="codex", kind="acp"), "connection ended (exit 127)") == (
+        "connection ended (exit 127)",
+        None,
+    )
+
+
+async def test_the_ping_hands_its_caller_the_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The connect path is where the page's refused-add line gets its fix from."""
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpRemoteError
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    def _refused(*args: object, **kwargs: object) -> object:
+        raise AcpRemoteError("request", -32603, "Internal error", {"details": _HERMES_NO_PROVIDER})
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", _refused)
+    result = await probe_mod.ping_agent(SimpleNamespace(name="Hermes Agent", preset="hermes", kind="acp"))
+    assert result.remedy == Remedy("setup", "hermes model")
 
 
 def test_a_failure_that_is_not_about_credentials_keeps_its_own_words() -> None:

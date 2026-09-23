@@ -92,6 +92,27 @@ describe('act', () => {
     expect(store.get().joining).toEqual({})
   })
 
+  /* The fix a refusal names travels with the refusal, and only when there is
+     one: a write refused for any other reason keeps the entry it always had. */
+  it('keeps the fix a refusal names beside its sentence', async () => {
+    const r = row()
+    const said = 'it is installed but has no usable credential'
+    const source: ExtAgentsSource = {
+      load: async () => [r],
+      act: async () => {
+        throw { data: { detail: said, remedy: { kind: 'sign_in', command: 'claude auth login' } } }
+      },
+    }
+    setSources({ extAgents: source })
+    await store.act(r, 'connect', {})
+    expect(store.get().failed.claude_code).toEqual({
+      op: 'connect',
+      args: {},
+      detail: said,
+      remedy: { kind: 'sign_in', command: 'claude auth login' },
+    })
+  })
+
   it('sends the refused write again on retry, and clears the refusal once it lands', async () => {
     const r = row()
     let refusals = 1

@@ -17,7 +17,7 @@ import type { PickerProvider } from '../../components/ModelPicker'
 import type { Shown } from './Rows'
 import type { Section } from './source'
 import type { ExtAgentsState } from './store'
-import type { ExtAgentRow } from './types'
+import type { ExtAgentRow, Remedy } from './types'
 import type { JSX } from 'react'
 import './styles.css'
 
@@ -86,35 +86,42 @@ function GoodAt({ row, saved, readOnly }: { row: ExtAgentRow; saved: string; rea
   )
 }
 
-/* The install block for an absent agent: the vendor's command with a copy
-   button, and the vendor's site. Copy confirms itself on the button rather
-   than in a toast, since the reader is looking at the button. */
-function InstallBlock({ row }: { row: ExtAgentRow }): JSX.Element | null {
-  const { site, cmd } = installOf(row)
+/* A command the reader runs in a terminal, with a copy button. Copy confirms
+   itself on the button rather than in a toast, since the reader is looking at
+   the button. Shared by the install block and a refusal's fix, which is the
+   same act: a command to run somewhere this page cannot reach. */
+function CmdCopy({ cmd }: { cmd: string }): JSX.Element {
   const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (!copied) return
     const timer = setTimeout(() => setCopied(false), 1400)
     return () => clearTimeout(timer)
   }, [copied])
+  return (
+    <div className="extAgents-cmd">
+      <code>{cmd}</code>
+      <button
+        type="button"
+        onClick={() => {
+          void navigator.clipboard?.writeText(cmd)
+          setCopied(true)
+        }}
+      >
+        {t(copied ? 'gui.agent.copied' : 'gui.agent.copy')}
+      </button>
+    </div>
+  )
+}
+
+/* The install block for an absent agent: the vendor's command with a copy
+   button, and the vendor's site. */
+function InstallBlock({ row }: { row: ExtAgentRow }): JSX.Element | null {
+  const { site, cmd } = installOf(row)
   if (!site && !cmd) return null
   return (
     <div className="extAgents-inst">
       <span className="extAgents-k">{t('gui.plug.install')}</span>
-      {cmd ? (
-        <div className="extAgents-cmd">
-          <code>{cmd}</code>
-          <button
-            type="button"
-            onClick={() => {
-              void navigator.clipboard?.writeText(cmd)
-              setCopied(true)
-            }}
-          >
-            {t(copied ? 'gui.agent.copied' : 'gui.agent.copy')}
-          </button>
-        </div>
-      ) : null}
+      {cmd ? <CmdCopy cmd={cmd} /> : null}
       {site ? (
         <a className="extAgents-site" href={`https://${site}`} rel="noreferrer" target="_blank">
           {site}
@@ -295,6 +302,41 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
   )
 }
 
+/* A refusal, and the fix when the server named one. The server's sentence is
+   English and written for a log; a remedy is the same verdict as data, so here
+   it is said in the reader's language -- what is missing, the command that
+   supplies it on a line of its own, and the button to press after -- with the
+   agent's own words folded under it instead of put first. Without a remedy the
+   sentence is all there is, and it is shown as it came. */
+function Refusal({ agent, detail, remedy, button, lead = (say) => say }: {
+  agent: string
+  detail: string
+  remedy: Remedy | null
+  button: string
+  lead?: (say: string) => string
+}): JSX.Element {
+  if (!remedy) return <>{lead(detail)}</>
+  const command = remedy.kind === 'api_key' ? '' : remedy.command
+  const say =
+    remedy.kind === 'api_key'
+      ? t('gui.agent.fix_api_key', { agent, button })
+      : !command
+        ? t('gui.agent.fix_sign_in_bare', { agent, button })
+        : remedy.kind === 'setup'
+          ? t('gui.agent.fix_setup', { agent, button })
+          : t('gui.agent.fix_sign_in', { agent, button })
+  return (
+    <div className="extAgents-fix">
+      <div>{lead(say)}</div>
+      {command ? <CmdCopy cmd={command} /> : null}
+      <details className="extAgents-raw">
+        <summary>{t('gui.agent.fix_raw')}</summary>
+        {detail}
+      </details>
+    </div>
+  )
+}
+
 /* One line under the name in the sheet: what is happening to this agent right
    now, or who makes it when nothing is. */
 function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtAgentsState }): JSX.Element {
@@ -309,10 +351,11 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
     )
   }
   if (shown === 'failed') {
+    const failed = s.failed[row.name]
     return (
-      <div className="extAgents-by extAgents-by-bad">
+      <div className={'extAgents-by extAgents-by-bad' + (failed?.remedy ? ' extAgents-by-fix' : '')}>
         <span className="extAgents-led extAgents-led-bad" />
-        {s.failed[row.name]?.detail}
+        <Refusal agent={row.name} detail={failed?.detail || ''} remedy={failed?.remedy || null} button={t('gui.retry')} />
       </div>
     )
   }
@@ -323,9 +366,15 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
      verdict measured before the executable went away. */
   if (row.last_test_ok === false && shown !== 'missing') {
     return (
-      <div className="extAgents-by extAgents-by-bad">
+      <div className={'extAgents-by extAgents-by-bad' + (row.last_test_remedy ? ' extAgents-by-fix' : '')}>
         <span className="extAgents-led extAgents-led-bad" />
-        {t('gui.agent.hd_test_bad', { detail: row.last_test_detail || '' })}
+        <Refusal
+          agent={row.name}
+          detail={row.last_test_detail || ''}
+          remedy={row.last_test_remedy || null}
+          button={t('gui.agent.test_label')}
+          lead={(say) => t('gui.agent.hd_test_bad', { detail: say })}
+        />
       </div>
     )
   }

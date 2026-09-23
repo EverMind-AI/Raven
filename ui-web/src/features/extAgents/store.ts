@@ -4,9 +4,9 @@ import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
-import { isFound, sectionOf, stageOf } from './source'
+import { isFound, remedyOf, sectionOf, stageOf } from './source'
 
-import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource } from './types'
+import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, Remedy } from './types'
 
 /* Page state, outside React on purpose: two of the callers that drive this page
  * are not React. The rail opens it (chrome/Rail.tsx) and Esc closes it
@@ -20,6 +20,10 @@ export interface Failure {
   op: ExtAgentOp
   args: ExtAgentActArgs
   detail: string
+  /* The fix the server named for this refusal; absent when it named none.
+     `detail` stays the server's own sentence, shown under the fix rather than
+     instead of it. */
+  remedy?: Remedy
 }
 
 /* A write in flight, kept the way a refused one is: which write, with what. */
@@ -132,6 +136,10 @@ const failure = (e: unknown): string => {
   return (err && ((err.data && err.data.detail) || err.detail || err.message)) || String(e)
 }
 
+/* The same refusal's classification, carried beside its sentence under
+   `data.remedy` when the server could name a fix. */
+const remedyFrom = (e: unknown): Remedy | null => remedyOf((e as { data?: { remedy?: unknown } } | null)?.data?.remedy)
+
 /* `load(true)` re-measures availability. Opening the page is one caller --
    the section heading there is a fresh answer every time the reader arrives --
    the sheet's re-check button is another, and the wizard's agents step a third,
@@ -168,9 +176,9 @@ export async function run(
   row?: ExtAgentRow,
   args?: ExtAgentActArgs,
   opts: { quiet?: boolean } = {},
-): Promise<string | null> {
+): Promise<Pick<Failure, 'detail' | 'remedy'> | null> {
   let rows = get().rows
-  let failedWith: string | null = null
+  let failedWith: Pick<Failure, 'detail' | 'remedy'> | null = null
   /* A rename moves the open sheet, but only once the rows that carry the new
      name are here: the sheet is resolved by looking the name up in rows, so
      moving it any earlier resolves to nothing, and the shared drawer -- which
@@ -182,12 +190,13 @@ export async function run(
     rows = await source().act(op, row as ExtAgentRow, args || {})
     if (row && args?.new_name && args.new_name !== row.name) renamed = args.new_name
   } catch (e) {
-    failedWith = failure(e)
+    const remedy = remedyFrom(e)
+    failedWith = remedy ? { detail: failure(e), remedy } : { detail: failure(e) }
     /* A refused model write may have been checked against a menu the row has
        since moved off -- it is re-measured behind the page -- so the sheet
        repaints from the listing as it is now rather than from what it held. */
     if (op === 'model') rows = await source().load(false).catch(() => rows)
-    if (!opts.quiet) toast(t('gui.agent.failed', { detail: failedWith }))
+    if (!opts.quiet) toast(t('gui.agent.failed', { detail: failedWith.detail }))
   }
   const landed: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
   if (renamed && get().sheet === row?.name) landed.sheet = renamed
@@ -210,8 +219,8 @@ const without = <T>(map: Record<string, T>, name: string): Record<string, T> => 
 export async function act(row: ExtAgentRow, op: ExtAgentOp, args: ExtAgentActArgs = {}): Promise<void> {
   set({ joining: { ...get().joining, [row.name]: { op, args } }, failed: without(get().failed, row.name) })
   try {
-    const detail = await run(op, row, args, { quiet: true })
-    if (detail !== null) set({ failed: { ...get().failed, [row.name]: { op, args, detail } } })
+    const refused = await run(op, row, args, { quiet: true })
+    if (refused !== null) set({ failed: { ...get().failed, [row.name]: { op, args, ...refused } } })
   } finally {
     set({ joining: without(get().joining, row.name) })
   }

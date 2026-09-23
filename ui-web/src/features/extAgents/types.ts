@@ -60,6 +60,9 @@ export interface ExtAgentRow {
   last_test_ok: boolean | null
   last_test_at_ms: number | null
   last_test_detail: string
+  /* The fix the server named for the last failed test; absent when the failure
+     was not about a credential. `last_test_detail` stays the English record. */
+  last_test_remedy?: Remedy | null
   upgrade_to?: string | null
   /* One of Raven's own, whichever way this install registered it: the
      built-in row, a discovered product, or a config row whose acp handshake
@@ -99,4 +102,13 @@ export interface ExtAgentActArgs {
 export interface ExtAgentsSource {
   load(probe?: boolean): Promise<ExtAgentRow[]>
   act(op: ExtAgentOp, row: ExtAgentRow, args?: ExtAgentActArgs): Promise<ExtAgentRow[]>
+}
+
+/* What fixes a refusal about a credential, as the server classified it: which
+   kind of fix, and the command that makes it on this machine when one is known.
+   The same verdict the server's English sentence spells out, as data, so the
+   sheet can say it in the reader's language. */
+export interface Remedy {
+  kind: 'sign_in' | 'setup' | 'api_key'
+  command: string
 }

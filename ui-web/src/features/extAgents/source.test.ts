@@ -55,6 +55,19 @@ beforeEach(() => {
 })
 
 describe('one agent row', () => {
+  /* A remedy is data the sheet renders, so only a well-formed one is kept: a
+     kind the sheet has no words for would draw an empty fix where the server's
+     sentence used to be. */
+  it('reads the fix a failed test named, and drops anything that is not one', () => {
+    const fixed = extAgentRowOf(wire({ last_test_remedy: { kind: 'setup', command: 'hermes model' } }))
+    expect(fixed.last_test_remedy).toEqual({ kind: 'setup', command: 'hermes model' })
+    const keyOnly = extAgentRowOf(wire({ last_test_remedy: { kind: 'api_key' } }))
+    expect(keyOnly.last_test_remedy).toEqual({ kind: 'api_key', command: '' })
+    expect('last_test_remedy' in extAgentRowOf(wire({}))).toBe(false)
+    const junk = wire({ last_test_remedy: { kind: 'reboot' } as unknown as ExtAgentRowWire['last_test_remedy'] })
+    expect('last_test_remedy' in extAgentRowOf(junk)).toBe(false)
+  })
+
   it('names its kind from the flag when the server sends none', () => {
     expect(extAgentRowOf(wire({ builtin: true })).kind).toBe('builtin')
     expect(extAgentRowOf(wire({})).kind).toBe('cli')
