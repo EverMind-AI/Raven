@@ -383,14 +383,17 @@ than from what was true when the surface was drawn.
 **Language store**:
 `src/state/lang/store.ts` -- the page's language, the catalogue behind it, and
 the one notification a pick sends. The language is resolved as the module loads
--- the reader's remembered pick, otherwise what `<html lang>` declares -- so
-`get().lang` is never null and the first frame is one language rather than the
-served markup with words from another drawn over it. Two groups hear a pick:
+-- the reader's remembered pick, else the first of their own languages this page
+has words for, else what `<html lang>` declares -- so `get().lang` is never null
+and the first frame is one language rather than the served markup with words
+from another drawn over it. The middle step is what a page that never reaches
+the gateway has in place of its answer, a failed connect returning before
+`state/lang/pick.ts`'s `load` is called. Two groups hear a pick:
 `subscribe` is what a component reads through `useSyncExternalStore`, so every
 region and every island re-renders its own words, and `onApplied` is for
 everything that is drawn rather than rendered. `get().picked` says whether a
-language was chosen rather than inherited from the document, and it decides one
-thing: `attr(key)` answers `undefined` until a pick lands, because an attribute
+language was chosen rather than inherited from the document or the browser, and
+it decides one thing: `attr(key)` answers `undefined` until a pick lands, because an attribute
 the served markup does not carry is one applyI18n would not have written
 either.
 
