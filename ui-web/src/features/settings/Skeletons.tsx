@@ -70,6 +70,20 @@ function WCard({ n, titled, ctl, from = 0 }: { n: number; titled?: boolean; ctl?
   )
 }
 
+/** One General setting, the shape pages/General.tsx's `Setting` renders: a
+    name and a line under it, then the control beside them or under both. */
+function WGen({ ctl, below }: { ctl: ReactNode; below?: boolean }): JSX.Element {
+  return (
+    <section className={'settings-gen' + (below ? ' settings-gen-below' : '')}>
+      <div className="settings-gen-k">
+        <Bar w="72px" h={13} />
+        <div className="settings-gen-d"><Bar w="220px" /></div>
+      </div>
+      <div className="settings-gen-ctl">{ctl}</div>
+    </section>
+  )
+}
+
 /** The expandable name/switch rows the tools and plugins pages list. */
 function WXrows({ n, from = 0 }: { n: number; from?: number }): JSX.Element {
   return (
@@ -293,7 +307,27 @@ const SHAPE: Partial<Record<SectionId, () => JSX.Element>> = {
       <WCard ctl={38} from={5} n={1} />
     </Wait>
   ),
-  general: () => <Wait><WCard ctl={190} n={3} /></Wait>,
+  general: () => (
+    <Wait>
+      <div className="settings-genlist">
+        <WGen ctl={<Bar w="120px" h={30} />} />
+        <WGen
+          below
+          ctl={(
+            <div className="settings-themes">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="settings-theme">
+                  <Bar w="100%" h={96} />
+                  <span className="settings-theme-foot"><Bar w={width(i)} /></span>
+                </div>
+              ))}
+            </div>
+          )}
+        />
+        <WGen ctl={<Bar w="38px" h={22} />} />
+      </div>
+    </Wait>
+  ),
   model: () => <Wait><WCard ctl={210} n={ROLE_ROWS} titled /></Wait>,
   plugins: PluginsWait,
   provider: ProviderWait,

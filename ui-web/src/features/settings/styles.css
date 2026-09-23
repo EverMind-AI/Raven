@@ -707,3 +707,44 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
    carrying `role="status"` is the one the section already draws. */
 .settings-wait.settings-tp {display:grid}
 .settings-wait .settings-tp-find .settings-wbar {border-radius:var(--ctl-r)}
+
+/* ── general: title + line on the left, control on the right ───── */
+
+.settings-genlist {display:flex; flex-direction:column; gap:26px; padding-top:4px}
+.settings-gen {display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px 20px}
+.settings-gen-below {grid-template-columns:minmax(0,1fr)}
+.settings-gen-k, .settings-gen-ctl {min-width:0}
+.settings-gen-t {font-size:15px; font-weight:500; color:var(--text)}
+.settings-gen-d {font-size:13px; color:var(--faint); margin-top:3px}
+
+/* The theme as three miniatures of the window. The palette is written as
+   properties because it is data: each card shows its theme's colours whatever
+   theme the page itself is in. */
+.settings-themes {display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px}
+.settings-theme {
+  font:inherit; color:inherit; text-align:left; cursor:pointer;
+  display:flex; flex-direction:column; gap:12px; padding:12px;
+  background:var(--paper); border:1px solid var(--line); border-radius:12px;
+  transition:border-color .15s ease, box-shadow .15s ease;
+}
+.settings-theme:hover {border-color:color-mix(in oklab, var(--line) 50%, var(--muted))}
+.settings-theme[aria-checked="true"] {border-color:var(--amber); box-shadow:0 0 0 1px var(--amber)}
+.settings-theme:focus-visible {outline:2px solid var(--amber); outline-offset:2px}
+.settings-theme-foot {display:flex; align-items:center; justify-content:space-between; font-size:13.5px; padding:0 2px}
+.settings-theme-dot {width:16px; height:16px; border-radius:50%; border:1.5px solid var(--line); box-sizing:border-box; flex:none}
+.settings-theme[aria-checked="true"] .settings-theme-dot {border:4.5px solid var(--amber)}
+
+.settings-shotbox {position:relative; display:block; height:96px; border-radius:7px; overflow:hidden; border:1px solid var(--line-soft)}
+.settings-shot {
+  --shot-bg:#ffffff; --shot-side:#efefef; --shot-bar:#e6e6e6; --shot-block:#e9e9e9;
+  position:absolute; inset:0; display:grid; grid-template-columns:24% 1fr; background:var(--shot-bg);
+}
+.settings-shot-dark {--shot-bg:#1d1d1d; --shot-side:#2a2a2a; --shot-bar:#555555; --shot-block:#4a4a4a}
+.settings-shot-side {background:var(--shot-side); padding:12px 10px}
+.settings-shot-side i {display:block; height:5px; width:60%; border-radius:3px; background:var(--shot-bar)}
+.settings-shot-main {padding:18px 14px; display:flex; flex-direction:column; gap:10px}
+.settings-shot-main i {display:block; height:6px; width:48%; border-radius:3px; background:var(--shot-bar)}
+.settings-shot-main b {display:block; height:22px; width:78%; border-radius:4px; background:var(--shot-block)}
+/* System: the dark window over the right-hand part of the light one. */
+.settings-shot-half {position:absolute; inset:0; clip-path:inset(0 0 0 62%)}
+@media (max-width: 640px) { .settings-themes {grid-template-columns:1fr} }
