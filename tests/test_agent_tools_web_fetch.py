@@ -1,5 +1,6 @@
 """Direct data reads and HTML fallback contracts for the host web_fetch tool."""
 
+import asyncio
 import json
 
 import httpx
@@ -159,7 +160,8 @@ async def test_binary_data_is_not_presented_as_a_successful_text_fallback(transp
 
     result = json.loads(await web.WebFetchTool().execute("https://origin.example/document"))
 
-    assert result["error"] == "Unsupported direct content type"
+    assert result["error"] == "Jina Reader answered HTTP 503"
+    assert result["detail"] == "Unsupported direct content type"
     assert "text" not in result
 
 
@@ -201,3 +203,128 @@ async def test_legacy_mode_is_not_echoed_as_an_output_promise(transport):
 
     assert "extractMode" not in result
     assert json.loads(result["text"]) == {"a": 1}
+
+
+class _TrackedStream(httpx.AsyncByteStream):
+    """Detect over-reading and confirm closure on every streaming exit path."""
+
+    def __init__(self, chunks, *, max_reads=None, delay=0):
+        self.chunks = chunks
+        self.max_reads = max_reads
+        self.delay = delay
+        self.reads = 0
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            self.reads += 1
+            if self.max_reads is not None:
+                assert self.reads <= self.max_reads, "response read past its budget"
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            yield chunk
+
+    async def aclose(self):
+        self.closed = True
+
+
+@pytest.mark.parametrize("content_length", [None, "1", "999999999999"])
+async def test_streaming_size_limit_does_not_trust_content_length(transport, content_length):
+    responses, calls = transport
+    chunk = b"x" * (64 * 1024)
+    limit = web.DIRECT_FETCH_MAX_BYTES
+    stream = _TrackedStream([chunk] * 100, max_reads=limit // len(chunk) + 1)
+    headers = {"Content-Type": "text/plain"}
+    if content_length is not None:
+        headers["Content-Length"] = content_length
+    responses["origin.example"] = httpx.Response(200, headers=headers, stream=stream)
+
+    result = json.loads(await web.WebFetchTool().execute("https://origin.example/data", maxChars=limit + 100))
+
+    assert result["text"] == "x" * limit
+    assert result["length"] == limit
+    assert result["truncated"] is True
+    assert stream.closed
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("size_delta", [-1, 0, 1])
+async def test_streaming_limit_boundary(transport, size_delta):
+    responses, _ = transport
+    limit = web.DIRECT_FETCH_MAX_BYTES
+    body = b"x" * (limit + size_delta)
+    stream = _TrackedStream([body])
+    responses["origin.example"] = httpx.Response(200, headers={"Content-Type": "text/plain"}, stream=stream)
+
+    result = json.loads(await web.WebFetchTool().execute("https://origin.example/data", maxChars=limit + 100))
+
+    assert result["length"] == min(len(body), limit)
+    assert result["truncated"] is (size_delta > 0)
+    assert stream.closed
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Content-Type": "application/pdf"},
+        {"Content-Type": "application/zip"},
+        {"Content-Type": "text/plain", "Content-Encoding": "gzip"},
+    ],
+)
+async def test_unsupported_bodies_are_closed_without_reading(transport, headers):
+    responses, calls = transport
+    stream = _TrackedStream([b"must not be read"], max_reads=0)
+    responses["origin.example"] = httpx.Response(200, headers=headers, stream=stream)
+    responses["r.jina.ai"] = httpx.Response(200, text="Provider extraction")
+
+    result = json.loads(await web.WebFetchTool().execute("https://origin.example/data"))
+
+    assert result["text"] == "Provider extraction"
+    assert stream.reads == 0
+    assert stream.closed
+    assert calls[0].headers["accept-encoding"] == "identity"
+
+
+@pytest.mark.parametrize("status", [302, 404, 503])
+async def test_redirect_and_error_bodies_are_never_buffered(transport, status):
+    responses, _ = transport
+    stream = _TrackedStream([b"must not be read"], max_reads=0)
+    responses["origin.example"] = httpx.Response(
+        status, headers={"Location": "https://next.example/data"}, stream=stream
+    )
+    responses["next.example"] = httpx.Response(200, text="Direct data")
+    responses["r.jina.ai"] = httpx.Response(200, text="Provider extraction")
+
+    result = json.loads(await web.WebFetchTool().execute("https://origin.example/data"))
+
+    assert result["text"] == ("Direct data" if status == 302 else "Provider extraction")
+    assert stream.reads == 0
+    assert stream.closed
+
+
+async def test_continuously_producing_stream_hits_total_deadline(transport, monkeypatch):
+    responses, _ = transport
+    monkeypatch.setattr(web, "DIRECT_FETCH_TIMEOUT_S", 0.03)
+    stream = _TrackedStream([b"x"] * 1000, delay=0.005)
+    responses["origin.example"] = httpx.Response(200, headers={"Content-Type": "text/plain"}, stream=stream)
+    responses["r.jina.ai"] = httpx.Response(200, text="Provider extraction")
+
+    result = json.loads(await asyncio.wait_for(web.WebFetchTool().execute("https://origin.example/data"), 1))
+
+    assert result["text"] == "Provider extraction"
+    assert 0 < stream.reads < 1000
+    assert stream.closed
+
+
+async def test_size_limited_html_is_available_when_jina_fails(transport):
+    responses, _ = transport
+    stream = _TrackedStream([b"<p>" + b"x" * web.DIRECT_FETCH_MAX_BYTES + b"</p>"])
+    responses["origin.example"] = httpx.Response(200, headers={"Content-Type": "text/html"}, stream=stream)
+    responses["r.jina.ai"] = httpx.Response(451)
+
+    result = json.loads(await web.WebFetchTool().execute("https://origin.example/article"))
+
+    assert result["extractor"] == "direct-http"
+    assert result["truncated"] is True
+    assert result["text"] == "x" * 50000
+    assert stream.closed
