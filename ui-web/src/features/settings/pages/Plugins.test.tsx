@@ -46,15 +46,41 @@ describe('plugins page', () => {
     expect(screen.getByText('gui.settings.plugins.counter {"on":1,"total":4}')).toBeTruthy()
     expect(screen.getByText('gui.settings.plugins.connected')).toBeTruthy()
     expect(screen.getByText('gui.settings.plugins.setup')).toBeTruthy()
-    expect(screen.getByText('gui.settings.plugins.failed_retry')).toBeTruthy()
+    expect(screen.getByText('gui.settings.plugins.failed')).toBeTruthy()
     expect(document.querySelectorAll('.settings-xrow.settings-dim')).toHaveLength(1)
   })
 
-  it('retry reconnects without toggling; the switch goes through plug.toggle', async () => {
+  it('the failed chip is a status, and the reconnect lives in the drawer beside the reason', async () => {
+    /* "Failed · retry" was a button on the row: the one place that says what
+       state a server is in was also where a stray click reconnected it. */
     const { calls } = install()
     await mount('plugins')
-    await act(async () => { fireEvent.click(screen.getByText('gui.settings.plugins.failed_retry')) })
+    const chip = screen.getByText('gui.settings.plugins.failed')
+    expect(chip.closest('button')).toBeNull()
+    await act(async () => { fireEvent.click(chip) })
+    expect(calls).toEqual([])
+    await act(async () => { fireEvent.click(screen.getByText('github')) })
+    await act(async () => { await Promise.resolve() })
+    const fail = document.querySelector('.settings-pfail') as HTMLElement
+    /* First in the drawer, before the credential: it is what the row was
+       opened for. */
+    expect(document.querySelector('.settings-cfg')!.firstElementChild).toBe(fail)
+    expect(fail.textContent).toContain('boom')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.plugins.retry')) })
     expect(calls).toEqual([['retryServer', 'github']])
+  })
+
+  it('a connected server\'s drawer offers no reconnect', async () => {
+    install()
+    await mount('plugins')
+    await act(async () => { fireEvent.click(screen.getByText('context7')) })
+    await act(async () => { await Promise.resolve() })
+    expect(document.querySelector('.settings-pfail')).toBeNull()
+  })
+
+  it('the switch goes through plug.toggle', async () => {
+    const { calls } = install()
+    await mount('plugins')
     calls.length = 0
     await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'context7' })) })
     expect(calls).toEqual([['toggleServer', { name: 'context7', on: false }]])
@@ -99,5 +125,41 @@ describe('plugins page', () => {
       ['configureServer', { name: 'github', form: { token: 'ghp_x' } }],
       ['configureServer', { name: 'github', form: { token: '' } }],
     ])
+  })
+
+  it('shows what the server is and what went wrong, not just how to sign in', async () => {
+    install()
+    await mount('plugins')
+    await act(async () => { fireEvent.click(screen.getByText('github')) })
+    await act(async () => { await Promise.resolve() })
+    /* The manager's own words. They reached the reader as the word "failed" on
+       a chip and nowhere else, which is not something anyone can act on. */
+    expect(screen.getByText('boom')).toBeTruthy()
+    expect(screen.getByText('https://api.githubcopilot.com/mcp')).toBeTruthy()
+    expect(screen.getByText('gui.settings.plugins.tools_n {"n":3}')).toBeTruthy()
+    expect(screen.getByText('list_issues get_pr')).toBeTruthy()
+  })
+
+  it('does not call a server credential-free just because the catalogue has no entry for it', async () => {
+    /* Two different facts, one of them a lie: the row says this server takes a
+       key, and the catalogue -- which is where the FIELD names come from --
+       simply has nothing filed under its name. github reached this state on
+       the live page, with an expired token and a panel telling the reader it
+       needed nothing. */
+    install(undefined, { serverDetail: async () => ({ known: false, fields: [], tools: [] }) })
+    await mount('plugins')
+    await act(async () => { fireEvent.click(screen.getByText('github')) })
+    await act(async () => { await Promise.resolve() })
+    expect(screen.queryByText('gui.settings.plugins.no_credential')).toBeNull()
+    expect(screen.getByText('gui.settings.plugins.no_fields')).toBeTruthy()
+  })
+
+  it('says a credential-free server takes none, on the server\'s own word', async () => {
+    install()
+    await mount('plugins')
+    await act(async () => { fireEvent.click(screen.getByText('context7')) })
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByText('gui.settings.plugins.no_credential')).toBeTruthy()
+    expect(screen.queryByLabelText('Token')).toBeNull()
   })
 })

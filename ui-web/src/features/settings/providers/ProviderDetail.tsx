@@ -8,6 +8,7 @@ import { ProviderIcon } from '../../../components/ProviderMark'
 import { t } from '../../../i18n/t'
 import { Fold, IconBtn, Rov, Sec } from '../Fields'
 import * as store from '../store'
+import { ownId } from './AddModelPop'
 import { AZURE, OauthNote, kindOf, needsKey, takesBase, takesKey } from './Providers'
 import { roleName, rolesUsing } from './Roles'
 
@@ -123,7 +124,11 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
           </span>
         </Sec>
       )}
-      {kind !== 'oauth' && !takesKey(p) && (
+      {/* The address for a provider that takes no key -- unless the block above
+          has already drawn it: a local server that takes an address and no
+          key met both conditions and showed "Server address" twice, each with
+          its own Connect. */}
+      {kind !== 'oauth' && !takesKey(p) && !(!needsKey(p) && takesBase(p)) && (
         <Sec label={t('gui.settings.providers.base')}>
           <span className="settings-taglist">
             <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder="http://localhost:11434"
@@ -171,10 +176,13 @@ function AzureFields({ p }: { p: ProviderRow }): JSX.Element {
   )
 }
 
+const MODELS_FOLDED = 8
+
 function Models({ p }: { p: ProviderRow }): JSX.Element {
   const s = store.get()
   const listed = p.configured || []
   const open = !!s.sheet && s.sheet.slug === p.id
+  const all = s.modelsAll === p.id
   const remove = (m: string): void => {
     const used = rolesUsing(s.snap, p.id, m)
     if (used.length) { store.refuse(t('gui.settings.providers.model_in_use', { roles: used.map(roleName).join(', '), model: m })); return }
@@ -190,11 +198,23 @@ function Models({ p }: { p: ProviderRow }): JSX.Element {
         </button>
       }>
       {/* The chips are the list -- a second heading over them ("models
-          available") said what the section's own label already says. */}
+          available") said what the section's own label already says.
+          Folded past a few: a gateway takes models by the dozen, and a list
+          that only ever grew pushed everything under it off the pane. A fold,
+          not a scrolling box -- the pane is itself the scroller, and a second
+          one inside it is a place the wheel gets stuck. Each chip names the
+          model as the provider's own list does, without the provider's name in
+          front of every one; the full id is its title. */}
       <span className="settings-taglist">
-        {listed.map((m) => (
-          <span key={m} className="settings-tag2">{m}<span className="settings-x" role="button" aria-label={t('gui.settings.providers.remove_model', { model: m })} onClick={() => remove(m)}>{'\u00d7'}</span></span>
+        {(all ? listed : listed.slice(0, MODELS_FOLDED)).map((m) => (
+          <span key={m} className="settings-tag2" title={m}>{ownId(p, m)}<span className="settings-x" role="button" aria-label={t('gui.settings.providers.remove_model', { model: m })} onClick={() => remove(m)}>{'\u00d7'}</span></span>
         ))}
+        {listed.length > MODELS_FOLDED && (
+          <button type="button" className="settings-tagmore" aria-expanded={all}
+            onClick={() => store.set({ modelsAll: all ? null : p.id })}>
+            {all ? t('gui.settings.providers.models_less') : t('gui.settings.providers.models_more', { n: String(listed.length - MODELS_FOLDED) })}
+          </button>
+        )}
         {!listed.length && <span className="settings-tp-empty">{t('gui.settings.providers.no_models_yet')}</span>}
       </span>
     </Sec>
@@ -333,7 +353,13 @@ function Head({ p }: { p: ProviderRow }): JSX.Element {
   const state = p.on
     ? t('gui.settings.providers.connected')
     : t(kindOf(p) === 'oauth' ? 'gui.settings.providers.needs_auth' : kindOf(p) === 'local' ? 'gui.settings.providers.needs_base' : 'gui.settings.providers.needs_key')
-  const link = p.keyUrl || p.homepage
+  /* One way out of the page, not two. The name's arrow was `keyUrl ||
+     homepage`, so on any provider with a key page it opened the same page as
+     "Get a key" two lines below it. It stays only where the key section has no
+     link of its own to offer -- a browser-authorized or local provider, or one
+     the registry knows no key page for -- and then it is the vendor's site. */
+  const keyLinked = kindOf(p) !== 'oauth' && takesKey(p) && !!p.keyUrl
+  const link = keyLinked ? null : (p.homepage || p.keyUrl)
   return (
     <div className="settings-tp-head">
       <ProviderIcon id={p.id} name={p.name} />

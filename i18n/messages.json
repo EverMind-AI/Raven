@@ -2863,10 +2863,6 @@
       "en": "Not wired up yet",
       "zh": "功能尚未接入"
     },
-    "gui.model.add_group": {
-      "en": "Add the whole group",
-      "zh": "添加整组"
-    },
     "gui.model.add_manual": {
       "en": "Add a model by hand",
       "zh": "手动添加模型"
@@ -2942,10 +2938,6 @@
     "gui.key.show": {
       "en": "Show the key",
       "zh": "显示密钥"
-    },
-    "gui.model.add_all": {
-      "en": "Add all ({n})",
-      "zh": "全部添加（{n}）"
     },
     "gui.model.catalogue_n": {
       "en": "{n} shown",
@@ -7035,6 +7027,18 @@
       "en": "Models on offer",
       "zh": "可选用的模型"
     },
+    "gui.settings.providers.models_more": {
+      "en": "{n} more",
+      "zh": "还有 {n} 个"
+    },
+    "gui.settings.providers.models_less": {
+      "en": "Show fewer",
+      "zh": "收起"
+    },
+    "gui.settings.providers.all_added": {
+      "en": "Every model this vendor lists is already added. Type an id to add one it does not list.",
+      "zh": "这家列出的模型都已添加。要加它没列出的，直接填 id。"
+    },
     "gui.settings.providers.no_models_yet": {
       "en": "No models yet. Use \"Add model\" to pick from this vendor's list, or type an id.",
       "zh": "还没有模型。点「添加模型」从这家的列表里挑，或者直接填一个 id。"
@@ -7055,9 +7059,17 @@
       "en": "Add model",
       "zh": "添加模型"
     },
-    "gui.settings.providers.showing_added": {
-      "en": "showing {n} · added {m}",
-      "zh": "显示 {n} 个 · 已添加 {m}"
+    "gui.settings.providers.pick_all": {
+      "en": "Select all",
+      "zh": "全选"
+    },
+    "gui.settings.providers.add_picked": {
+      "en": "Add ({n})",
+      "zh": "添加（{n}）"
+    },
+    "gui.settings.providers.pick_group": {
+      "en": "Select all of {name}",
+      "zh": "全选 {name}"
     },
     "gui.settings.providers.fetching": {
       "en": "Fetching the model list from {name}",
@@ -7212,8 +7224,8 @@
       "zh": "主对话"
     },
     "gui.settings.roles.chat_use": {
-      "en": "The model conversations run on",
-      "zh": "对话时使用的模型"
+      "en": "The default model configuration a new session starts on",
+      "zh": "新开会话时的默认模型配置"
     },
     "gui.settings.roles.curator": {
       "en": "Context compaction",
@@ -7343,9 +7355,17 @@
       "en": "Fixed",
       "zh": "自定义"
     },
-    "gui.settings.roles.ctx_current": {
-      "en": "Current",
-      "zh": "当前"
+    "gui.settings.roles.sum_effort": {
+      "en": "Effort",
+      "zh": "思考"
+    },
+    "gui.settings.roles.sum_iters": {
+      "en": "Tools",
+      "zh": "工具"
+    },
+    "gui.settings.roles.sum_ctx": {
+      "en": "Context",
+      "zh": "上下文"
     },
     "gui.settings.roles.ctx_fixed": {
       "en": "Fixed at",
@@ -7527,13 +7547,13 @@
       "en": "Needs setup",
       "zh": "待配置"
     },
-    "gui.settings.plugins.failed_retry": {
-      "en": "Connection failed · retry",
-      "zh": "连接失败 · 重试"
+    "gui.settings.plugins.failed": {
+      "en": "Connection failed",
+      "zh": "连接失败"
     },
-    "gui.settings.plugins.auth": {
-      "en": "Authorization",
-      "zh": "授权"
+    "gui.settings.plugins.retry": {
+      "en": "Reconnect",
+      "zh": "重新连接"
     },
     "gui.settings.plugins.auth_browser": {
       "en": "Authorize in browser",
@@ -7562,6 +7582,22 @@
     "gui.settings.plugins.no_credential": {
       "en": "This server takes no credential",
       "zh": "这个服务不需要凭据"
+    },
+    "gui.settings.plugins.no_fields": {
+      "en": "The catalogue names no credential field for this server",
+      "zh": "目录里没有登记这个服务要填什么凭据"
+    },
+    "gui.settings.plugins.address": {
+      "en": "Address",
+      "zh": "连接"
+    },
+    "gui.settings.plugins.tools": {
+      "en": "Tools",
+      "zh": "工具"
+    },
+    "gui.settings.plugins.tools_n": {
+      "en": "{n}",
+      "zh": "{n} 个"
     },
     "gui.model.pick_search": {
       "en": "Search or type a model id",

@@ -74,17 +74,21 @@ export function Fold({ open, label, onToggle, children }: {
   )
 }
 
-export function Row({ label, sub, stack, k, children }: {
+export function Row({ label, sub, stack, k, open, children }: {
   label?: ReactNode
   sub?: string
   /* Label above the control rather than beside it: key fields, lists. */
   stack?: boolean
   /* A whole label cell of the caller's own (the role rows). */
   k?: ReactNode
+  /* This row has a drawer open under it, so it gives up its own separator --
+     a line between a row and its own panel reads as a third row. */
+  open?: boolean
   children?: ReactNode
 }): JSX.Element {
+  const cls = ['settings-row', stack ? 'settings-stack' : '', open ? 'settings-open' : ''].filter(Boolean).join(' ')
   return (
-    <div className={stack ? 'settings-row settings-stack' : 'settings-row'}>
+    <div className={cls}>
       {k ?? (
         <div className="settings-k">
           {label}
