@@ -88,9 +88,14 @@ async def test_submit_result_returns_the_outcome():
     assert outcome == TurnOutcome(usage=Usage(5, 7, 12), explicit_reply=True)
 
 
-async def test_failed_turn_result_is_none():
+async def test_failed_turn_result_is_the_report_the_lane_filed():
+    # A failure and a cancel both used to arrive as None, so a submitter that
+    # only awaits the handle -- cron -- had to invent a sentence for a failure
+    # the turn had already worded.
     sched = _scheduler(FailingRunner())
-    assert await sched.submit(_req()).result() is None
+    result = await sched.submit(_req()).result()
+    assert isinstance(result, TurnFailed)
+    assert (result.error, result.cancelled) == ("ValueError: boom", False)
 
 
 # --- off-loop fail-fast (must compare self._loop, not just get_running_loop) ---
