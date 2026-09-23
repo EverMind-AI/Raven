@@ -124,8 +124,27 @@ const rowsOf = (list: ProviderWire[]): Provider[] =>
    list, and a dialog (or the first-run wizard) that opened inside that window
    coalesced onto the dropped load and showed no provider to connect. */
 export async function loadDefaultProviders(): Promise<void> {
-  const mo = await gateway().call('model.options', {})
+  const mo = await readOptions({})
   defaultProvidersLive = rowsOf(mo.providers || [])
+}
+
+/* One catalogue read per distinct question at a time. The boot asks the
+   default-scoped question from three places inside the same second -- the
+   draft's own switch, the settings refresh, and the settings dialog's first
+   draw -- and each answer is a full catalogue build on the gateway: 0.4s on a
+   home with many providers, and three at once slow every other call on the
+   socket eightfold while they run. Callers asking the same question while one
+   is in flight share its answer; a different question is its own call. */
+const inFlight = new Map<string, Promise<ResultOf<'model.options'>>>()
+
+function readOptions(params: ParamsOf<'model.options'>): Promise<ResultOf<'model.options'>> {
+  const key = JSON.stringify(params)
+  let read = inFlight.get(key)
+  if (!read) {
+    read = gateway().call('model.options', params).finally(() => { inFlight.delete(key) })
+    inFlight.set(key, read)
+  }
+  return read
 }
 
 export async function loadProviders(sid?: string | null, gen?: number): Promise<void> {
@@ -140,7 +159,7 @@ export async function loadProviders(sid?: string | null, gen?: number): Promise<
   // generation it captured then -- the answer is about that older view, and a
   // ticket taken here would read as current.
   const ticket = gen !== undefined ? gen : generation()
-  const mo = await gateway().call('model.options', target ? { session_id: target } : {})
+  const mo = await readOptions(target ? { session_id: target } : {})
   // model.options does its catalogue work off-thread, so responses can land out
   // of click order. A refresh keyed to a superseded view must not repaint the
   // page the reader has since moved to.
