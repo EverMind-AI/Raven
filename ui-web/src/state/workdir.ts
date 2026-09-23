@@ -208,7 +208,8 @@ const menuRows = (): readonly WdRow[] => {
 /* Open only while the pick can still change: a conversation's chip is hidden,
    and a click that reached here anyway must not raise a menu over it. The way
    back out is the chip, a pointer landing outside (state/globalListeners.ts's
-   click-away arbitration), a pick, or leaving the draft. */
+   click-away arbitration), Escape (state/escapeOrder.ts), a pick, or leaving
+   the draft. */
 export function open(): void {
   if (get().paint?.locked) return
   set({ ...get(), open: true, view: 'menu', listed: menuRows(), err: null, opened: get().opened + 1 })
