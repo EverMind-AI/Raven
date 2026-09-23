@@ -282,12 +282,13 @@ export function Search({ id, value, placeholder, onChange }: {
   )
 }
 
-/* A path with a copy action, for the About page. */
-export function PathVal({ path, onCopy }: { path: string; onCopy(): void }): JSX.Element {
+/* A path with one action beside it, for the About page: show it in the file
+   manager, or copy it where the host is not this desktop. */
+export function PathVal({ path, label, onAct }: { path: string; label: string; onAct(): void }): JSX.Element {
   return (
     <span className="settings-pathv">
       <span className="settings-pp">{path}</span>
-      <IconBtn label={t('gui.settings.copy_path')} onClick={onCopy} />
+      <IconBtn label={label} onClick={onAct} />
     </span>
   )
 }

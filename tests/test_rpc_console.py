@@ -973,6 +973,49 @@ async def test_fs_reveal_refuses_what_the_viewer_refuses(tmp_path: Path, monkeyp
     assert spawned == []
 
 
+async def test_fs_reveal_shows_the_config_file_and_opens_agent_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The About page's two rows are addresses. Both sit under the state
+    directory the path fence refuses, so the page names them and the gateway
+    resolves them: the config file selected in its folder, agent home opened."""
+    from raven.config.loader import get_config_path, load_config
+
+    home = tmp_path / "raven-home"
+    home.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    get_config_path().write_text("{}")
+    Path(load_config().workspace_path).mkdir(parents=True, exist_ok=True)
+
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    loop = _WorkdirLoop({}, tmp_path)
+    assert await console_module.fs_reveal({"place": "config"}, agent_loop_factory=_loop_factory(loop)) == {"ok": True}
+    assert await console_module.fs_reveal({"place": "workspace"}, agent_loop_factory=_loop_factory(loop)) == {
+        "ok": True
+    }
+    assert spawned == [
+        ["open", "-R", str(get_config_path().resolve())],
+        ["open", str(Path(load_config().workspace_path).expanduser().resolve())],
+    ]
+
+
+async def test_fs_reveal_names_only_its_own_places(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A place is a name from a list of two, not a path in disguise."""
+    from raven.rpc.errors import ConfigValidationError
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "raven-home"))
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+
+    loop = _WorkdirLoop({}, tmp_path)
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_reveal({"place": "serve.json"}, agent_loop_factory=_loop_factory(loop))
+    assert spawned == []
+
+
 # ---------------------------------------------------------------------------
 # fs.open -- the same fence, then the host's application
 # ---------------------------------------------------------------------------

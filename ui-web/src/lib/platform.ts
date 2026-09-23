@@ -17,6 +17,11 @@ export function hostPlatformSet(v: string): void {
   host = v
 }
 
+/* Whether the gateway is this desktop. Host-side actions -- reveal, open with
+   an app -- run where the gateway runs, so on a remote serve they would drive
+   somebody else's machine. */
+export const hostIsLocal = (): boolean => /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)
+
 export const modKey = (): string => (isMac() ? '⌘' : 'Ctrl +')
 
 /* The language declaration, from the store that writes it rather than off the

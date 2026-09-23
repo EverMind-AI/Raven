@@ -178,6 +178,7 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
     removeSession: async (id) => { calls.push(['removeSession', id]) },
     inspectSkill: async (name) => { calls.push(['inspectSkill', name]); return { name, description: 'd', path: `/skills/${name}`, body: '# Hi\n\nbody', files: ['SKILL.md', 'notes.md'], always: false, install: null } },
     openSkillFile: async (name, file) => { calls.push(['openSkillFile', { name, file }]) },
+    revealPlace: async (place) => { calls.push(['revealPlace', place]) },
     uninstallSkill: async (name) => rec('uninstallSkill', name),
     /* A read the credential panel makes on its own, so it is not recorded: a
        case asserting what a row's buttons wrote would have to skip past it. */

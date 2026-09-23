@@ -12,6 +12,12 @@ import { workspacePath } from './About'
 vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => {}, get: () => [] }))
 const copied = vi.hoisted(() => ({ values: [] as string[] }))
 vi.mock('../../../lib/openUrl', () => ({ open: (v: string) => { copied.values.push(v) } }))
+const host = vi.hoisted(() => ({ local: true }))
+vi.mock('../../../lib/platform', async (orig) => ({
+  ...(await orig<typeof import('../../../lib/platform')>()),
+  hostIsLocal: () => host.local,
+  hostPlatform: () => 'mac',
+}))
 
 
 beforeEach(() => {
@@ -24,17 +30,32 @@ afterEach(() => {
   vi.restoreAllMocks()
   resetSources()
   copied.values = []
+  host.local = true
 })
 
 describe('about page', () => {
-  it('shows the running version and both paths, and copies a path on its button', async () => {
-    install()
+  it('shows the running version and both paths, and takes the reader to each in the file manager', async () => {
+    const { calls } = install()
     await mount('about')
     expect(screen.getByText('0.2.1')).toBeTruthy()
     expect(screen.getByText('/home/me/.raven/config.json')).toBeTruthy()
     expect(screen.getByText('/home/me/.raven/workspace')).toBeTruthy()
+    const [config, storage] = screen.getAllByLabelText('gui.ws.reveal_finder')
+    await act(async () => { fireEvent.click(config!) })
+    await act(async () => { fireEvent.click(storage!) })
+    expect(calls.filter((c) => c[0] === 'revealPlace')).toEqual([['revealPlace', 'config'], ['revealPlace', 'workspace']])
+    expect(copied.values).toEqual([])
+  })
+
+  it('copies the path instead while the gateway is another machine', async () => {
+    /* The file manager would open on the gateway's host, which is not the
+       reader's screen when the page is served from elsewhere. */
+    host.local = false
+    const { calls } = install()
+    await mount('about')
     await act(async () => { fireEvent.click(screen.getAllByLabelText('gui.settings.copy_path')[0]!) })
     expect(copied.values).toEqual(['/home/me/.raven/config.json'])
+    expect(calls.filter((c) => c[0] === 'revealPlace')).toEqual([])
   })
 
   it('reads the storage location from agents.defaults.workspace when set', () => {

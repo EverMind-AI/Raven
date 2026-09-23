@@ -5488,14 +5488,26 @@
     },
     {
       "name": "fs.reveal",
-      "summary": "Show one file in the gateway host's file manager, selected.",
+      "summary": "Show one file in the gateway host's file manager, selected, or one of raven's own locations.",
       "params": [
         {
           "name": "path",
-          "required": true,
+          "required": false,
           "schema": {
             "type": "string",
-            "description": "Absolute, or relative to the session's working directory."
+            "description": "Absolute, or relative to the session's working directory. Give this or `place`."
+          }
+        },
+        {
+          "name": "place",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "config",
+              "workspace"
+            ],
+            "description": "One of raven's own locations, resolved by the gateway rather than sent: the config file (shown selected) or agent home (opened). Give this or `path`."
           }
         },
         {
