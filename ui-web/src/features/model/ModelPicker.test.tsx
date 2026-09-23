@@ -8,7 +8,7 @@ import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import * as tier from '../../state/tier'
 import { domSnapshot } from '../../test/domSnapshot'
-import { ModelApp } from './ModelPicker'
+import { FOLD, ModelApp } from './ModelPicker'
 import * as store from './store';
 
 import type { ModelSource, Provider } from './types'
@@ -1023,13 +1023,18 @@ describe('the model picker, to a screen reader', () => {
 
   it('leaves the show-all row out of the set it sits in', () => {
     /* It reveals more of the account's radios rather than being one: a row that
-       answers to the set's state would be offered as a model to pick. */
-    const many = Array.from({ length: 8 }, (_, i) => `router/model-${String(i)}`)
+       answers to the set's state would be offered as a model to pick. Asserted
+       against its siblings rather than on its own, because it carries their
+       `row` class: on a picker that marked no row at all, "the show-all row is
+       not a radio" is true for the wrong reason. */
+    const many = Array.from({ length: FOLD + 2 }, (_, i) => `router/model-${String(i)}`)
     install({}, [{ id: 'router', name: 'Router', on: true, models: many, configured: many }])
     mount()
     openIt()
-    expect(more()).not.toBeNull()
-    expect(more()!.getAttribute('role')).toBeNull()
+    const siblings = [...document.querySelectorAll<HTMLElement>('.mpick .models .model-group .row')]
+    expect(siblings.map((b) => b.getAttribute('role')))
+      .toEqual([...Array<string | null>(FOLD).fill('radio'), null])
+    expect(siblings.at(-1)).toBe(more())
     expect(more()!.getAttribute('aria-checked')).toBeNull()
   })
 
