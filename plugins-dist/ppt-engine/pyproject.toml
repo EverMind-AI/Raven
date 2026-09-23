@@ -76,11 +76,22 @@ include = [
     # ships in. Kilobytes beside fifty megabytes of pptx: a second set of files
     # would be the same pictures again for the sake of the words on top of them.
     "raven_ppt/assets/templates/i18n/*.json",
+    # The picker's pictures, one per template per language, rendered from the
+    # templates above by scripts/bake_deck_template_covers.py at release time.
+    # Four hundred kilobytes is what keeps every installed raven from running
+    # LibreOffice once per template to draw them itself.
+    "raven_ppt/assets/templates/covers/*.jpg",
     "raven_ppt/services/assets/data/*.json",
     "raven_ppt/services/assets/fonts/*.ttf",
     "raven_ppt/services/assets/fonts/*.txt",
     "raven_ppt/skill/**/*.md",
 ]
+
+# The covers are generated, so the repository ignores them, and Hatch excludes
+# what the VCS ignores. Only the ignore file at THIS project's root is read, and
+# the rule lives at the repository root, so the include above is what ships them
+# today; this is what keeps them shipping if that rule ever moves down here.
+artifacts = ["raven_ppt/assets/templates/covers/*.jpg"]
 
 [tool.hatch.build.targets.sdist]
 include = [

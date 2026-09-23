@@ -63,6 +63,19 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
 
+      # 2c) The template picker's covers. One cover is a LibreOffice conversion,
+      #     and the gateway used to start ten of them a few seconds after every
+      #     boot -- on hosts whose reader never opens the picker as much as on
+      #     the ones that do. Rendered here instead, from the same templates the
+      #     wheel carries, so an installed raven never runs LibreOffice to draw
+      #     a picture it could have been given. `--extra dev` is what puts the
+      #     engine (and PyMuPDF with it) in the environment the script imports.
+      - name: Bake the deck template covers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-impress
+          uv run --frozen --extra dev python scripts/bake_deck_template_covers.py
+
       - name: Build wheel + sdist
         run: |
           uv build --wheel
@@ -130,7 +143,14 @@ jobs:
               assert len(blob) == entry["bytes"], f"{entry['name']} is {len(blob)} bytes, pinned {entry['bytes']}"
               digest = hashlib.sha256(blob).hexdigest()
               assert digest == entry["sha256"], f"{entry['name']} is {digest}, pinned {entry['sha256']}"
-          print(f"OK: {whl} ships all {len(pins)} bundled templates, each matching its pin")
+          covers = [n for n in names if n.startswith("raven_ppt/assets/templates/covers/")]
+          # One per template per language, and the wheel is the only place they
+          # exist: the directory is gitignored, so a bake that did not run
+          # leaves a wheel that builds and installs and quietly puts LibreOffice
+          # back on every reader's machine.
+          langs = 1 + len(glob.glob("plugins-dist/ppt-engine/raven_ppt/assets/templates/i18n/*.json"))
+          assert len(covers) == len(pins) * langs, f"{len(covers)} covers in {whl}, expected {len(pins) * langs}"
+          print(f"OK: {whl} ships all {len(pins)} bundled templates, each matching its pin, and {len(covers)} covers")
           PY
 
       # 4b) Export the locked dependency set as a constraints file. The install
