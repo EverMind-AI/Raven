@@ -632,15 +632,17 @@ have_han_font() {
   # is what makes a second install a no-op instead of another 8MB download.
   [ -f "$(han_font_dir)/$HAN_FONT_NAME" ] && return 0
   # A Mac is asked first and separately, because nothing is missing there: it
-  # ships Arial Unicode, and what kept LibreOffice from drawing with it was a
-  # bundled fontconfig left unconfigured, which raven now configures per
-  # conversion. Downloading a face would not have helped and is not needed. The
+  # ships Arial Unicode and Songti, and what kept LibreOffice from drawing with
+  # them was a bundled fontconfig left unconfigured, which raven now configures
+  # per conversion. Downloading a face would not have helped and is not needed.
+  # PingFang is not asked about: it is the one stock face the renderer draws
+  # nothing from, so counting it would skip an install that was needed. The
   # host's own fc-list must not be consulted here either -- brew installs it
   # alongside plenty of formulae, and it describes a configuration the converter
   # does not read.
   if [ "$NODE_OS" = darwin ]; then
     [ -f "$MACOS_FONT_ROOT/Supplemental/Arial Unicode.ttf" ] && return 0
-    [ -f "$MACOS_FONT_ROOT/PingFang.ttc" ] && return 0
+    [ -f "$MACOS_FONT_ROOT/Supplemental/Songti.ttc" ] && return 0
   elif have fc-list; then
     # Everywhere else LibreOffice and fc-list read the same configuration, so
     # this answers the general question.

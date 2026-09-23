@@ -193,16 +193,24 @@ def host_han_faces() -> list[str]:
     return sorted({line.split(",")[0].strip() for line in out.splitlines() if line.strip()})
 
 
-_HAN_NAME_HINTS = ("cjk", "notosanssc", "notosanstc", "notoserifsc", "sourcehan", "pingfang", "heiti", "msyh", "simsun")
+# "pingfang" is absent for the reason given below: the renderer draws nothing
+# from it, so a copy of it in a user's font directory is not a face.
+_HAN_NAME_HINTS = ("cjk", "notosanssc", "notosanstc", "notoserifsc", "sourcehan", "heiti", "msyh", "simsun")
 
 _SYSTEM_HAN_FACES = (
     # Paths a file on disk really does mean the renderer reaches: on a host with
     # the fontconfig library but not the fc-list binary, and on macOS, where
     # render_env names the directory these two sit in. Arial Unicode leads
     # because it is a plain TrueType and measurement has to open what it gets;
-    # PingFang is a collection and answers only where that one is gone.
+    # Songti is a collection and answers only where that one is gone.
+    #
+    # PingFang is the obvious candidate and is deliberately not here. Handed to
+    # LibreOffice on its own (macOS 15, LibreOffice 26.8) it drew no Han at all,
+    # while Songti, STHeiti and Hiragino from the same directories all drew
+    # correctly -- so the one face a Mac is named for is the one face this must
+    # not promise.
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/Supplemental/Songti.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-VF.otf.ttc",
     "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
