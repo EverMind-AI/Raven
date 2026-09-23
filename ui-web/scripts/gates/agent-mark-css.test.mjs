@@ -110,10 +110,13 @@ describe('the agent mark filters', () => {
      mark's own rule is the box, and what is left to hold is that each slot
      declares all three of width, height and radius: a rule that drops one falls
      back to the default for that property alone, which is the same silent
-     half-size. The slots are named because that is a fact about the markup
-     rather than the stylesheet. An agent mark in a container that overrides
-     nothing (the desk's roster head, an instance row) keeps the default. */
-  const SIZED_SLOTS = ['pmdhead', 'surow']
+     half-size. An agent mark in a container that overrides nothing (the desk's
+     roster head, an instance row) keeps the default and is not read here.
+
+     The slots are derived from the stylesheet rather than listed, so a
+     container added later is held to the same rule without this file being
+     edited -- a hand-written list is a claim about a set that nothing checks. */
+  const SIZED_SLOTS = rules(/^\.[\w-]+\s*>\s*\.agent-mark$/)
 
   it('gives an agent mark a whole box in every slot that resizes it', () => {
     const boxOf = (body) => ({
@@ -121,14 +124,15 @@ describe('the agent mark filters', () => {
       height: /(?:^|[;{\s])height:\s*([\d.]+)px/.exec(body)?.[1],
       radius: /border-radius:\s*([\d.]+)px/.exec(body)?.[1],
     })
-    for (const slot of SIZED_SLOTS) {
-      const mark = rules(new RegExp(`^\\.${slot}\\s*>?\\s*\\.agent-mark$`))
-      expect(mark.length, `.${slot} sizes an agent mark`).toBe(1)
-      const got = boxOf(mark[0][1])
-      expect(got.width, `.${slot} mark declares a width`).toBeTruthy()
-      expect(got.height, `.${slot} mark declares a height`).toBeTruthy()
-      expect(got.radius, `.${slot} mark declares a radius`).toBeTruthy()
-      expect(got.height, `.${slot} mark is square`).toBe(got.width)
+    /* Read, not assumed: a stylesheet that stopped sizing the mark anywhere
+       would make the loop below pass over an empty set. */
+    expect(SIZED_SLOTS.length, 'some container sizes an agent mark').toBeGreaterThan(0)
+    for (const [slot, body] of SIZED_SLOTS) {
+      const got = boxOf(body)
+      expect(got.width, `${slot} declares a width`).toBeTruthy()
+      expect(got.height, `${slot} declares a height`).toBeTruthy()
+      expect(got.radius, `${slot} declares a radius`).toBeTruthy()
+      expect(got.height, `${slot} is square`).toBe(got.width)
     }
   })
 })
