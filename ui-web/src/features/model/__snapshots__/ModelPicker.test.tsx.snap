@@ -2,6 +2,54 @@
 
 exports[`the model picker > keeps its rendered shape 1`] = `
 "div.mpick
+  svg.model-tag-defs
+    defs
+      symbol#mtag-text
+        path
+        path
+      symbol#mtag-reasoning
+        path
+        path
+      symbol#mtag-function-call
+        path
+      symbol#mtag-structured-output
+        rect
+        path
+      symbol#mtag-image-recognition
+        rect
+        path
+        circle
+      symbol#mtag-audio-recognition
+        rect
+        path
+      symbol#mtag-video-recognition
+        rect
+        path
+      symbol#mtag-file-input
+        path
+        path
+      symbol#mtag-image-generation
+        rect
+        path
+        path
+      symbol#mtag-audio-generation
+        path
+        path
+      symbol#mtag-video-generation
+        rect
+        path
+        path
+      symbol#mtag-embedding
+        path
+        path
+        circle
+        circle
+      symbol#mtag-rerank
+        path
+        path
+      symbol#mtag-computer-use
+        rect
+        path
   div.find
     svg
       path
@@ -39,6 +87,54 @@ exports[`the model picker > keeps its rendered shape 1`] = `
 
 exports[`the names > keeps its rendered shape 1`] = `
 "div.mpick
+  svg.model-tag-defs
+    defs
+      symbol#mtag-text
+        path
+        path
+      symbol#mtag-reasoning
+        path
+        path
+      symbol#mtag-function-call
+        path
+      symbol#mtag-structured-output
+        rect
+        path
+      symbol#mtag-image-recognition
+        rect
+        path
+        circle
+      symbol#mtag-audio-recognition
+        rect
+        path
+      symbol#mtag-video-recognition
+        rect
+        path
+      symbol#mtag-file-input
+        path
+        path
+      symbol#mtag-image-generation
+        rect
+        path
+        path
+      symbol#mtag-audio-generation
+        path
+        path
+      symbol#mtag-video-generation
+        rect
+        path
+        path
+      symbol#mtag-embedding
+        path
+        path
+        circle
+        circle
+      symbol#mtag-rerank
+        path
+        path
+      symbol#mtag-computer-use
+        rect
+        path
   div.find
     svg
       path
@@ -51,6 +147,17 @@ exports[`the names > keeps its rendered shape 1`] = `
         span.ct
       button.row
         span.nm
+        span.model-tags
+          svg.model-tag
+            title
+            use
+          svg.model-tag
+            title
+            use
+          svg.model-tag
+            title
+            use
+          span.model-window
       button.row
         span.nm
   div.foot

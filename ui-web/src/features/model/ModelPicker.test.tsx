@@ -595,14 +595,27 @@ describe('the names', () => {
     expect(bare!.querySelector('.nm')!.textContent).toBe('claude-sonnet-5')
   })
 
-  it('draws a name and nothing else on a row: no capability icons, no window badge', () => {
+  it('draws the capabilities and the window beside the name', () => {
     install({}, TAGGED)
     mount()
     openIt()
     /* The registry publishes three capabilities and a 1M window for the first
-       row; the list is a list of names, and the row shows none of it. */
-    expect(rows('models')[0]!.querySelector('.model-tags, .model-window, .model-tag-defs')).toBeNull()
-    expect(document.querySelector('.mpick .model-tag-defs')).toBeNull()
+       row, and the row is where a reader compares them before picking. The
+       row a catalogue says nothing about carries no badge at all. */
+    const [tagged, bare] = rows('models')
+    expect(tagged!.querySelectorAll('.model-tag')).toHaveLength(3)
+    expect(tagged!.querySelector('.model-window')!.textContent).toBe('1M')
+    expect(bare!.querySelector('.model-tags')).toBeNull()
+  })
+
+  it('carries the sprite the icons resolve against', () => {
+    install({}, TAGGED)
+    mount()
+    openIt()
+    /* Every icon above is a `use` of a symbol defined once per surface. The
+       picker drew them against a sprite nothing rendered after the composer
+       rework, which is a row of blank 13px boxes. */
+    expect(document.querySelector('.mpick .model-tag-defs #mtag-reasoning')).not.toBeNull()
   })
 
   it('keeps its rendered shape', () => {

@@ -23,7 +23,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 
-import { ModelTags, TagGlyph } from '../../../components/ModelTags'
+import { ModelTagDefs, ModelTags, TagGlyph } from '../../../components/ModelTags'
 import { t } from '../../../i18n/t'
 import { KIND_GLYPH, KIND_LABEL, KIND_ORDER, bareModel as bare, guessKind, modelKind, nextKind } from '../../model/types'
 import { Rov } from '../Fields'
@@ -203,6 +203,9 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
 
   return createPortal((
     <div className="settings-apop" ref={box} role="dialog" aria-label={t('gui.settings.providers.add_model')}>
+      {/* This popover opens with the picker shut, so it carries the sprite its
+          own rows reference rather than relying on the picker's. */}
+      <ModelTagDefs />
       <div className="settings-apsearch">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
         <input

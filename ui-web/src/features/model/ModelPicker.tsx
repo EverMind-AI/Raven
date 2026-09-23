@@ -10,8 +10,9 @@
  *     and unfolds on a click -- per group, per opening;
  *   - a search narrows every group in place and drops the ones with no hit,
  *     so a term is the way to reach anything the fold hides.
- * A row is the model's name and nothing else. The id is on the title, the
- * provider is the head above, and a pick is a click.
+ * A row is the model's name, the capabilities the registry publishes for it
+ * and the window its vendor publishes (components/ModelTags). The id is on
+ * the title, the provider is the head above, and a pick is a click.
  *
  * Two rows that are not models ride along when the composer opened it: the
  * sub-agent tier (state/tier.ts), a setting of the same conversation drawn
@@ -21,6 +22,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
+import { ModelTagDefs, ModelTags } from '../../components/ModelTags'
 import { ProviderIcon } from '../../components/ProviderMark'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
@@ -109,6 +111,7 @@ function Row({ p, m, current, account }: { p: Provider; m: string; current: stri
   return (
     <button className="row" title={store.short(m)} onClick={() => void store.choose(m, p.id)}>
       <span className="nm">{label(p, m)}</span>
+      <ModelTags facts={p.labels?.[m]} />
       {account ? <span className="ct">{p.name}</span> : null}
       {m === current ? <span className="tick">✓</span> : null}
     </button>
@@ -273,6 +276,7 @@ function Pick(): JSX.Element {
 
   return (
     <div className="mpick" role="dialog" ref={box}>
+      <ModelTagDefs />
       <div className="find">
         {at.offer.title ? <span className="model-slot">{at.offer.title}</span> : null}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
