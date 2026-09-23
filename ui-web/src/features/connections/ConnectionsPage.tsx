@@ -268,19 +268,8 @@ function ConnForm({ c }: { c: ConnChannel }): JSX.Element {
   const [sent, setSent] = useState(false)
   /* Receiving is the only thing that closes this card by itself. Anything else
      -- an adapter that would not start, a gateway that could not be asked -- is
-     a reason the reader is owed, so the card stays with the state line up.
-   *
-   * And it is the turn into receiving that closes it, not the state. On an
-   * entrance that is already live -- the card a reader opens to correct a
-   * rotated token -- the state was true before the press, so the press itself
-   * closed the card and reported an answer nothing had given yet. */
+     a reason the reader is owed, so the card stays with the state line up. */
   const live = connState(c) === 'live'
-  const wasLive = useRef(live)
-  useEffect(() => {
-    const before = wasLive.current
-    wasLive.current = live
-    if (sent && live && !before) store.closeChannel()
-  }, [sent, live])
   const fieldRow = (f: ConnField): JSX.Element => {
     /* The human sentence is the label; the config key rides on its tooltip.
        The catalogue speaks first so the label follows the reader's language,
@@ -332,8 +321,17 @@ function ConnForm({ c }: { c: ConnChannel }): JSX.Element {
     setDirty(false)
     /* Always "on". `enable` used to be `!c.on`, which read as a toggle: saving
        a correction to a connected channel turned it off. Disconnecting is its
-       own control in the dialog, so this one only ever connects. */
-    void store.apply(c, patch, true)
+       own control in the dialog, so this one only ever connects.
+     *
+     * The card closes when the write has been applied and the entrance reads
+     * live after it, not before. A card opened on an entrance that was already
+     * receiving used to close on the press itself, reporting an answer nothing
+     * had given yet; and a rebuild that finishes before the status is re-read
+     * shows no intermediate state at all, so the answer has to be read off the
+     * write's own completion rather than waited for as a transition. */
+    void store.apply(c, patch, true).then(() => {
+      if (connState(c) === 'live') store.closeChannel()
+    })
   }
   return (
     <>

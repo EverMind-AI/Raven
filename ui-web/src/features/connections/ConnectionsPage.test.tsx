@@ -320,21 +320,12 @@ describe('connections island', () => {
     /* The card a reader opens to correct a rotated token is open on an entrance
        that is already receiving, and "receiving" was the whole guard: the press
        closed the card on a state that had been true before it, reporting an
-       answer nothing had given. */
-    it('keeps the form up when a live entrance is corrected, until it receives again', async () => {
+       answer nothing had given. The answer is the write's completion. */
+    it('does not close the form on the press, before the write has been answered', async () => {
       const slack = chan({ on: true, running: true, connected: true })
       let written!: () => void
       const writing = new Promise<void>((resolve) => { written = resolve })
-      install([slack], {
-        /* Held open on purpose: the press is the moment that mattered, and it
-           came before anything had answered. Saving a credential then rebuilds
-           the adapter, so the entrance is down for as long as that takes. */
-        apply: async (c) => {
-          await writing
-          c.running = false
-          c.connected = false
-        },
-      })
+      install([slack], { apply: async () => { await writing } })
       await mount()
       await act(async () => { openRow('Slack') })
       await act(async () => {
@@ -349,14 +340,47 @@ describe('connections island', () => {
         written()
         await new Promise((resolve) => setTimeout(resolve, 0))
       })
-      expect(main().querySelector('#connDlgBody')).toBeTruthy()
+      expect(screen.getByText('gui.conn.pick')).toBeTruthy()
+    })
 
+    /* A rebuild that finishes before the status is re-read shows no down state
+       in between: live before, live after. The form still has to close, so the
+       write's completion, not a transition, is what it keys on. */
+    it('closes the form once the correction is applied and the entrance reads live', async () => {
+      const slack = chan({ on: true, running: true, connected: true })
+      install([slack], { apply: async () => {} })
+      await mount()
+      await act(async () => { openRow('Slack') })
       await act(async () => {
-        slack.running = true
-        slack.connected = true
-        await store.refresh()
+        typeInto(main().querySelector<HTMLInputElement>('#connDlgBody input')!, 'rotated-token')
+      })
+      await act(async () => {
+        ;(paneFoot().querySelector('button.key') as HTMLElement).click()
+        await new Promise((resolve) => setTimeout(resolve, 0))
       })
       expect(screen.getByText('gui.conn.pick')).toBeTruthy()
+    })
+
+    /* And the reason the card exists: a correction the adapter could not start
+       on leaves the reader with the state line, not with a closed card. */
+    it('keeps the form up when the applied correction leaves the entrance down', async () => {
+      const slack = chan({ on: true, running: true, connected: true })
+      install([slack], {
+        apply: async (c) => {
+          c.running = false
+          c.connected = false
+        },
+      })
+      await mount()
+      await act(async () => { openRow('Slack') })
+      await act(async () => {
+        typeInto(main().querySelector<HTMLInputElement>('#connDlgBody input')!, 'rotated-token')
+      })
+      await act(async () => {
+        ;(paneFoot().querySelector('button.key') as HTMLElement).click()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(main().querySelector('#connDlgBody')).toBeTruthy()
     })
   })
 
