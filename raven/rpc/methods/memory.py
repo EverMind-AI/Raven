@@ -126,25 +126,26 @@ def _unavailable_note() -> str | None:
     """Why this page has nothing to show, in a sentence, or ``None``.
 
     Three ways to arrive at an empty memory browser that are not a failure and
-    that a person cannot tell apart from one: the service cannot run on this
-    platform, the plugin is not installed, and the plugin is installed but is
-    not what ``memory.backend`` names. All used to render as four zeros or a
-    retry button, which reads as "your memories are gone" rather than "this
-    page is not where they are".
+    that a person cannot tell apart from one: the plugin is not installed, the
+    plugin is installed but is not what ``memory.backend`` names, and the
+    install is pointed at EverOS on a platform where it cannot run. All used to
+    render as four zeros or a retry button, which reads as "your memories are
+    gone" rather than "this page is not where they are".
+
+    The platform sentence is only for an install that would otherwise be sent
+    to EverOS: one whose memory runs on another backend has memory, and telling
+    it otherwise would be false.
     """
     from raven.config.raven import load_raven_config
 
-    platform_note = everos_platform_note()
-    if platform_note is not None:
-        return platform_note
     if not everos_plugin_installed():
-        return everos_plugin_missing_note()
+        return everos_platform_note() or everos_plugin_missing_note()
     try:
         backend = load_raven_config().memory.backend
     except Exception:  # noqa: BLE001 - an unreadable config is not this page's to report
         return None
     if backend == _EVEROS_BACKEND:
-        return None
+        return everos_platform_note()
     if not backend:
         return "Long-term memory is turned off, so there is nothing stored to browse."
     return (
