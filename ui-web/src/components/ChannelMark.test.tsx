@@ -2,7 +2,7 @@
 /* What an entrance's row draws, and off which field.
  *
  * The mark is chosen by channel id -- the adapter's package name -- and never
- * by the name on the row. The name is what the page's language says, and which
+ * by the name on the row. The name is what the reader's language says, and which
  * app a row is does not change with that; a row that merely spells itself
  * `Slack` is not Slack either.
  *
@@ -72,7 +72,7 @@ describe('an entrance row s app mark', () => {
     expect(mark()?.classList.contains('channel-mark-inset')).toBe(true)
   })
 
-  it('draws mail as mail rather than as anyone s product', () => {
+  it('draws mail as mail rather than as anyone s brand', () => {
     draw('email', 'Email')
     expect(img()).toBeNull()
     expect(tile()).toBeNull()
@@ -100,7 +100,7 @@ describe('an entrance row s app mark', () => {
     expect(img()?.getAttribute('src')).toBe('assets/channels/discord.png')
   })
 
-  it('asks for the file under the asset digest the built page carries', () => {
+  it('asks for the file under the asset digest the build stamps', () => {
     ;(window as { __ASSETV?: string }).__ASSETV = 'abc123'
     draw('qq', 'QQ')
     expect(img()?.getAttribute('src')).toBe('assets/channels/qq.png?v=abc123')

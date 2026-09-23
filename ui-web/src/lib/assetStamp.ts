@@ -6,8 +6,8 @@
  * and a hard reload. The asset tree's digest in the query makes a changed file
  * a different URL, which no cache can answer from what it already holds.
  *
- * Absent outside the built page (tests, the vite dev server), where the plain
- * path is what the assertions and the loader both expect. */
+ * Absent outside the build (tests, the vite dev server), where the plain path
+ * is what the assertions and the loader both expect. */
 
 export const assetStamp = (): string => {
   const v = (window as unknown as { __ASSETV?: string }).__ASSETV

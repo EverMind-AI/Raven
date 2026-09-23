@@ -1,4 +1,4 @@
-"""Fetch every channel's app mark and write it at the size the channels page draws it.
+"""Fetch every channel's app mark and write it at the size the channels section draws it.
 
 The channels section of the settings dialog shows each entrance's own app icon
 (``ui-web/src/components/ChannelMark.tsx``). Nine of them are the icon the vendor

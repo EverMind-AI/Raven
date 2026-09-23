@@ -1,4 +1,4 @@
-"""Every channel adapter has an app mark, and every mark file is one the page can draw.
+"""Every channel adapter has an app mark, and every mark file is one the web UI can draw.
 
 The channels section of the settings dialog draws each entrance's app icon,
 chosen by channel id. The adapters live in Python (one package each under
@@ -37,7 +37,7 @@ _GENERIC = re.compile(r"^const GENERIC = new Set\(\[([^\]]*)\]\)$", re.MULTILINE
 
 
 def _marks() -> dict[str, str]:
-    """The mark table as the page reads it, channel id to file name.
+    """The mark table as ChannelMark reads it, channel id to file name.
 
     Read out of the source rather than executed: a Python suite cannot import a
     tsx module, and restating the table here would be the duplication this file
@@ -52,7 +52,7 @@ def _marks() -> dict[str, str]:
 
 
 def _generic() -> set[str]:
-    """The entrances that are a protocol rather than a product, drawn with no one's mark."""
+    """The entrances that are a protocol rather than a brand, drawn with no one's mark."""
     found = _GENERIC.findall(_TABLE.read_text(encoding="utf-8"))
     assert len(found) == 1, "the generic set did not parse -- has its shape changed?"
     return set(re.findall(r"'([a-z0-9_]+)'", found[0]))

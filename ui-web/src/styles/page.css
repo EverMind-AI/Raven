@@ -3411,8 +3411,8 @@ details[open] summary { margin-bottom: 8px; }
 .channel-mark-inset img, .channel-mark-inset svg { width: 22px; height: 22px; }
 .channel-mark-inset svg { stroke-linecap: round; stroke-linejoin: round; }
 /* matrix.svg flips its ink with a prefers-color-scheme rule inside the file,
-   which an <img> evaluates against its own used color-scheme rather than this
-   page's data-theme -- the same hand-over .agent-mark img makes. */
+   which an <img> evaluates against its own used color-scheme rather than the
+   root's data-theme -- the same hand-over .agent-mark img makes. */
 :root[data-theme="dark"] .channel-mark img { color-scheme: dark; }
 :root[data-theme="light"] .channel-mark img { color-scheme: light; }
 /* name + publisher stack beside the tile */

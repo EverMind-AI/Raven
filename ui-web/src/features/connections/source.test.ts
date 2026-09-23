@@ -49,8 +49,8 @@ describe('the catalogue', () => {
   })
 
   /* One spelling: a brand whose name is the same in both languages is still
-     named through the catalogue, not written into the row. */
-  it('names every row through the catalogue', () => {
+     named through the message catalogue, not written into the row. */
+  it('names every row through the message catalogue', () => {
     expect(chanName(row('feishu'))).toBe('gui.chan.feishu')
     expect(chanName(row('slack'))).toBe('gui.chan.slack')
   })

@@ -6,10 +6,10 @@
  * the demo shell's fixture table only because that is where the offline page
  * first needed it.
  *
- * Every entrance is named through the message catalogue, in both of the
- * page's languages -- a brand spelled the same in both still has its entry, so
- * what each language calls a row is a decision the catalogue records rather
- * than one a row can skip (catalogue.test.ts holds every entry to it).
+ * Every entrance is named through the message catalogue, in both locales --
+ * a brand spelled the same in both still has its entry, so what each language
+ * calls a row is a decision the message catalogue records rather than one a
+ * row can skip (catalogue.test.ts holds every entry to it).
  * `chanName` is the one accessor.
  *
  * The rows are one shared, mutable array. Both sources answer with these

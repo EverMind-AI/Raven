@@ -1,9 +1,9 @@
-/* Every entrance the page lists is named in both of the page's languages.
+/* Every entrance the channels section lists is named in both locales.
  *
- * The catalogue names each row through the shared message catalogue
+ * The channel catalogue names each row through the shared message catalogue
  * (i18n/messages.json), and a lookup that misses falls back to text rather than
  * failing, so a gap renders as something plausible: a Chinese word in the
- * English slot read as a brand name on the English page. Held here against the
+ * English slot read as a brand name to an English reader. Held here against the
  * file itself, one entry at a time.
  */
 

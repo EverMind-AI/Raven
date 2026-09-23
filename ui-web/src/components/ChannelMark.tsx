@@ -9,7 +9,7 @@ import { Tile } from './SetupRow'
 import type { JSX } from 'react'
 
 /* Keyed by channel id -- the adapter's package name -- never by the row's name,
-   which is whatever the page's language calls it. tests/test_ui_channel_marks.py
+   which is whatever the reader's language calls it. tests/test_ui_channel_marks.py
    holds this table equal to the adapters and to the files
    scripts/refresh_channel_marks.py writes, and that script is where each file's
    source is recorded.
@@ -31,7 +31,7 @@ const MARKS: Record<string, { file: string; inset?: true }> = {
   whatsapp: { file: 'whatsapp.png' },
 }
 
-/* Entrances that are a protocol rather than anyone's product: a mail provider's
+/* Entrances that are a protocol rather than anyone's brand: a mail provider's
    logo would name one inbox out of every mail host the form accepts. */
 const GENERIC = new Set(['email'])
 
