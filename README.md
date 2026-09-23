@@ -249,41 +249,6 @@ checkout reads the tree in place. Setup asks about each product and registers
 the ones you take up, on the model it is tuned for or on this raven's LLM.
 See [`agents/README.md`](agents/README.md).
 
-### 🔄 Update
-
-Update the way you installed.
-
-**From a one-line install**, run the same installer again: it installs the
-newest release over the old one and starts the WebUI again. Or update from the
-command line:
-
-```bash
-raven web --stop
-raven upgrade
-raven web
-```
-
-`raven upgrade` installs the newest release but does not restart a Raven that
-is already running, so stop the WebUI before it and start it again after.
-`raven upgrade --check` only reports whether a newer release exists.
-
-**From a source checkout**, pull and run the installer as a file again
-(`.\install.ps1` in PowerShell):
-
-```bash
-git pull
-./install.sh
-```
-
-It reinstalls the checkout in editable mode, rebuilds the TUI bundle and the
-served page only when their sources have changed, and starts the WebUI again.
-`raven upgrade` does not update a source checkout: the code to update is the
-checkout itself.
-
-Both installers stop a running WebUI and end by starting a new one in the
-foreground. Ctrl-C stops it, and `raven web` starts it again in the background.
-Your settings and conversations in `~/.raven` are kept.
-
 Learn more about Raven on the documentation site.
 
 **[Read the documentation](https://evermind-ai.github.io/Raven/)**

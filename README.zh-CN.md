@@ -239,31 +239,6 @@ cd Raven
 
 这些 Agent 随 Raven 一同发布：wheel 包包含 `agents/` 产品目录，首次使用时会将其复制到 Raven 主目录；源码安装则直接读取仓库中的目录。配置向导会逐一询问是否启用，并为所选 Agent 注册其适配的模型，或使用当前 Raven 的 LLM。详见 [`agents/README.md`](agents/README.md)。
 
-### 🔄 更新
-
-按安装时的方式更新。
-
-**通过一行命令安装的**，再运行一次同一个安装命令即可：它会在原有版本之上安装最新发布版，并重新启动 WebUI。也可以用命令行更新：
-
-```bash
-raven web --stop
-raven upgrade
-raven web
-```
-
-`raven upgrade` 会安装最新发布版，但不会重启正在运行的 Raven，所以要先停止 WebUI，更新完成后再启动。`raven upgrade --check` 只检查是否有更新的版本。
-
-**从源码检出安装的**，拉取代码后再以文件方式运行一次安装脚本（PowerShell 中为 `.\install.ps1`）：
-
-```bash
-git pull
-./install.sh
-```
-
-它会以可编辑（editable）模式重新安装该检出目录，仅在源码有变动时重新构建 TUI 包和内置页面，并重新启动 WebUI。`raven upgrade` 不会更新源码安装：要更新的代码就是检出目录本身。
-
-两个安装脚本都会先停止正在运行的 WebUI，最后在前台启动新的 WebUI。按 Ctrl-C 即可停止；运行 `raven web` 可让它重新在后台运行。`~/.raven` 中的设置和会话都会保留。
-
 在文档站了解更多 Raven 信息。
 
 **[阅读文档](https://evermind-ai.github.io/Raven/zh/)**
