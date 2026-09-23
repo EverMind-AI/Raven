@@ -1028,11 +1028,12 @@ def _stop_child(proc: object, group: Optional[int] = None) -> None:
     it. So the gateway exiting is not the end of the stop: a descendant that
     ignored SIGTERM outlives a gateway that honoured it, holding the port or
     the lock after ``web.json`` is gone and the stop reported a success. The
-    group is settled on every path -- the gateway stopped here, killed here, or
-    already gone -- with SIGTERM first and SIGKILL once ``_CHILD_STOP_S`` from
-    the start of the stop has run out, a single budget for the gateway and its
-    group together, so the whole stop fits inside the wait ``--stop`` gives
-    the supervisor.
+    group is settled on every path. A gateway killed here is killed with its
+    group in one SIGKILL, and the group is then waited out. A gateway that
+    stopped here or was already gone leaves its group SIGTERM first, then
+    SIGKILL once ``_CHILD_STOP_S`` from the start of the stop has run out -- a
+    single budget for the gateway and its group together, so the whole stop
+    fits inside the wait ``--stop`` gives the supervisor.
     """
     import os
     import signal
@@ -1055,6 +1056,12 @@ def _stop_child(proc: object, group: Optional[int] = None) -> None:
                     proc.kill()  # type: ignore[attr-defined]
             with suppress(subprocess.TimeoutExpired):
                 proc.wait(timeout=_KILL_WAIT_S)  # type: ignore[attr-defined]
+            if group is not None:
+                # The group is already SIGKILLed, and the budget spent. A member
+                # the gateway orphaned stays in the group until init reaps it, so
+                # it gets the kill wait rather than a SIGTERM round with none.
+                _group_gone(group, time.monotonic() + _KILL_WAIT_S)
+                return
     if group is None:
         return
     try:

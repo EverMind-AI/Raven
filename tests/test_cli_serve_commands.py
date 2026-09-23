@@ -801,6 +801,19 @@ class TestTheSupervisor:
 
 
 class TestStopping:
+    @pytest.fixture(autouse=True)
+    def _no_real_groups(self, monkeypatch) -> None:
+        """The pids here are made up, and a real process may hold one. Left to
+        the real calls, the escalation would read that process's group and
+        SIGKILL it, or fail on it and skip the wait being measured."""
+        import os
+
+        def _no_such_process(pid: int) -> int:
+            raise ProcessLookupError(pid)
+
+        monkeypatch.setattr(os, "getpgid", _no_such_process)
+        monkeypatch.setattr(os, "killpg", lambda *_a: pytest.fail("signalled a real process group"))
+
     @staticmethod
     def _resident(home: Path) -> None:
         home.mkdir(parents=True, exist_ok=True)
@@ -2258,6 +2271,34 @@ class TestTheSupervisorsStopOfItsGateway:
             _settled(proc)
             with suppress(OSError, ValueError):
                 os.kill(int(pid_file.read_text()), signal.SIGKILL)
+
+    def test_a_killed_group_still_being_reaped_is_waited_out_not_reported(self, monkeypatch, capsys) -> None:
+        """A member the killed gateway orphaned stays in the group until init
+        reaps it, which on a CI runner outlasted the spent budget. The first
+        probe after the kill reports it present, the way that zombie does."""
+        import os
+        import signal
+
+        real_killpg = os.killpg
+        killed: list[int] = []
+
+        def _killpg(group: int, sig: int) -> None:
+            if sig == signal.SIGKILL:
+                killed.append(group)
+            elif sig == 0 and len(killed) == 1:
+                killed.append(group)
+                return
+            real_killpg(group, sig)
+
+        monkeypatch.setattr(os, "killpg", _killpg)
+        proc = _child(_IGNORES_SIGTERM)
+        try:
+            serve_commands._stop_child(proc, serve_commands._owned_group(proc))
+            assert proc.returncode == -9
+            assert len(killed) == 2, "the probe that stands in for the zombie never ran"
+            assert "own processes" not in capsys.readouterr().out
+        finally:
+            _settled(proc)
 
     def test_a_gateway_already_gone_still_has_its_group_settled(self) -> None:
         proc = _child(_HONOURS_SIGTERM)
