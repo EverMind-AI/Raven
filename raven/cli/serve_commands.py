@@ -907,7 +907,16 @@ def _supervise(port: int) -> None:
         while True:
             started = time.monotonic()
             try:
-                proc = subprocess.Popen(_gateway_argv(target))  # noqa: S603 - see _gateway_argv
+                proc = subprocess.Popen(  # noqa: S603 - see _gateway_argv
+                    _gateway_argv(target),
+                    # A session of its own, so the tree is the gateway's to keep
+                    # and this supervisor's to end. Sharing one group, the only
+                    # group-wide signal available to the cleanup below is the one
+                    # that also reaches this process: `_stop_child` could kill the
+                    # gateway's pid and nothing else, and a descendant that
+                    # ignores SIGTERM outlived both the stop and `web.json`.
+                    start_new_session=(sys.platform != "win32"),
+                )
             except OSError as exc:
                 print(f"raven web: could not start the gateway: {exc}", flush=True)
                 return
@@ -972,6 +981,14 @@ def _stop_child(proc: object) -> None:
     """End the gateway this supervisor started, SIGKILL after ``_CHILD_STOP_S``.
 
     A child that already exited is left alone; so is one never started.
+
+    The escalation is group-wide, because the gateway is not the only thing the
+    supervisor owns: it leads a session of its own (see the ``Popen`` in
+    ``_supervise``), and anything it started without a session is in there with
+    it. Killing the pid alone ends the gateway and leaves those behind, holding
+    the port or the lock, with ``web.json`` already gone and the stop reported
+    successful. The group is only ever this child's, so the signal cannot reach
+    the supervisor that sent it.
     """
     import subprocess
 
@@ -985,8 +1002,27 @@ def _stop_child(proc: object) -> None:
     except subprocess.TimeoutExpired:
         pass
     print(f"raven web: the gateway ignored SIGTERM for {_CHILD_STOP_S:.0f}s; killing it", flush=True)
-    with suppress(OSError):
-        proc.kill()  # type: ignore[attr-defined]
+    import os
+    import signal
+    import sys
+
+    if sys.platform == "win32":  # pragma: no cover - no process groups, no SIGKILL
+        with suppress(OSError):
+            proc.kill()  # type: ignore[attr-defined]
+    else:
+        pid = getattr(proc, "pid", None)
+        try:
+            group = os.getpgid(pid) if pid is not None else None
+        except OSError:
+            group = None
+        # Only a group this child leads: one it does not lead belongs to
+        # somebody else, and signalling that would take down a stranger's tree.
+        if group is not None and group == pid and group != os.getpgrp():
+            with suppress(OSError):
+                os.killpg(group, signal.SIGKILL)
+        else:
+            with suppress(OSError):
+                proc.kill()  # type: ignore[attr-defined]
     with suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=_KILL_WAIT_S)  # type: ignore[attr-defined]
 

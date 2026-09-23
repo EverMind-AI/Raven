@@ -1900,6 +1900,20 @@ while True:
 """
 
 
+_STUBBORN_WITH_CHILD = """
+import json, os, signal, subprocess, sys, time
+home = sys.argv[1]
+grandchild = subprocess.Popen([sys.executable, "-c", "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)"])
+with open(os.path.join(home, "gc-pid"), "w") as f:
+    f.write(str(grandchild.pid))
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with open(os.path.join(home, "serve.json"), "w") as f:
+    json.dump({"port": 18999, "token": "t", "pid": os.getpid()}, f)
+while True:
+    time.sleep(0.05)
+"""
+
+
 def _wait_for(path: Path, timeout_s: float = 20.0) -> None:
     import time
 
@@ -2017,3 +2031,39 @@ class TestStoppingARealTree:
         finally:
             with suppress(OSError):
                 proc.kill()
+
+    def test_the_gateways_own_children_are_killed_before_web_json_goes(self, home: Path) -> None:
+        """The gateway is not the only process the supervisor owns: anything it
+        started without a session of its own is in its group. Killing its pid
+        alone let a grandchild that ignores SIGTERM outlive the stop, with
+        `web.json` already gone and the command reporting success (reviewer
+        2026-09-23)."""
+        import os
+        import signal
+        import subprocess
+
+        from raven.utils.pid import pid_alive
+
+        home.mkdir(parents=True, exist_ok=True)
+        script = (
+            "import sys\n"
+            "from raven.cli import serve_commands as sc\n"
+            f"sc._gateway_argv = lambda port: [sys.executable, '-c', {_STUBBORN_WITH_CHILD!r}, {str(home)!r}]\n"
+            "sc._CHILD_STOP_S = 0.5\n"
+            "sc._supervise(18999)\n"
+        )
+        env = {**os.environ, "RAVEN_HOME": str(home)}
+        proc = subprocess.Popen([sys.executable, "-c", script], env=env)
+        try:
+            _wait_for(home / "gc-pid")
+            gc = int((home / "gc-pid").read_text())
+            _wait_for(home / "web.json")
+            proc.send_signal(signal.SIGTERM)
+            assert proc.wait(timeout=20) == 0
+            assert not (home / "web.json").exists()
+            assert not pid_alive(gc), "the gateway's own child outlived the stop"
+        finally:
+            with suppress(OSError):
+                proc.kill()
+            with suppress(OSError, ValueError):
+                os.kill(getattr(proc, "pid", 0), signal.SIGKILL)
