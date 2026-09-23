@@ -4964,8 +4964,21 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   background: color-mix(in oklab, var(--surface) 25%, transparent); color: var(--surface);
 }
 
-.veil { position: fixed; inset: 0; background: var(--scrim); display: none; place-items: center; z-index: var(--z-veil); }
+/* The page behind is dimmed and blurred the way the settings dialog's is
+   (.setveil), not blacked out. */
+.veil { position: fixed; inset: 0; background: var(--scrim-soft); backdrop-filter: blur(3px);
+  display: none; place-items: center; z-index: var(--z-veil); }
 .veil[data-open="true"] { display: grid; }
+/* The confirm dialog's own card, sized like the upgrade shade's card
+   (.upshade .upcard) because that card is what replaces it when the question
+   was an upgrade, so the two read as one surface. Placed before .btn.key /
+   .btn.bad so their colours still win over the plain button's. */
+.veil .sheet { width: min(420px, calc(100vw - 48px)); border-radius: 14px; }
+.veil .sheet header { padding: 18px 20px 0; font-size: 15px; }
+.veil .sheet .body { padding: 8px 20px 0; line-height: 1.6; }
+.veil .sheet footer { padding: 20px 20px 18px; gap: 8px; }
+.veil .btn { padding: 6px 14px; border-radius: 8px; color: var(--text); background: var(--surface); }
+.veil .btn:not(.key, .bad):hover { background: var(--raised); }
 /* Bounded, and the fields scroll inside it. A channel's form is as long as that
    channel has fields -- slack specs nine, three of them nested -- and an
    unbounded sheet grew taller than the window with its own save button below

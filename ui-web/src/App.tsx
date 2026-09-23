@@ -96,6 +96,10 @@ function useScrim(id: string, close: () => void): void {
    it by clicking #cfNo -- which reaches this through the button's onClick. */
 const cancel = (): void => confirm.answer(false)
 
+/* The yes button's look per tone: a notice's one button is the plain one, so
+   nothing on the sheet reads as a consequence. */
+const YES_CLASS: Record<confirm.ConfirmTone, string> = { danger: 'btn bad', primary: 'btn key', notice: 'btn' }
+
 /* The confirm dialog. The question is state/confirm.ts's: the asker hands it a
    title, a body and a label for the yes button, and until something asks, the
    three literals the page was served with stand. */
@@ -109,8 +113,8 @@ function ConfirmSheet(): JSX.Element {
         <header id="cfTitle">{s.title ?? 'Confirm'}</header>
         <div className="body" id="cfBody">{s.body}</div>
         <footer>
-          <button className="btn" id="cfNo" onClick={cancel}>{t('gui.cancel')}</button>
-          <button className="btn bad" id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? 'Confirm'}</button>
+          <button className="btn" id="cfNo" hidden={s.tone === 'notice'} onClick={cancel}>{t('gui.cancel')}</button>
+          <button className={YES_CLASS[s.tone]} id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? 'Confirm'}</button>
         </footer>
       </div>
     </div>

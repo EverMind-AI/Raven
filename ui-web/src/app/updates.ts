@@ -93,7 +93,7 @@ function hideBehindNote(): void {
 /* The click for a page behind its sources. The page cannot rebuild itself, so
    what it can do is say where and how. */
 function explainBehind(): void {
-  confirmAsk(t('gui.update.behind_title'), t('gui.update.behind_body'), t('gui.close'), () => {})
+  confirmAsk(t('gui.update.behind_title'), t('gui.update.behind_body'), t('gui.close'), () => {}, 'notice')
 }
 
 /* An upgrade outlives the page that started it: serve exits, a detached helper
@@ -131,12 +131,12 @@ export function askUpgrade(): void {
   const running = upMarkRead()
   if (running) { watchUpgrade(upShade(), running.t0); return }
   if (turn.busy()) {
-    confirmAsk(t('gui.upg.title'), t('gui.upg.body_busy'), t('gui.upg.close'), () => {})
+    confirmAsk(t('gui.upg.title'), t('gui.upg.body_busy'), t('gui.upg.close'), () => {}, 'notice')
     return
   }
   confirmAsk(t('gui.upg.title'),
     t('gui.upg.body', { from: `v${APP_VERSION() || '?'}`, to: `v${upLatest || '?'}` }),
-    t('gui.upg.go'), runUpgrade)
+    t('gui.upg.go'), runUpgrade, 'primary')
 }
 
 /* Called at boot: a page that loads while an install is in flight re-attaches
