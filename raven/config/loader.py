@@ -1018,14 +1018,16 @@ def _migrate_embedding_home(data: dict, *, notify: bool = False, config_path: Pa
 
 
 def _migrate_retired_deep_research(data: dict[str, Any], *, notify: bool = False) -> bool:
-    """Drop what the retired ``deep_research`` tool left in the config.
+    """Drop the retired ``deep_research`` tool's own config section.
 
     The tool is gone: research runs on the Raven-Research agent and the
     MiroThinker sub-agent, which carry their own settings. What it leaves
     behind is a section nothing reads -- and it held an API key, the more
-    reason to clear it -- plus a ``disabledTools`` entry switching off a tool
-    that no longer registers. The emptied list stays put, the way the
-    phantom-knob floor leaves ``tokenWise: {}`` behind.
+    reason to clear it. A ``deep_research`` entry in ``tools.disabledTools``
+    is left alone on purpose: that list is the general name denylist and a
+    plugin tool may carry the name (plugin tools register last so one can
+    shadow a built-in), so dropping the entry would put such a tool back on
+    offer.
 
     Silent, and False, when it changes nothing. This one has to be: the
     research rename parks the stamp below its own floor, so for those configs
@@ -1048,19 +1050,6 @@ def _migrate_retired_deep_research(data: dict[str, Any], *, notify: bool = False
             )
             if notify and notice not in _migration_notices:
                 _migration_notices.append(notice)
-
-    for spelling in ("disabledTools", "disabled_tools"):
-        disabled = tools.get(spelling)
-        if not isinstance(disabled, list) or "deep_research" not in disabled:
-            continue
-        tools[spelling] = [name for name in disabled if name != "deep_research"]
-        changed = True
-        notice = (
-            f"Dropped `deep_research` from `tools.{spelling}`: the tool it switched off is retired, "
-            "so the entry named nothing. The rest of your disabled tools stand."
-        )
-        if notify and notice not in _migration_notices:
-            _migration_notices.append(notice)
 
     return changed
 

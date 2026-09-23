@@ -48,7 +48,8 @@ All notable changes to Raven are documented here.
   took its name when no key was configured and the `raven deep-research`
   command that configured it. The settings page no longer carries its row,
   and `tools.deepResearch` is no longer read: a load-time migration drops
-  that section and any `deep_research` entry in `tools.disabledTools`.
+  that section. A `deep_research` entry in `tools.disabledTools` is left as
+  written, since that denylist also governs a plugin tool of the same name.
   Reports written under `<workspace>/deep_research/` stay on disk; nothing
   writes there any more. The capability moved to the agent surface -- the
   first-party Raven-Research agent, and MiroThinker as a sub-agent preset.
