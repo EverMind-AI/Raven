@@ -3749,9 +3749,13 @@ details[open] summary { margin-bottom: 8px; }
 .card .st.warn { color: var(--gold); }
 .card .st.bad { color: var(--clay); }
 .card .st.new { color: var(--sky); }
+/* The width is not a no-op: the filled button is `.mini.go`, and `.go` is also
+   the composer's Send disc, which fixes its width at 30px. This rule comes
+   later and ties on specificity, so stating the width here is what lets the
+   button grow to its label instead of stopping at the floor. */
 .mini {
   border: 1px solid var(--line); border-radius: 7px; padding: 0 12px;
-  height: 28px; min-width: 68px; justify-content: center; white-space: nowrap;
+  height: 28px; width: auto; min-width: 68px; justify-content: center; white-space: nowrap;
   font-size: 12.5px; color: var(--text); background: var(--ink);
   display: inline-flex; align-items: center; gap: 6px;
   transition: background .13s ease, color .13s ease, border-color .13s ease;
