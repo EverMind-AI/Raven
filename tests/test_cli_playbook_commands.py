@@ -1138,6 +1138,48 @@ class TestTheTerminalIsAskedBeforeAStintRuns:
         assert await pc.ask_at_the_terminal("conv", "Run it?") is False
         assert any("no terminal to ask at" in line for line in said)
 
+    @staticmethod
+    def _ask_the_tool_was_built_with(monkeypatch) -> list:
+        from raven.agent.subagent import dag_tool as dag_tool_mod
+
+        seen: list = []
+
+        class _Recording(dag_tool_mod.SubAgentDagTool):
+            def __init__(self, *args, **kwargs):
+                seen.append(kwargs.get("ask"))
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(dag_tool_mod, "SubAgentDagTool", _Recording)
+        monkeypatch.setattr("raven.providers.factory.make_provider", lambda config: _FakeProvider())
+        monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
+        return seen
+
+    def test_a_stint_is_run_with_the_terminal_as_its_approval(self, library, monkeypatch) -> None:
+        from raven.cli import playbook_commands as pc
+
+        shipped = Path(pc.__file__).resolve().parents[1] / "playbook" / "builtin" / "long-horizon-dev-stint"
+        target = library["builtin"] / "long-horizon-dev-stint"
+        target.mkdir()
+        (target / "playbook.md").write_text((shipped / "playbook.md").read_text(encoding="utf-8"), encoding="utf-8")
+        seen = self._ask_the_tool_was_built_with(monkeypatch)
+
+        r = runner.invoke(app, ["playbook", "run", "long-horizon-dev-stint"])
+
+        assert r.exit_code == 0, r.output
+        assert seen == [pc.ask_at_the_terminal]
+
+    def test_any_other_confirmed_playbook_keeps_the_approval_this_path_had(self, library, monkeypatch) -> None:
+        """Only a stint is asked at the terminal. What `confirm` means on the
+        command line for every other mode is a decision of its own: turning it
+        on here too would fail every script that runs one unattended."""
+        _write_md(library["user"], "mine", "a confirmed prompt playbook")
+        seen = self._ask_the_tool_was_built_with(monkeypatch)
+
+        r = runner.invoke(app, ["playbook", "run", "mine"])
+
+        assert r.exit_code == 0, r.output
+        assert seen == [None]
+
 
 class TestScaffoldingAStint:
     """`playbook new-stint` -- the one mode a model may not write for you.

@@ -474,6 +474,18 @@ def playbook_run(
     from raven.providers.factory import make_provider
     from raven.providers.pool import ProviderPool
 
+    # Read before the graph tool is built, because the tool's approval channel
+    # depends on the playbook's mode (see below). Nothing wired an MCP source on
+    # this path, so a node's `mcps` resolved to "not connected on the host"
+    # however well the machine was configured. The spec is read here rather than
+    # taken from the runtime because the pre-flight has to know what to dial
+    # before the graph starts; a file that cannot be parsed is left to the
+    # runtime, which reports it below.
+    try:
+        spec = store.load(name)
+    except Exception:  # noqa: BLE001 - the runtime reports an unloadable file
+        spec = None
+
     provider = make_provider(config)
     manager = SubagentManager(
         provider=provider,
@@ -492,7 +504,13 @@ def playbook_run(
         guide_skill_id=None,
         state_for=manager.instance_state,
         model_for=manager.session_model_for,
-        ask=ask_at_the_terminal,
+        # A stint only. Its `verify` is shell from a file, which is why such a
+        # playbook must keep `confirm: true`, and a gate nobody is asked at does
+        # not hold that line. Every other mode keeps this path's approval as it
+        # was -- with no channel wired, the graph runs -- because changing what
+        # `confirm` means on the command line for every playbook is its own
+        # decision, and a script that runs one unattended would start failing.
+        ask=ask_at_the_terminal if spec is not None and spec.mode == "stint" else None,
     )
     executor = PlaybookExecutor(
         dag_tool=dag_tool,
@@ -515,16 +533,6 @@ def playbook_run(
         executor=executor,
         disabled=config.playbooks.disabled,
     )
-
-    # Nothing wired an MCP source on this path, so a node's `mcps` resolved to
-    # "not connected on the host" however well the machine was configured. The
-    # spec is read here rather than taken from the runtime because the pre-flight
-    # has to know what to dial before the graph starts; a file that cannot be
-    # parsed is left to the runtime, which reports it below.
-    try:
-        spec = store.load(name)
-    except Exception:  # noqa: BLE001 - the runtime reports an unloadable file
-        spec = None
 
     async def run_with_mcp():
         if spec is None:
