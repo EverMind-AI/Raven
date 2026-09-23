@@ -1676,9 +1676,15 @@ def _without_userinfo(url: str) -> str:
 
     A proxy is commonly configured as ``http://user:password@host:port``, and a
     probe's error travels to the browser, where it is shown as a tooltip.
+    httpx also takes one with no scheme (``user:password@host:port``, read as
+    http://), which ``urlsplit`` files under the path, so that form is split by
+    hand.
     """
     from urllib.parse import urlsplit, urlunsplit
 
+    if "://" not in url:
+        authority, sep, rest = url.partition("/")
+        return authority.rsplit("@", 1)[-1] + sep + rest
     parts = urlsplit(url)
     if "@" not in parts.netloc:
         return url
@@ -1721,6 +1727,8 @@ def _probe_models_endpoint(
         # at the real fault.
         raw_proxy = _env_proxy_for(url) if transport is None else None
         proxy = _without_userinfo(raw_proxy) if raw_proxy else None
+        # Also covers httpx quoting a scheme-less proxy with the http:// it
+        # assumed: the value as set is a substring of that.
         detail = str(exc).replace(raw_proxy, proxy) if raw_proxy and proxy else str(exc)
         if proxy and isinstance(exc, (httpx.ProxyError, httpx.ConnectError, httpx.ConnectTimeout)):
             return {
