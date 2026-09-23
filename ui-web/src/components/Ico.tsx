@@ -31,19 +31,20 @@ export function ico(d: string, cls?: string): SVGSVGElement {
    call means without decoding the coordinates. */
 export const CROSS = 'M7 7l10 10M17 7 7 17'
 export const CHEVRON_DOWN = 'M6.5 10 12 15.5 17.5 10'
-export const SEND = 'M5 12h13M12 5l7 7-7 7'
+export const SEND = 'M12 19V5M6.5 10.5 12 5l5.5 5.5'
 
 /* The send arrow, which is not drawn like the others: it sits inside a 30px
    filled disc, so it is set small and heavy rather than at this file's 24px
    hairline weight. Both composers wear it -- the page's own and a sub-agent's
    -- and they used to build it apart, so the sub-agent's came out 20px at 1.8
    against the page's 14px at 2.4: the same arrow, visibly a different button.
-   The size and the weight live here with the path, and
+   It points up, the way the design draws it: a 16px box at 2.25 is the
+   design's 1.5px line. The size and the weight live here with the path, and
    `composer/store.ts::ICON_SEND` builds its string from the same three
    numbers (SEND_PX / SEND_STROKE), with a test holding the two renderings
    attribute for attribute. */
-export const SEND_PX = 14
-export const SEND_STROKE = 2.4
+export const SEND_PX = 16
+export const SEND_STROKE = 2.25
 
 export function SendGlyph(): JSX.Element {
   return (

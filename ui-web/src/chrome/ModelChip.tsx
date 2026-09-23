@@ -18,8 +18,10 @@
  * which is what that guard answers.
  */
 
+import { ArrowDown01Icon } from '@hugeicons/core-free-icons'
 import { useSyncExternalStore } from 'react'
 
+import { Icon } from '../components/Icon'
 import { ProviderIcon } from '../components/ProviderMark'
 import { paint } from '../features/model/chip'
 import { openModelsForMissingProvider } from '../features/model/source'
@@ -29,7 +31,6 @@ import { sameModel } from '../features/model/types'
 import type { Provider } from '../features/model/types'
 import type { JSX } from 'react'
 
-const CHEVRON = 'M6 9l6 6 6-6'
 
 /* The provider serving the current model and the id as that provider spells it,
    or null while no list is installed (the served frame, and a test that never
@@ -78,9 +79,7 @@ export function ModelChip(): JSX.Element {
     >
       {at ? <ProviderIcon id={at.provider.id} name={at.provider.name} /> : null}
       <span id="modelName">{label}</span>
-      <svg className="chrome-model-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-        <path d={CHEVRON} />
-      </svg>
+      <span className="chrome-model-caret"><Icon icon={ArrowDown01Icon} size={12} /></span>
     </button>
   )
 }

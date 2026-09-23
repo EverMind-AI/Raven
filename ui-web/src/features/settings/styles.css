@@ -54,12 +54,12 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-rail {background:var(--surface); border-right:1px solid var(--line); padding:20px 12px 24px; overflow-y:auto}
 .settings-rail h4 {font-size:16px; font-weight:600; padding:0 10px 14px}
 .settings-rail .settings-grp {font-family:var(--disp); font-size:11px; letter-spacing:.13em; text-transform:uppercase; color:var(--faint); font-weight:600; padding:14px 10px 6px}
-.settings-nitem {display:flex; align-items:center; gap:9px; width:100%; text-align:left; font:inherit; font-size:14px;
-  background:none; border:0; color:var(--muted); padding:6px 10px; border-radius:7px; cursor:pointer; position:relative}
-.settings-nitem:hover {background:var(--raised); color:var(--text)}
-.settings-nitem[aria-current="true"] {background:var(--amber-dp); color:var(--gold); font-weight:600}
-.settings-nitem[aria-current="true"] svg {color:var(--gold)}
-.settings-nitem svg {width:16px; height:16px; flex:0 0 16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; opacity:.85}
+.settings-nitem {display:flex; align-items:center; gap:8px; width:100%; height:32px; text-align:left; font:inherit; font-size:13px;
+  background:none; border:0; color:var(--rail-ink); padding:0 8px; border-radius:8px; cursor:pointer; position:relative}
+.settings-nitem:hover {background:var(--settings-nav-on); color:var(--rail-ink-on)}
+.settings-nitem[aria-current="true"] {background:var(--settings-nav-on); color:var(--rail-ink-on); font-weight:500}
+.settings-nitem svg {width:16px; height:16px; flex:0 0 16px; color:var(--settings-nav-ico)}
+.settings-nitem[aria-current="true"] svg, .settings-nitem:hover svg {color:currentColor}
 .settings-nitem.settings-soon {opacity:.55; cursor:default}
 .settings-nitem.settings-soon:hover {background:none; color:var(--muted)}
 .settings-nitem .settings-p2 {margin-left:auto; font-size:11px; font-family:var(--disp); font-weight:600; letter-spacing:.06em;

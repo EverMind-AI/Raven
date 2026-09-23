@@ -68,6 +68,6 @@ describe('the glyphs the page draws two ways', () => {
     /* Written out rather than compared against `SEND`, which both sides now
        read: shared, the equality above cannot notice the path changing, so the
        arrow the page ships is pinned here as a literal. */
-    expect(shape(rendered)['[path]']).toBe('M5 12h13M12 5l7 7-7 7')
+    expect(shape(rendered)['[path]']).toBe('M12 19V5M6.5 10.5 12 5l5.5 5.5')
   })
 })

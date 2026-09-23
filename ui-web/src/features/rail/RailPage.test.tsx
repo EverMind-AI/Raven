@@ -337,7 +337,7 @@ describe('rail island', () => {
 
   it('shows a placeholder instead of a title while the name is being generated', () => {
     /* The row is not loading -- the list is here. Only its name is coming, so
-       the bar stands where the title goes and the timestamp keeps its slot. */
+       the bar stands where the title goes, and the row carries no clock. */
     install({ rows: [row({ naming: true, title: 'gui.new_task' })] })
     const host = mount()
 
@@ -345,14 +345,14 @@ describe('rail island', () => {
     expect(bars.length).toBe(1)
     expect(bars[0]!.getAttribute('aria-label')).toBe('gui.sess.naming')
     expect(screen.queryByText('gui.new_task')).toBeNull()
-    expect(screen.getByText('11:24')).toBeTruthy()
+    expect(screen.queryByText('11:24')).toBeNull()
   })
 
   it('leaves the placeholder no width of its own', () => {
     /* Width and flex belong to the stylesheet, not to this element. Two earlier
        versions sized the bar here and both were wrong for the same reason: a
        per-row inline size resolves against the title slot, whose width depends
-       on how long the neighbouring timestamp is and shrinks again under hover.
+       on what else shares the row and shrinks again under hover.
        Only the height stays inline, since it is the one dimension the
        surrounding line box does not set. */
     install({ rows: [row({ naming: true, title: 'gui.new_task' })] })

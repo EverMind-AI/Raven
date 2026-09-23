@@ -59,6 +59,32 @@
   --hover:    #ececea;   /* a row the pointer is on */
   --selected: #eaeae7;   /* a row that is the one open */
   --text-3:   #8a8a88;   /* a group label: quieter than muted, louder than faint */
+  /* The rail's own row ramp, from the design (Figma: Raven / AppSidebar): a
+     label, the same label on a hovered or open row, the quiet grey of a group
+     heading and an idle row action, and the two grounds a row steps through. */
+  --rail-ink:    #333333;
+  --rail-ink-on: #1a1a1a;
+  --rail-quiet:  #999999;
+  --rail-hover:  #f7f7f7;
+  --rail-on:     #f0f0f0;
+  --rail-tip:    #1a1a1a;
+  --rail-tip-ink: #ffffff;
+  /* The settings dialog's nav, and the composer card and its bar (Figma: Raven
+     / ChatComposer, SendButton). */
+  --snav-bg:        #fafafa;
+  --settings-nav-on:  #f0f0f0;
+  --settings-nav-ico: #666666;
+  --composer-bg:    rgba(255, 255, 255, .8);
+  --composer-line:  #e6e6e6;
+  --composer-sh:    rgba(0, 0, 0, .08);
+  --composer-ink:   #1a1a1a;
+  --composer-ph:    #908f8c;
+  --composer-hover: #f7f7f7;
+  --att-bg:         #f0f0f0;
+  --send-off:       #bdbbb8;
+  --send-off-ink:   #faf9f5;
+  --send-on:        #1a1a1a;
+  --send-on-ink:    #ffffff;
   --ph:       #b8b8b8;   /* placeholder text in a field */
   /* The one high-contrast pair on the page: the send button, and the message
      the reader wrote. Both invert in dark, which is why they are tokens and
@@ -113,7 +139,7 @@
      two rules below both spell `calc(var(--col) + 72px)`. Transcript, banner
      and composer all read from this one token, so the column and the field it
      is typed into always share an edge. */
-  --col: 760px;
+  --col: 1112px;
 
   /* Ink and surface roles hoisted from rule-level hex literals. Rules that
      keep literal colors on purpose (theme-preview swatches, mask gradients,
@@ -194,11 +220,32 @@
     /* The dark counterparts of the light block's surfaces -- see there. */
     --page:     #141414;
     --wash:     linear-gradient(180deg, #151515, #121212);
-    --side-bg:  #171717;
+    --side-bg:  #333333;
     --paper:    #202020;
     --hover:    #242424;
     --selected: #2e2e2e;
     --text-3:   #9b9b9b;
+    --rail-ink:    #f7f7f7;
+    --rail-ink-on: #ffffff;
+    --rail-quiet:  #999999;
+    --rail-hover:  #474747;
+    --rail-on:     #474747;
+    --rail-tip:    #1a1a1a;
+    --rail-tip-ink: #ffffff;
+    --snav-bg:        #262626;
+    --settings-nav-on:  #333333;
+    --settings-nav-ico: #999999;
+    --composer-bg:    rgba(32, 32, 32, .85);
+    --composer-line:  #333333;
+    --composer-sh:    rgba(0, 0, 0, .45);
+    --composer-ink:   #e8e8e6;
+    --composer-ph:    #7a7a78;
+    --composer-hover: #2e2e2e;
+    --att-bg:         #303030;
+    --send-off:       #4a4a4a;
+    --send-off-ink:   #8a8a88;
+    --send-on:        #e8e8e6;
+    --send-on-ink:    #1a1a1a;
     --ph:       #6e6e6e;
     --black:    #e8e8e6;
     --bubble-me:    #343434;
@@ -223,8 +270,14 @@
   --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --moss: #7fbf6a;
   --clay: #d96a5b; --gold: #e0a030; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
   --page: #141414; --wash: linear-gradient(180deg, #151515, #121212);
-  --side-bg: #171717; --paper: #202020; --hover: #242424;
+  --side-bg: #333333; --paper: #202020; --hover: #242424;
   --selected: #2e2e2e; --text-3: #9b9b9b; --ph: #6e6e6e; --black: #e8e8e6;
+  --rail-ink: #f7f7f7; --rail-ink-on: #ffffff; --rail-quiet: #999999;
+  --rail-hover: #474747; --rail-on: #474747; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
+  --snav-bg: #262626; --settings-nav-on: #333333; --settings-nav-ico: #999999;
+  --composer-bg: rgba(32, 32, 32, .85); --composer-line: #333333; --composer-sh: rgba(0, 0, 0, .45);
+  --composer-ink: #e8e8e6; --composer-ph: #7a7a78; --composer-hover: #2e2e2e; --att-bg: #303030;
+  --send-off: #4a4a4a; --send-off-ink: #8a8a88; --send-on: #e8e8e6; --send-on-ink: #1a1a1a;
   --bubble-me: #343434; --bubble-me-fg: #ededeb;
   --ring: rgba(255, 255, 255, .07); --ring-2: rgba(255, 255, 255, .14);
   --sh-soft: rgba(0, 0, 0, .5); --seg-on: #333333;
@@ -246,6 +299,12 @@
     radial-gradient(40% 45% at 70% 90%, rgba(242, 233, 214, .5), rgba(242, 233, 214, 0) 70%),
     linear-gradient(180deg, #fafaf8 0%, #f7f7f5 100%);
   --selected: #eaeae7; --text-3: #8a8a88; --ph: #b8b8b8; --black: #111111;
+  --rail-ink: #333333; --rail-ink-on: #1a1a1a; --rail-quiet: #999999;
+  --rail-hover: #f7f7f7; --rail-on: #f0f0f0; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
+  --snav-bg: #fafafa; --settings-nav-on: #f0f0f0; --settings-nav-ico: #666666;
+  --composer-bg: rgba(255, 255, 255, .8); --composer-line: #e6e6e6; --composer-sh: rgba(0, 0, 0, .08);
+  --composer-ink: #1a1a1a; --composer-ph: #908f8c; --composer-hover: #f7f7f7; --att-bg: #f0f0f0;
+  --send-off: #bdbbb8; --send-off-ink: #faf9f5; --send-on: #1a1a1a; --send-on-ink: #ffffff;
   --bubble-me: #2e2e2e; --bubble-me-fg: #ffffff;
   --ring: rgba(0, 0, 0, .03); --ring-2: rgba(0, 0, 0, .05);
   --sh-soft: rgba(0, 0, 0, .06); --seg-on: #ffffff;
@@ -332,7 +391,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .rail {
   background: var(--side-bg);
   border-right: 1px solid var(--line-soft);
-  padding: 8px 4px 10px;
+  padding: 0 4px;
   display: flex; flex-direction: column; min-height: 0; position: relative;
 }
 
@@ -364,13 +423,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    collapsed-rail twin in the chat header uses it too. */
 /* Same height as the chat header, or the toggle jumps vertically when the rail
    closes and its twin in that header takes over. */
-.railtop { display: flex; align-items: center; justify-content: flex-start; gap: 2px;
-  flex: none; height: 44px; padding: 0 var(--edge); }
+.railtop { display: flex; align-items: center; justify-content: flex-start; gap: 4px;
+  flex: none; height: 64px; padding: 20px 12px 16px; }
 /* Pushes the two chores to the far end of the row, which is what puts the name
    at the window's corner and the buttons where the design has them. */
-.wordmark { display: flex; align-items: center; gap: 8px; margin-right: auto; padding: 0 6px;
-  font-size: 13px; font-weight: 600; letter-spacing: .06em; color: var(--text); }
+.wordmark { display: flex; align-items: center; gap: 6px; margin-right: auto;
+  font-size: 14px; font-weight: 600; color: var(--text); }
 .wordmark svg { display: block; flex: none; }
+.railtop .ghost-ic { color: var(--rail-quiet); border-radius: 8px; }
+.railtop .ghost-ic:hover { color: var(--rail-ink-on); background: var(--rail-hover); }
+.railtop .ghost-ic svg { width: 16px; height: 16px; }
 /* The collapsed-rail twin is lifted out of this row's flow (see #railShow), so
    the space it stood in has to be reserved: --edge, the button, and the gap. */
 .app[data-rail="off"] .top { padding-left: calc(var(--edge) + 35px); }
@@ -386,7 +448,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* Desktop shell hides the OS title bar, so this row shares the traffic-light
    band: --tl-row / --tl-pad are measured from the real buttons and injected by
    the shell, and the fallbacks match a standard macOS title bar. */
-:root[data-shell="1"] .railtop { height: var(--tl-row, 38px); padding-left: var(--tl-pad, 78px); }
+:root[data-shell="1"] .railtop { height: var(--tl-row, 38px); padding-top: 0; padding-bottom: 0;
+  padding-left: var(--tl-pad, 78px); }
 :root[data-shell="1"] .top { height: var(--tl-row, 38px); }
 /* In the shell this band IS the title bar: it drags the window (see the
    pointerdown handler by the popover closers), so its text must not be
@@ -405,7 +468,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    nothing. One rule here rather than a size at every call site. */
 .ghost-ic svg { width: 15px; height: 15px; }
 
-.rail-nav { display: grid; gap: 2px; padding: 0 8px 4px; }
+.rail-nav { display: grid; gap: 4px; padding: 8px 8px 4px; }
 .rail-nav + .find { margin-top: 0; }
 
 /* The new-task action is a row in this list, not a control dropped on top of
@@ -422,7 +485,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .find input:hover { border-color: var(--line); }
 .find input:focus { border-color: var(--muted); background: var(--ink); }
 .find input::placeholder { color: var(--faint); }
-.find .ic { position: absolute; left: 8px; top: 5px; color: var(--faint); pointer-events: none; }
+.find .ic { position: absolute; left: 8px; top: 6px; display: grid; color: var(--faint); pointer-events: none; }
 .find .clr { position: absolute; right: 5px; top: 2px; color: var(--faint); padding: 2px 4px; border-radius: 4px; }
 .find .clr:hover { color: var(--text); }
 
@@ -435,35 +498,29 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    held when the caret led -- which is what keeps it lined up with `.grp-empty`
    and with the whole column. */
 .list .grp {
-  display: flex; align-items: center; gap: 5px;
-  padding: 17px 10px 4px; cursor: pointer; user-select: none;
+  display: flex; align-items: center; gap: 4px; height: 28px;
+  margin: 16px 0 4px; padding: 0 8px; border-radius: 8px; cursor: pointer; user-select: none;
 }
-.list .grp:first-child { padding-top: 7px; }
-.list .grp .car { display: grid; place-items: center; flex: none; color: var(--faint);
-  opacity: 0; transition: opacity .15s ease; }
-.list .grp[aria-expanded="false"] .car, .list .grp:hover .car,
-.list .grp:focus-visible .car { opacity: 1; }
-.list .grp .car svg {
-  width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 2.2;
-  stroke-linecap: round; stroke-linejoin: round;
-  transform: rotate(90deg); transition: transform .18s ease;
-}
-.list .grp[aria-expanded="false"] .car svg { transform: rotate(0deg); }
+.list .grp:first-child { margin-top: 12px; }
+.list .grp:hover { background: var(--rail-hover); }
+.list .grp .car { display: grid; place-items: center; flex: none; color: var(--rail-quiet); }
+.list .grp .car svg { width: 16px; height: 16px; transition: transform .18s ease; }
+.list .grp[aria-expanded="false"] .car svg { transform: rotate(-90deg); }
 @media (prefers-reduced-motion: reduce) { .list .grp .car, .list .grp .car svg { transition: none; } }
 /* The rail's group headings keep the page's tracking but drop its monospace
    and its capitals: a session list is already a column of short strings, and a
    mono uppercase row over it reads as a second kind of name rather than as the
    drawer they are filed in. */
 .list .grp .lab {
-  padding: 0; flex: none; font-family: var(--sans); font-size: 11px;
-  font-weight: 600; letter-spacing: .09em; text-transform: none; color: var(--faint);
+  padding: 0; flex: none; font-family: var(--sans); font-size: 12px;
+  font-weight: 400; letter-spacing: normal; text-transform: none; color: var(--rail-quiet);
 }
 /* The caret carries the push to the far end of the row, now that the hairline
    which used to do it is gone -- one element fewer than a spacer would be. */
 .list .grp .car { margin-right: auto; }
-.list .grp:hover .lab, .list .grp:hover .car { color: var(--muted); }
-.list .grp:focus-visible { outline: 1px solid var(--amber); outline-offset: 2px; border-radius: 6px; }
-.grp-empty { font-size: 12px; color: var(--faint); padding: 3px 10px 5px 10px; }
+.list .grp:focus-visible { outline: 1px solid var(--amber); outline-offset: 2px; }
+.list .sess + .sess { margin-top: 2px; }
+.grp-empty { font-size: 12px; color: var(--faint); padding: 3px 8px 5px 8px; }
 /* The one heading that has a verb keeps it out of sight until the pointer is on
    the row: a link beside every list would read as part of the heading, and it
    is an errand rather than a destination. Focus reveals it too -- a keyboard has
@@ -477,7 +534,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 @media (prefers-reduced-motion: reduce) { .grp .grp-go { transition: none; } }
 .grp-more {
   display: block; width: 100%; text-align: left; font-size: 12px; color: var(--faint);
-  padding: 6px 10px; border-radius: 8px; margin-top: 1px;
+  padding: 6px 8px; border-radius: 8px; margin-top: 2px;
 }
 .grp-more:hover { color: var(--text); background: var(--surface); }
 
@@ -498,17 +555,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   min-height: 1lh;
 }
 .sess .t span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The stamp is a fixed-width note on the row, so it keeps its own weight when
-   the row goes bold. */
-.sess .w {
-  flex: none; font-family: var(--mono); font-size: 10.5px; color: var(--faint);
-  font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap;
-}
-.sess[aria-current="true"] .w { color: var(--muted); }
-/* The two common actions replace the timestamp in place on hover, keeping the
+.sess .w { flex: none; }
+/* The row actions replace the turn marker in place on hover, keeping the
    row width stable while making pin and archive one-click operations.
 
-   The stamp yields on exactly the condition that brings the actions up, and
+   The marker yields on exactly the condition that brings the actions up, and
    nothing else. Reading `.sess:focus-within` instead was the same thought
    written one selector too wide: a row is a div[role=button][tabindex=0], so
    CLICKING a session leaves the row itself focused -- which took the stamp
@@ -519,27 +570,30 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    opacity-0, not hidden, so tabbing on from the row focuses one and both
    halves of this pair fire together. */
 .sess .quick {
-  display: flex; align-items: center; gap: 2px; position: absolute; right: 6px;
+  display: flex; align-items: center; gap: 4px; position: absolute; right: 6px;
   opacity: 0; pointer-events: none; top: 50%; transform: translateY(-50%);
 }
 .sess:hover .quick, .sess .quick:focus-within { opacity: 1; pointer-events: auto; }
 .sess:hover .w, .sess:has(.quick:focus-within) .w { display: none; }
-.sess:hover .t, .sess:has(.quick:focus-within) .t { padding-right: 48px; }
+.sess:hover .t, .sess:has(.quick:focus-within) .t { padding-right: 76px; }
 .sess .quick button {
-  display: grid; place-items: center; position: relative; width: 22px; height: 22px; border-radius: 5px;
-  color: var(--faint);
+  display: grid; place-items: center; position: relative; width: 20px; height: 20px; border-radius: 5px;
+  color: var(--rail-quiet);
 }
-.sess .quick button:hover, .sess .quick button:focus-visible { color: var(--text); background: var(--selected); }
+.sess .quick button:hover, .sess .quick button:focus-visible { color: var(--rail-ink); }
 .sess .quick button::after {
-  content: attr(aria-label); position: absolute; left: 50%; bottom: calc(100% + 5px);
+  content: attr(aria-label); position: absolute; left: 50%; bottom: calc(100% + 6px);
   z-index: 2; opacity: 0; transform: translate(-50%, 2px); pointer-events: none;
-  padding: 3px 6px; border-radius: 5px; background: var(--text); color: var(--ink);
-  font-size: 10px; font-weight: 400; line-height: 1.25; white-space: nowrap;
+  padding: 5px 10px; border-radius: 8px; background: var(--rail-tip); color: var(--rail-tip-ink);
+  box-shadow: 0 0 10px rgba(0, 0, 0, .12);
+  font-size: 13px; font-weight: 400; line-height: 18px; white-space: nowrap;
   transition: opacity .08s ease .12s, transform .08s ease .12s;
 }
 .sess .quick button:hover::after, .sess .quick button:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
 .sess .quick button[data-active] { color: var(--amber); }
-.sess .quick svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.sess .quick svg { width: 16px; height: 16px; }
+/* The design lays the pin on its side. */
+.sess .quick .quick-pin svg { transform: rotate(45deg); }
 .sess:has(.ren) .quick { display: none; }
 .sess:has(.ren) .t { padding-right: 0; }
 /* As wide as the name it holds, not as wide as the rail.
@@ -568,20 +622,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   border-color: var(--muted); outline: 0;
 }
 
-/* Streaming and just-finished take the stamp's slot rather than the dot's.
-   A row that is working is worth watching, and the tail is where the eye
-   already goes for the time -- while the answer is still coming the clock is
-   the least interesting thing the row can say. The stamp comes back the
-   moment the session has been read, so this never accumulates.
-
-   The stamp text stays in the box and is hidden rather than removed, and the
-   marker is absolutely positioned over it. A stamp is anywhere from "昨天"
-   (21px) to "2026年12月30日" (83px), so swapping the text out for a marker
-   would resize the tail and shove the title -- the row visibly twitched on
-   every transition. Holding the text's box keeps the swap free of reflow
-   without pinning every row to the width of the longest possible date. */
-.sess .w[data-sig] { position: relative; }
-.sess .w[data-sig] .wt { visibility: hidden; }
+/* A turn that is streaming, just finished, failed or asking marks the row's
+   tail with one dot; a row with nothing to report has no tail at all. */
+.sess .w[data-sig] { position: relative; width: 6px; height: 6px; }
 .sess .w[data-sig] i {
   position: absolute; right: 0; top: 50%; margin-top: -3px;
   width: 6px; height: 6px; border-radius: 50%; display: block;
@@ -629,14 +672,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* No seam above the identity row: the list ends in whitespace and the foot is
    a glyph and one word, so there is nothing for a rule to separate that the gap
    does not separate already. */
-.rail-foot { display: grid; gap: 2px; padding: 6px 8px 8px; margin-top: 4px; flex: none; }
+.rail-foot { display: grid; gap: 2px; padding: 16px 6px; flex: none; }
 
 .rail-foot .me {
-  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
-  padding: 5px 8px; border-radius: 7px;
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; text-align: left;
+  padding: 0 8px; border-radius: 8px; color: var(--rail-ink);
 }
-.rail-foot .me:hover { background: var(--raised); }
-.rail-foot .me[aria-expanded="true"] { background: var(--raised); }
+.rail-foot .me:hover { background: var(--rail-hover); color: var(--rail-ink-on); }
+.rail-foot .me[aria-expanded="true"] { background: var(--rail-on); color: var(--rail-ink-on); }
 .rail-foot .me .av {
   flex: none; width: 24px; height: 24px; border-radius: 50%;
   background: var(--amber-dp); color: var(--amber);
@@ -645,11 +688,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* No account sits behind this row, so the glyph is a nav row's glyph: no plate,
    no circle, the same 16px mark and the same muted ink as every other row. */
 .rail-foot .me .av.anon {
-  width: 16px; height: 16px; border-radius: 0; background: none; color: var(--muted);
+  width: 16px; height: 16px; border-radius: 0; background: none; color: inherit;
 }
-.rail-foot .me .av.anon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.rail-foot .me .av.anon svg { width: 16px; height: 16px; }
 .rail-foot .me .who { flex: 1; min-width: 0; display: grid; }
-.rail-foot .me .who .n { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-foot .me .who .n { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-foot .me .who .s {
   font-family: var(--mono); font-size: 10.5px; color: var(--faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -720,25 +763,24 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* One row shape for the whole rail -- the new-task action, the module links and
    every session line -- so the column reads as one list instead of three. */
 .navi, .sess {
-  position: relative; display: flex; align-items: center; gap: 10px; width: 100%;
-  height: 32px; padding: 0 10px; border-radius: 8px; text-align: left; cursor: pointer;
-  font-size: 14px; color: var(--text);
+  position: relative; display: flex; align-items: center; gap: 8px; width: 100%;
+  height: 32px; padding: 0 8px; border-radius: 8px; text-align: left; cursor: pointer;
+  font-size: 13px; color: var(--rail-ink);
 }
 /* A row's label is the page's own text colour, and the glyph beside it is the
    quiet one: the list reads as a list of names, with the icons as marks against
    them rather than as a second column of equal weight. */
-.navi svg { width: 16px; height: 16px; color: var(--muted); }
-.navi:hover, .sess:hover { background: var(--hover); color: var(--text); }
+.navi svg { width: 16px; height: 16px; }
+.navi:hover, .sess:hover { background: var(--rail-hover); color: var(--rail-ink-on); }
 /* Selected and hovered are the same move at two depths -- one flat step of
    ground, --hover then --selected -- and the weight of the label carries the
    rest. The lift this row used to have (a ring plus a shadow, and an amber
    glyph) was a third treatment on a surface that now has only two, and on a
    white rail the ring had nothing left to separate the row from. */
 .navi[aria-current="true"], .sess[aria-current="true"] {
-  background: var(--selected); color: var(--text); font-weight: 500;
+  background: var(--rail-on); color: var(--rail-ink-on); font-weight: 500;
 }
-.navi[aria-current="true"]:hover, .sess[aria-current="true"]:hover { background: var(--selected); }
-.navi[aria-current="true"] svg { color: var(--text); }
+.navi[aria-current="true"]:hover, .sess[aria-current="true"]:hover { background: var(--rail-on); }
 /* A module page covers the chat, so the page is where you are; the session
    behind it keeps a readable label but drops the lift rather than leaving two
    rows looking selected at once. */
@@ -2236,24 +2278,23 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   display: none;
 }
 .dock-in { max-width: var(--col); margin: 0 auto; position: relative; pointer-events: auto;
-  /* Slightly denser at the top: the glass reads as a material with a light
-     source, not a flat translucent rect. The inset white line is the rim
-     catching that light -- it is what sells the pane as glass in dark mode
-     and disappears harmlessly into the light theme. */
-  background: var(--paper);
-  border: 0; border-radius: 20px;
-  padding: 12px 12px 10px 16px;
+  /* Frosted glass, the way the design draws it (Figma: Raven / ChatComposer):
+     a mostly opaque white over a heavy blur, a half-pixel rule and one soft
+     shadow all round. The card has no padding of its own; each band inside it
+     carries its own inset, so the field and the bar line up with the design's
+     16px edges. */
+  background: var(--composer-bg);
+  -webkit-backdrop-filter: blur(50px);
+  backdrop-filter: blur(50px);
+  border: .5px solid var(--composer-line); border-radius: 16px;
+  padding: 0;
   transition: box-shadow .15s;
-  box-shadow: 0 2px 14px var(--sh-soft), 0 0 0 1px var(--ring);
+  box-shadow: 0 0 20px var(--composer-sh);
 }
-/* The card answers focus by deepening, which is the only state it has. The blur
-   and the rim light it used to carry were reading the transcript through it,
-   and a composer that shows what is behind it competes with the one thing on
-   this page the reader is actually making. */
-.dock-in:focus-within { box-shadow: 0 4px 20px var(--sh-soft), 0 0 0 1px var(--ring-2); }
+.dock-in:focus-within { box-shadow: 0 0 24px var(--composer-sh); }
 /* Drag-over highlight moved up from the field: the card is the drop target
    the reader sees. */
-.dock-in:has(.field.drop) { box-shadow: 0 4px 20px var(--sh-soft), 0 0 0 1px var(--amber); }
+.dock-in:has(.field.drop) { box-shadow: 0 0 20px var(--composer-sh), 0 0 0 1px var(--amber); }
 
 /* ── the work indicator ───────────────────────────────────────────────────
    One glyph for "this is happening now", in every place that used to say it in
@@ -2302,6 +2343,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .turnlive .wkg { color: var(--amber); }
 
 .queued { margin-bottom: 9px; display: grid; gap: 3px; }
+.dock-in .queued { margin: 0; padding: 0 16px; }
+.dock-in .queued:not(:empty) { padding-top: 12px; }
 .qrow {
   display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px;
   color: var(--muted); border-left: 2px solid var(--faint); padding: 2px 0 2px 9px;
@@ -2318,6 +2361,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   border: 0; border-radius: 0; background: none; box-shadow: none;
   padding: 4px 8px 0;
 }
+.dock-in .field { padding: 16px 16px 0; }
+.dock-in .atts:not([hidden]) + .field { padding-top: 8px; }
 .field .c { font-family: var(--mono); color: var(--amber); padding-bottom: 3px; }
 /* The ceiling is viewport-relative on purpose: a fixed 168px eats a third of a
    short window, and what it eats is the tail of the transcript the reader is
@@ -2330,9 +2375,14 @@ textarea {
   min-height: 46px; max-height: min(200px, 24vh); padding: 2px 0; line-height: 1.6;
 }
 textarea::placeholder { color: var(--faint); }
-/* The composer's own field: one line's leading, and the space under the last
-   line that keeps a descender off the row of controls below it. */
-.dock-in textarea { line-height: 22px; padding: 4px 0 6px; }
+/* The composer's own field: the design's 14/26 body, two lines at rest and
+   about eleven before it scrolls -- still viewport-bounded, so a short window
+   keeps the transcript it is writing about. */
+.dock-in textarea {
+  font-size: 14px; line-height: 26px; padding: 0; color: var(--composer-ink);
+  min-height: 52px; max-height: min(286px, 36vh);
+}
+.dock-in textarea::placeholder { color: var(--composer-ph); }
 /* WebKit paints its own focus ring on text controls; ours is the container
    border, so suppress it where we already show focus. */
 textarea:focus, textarea:focus-visible,
@@ -2342,6 +2392,17 @@ textarea:focus, textarea:focus-visible,
 
 /* attachments staged above the composer */
 .atts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.dock-in .atts { gap: 10px; margin: 0; padding: 16px 16px 0; }
+/* A file is a small tag, not a card: its type badge, its name, and a remove
+   button that takes the badge's place while the pointer is on the tag. */
+.dock-in .att:not(.img) {
+  height: 22px; max-width: none; gap: 4px; padding: 0 6px 0 4px;
+  background: var(--att-bg); border: 0; border-radius: 6px;
+  font-size: 13px; line-height: 18px; color: var(--composer-ink);
+}
+.dock-in .att:not(.img) .nm { max-width: 100px; }
+.dock-in .att:not(.img):hover .cp-ik > svg { visibility: hidden; }
+.dock-in .att:not(.img):hover .cp-ik .rm { display: grid; }
 .att {
   display: inline-flex; align-items: center; gap: 7px; max-width: 260px;
   background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px;
@@ -2378,29 +2439,47 @@ textarea:focus, textarea:focus-visible,
 }
 .dock-in:focus-within .tool-btn, .tool-btn:hover { opacity: 1; }
 .tool-btn:hover { color: var(--text); background: var(--raised); }
+/* Send, in the design's four states (Figma: Raven / SendButton): a grey disc
+   while there is nothing to send, an ink one once there is, and the same ink
+   disc holding a spinner while the turn is on its way and a stop square once
+   it is streaming. */
 .go {
-  flex: none; width: 30px; height: 30px; border-radius: 50%; margin-left: 6px;
-  background: var(--black); color: var(--ink); display: grid; place-items: center;
-  transition: opacity .15s, background .15s;
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  background: var(--send-on); color: var(--send-on-ink); display: grid; place-items: center;
+  transition: background .15s, color .15s;
 }
-.go:disabled { opacity: .22; cursor: default; }
-.go.halt { background: var(--clay); color: var(--ink-on-accent); }
+.go:disabled { background: var(--send-off); color: var(--send-off-ink); cursor: default; }
+.go[data-state="sending"] svg { animation: go-spin 1s linear infinite; }
+@keyframes go-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .go[data-state="sending"] svg { animation-duration: 2.4s; } }
 
 /* wraps instead of pushing the usage line past the edge on a narrow window */
 /* Pulled left of the field it sits under, so the first control's own padding
    lines its glyph up with the text above rather than with its box. */
-.under { display: flex; align-items: center; gap: 4px; margin: 8px 0 0 -4px; padding: 0; flex-wrap: wrap; }
-/* The "+" (src/chrome/PlusMenu.tsx): a square the size of the chips' line. */
-.plus { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--muted); }
-.plus:hover, .plus[aria-expanded="true"] { color: var(--text); background: var(--raised); }
-.plus svg { width: 16px; height: 16px; }
+.under { display: flex; align-items: center; gap: 4px; margin: 0; padding: 16px 16px 16px 8px; flex-wrap: wrap; }
+/* The "+" (src/chrome/PlusMenu.tsx): a 30px round target; open, its cross turns
+   into a close mark. */
+.plus { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: var(--rail-ink); }
+.plus:hover, .plus[aria-expanded="true"] { color: var(--composer-ink); background: var(--composer-hover); }
+.plus svg { width: 18px; height: 18px; transition: transform .15s ease; }
+.plus[aria-expanded="true"] svg { transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) { .plus svg { transition: none; } }
 /* The chips under the field read as words rather than as code: the value each
    carries is a name from the catalogue or a model's display name. */
-.under .chip { font-family: var(--sans); font-size: 12px; padding: 4px 8px; border-radius: 8px; }
-.under .chip .pico { width: 14px; height: 14px; }
-.under .chip.model { color: var(--text); font-weight: 500; gap: 7px; }
-.under .chip.model .provider-icon { width: 15px; height: 15px; }
-.under .chip.model .chrome-model-caret { width: 12px; height: 12px; flex: none; opacity: .6; margin-left: -2px; }
+/* Each is a 30px row that turns into a pill under the pointer (Figma: Raven /
+   attachment-01): quiet grey words at rest, the secondary ink on hover. */
+.under .chip {
+  font-family: var(--sans); font-size: 12px; height: 30px; padding: 0 12px; gap: 6px;
+  border-radius: 12px; color: var(--rail-quiet);
+}
+.under .chip:hover, .under .chip[aria-expanded="true"] {
+  color: var(--rail-ink); background: var(--composer-hover); border-radius: 100px;
+}
+.under .chip .pico { width: 12px; height: 12px; }
+.under .chip.model { color: var(--composer-ink); font-weight: 400; }
+.under .chip.model:hover, .under .chip.model[aria-expanded="true"] { color: var(--composer-ink); }
+.under .chip.model .provider-icon { width: 16px; height: 16px; }
+.under .chip.model .chrome-model-caret { display: grid; flex: none; color: var(--rail-quiet); }
 .tries { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .try {
   border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px;
@@ -2604,9 +2683,9 @@ textarea:focus, textarea:focus-visible,
   gap: 14px; pointer-events: none; z-index: 4;
 }
 .chat[data-fresh] #brand { display: flex; animation: brandin .5s cubic-bezier(.2, .7, .3, 1) backwards; }
-/* The mark is the silhouette (components/RavenMark.tsx), inked in the page's
-   own text colour, with its eyes cut to the ground it stands on. */
-#brand .mk { flex: none; display: block; color: var(--text); --mark-eye: var(--page); }
+/* The mark is the tile (components/RavenMark.tsx), which brings its own ground. */
+#brand .mk { flex: none; display: block; }
+#brand .mk svg { display: block; }
 /* A greeting, not a hero. The 70px serif wordmark this replaced was the single
    largest thing on the page, and it was announcing the product to someone who
    had already opened it. */
@@ -3924,7 +4003,7 @@ details[open] summary { margin-bottom: 8px; }
    white is the boundary, no rule. */
 .snav {
   display: grid; grid-template-rows: auto 1fr auto; min-height: 0;
-  background: var(--surface);
+  background: var(--snav-bg);
 }
 /* Inside the settings dialog a small button is the control standard's size,
    the way the prototype's settings document sizes it -- 32 and 8, beside a
@@ -3952,11 +4031,9 @@ details[open] summary { margin-bottom: 8px; }
 .smodal .mini.go:hover:not(:disabled) {
   filter: brightness(1.18); border-color: var(--text); background: var(--text);
 }
-.snav .brandrow { padding: 14px 16px 6px; }
-.snav .wm {
-  font-family: var(--mono); font-size: 13px; font-weight: 600; letter-spacing: -.01em;
-}
-.snavlist { overflow-y: auto; min-height: 0; padding: 0 8px 8px; display: grid; gap: 0; align-content: start; }
+.snav .brandrow { display: flex; align-items: center; height: 64px; padding: 0 24px; }
+.snav .wm { font-size: 16px; font-weight: 600; color: var(--composer-ink); }
+.snavlist { overflow-y: auto; min-height: 0; padding: 0 16px 16px; display: grid; gap: 2px; align-content: start; }
 /* Tight enough that all 14 sections fit without the rail scrolling: a section
    list you have to scroll to see hides half the settings. */
 .snav button.sitem {
@@ -5145,30 +5222,12 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 @keyframes nojs-over-splash {
   to { z-index: var(--z-noscript); }
 }
-/* The mark, near the size its own drawing carries: assets/raven.png is 86x86 --
-   square, because the same file is the favicon and a tab scales it into a
-   square box -- with the bird 68px of that and the rest transparent air. So a
-   box much past 86 is upscaling a flat silhouette; the old illustrated crow was
-   960px wide and could take 132. Square here too, or the padding stretches. */
-.sp-rv { width: 111px; height: 111px; user-select: none;
+/* The mark is assets/raven-mark.svg, the tile the rail wears: a vector, so the
+   splash can draw it at any size without upscaling a bitmap, and a tile with
+   its own ground, so it needs no inverting on the dark one. */
+.sp-rv { width: 88px; height: 88px; user-select: none;
   filter: drop-shadow(0 12px 10px rgba(17, 21, 30, .22));
   animation: spfloat 3.2s ease-in-out infinite; }
-/* Inverted on the dark ground, the way the page's own mono marks are
-   (`.agent-mark[data-tone="mono"]`, pinned by scripts/gates/agent-mark-css).
-   The mark is a silhouette -- one solid body with the eyes cut out of it -- so
-   on --ink at #1d1d1d the body measures 1.25:1 and what is left is two white
-   eyes floating on black. Inverting takes the body to 16.9:1 and turns the eyes
-   into the holes they are, which is what RavenMark draws from `currentColor`
-   and `--mark-eye` on the rest of the page. Both dark paths, because they are
-   not one rule: an explicit choice stamps `data-theme` and the system setting
-   stamps nothing. The shadow rides after the invert so it is not inverted too,
-   and it is restated because `filter` takes one list. */
-:root[data-theme="dark"] .sp-rv {
-  filter: invert(1) drop-shadow(0 12px 10px rgba(17, 21, 30, .22)); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .sp-rv {
-    filter: invert(1) drop-shadow(0 12px 10px rgba(17, 21, 30, .22)); }
-}
 .sp-wl { margin-top: 20px; font-family: var(--serif); font-size: 30px;
   letter-spacing: -.008em; color: var(--text); line-height: 1; }
 .sp-bar { margin-top: 36px; width: 104px; height: 2px; border-radius: 1px;

@@ -4,15 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Raven</title>
-<!-- Two, because the mark is a silhouette rather than a drawing with its own
-     palette: the bird is one solid black body with the eyes cut out of it, which
-     measures 21:1 on a light tab strip and 1.25:1 on a dark one.
-     assets/raven-dark.png is the same file with its RGB inverted and its alpha
-     kept, which is the treatment the splash takes in CSS and the one the page's
-     own mono marks take (`.agent-mark[data-tone="mono"]`). The dark candidate
-     is second because the last matching link is the one that wins. -->
+<!-- The mark is a tile with its own ground, so one icon serves both a light
+     tab strip and a dark one. -->
 <link rel="icon" type="image/png" href="assets/raven.png" />
-<link rel="icon" type="image/png" href="assets/raven-dark.png" media="(prefers-color-scheme: dark)" />
 <style>
 /*__STYLE__*/
 </style>
@@ -31,7 +25,7 @@
      load; live mode keeps it up until the boot sequence has real data. -->
 <div id="splash" aria-hidden="true">
   <div class="sp-in">
-    <img class="sp-rv" src="assets/raven.png" alt="" width="86" height="86" decoding="async">
+    <img class="sp-rv" src="assets/raven-mark.svg" alt="" width="88" height="88" decoding="async">
     <div class="sp-wl">Raven Agent</div>
     <div class="sp-bar"><i></i></div>
   </div>

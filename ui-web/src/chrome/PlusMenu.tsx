@@ -14,8 +14,10 @@
  * file input and the template sheet.
  */
 
+import { PlusSignIcon } from '@hugeicons/core-free-icons'
 import { useSyncExternalStore } from 'react'
 
+import { Icon } from '../components/Icon'
 import * as composer from '../features/composer/mount'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
@@ -23,7 +25,6 @@ import * as plus from '../state/plus'
 
 import type { JSX } from 'react'
 
-const PLUS = 'M12 5v14M5 12h14'
 const CLIP = 'M15 7l-6.2 6.2a2.6 2.6 0 0 0 3.7 3.7L19 10a4.4 4.4 0 0 0-6.2-6.2L6 10.5a6.2 6.2 0 0 0 8.8 8.8l3.4-3.4'
 
 function Glyph({ d, className }: { d: string; className?: string }): JSX.Element {
@@ -48,7 +49,7 @@ export function PlusBtn(): JSX.Element {
       aria-label={word}
       onClick={() => plus.toggle()}
     >
-      <Glyph d={PLUS} />
+      <Icon icon={PlusSignIcon} size={18} stroke={1.33} />
     </button>
   )
 }
