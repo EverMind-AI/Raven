@@ -116,9 +116,15 @@ export function roleProviders(r: Role, snap: SettingsSnapshot): ProviderRow[] {
   const on = snap.providers.filter((p) => p.on)
   if (r.media) return on.filter((p) => p.id === MEDIA_PROVIDER)
   if (r.everos) {
+    if (snap.everos?.available === false) return []
     const role = r.everos
+    /* A model the vendor serves is the vendor's to say, and a catalogue is not
+       the last word on it: any connected provider may be picked, with an id
+       typed if its list lacks one. Rerank is different in kind -- EverOS has
+       to build a request in that vendor's own rerank shape, which no typed id
+       supplies -- so it keeps to the vendors whose shape is known. */
+    if (role !== 'rerank') return on
     const offered = on.filter((p) => (snap.everos?.supports?.[p.id] || []).includes(role))
-    if (role !== 'rerank') return offered
     /* Reranking against somebody's own box needs a request shape the vendor
        table cannot name, and this page has nowhere to ask for one -- a first
        save of such a provider is refused, so offering it here would be a picker
@@ -164,6 +170,30 @@ const providerName = (snap: SettingsSnapshot, id: string): string => {
 
 /* The write a pick makes, by role. The typed id is added to the provider
    first, so the role never names a model the provider does not list. */
+const setIn = (raw: Record<string, unknown>, path: string, value: unknown): Record<string, unknown> => {
+  const [head, ...rest] = path.split('.')
+  const cur = raw[head!]
+  return {
+    ...raw,
+    [head!]: rest.length ? setIn(cur && typeof cur === 'object' ? cur as Record<string, unknown> : {}, rest.join('.'), value) : value,
+  }
+}
+
+/* The snapshot as it will read once this pick is stored, drawn at once: the
+   write is a few milliseconds but the reload behind it is a live read of every
+   vendor, and a slot that kept its old model for most of a second read as a
+   click that did nothing. */
+function withRole(r: Role, snap: SettingsSnapshot, model: string, provider: string): SettingsSnapshot {
+  if (r.id === 'chat') return { ...snap, model, curProvider: provider }
+  if (r.keys) return { ...snap, raw: setIn(setIn(snap.raw, r.keys[0], model), r.keys[1], provider) }
+  if (r.everos && snap.everos) {
+    const sections = snap.everos.sections || {}
+    return { ...snap, everos: { ...snap.everos, sections: { ...sections, [r.everos]: { ...sections[r.everos], model, provider } } } }
+  }
+  if (r.media) return { ...snap, raw: setIn(snap.raw, `tools.media.${r.media}`, mediaSelection(r.media, model)) }
+  return snap
+}
+
 async function setRole(r: Role, model: string, provider: string, typed: boolean, kind?: Kind): Promise<SettingsSnapshot | void> {
   const src = store.source()
   /* The typed id joins the provider's list first, with what the person said it
@@ -209,7 +239,7 @@ async function clearRole(r: Role): Promise<SettingsSnapshot | void> {
    what this slot may take (its kind, the providers the role allows, the pair it
    holds now) and what a pick means here (the role's own write, not a
    conversation switch). */
-export function RolePill({ role }: { role: Role }): JSX.Element {
+export function RolePill({ role, setup }: { role: Role; setup?: boolean }): JSX.Element {
   /* The picker hangs off this button, so it has to be reachable as an element
      and not only as markup. */
   const pill = useRef<HTMLButtonElement>(null)
@@ -223,26 +253,58 @@ export function RolePill({ role }: { role: Role }): JSX.Element {
      provider that is connected but has nothing of this kind added is NOT this
      case -- the picker lists it, says the column is empty and offers a row to
      type an id into. */
+  /* No EverOS to configure: say that, not that the vendors fall short. */
+  if (role.everos && s.snap.everos?.available === false && !val) {
+    return (
+      <span className="settings-mpill settings-dim" title={s.snap.everos.note || undefined}>
+        <span className="settings-id">{t('gui.settings.roles.everos_missing')}</span>
+      </span>
+    )
+  }
   if (!provs.length && !val) {
     /* The way out is the providers page, so say so with a button that goes
        there. A sentence that names the page without taking the reader to it
        leaves every slot on a fresh install a dead end -- which is the state a
        fresh install starts in. */
-    const label = role.media
-      ? 'gui.settings.roles.connect_openrouter'
-      : role.everos ? 'gui.settings.roles.no_vendor_for_role' : 'gui.settings.roles.no_provider'
+    /* A row names what it is missing only once something is connected; before
+       that every row is the same first step. The click still lands on the
+       vendor this row needs. */
+    const anyOn = s.snap.providers.some((p) => p.on)
+    const label = !anyOn
+      ? 'gui.settings.roles.no_provider'
+      : role.media ? 'gui.settings.roles.connect_openrouter'
+        : role.everos ? 'gui.settings.roles.no_vendor_for_role' : 'gui.settings.roles.no_provider'
+    /* Drawn in the pill's own box rather than as a button sized to its words:
+       on a fresh install most rows are in this state, and three labels of three
+       lengths beside the pills of the rows that are served made a ragged
+       column. */
     return (
-      <button type="button" className="mini ghost" onClick={() => {
-        /* The tab first: switching a section clears every drawer of the one it
-           leaves, `provider` included, so naming the row before the switch
-           names it into the state the switch is about to wipe.
-           A media role can only run on OpenRouter, so open that row rather than
-           leaving the reader to find it among fifty-five. */
-        store.setTab('provider')
-        if (role.media) store.set({ provider: MEDIA_PROVIDER, provAdd: MEDIA_PROVIDER })
-      }}>
-        {t(label)}
-      </button>
+      <span className="settings-mpill settings-dim">
+        <button type="button" className="settings-pm" onClick={(e) => {
+          /* The wizard has no providers page to go to: its add form sits in the
+             card above, so open that on a vendor that can serve this row. */
+          if (setup) {
+            const off = s.snap.providers.filter((p) => !p.on)
+            const fit = role.media
+              ? off.find((p) => p.id === MEDIA_PROVIDER)
+              : role.everos ? off.find((p) => (s.snap.everos?.supports?.[p.id] || []).includes(role.everos!)) : undefined
+            store.set({ provAdd: (fit || off[0])?.id ?? '', err: '' })
+            const pane = e.currentTarget.closest('.settings-setup')
+            requestAnimationFrame(() => pane?.querySelector('.settings-padd')?.scrollIntoView({ block: 'center', behavior: 'smooth' }))
+            return
+          }
+          /* The tab first: switching a section clears every drawer of the one it
+             leaves, `provider` included, so naming the row before the switch
+             names it into the state the switch is about to wipe.
+             A media role can only run on OpenRouter, so open that row rather than
+             leaving the reader to find it among fifty-five. */
+          store.setTab('provider')
+          if (role.media) store.set({ provider: MEDIA_PROVIDER, provAdd: MEDIA_PROVIDER })
+        }}>
+          <span className="settings-id">{t(label)}</span>
+          <span className="settings-ch">{'›'}</span>
+        </button>
+      </span>
     )
   }
   /* Shown, not offered. Raven cannot write a root somebody else manages, and it
@@ -271,7 +333,13 @@ export function RolePill({ role }: { role: Role }): JSX.Element {
     title: roleName(role),
     current: val ?? (inherit && chat ? chat : undefined),
     pick: async (model, provider, typed, kind) => {
-      await store.run(`role:${role.id}`, () => setRole(role, model, provider, typed, kind))
+      const before = store.get().snap
+      const drawn = withRole(role, before, model, provider)
+      store.set({ snap: drawn })
+      const ok = await store.run(`role:${role.id}`, () => setRole(role, model, provider, typed, kind))
+      /* Refused: put back what was there, unless something else has redrawn
+         the page since, in which case that is the newer truth. */
+      if (!ok && store.get().snap === drawn) store.set({ snap: before })
     },
   }
   return (
@@ -344,16 +412,20 @@ function ParamsDisc(): JSX.Element {
   const { effort, iters, pin } = chatParams(s.snap.raw)
   const sum: Array<[string, string]> = [
     [t('gui.settings.roles.sum_effort'), effortWord(effort)],
-    [t('gui.settings.roles.sum_iters'), `${iters} ${t('gui.settings.roles.times')}`],
-    [t('gui.settings.roles.sum_ctx'), pin ? `${pin.toLocaleString()} tok` : t('gui.settings.roles.ctx_auto')],
+    [t('gui.settings.roles.sum_iters'), t('gui.settings.roles.sum_iters_n', { n: iters })],
+    [t('gui.settings.roles.sum_ctx'), pin ? `${pin.toLocaleString()} tok` : t('gui.settings.roles.sum_ctx_auto')],
   ]
   return (
     <button type="button" className="foldcap settings-disc" aria-expanded={open} onClick={() => store.set({ chatCfg: !open })}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
       <span className="settings-sl">{t('gui.settings.roles.params')}</span>
-      {!open && sum.map(([label, value]) => (
-        <span className="settings-sv" key={label}><span className="settings-sn">{label}</span>{value}</span>
-      ))}
+      {!open && (
+        <span className="settings-sum">
+          {sum.map(([label, value]) => (
+            <span className="settings-sv" key={label}><span className="settings-sn">{label}</span>{value}</span>
+          ))}
+        </span>
+      )}
     </button>
   )
 }
@@ -416,7 +488,22 @@ function ChatParams(): JSX.Element {
   )
 }
 
-export function Roles(): JSX.Element {
+/* A few role rows with no card around them, for a page that needs only those
+   (the wizard's data-sync step asks for its embedding model in place).
+   `needed` drops the "optional" tag: the page drawing the row requires it. */
+export function RoleRows({ ids, setup, needed }: { ids: RoleId[]; setup?: boolean; needed?: boolean }): JSX.Element {
+  return (
+    <div className="settings-rows">
+      {ROLES.filter((r) => ids.includes(r.id)).map((r) => (
+        <Row key={r.id} k={<RoleLabel role={needed ? { ...r, optional: false } : r} />}>
+          <RolePill role={r} setup={setup} />
+        </Row>
+      ))}
+    </div>
+  )
+}
+
+export function Roles({ setup }: { setup?: boolean }): JSX.Element {
   const s = store.get()
   return (
     <Card title={t('gui.settings.roles.title_card')}>
@@ -425,7 +512,7 @@ export function Roles(): JSX.Element {
           <Row open={r.id === 'chat' && s.chatCfg} k={(
             <RoleLabel role={r} extra={r.id === 'chat' ? <ParamsDisc /> : undefined} />
           )}>
-            <RolePill role={r} />
+            <RolePill role={r} setup={setup} />
           </Row>
           {r.id === 'chat' && s.chatCfg && <ChatParams />}
         </div>

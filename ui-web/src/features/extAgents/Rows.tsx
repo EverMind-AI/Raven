@@ -136,7 +136,8 @@ function RowControl({ row, s, shown }: { row: ExtAgentRow; s: ExtAgentsState; sh
     )
   }
   if (shown === 'on') {
-    if (row.builtin) return null
+    /* Raven's shipped specialists are part of Raven: never disconnected. */
+    if (row.builtin || row.vendored) return null
     return (
       <button className="mini" onClick={() => store.disconnectRow(row)}>
         {t('gui.agent.disconnect')}
@@ -296,14 +297,19 @@ export const ordered = (rows: ExtAgentRow[]): ExtAgentRow[] =>
   [...rows].sort((a, b) => Number(isOwnRow(b)) - Number(isOwnRow(a)))
 
 export function SectionBlock({
-  label, rows, s, onOpen,
-}: { label: string; rows: ExtAgentRow[]; s: ExtAgentsState; onOpen?: (row: ExtAgentRow) => void }): JSX.Element {
+  label, rows, s, onOpen, note, counted = true,
+}: {
+  label: string; rows: ExtAgentRow[]; s: ExtAgentsState; onOpen?: (row: ExtAgentRow) => void; note?: string
+  /* Off for a heading that already says how many. */
+  counted?: boolean
+}): JSX.Element {
   return (
     <section className="extAgents-sec">
-      <div className="extAgents-hd">
+      <div className={counted ? 'extAgents-hd' : 'extAgents-hd extAgents-hd-say'}>
         <b>{label}</b>
-        <span className="extAgents-n">{String(rows.length)}</span>
+        {counted ? <span className="extAgents-n">{String(rows.length)}</span> : null}
       </div>
+      {note ? <div className="extAgents-empty">{note}</div> : null}
       {rows.length ? (
         <div className="extAgents-set">
           {rows.map((row) => (

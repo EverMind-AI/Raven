@@ -114,7 +114,8 @@ export function SettingsApp(): JSX.Element {
       {HOSTED[s.tab] || !Page ? null : (
         <div className="settings-panel" data-section={s.tab} key={s.epoch}>
           {s.loaded ? <Page /> : <SectionWait id={s.tab} />}
-          <InlineErr text={s.err} />
+          {/* An open add form says it beside its own button instead. */}
+          <InlineErr text={s.provAdd === null ? s.err : ''} />
         </div>
       )}
       {/* Beside the panel, not in it: the epoch key above replaces that box on

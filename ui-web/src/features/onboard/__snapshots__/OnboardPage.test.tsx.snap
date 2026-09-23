@@ -18,8 +18,9 @@ exports[`the onboarding wizard > keeps its rendered shape > model step 1`] = `
         span.ob-dot
         span
     div.ob-lang
-      button
-      button
+      button.ob-langbtn
+        svg.ob-langch
+          path
   div.ob-main
     div.ob-col[data-step=model]
       div.fake-model

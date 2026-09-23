@@ -307,7 +307,7 @@ function Pick(): JSX.Element {
         </svg>
         <input
           ref={field}
-          placeholder={t('gui.picker.search_ph')}
+          placeholder={typedTo ? t('gui.picker.search_or_type_ph') : t('gui.picker.search_ph')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {

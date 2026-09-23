@@ -3,7 +3,7 @@
    model and search steps are the settings dialog's own bodies, the agents step
    the sub-agents roster's; only the data-sync step is drawn here. */
 
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
@@ -48,9 +48,23 @@ function Body({ body }: { body: StepBody }): JSX.Element {
    minutes and hours (measured), and stay a CLI option. */
 function SyncBody(): JSX.Element {
   const s = store.get()
+  if (!store.syncable().length) {
+    return (
+      <div className="ob-card">
+        <div className="ob-ch"><div className="ob-t">{t('gui.onb.sync_title')}</div></div>
+        <div className="ob-empty">{t('gui.onb.sync_empty')}</div>
+      </div>
+    )
+  }
   return (
     <div className="ob-card">
       <div className="ob-ch"><div className="ob-t">{t('gui.onb.sync_title')}</div></div>
+      {s.bodies && !store.syncReady() && (
+        <div className="ob-mem ob-needs">
+          <div className="ob-memnote ob-at">{t('gui.onb.sync_needs_memory')}</div>
+          <Body body={s.bodies.memory} />
+        </div>
+      )}
       {store.found().map((agent) => {
         const p = store.platformOf(agent)
         const on = !!s.syncPick[agent.id]
@@ -84,6 +98,49 @@ function SyncBody(): JSX.Element {
   )
 }
 
+const LANGS = [
+  ['zh', 'gui.onb.lang_zh'],
+  ['en', 'gui.onb.lang_en_name'],
+] as const
+
+/* The language as a small menu: the trigger names the current one, the list
+   the two there are. Closes on a pick, a click elsewhere, or Escape. */
+function LangPick({ cur }: { cur: string }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const away = (e: MouseEvent): void => { if (!box.current?.contains(e.target as Node)) setOpen(false) }
+    const esc = (e: KeyboardEvent): void => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', esc)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', esc)
+    }
+  }, [open])
+  return (
+    <div className="ob-lang" ref={box}>
+      <button type="button" className="ob-langbtn" aria-haspopup="menu" aria-expanded={open}
+        aria-label={t('gui.onb.lang')} onClick={() => setOpen(!open)}>
+        {t(cur === 'zh' ? 'gui.onb.lang_zh' : 'gui.onb.lang_en')}
+        <svg className="ob-langch" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 4l2.5 2.5L7.5 4" /></svg>
+      </button>
+      {open && (
+        <div className="ob-langmenu" role="menu">
+          {LANGS.map(([code, key]) => (
+            <button key={code} type="button" role="menuitemradio" aria-checked={cur === code} className="ob-langopt"
+              onClick={() => { setOpen(false); if (cur !== code) store.setLang(code) }}>
+              <span>{t(key)}</span>
+              {cur === code && <span className="ob-langok" aria-hidden="true">✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Wizard(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   const cur = useSyncExternalStore(lang.subscribe, lang.get).lang
@@ -91,6 +148,7 @@ function Wizard(): JSX.Element {
   useBody(bodies.model)
   useBody(bodies.search)
   useBody(bodies.agents)
+  useBody(bodies.memory)
   const scroll = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -119,7 +177,7 @@ function Wizard(): JSX.Element {
   const at = steps.indexOf(s.step)
   const done = store.stepDone(s.step)
   const last = store.isLast(s.step)
-  const primaryKey = last ? (s.step === 'sync' ? 'gui.onb.start_sync' : 'gui.onb.enter') : 'gui.onb.next'
+  const primaryKey = last ? (s.step === 'sync' && store.syncable().length ? 'gui.onb.start_sync' : 'gui.onb.enter') : 'gui.onb.next'
 
   return (
     <div className="ob-app">
@@ -137,10 +195,7 @@ function Wizard(): JSX.Element {
             )
           })}
         </nav>
-        <div className="ob-lang">
-          <button type="button" aria-pressed={cur === 'zh'} onClick={() => store.setLang('zh')}>{t('gui.onb.lang_zh')}</button>
-          <button type="button" aria-pressed={cur === 'en'} onClick={() => store.setLang('en')}>{t('gui.onb.lang_en')}</button>
-        </div>
+        <LangPick cur={cur} />
       </header>
       <div className="ob-main" ref={scroll}>
         <div className="ob-col" data-step={s.step}>

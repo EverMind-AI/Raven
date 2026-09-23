@@ -24,6 +24,8 @@
 .extAgents-sec:first-of-type { margin-top: 0; }
 .extAgents-hd { display: flex; align-items: baseline; gap: 9px; margin-bottom: 12px; }
 .extAgents-hd b { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .12em; text-transform: uppercase; }
+/* A heading that is a sentence, not a label: set as written. */
+.extAgents-hd-say b { font-family: inherit; font-size: 12.5px; letter-spacing: 0; text-transform: none; }
 .extAgents-n { font-family: var(--mono); font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
 
 /* The rows sit on the line-soft colour with a 1px gap, so the gap is the divider. */
@@ -145,6 +147,8 @@
    connect button while its write is in flight. The roster and the sheet wear
    the same ring. */
 .extAgents-scan { display: flex; align-items: center; gap: 8px; padding: 14px 16px; }
+.extAgents-empty { padding: 18px 16px; margin-bottom: 12px; border: 1px dashed var(--line); border-radius: 10px;
+  color: var(--faint); font-size: 13px; text-align: center; }
 .extAgents-spin { display: inline-block; width: 11px; height: 11px; margin-right: 7px; vertical-align: -1px;
   border: 1.5px solid var(--line); border-top-color: var(--amber); border-radius: 50%;
   animation: extAgentsspin .8s linear infinite; flex: none; }
@@ -283,3 +287,6 @@
    from the field's left edge to inside the card's right edge and gives up
    height to the shelf below the field, so a fixed size here would fight it. */
 .extAgents-sheet .model-picker { max-width: calc(100vw - 32px); }
+
+/* The wizard's agents step opens on what connecting buys, in the page's words. */
+.extAgents-lede { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; line-height: 1.55; }

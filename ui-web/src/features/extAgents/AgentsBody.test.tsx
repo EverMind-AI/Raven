@@ -112,22 +112,24 @@ describe('the onboarding wizard\'s agents step', () => {
     expect(screen.queryByText('gui.agent.setup_scanning')).toBeNull()
   })
 
-  it('draws the hub\'s two sections, available first, with the hub\'s labels and counts', async () => {
+  it('draws available and connected, then Raven\'s shipped specialists as a group of their own', async () => {
     await mounted([
       row({ name: 'preset_a', configured: false, enabled: false }),
       row({ name: 'switched_on', configured: true, enabled: true }),
       row({ name: 'shipped', vendored: true, configured: false, enabled: true }),
     ])
     const labels = [...document.querySelectorAll('.extAgents-sec .extAgents-hd b')].map((b) => b.textContent)
-    expect(labels).toEqual(['gui.agent.g_avail', 'gui.agent.g_on'])
+    expect(labels).toEqual(['gui.agent.g_avail', 'gui.agent.g_on', 'gui.agent.g_shipped {"n":1}'])
     expect(sectionCount('gui.agent.g_avail')).toBe('1')
-    expect(sectionCount('gui.agent.g_on')).toBe('2')
-    expect(sectionOf('preset_a')).toBe('gui.agent.g_avail')
-    expect(sectionOf('shipped')).toBe('gui.agent.g_on')
+    expect(sectionCount('gui.agent.g_on')).toBe('1')
+    /* The heading says how many already. */
+    expect(sectionCount('gui.agent.g_shipped {"n":1}')).toBeNull()
+    expect(sectionOf('shipped')).toBe('gui.agent.g_shipped {"n":1}')
     expect(control('preset_a').textContent).toBe('gui.agent.connect')
     expect(control('switched_on').textContent).toBe('gui.agent.disconnect')
-    /* Raven's own first inside a section, the way the hub orders it. */
-    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['preset_a', 'shipped', 'switched_on'])
+    /* Part of Raven: never offered a disconnect. */
+    expect(rowNamed('shipped').querySelector('.extAgents-ctl button')).toBeNull()
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['preset_a', 'switched_on', 'shipped'])
   })
 
   it('leaves out the built-in loop, an openai endpoint and a command this machine has not got', async () => {
@@ -137,8 +139,25 @@ describe('the onboarding wizard\'s agents step', () => {
       row({ name: 'gone', kind: 'cli', configured: false, enabled: false, probe_status: 'missing' }),
     ])
     expect(rowsOf()).toEqual([])
-    expect(sectionNamed('gui.agent.g_avail')).toBeNull()
     expect(sectionNamed('gui.agent.g_on')).toBeNull()
+  })
+
+  it('opens on what Raven does with the agents it connects, before the roster', async () => {
+    await mounted([row({ name: 'Codex', kind: 'acp', configured: false, enabled: false, probe_status: 'ready' })])
+    const lede = document.querySelector('.extAgents-lede')!
+    expect(lede.textContent).toBe('gui.page.agents_sub')
+    expect(lede.compareDocumentPosition(document.querySelector('.extAgents-sec')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('says so when this machine has no agent of its own to connect', async () => {
+    await mounted([row({ name: 'raven_coder', vendored: true, configured: true, enabled: true })])
+    expect(sectionNamed('gui.agent.g_avail')!.querySelector('.extAgents-empty')!.textContent).toBe('gui.agent.setup_none')
+    expect(sectionOf('raven_coder')).toBe('gui.agent.g_shipped {"n":1}')
+  })
+
+  it('shows no empty note once an agent of the reader\'s own is found', async () => {
+    await mounted([row({ name: 'preset_a' })])
+    expect(document.querySelector('.extAgents-empty')).toBeNull()
   })
 
   it('names a refused row instead of offering to connect it', async () => {
@@ -205,12 +224,13 @@ describe('the onboarding wizard\'s agents step', () => {
 
   it('offers a shipped agent switched off, and switches it back on', async () => {
     await mounted([row({ name: 'raven_coder', vendored: true, configured: false, enabled: false })])
-    expect(sectionOf('raven_coder')).toBe('gui.agent.g_avail')
+    expect(sectionOf('raven_coder')).toBe('gui.agent.g_shipped {"n":1}')
     expect(store.stepDone()).toBe(false)
     await act(async () => {
       fireEvent.click(control('raven_coder'))
     })
-    expect(sectionOf('raven_coder')).toBe('gui.agent.g_on')
+    expect(sectionOf('raven_coder')).toBe('gui.agent.g_shipped {"n":1}')
+    expect(rowNamed('raven_coder').querySelector('.extAgents-ctl button')).toBeNull()
     /* Drawn as connected, still not counted: the step is about an external agent. */
     expect(store.stepDone()).toBe(false)
   })

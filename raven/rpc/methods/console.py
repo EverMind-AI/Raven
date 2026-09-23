@@ -1436,7 +1436,7 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
         # restates it -- a second copy here is what let the wizard's own copy
         # drift from this one.
         try:
-            clear_role(section)
+            clear_role(section, deliberate=True)
         except RoleRequiredError as e:
             raise ConfigValidationError(str(e)) from e
         return _everos_applied(agent_loop_factory)
