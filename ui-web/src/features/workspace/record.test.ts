@@ -343,3 +343,191 @@ describe('recording a file the turn removed', () => {
     expect(row?.hunks[0]?.rows.map((r) => r[1])).toEqual(['a', 'b'])
   })
 })
+
+/* What a command left on disk, which no tool result names: the runtime lists
+   the working directory around an `exec` and reports the difference. It carries
+   no patch, so the rows it makes have counts and no hunks -- and it must never
+   overwrite what a file tool already said about the same file. */
+describe('recording the files a command left behind', () => {
+  const rowFor = (path: string): WsChange | undefined =>
+    store.shared().changes.find((c) => c.key === path)
+
+  it('draws a file the command created as an addition, with the lines it counted', () => {
+    wsOnToolDone('exec', { command: 'python3 tally.py > /w/tally.txt' }, true, '', null,
+      undefined, undefined, undefined, [{ path: '/w/tally.txt', created: true, size: 96, lines: 4 }])
+
+    const row = rowFor('/w/tally.txt')
+    expect(row?.kind).toBe('add')
+    expect(row?.add).toBe(4)
+    expect(row?.del).toBe(0)
+    expect(row?.hunks).toEqual([])
+  })
+
+  /* A listing never held the old contents, so a rewrite has no number to show
+     -- and inventing the new file's length as added lines would say the command
+     wrote a file it only appended one line to. */
+  it('draws a file the command rewrote as a rewrite, with no count at all', () => {
+    wsOnToolDone('exec', { command: 'date >> /w/run.log' }, true, '', null,
+      undefined, undefined, undefined, [{ path: '/w/run.log', created: false, size: 412, lines: null }])
+
+    const row = rowFor('/w/run.log')
+    expect(row?.kind).toBe('write')
+    expect(row?.add).toBe(0)
+    expect(row?.del).toBe(0)
+    expect(row?.hunks).toEqual([])
+  })
+
+  it('counts no lines for a created file the runtime could not read', () => {
+    wsOnToolDone('exec', { command: 'convert a.png /w/out.bin' }, true, '', null,
+      undefined, undefined, undefined, [{ path: '/w/out.bin', created: true, size: 9001, lines: null }])
+
+    expect(rowFor('/w/out.bin')?.kind).toBe('add')
+    expect(rowFor('/w/out.bin')?.add).toBe(0)
+  })
+
+  /* The file tool's arguments ARE the diff; the listing knows only that the
+     file is there and how long it is. Two accounts of one file reach the same
+     turn whenever a write and a command run side by side -- the listing around
+     the command straddles the write -- and the tool's is the one that can say
+     what changed, so the listing is dropped rather than merged. */
+  it('leaves a row a file tool already made exactly as it stands', () => {
+    const args = { path: '/w/notes.md', content: 'a\nb\nc\n' }
+    wsOnTool('write_file', args)
+    wsOnToolDone('write_file', args, true, '', null,
+      '--- a/w/notes.md\n+++ b/w/notes.md\n@@ -0,0 +1,3 @@\n+a\n+b\n+c',
+      { path: '/w/notes.md', after: 'a\nb\nc\n' })
+    const wrote = rowFor('/w/notes.md')?.add
+
+    wsOnToolDone('exec', { command: 'wc -l /w/notes.md' }, true, '', null, undefined, undefined,
+      undefined, [{ path: '/w/notes.md', created: true, size: 6, lines: 99 }])
+
+    expect(store.shared().changes).toHaveLength(1)
+    const row = rowFor('/w/notes.md')
+    expect(row?.kind).toBe('add')
+    expect(row?.hunks).toHaveLength(1)
+    expect(row?.add).toBe(wrote)
+    expect(row?.add).not.toBe(99)
+  })
+
+  /* The row is keyed by the path the model typed and the listing reports the
+     one the runtime resolved, so the same file arrives under two spellings --
+     the same match a removal needs. */
+  it('matches the listing to this turn\'s row for the same file under the resolved path', () => {
+    const args = { path: 'scratch.md', content: 'tmp\n' }
+    wsOnTool('write_file', args)
+    wsOnToolDone('write_file', args, true, '', null,
+      '--- a/w/scratch.md\n+++ b/w/scratch.md\n@@ -0,0 +1,1 @@\n+tmp',
+      { path: '/w/scratch.md', after: 'tmp\n' })
+
+    wsOnToolDone('exec', { command: 'touch scratch.md' }, true, '', null,
+      undefined, undefined, undefined, [{ path: '/w/scratch.md', created: false, size: 4, lines: null }])
+
+    expect(store.shared().changes).toHaveLength(1)
+    /* And the creation is not demoted to a rewrite on the way: the listing
+       saw the file was already there because the write had just put it there. */
+    expect(rowFor('scratch.md')?.kind).toBe('add')
+    expect(rowFor('scratch.md')?.hunks).toHaveLength(1)
+  })
+
+  /* A command that makes a file and takes it away again leaves the nothing git
+     shows for it -- the same rule a file tool's creation follows. */
+  it('leaves no row for a file the same command created and removed', () => {
+    wsOnToolDone('exec', { command: 'python3 build.py && rm /w/tmp.txt' }, true, '', null,
+      undefined, undefined, [{ path: '/w/tmp.txt' }],
+      [{ path: '/w/tmp.txt', created: true, size: 8, lines: 1 }])
+
+    expect(store.shared().changes).toHaveLength(0)
+  })
+
+  /* The other order, and the one the listing cannot settle by itself: the row
+     is already there under the path the runtime resolved when the file tool
+     arrives under the path the model typed. Two rows for one file is what the
+     reader sees -- the command's addition and the edit on top of it -- so the
+     tool takes over the row the listing opened instead of starting its own. */
+  it('edits the row a command already made for the same file, under either spelling', () => {
+    wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null,
+      undefined, undefined, undefined, [{ path: '/w/notes.md', created: true, size: 6, lines: 3 }])
+
+    const args = { path: 'notes.md', old_text: 'b', new_text: 'B' }
+    wsOnTool('edit_file', args)
+    wsOnToolDone('edit_file', args, true, '', null,
+      '--- a/w/notes.md\n+++ b/w/notes.md\n@@ -2,1 +2,1 @@\n-b\n+B')
+
+    expect(store.shared().changes).toHaveLength(1)
+    const row = rowFor('notes.md')
+    /* Still the command's creation, not an edit to a file that was there. */
+    expect(row?.kind).toBe('add')
+    expect(row?.name).toBe('notes.md')
+    expect(row?.hunks).toHaveLength(1)
+  })
+
+  it('writes into the row a command already made, rather than beside it', () => {
+    wsOnToolDone('exec', { command: 'touch n.md' }, true, '', null,
+      undefined, undefined, undefined, [{ path: '/w/n.md', created: false, size: 0, lines: null }])
+
+    const args = { path: 'n.md', content: 'one\n' }
+    wsOnTool('write_file', args)
+    wsOnToolDone('write_file', args, true, '', null,
+      '--- a/w/n.md\n+++ b/w/n.md\n@@ -0,0 +1,1 @@\n+one', { path: '/w/n.md', after: 'one\n' })
+
+    expect(store.shared().changes).toHaveLength(1)
+    expect(rowFor('n.md')?.kind).toBe('add')
+    expect(rowFor('n.md')?.add).toBe(1)
+  })
+
+  /* A file that went leaves a row with no hunk too, and that row IS the answer:
+     nothing of what was lost was caught. A later write is a new file under the
+     same name, not a correction to that account. */
+  it('leaves a removal\'s bare row alone when a tool writes the path again', () => {
+    wsOnToolDone('exec', { command: 'rm old.md' }, true, '', null,
+      undefined, undefined, [{ path: '/w/old.md' }])
+
+    const args = { path: 'old.md', content: 'again\n' }
+    wsOnTool('write_file', args)
+
+    expect(store.shared().changes.map((c) => c.kind).sort()).toEqual(['delete', 'write'])
+  })
+
+  /* A reload reads the same shape back: unlike a removal there is nothing to
+     reduce, so live and replayed rows are identical. */
+  it('replays the stored listing as the same rows', () => {
+    wsOnHistory([
+      { role: 'user', text: 'build it' },
+      {
+        role: 'assistant',
+        tool_calls: [{ id: 'c1', name: 'exec', arguments: JSON.stringify({ command: 'make' }) }],
+      },
+      {
+        role: 'tool', tool_call_id: 'c1',
+        file_written: [
+          { path: '/w/build/out.js', created: true, size: 200, lines: 7 },
+          { path: '/w/build/manifest.json', created: false, size: 40, lines: null },
+        ],
+      },
+    ])
+
+    expect(rowFor('/w/build/out.js')?.kind).toBe('add')
+    expect(rowFor('/w/build/out.js')?.add).toBe(7)
+    expect(rowFor('/w/build/manifest.json')?.kind).toBe('write')
+    expect(rowFor('/w/build/manifest.json')?.add).toBe(0)
+  })
+
+  it('replays a stored listing of a file the same turn wrote without touching its hunks', () => {
+    wsOnHistory([
+      { role: 'user', text: 'write it then run it' },
+      {
+        role: 'assistant',
+        tool_calls: [
+          { id: 'c1', name: 'write_file', arguments: JSON.stringify({ path: 'gen.py', content: 'a\nb\n' }) },
+          { id: 'c2', name: 'exec', arguments: JSON.stringify({ command: 'python3 gen.py' }) },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'c1', diff: '--- a/w/gen.py\n+++ b/w/gen.py\n@@ -0,0 +1,2 @@\n+a\n+b' },
+      { role: 'tool', tool_call_id: 'c2', file_written: [{ path: '/w/gen.py', created: false, size: 4, lines: null }] },
+    ])
+
+    expect(store.shared().changes).toHaveLength(1)
+    expect(rowFor('gen.py')?.kind).toBe('add')
+    expect(rowFor('gen.py')?.hunks).toHaveLength(1)
+  })
+})

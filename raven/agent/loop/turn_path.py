@@ -45,7 +45,9 @@ from raven.agent.loop._shared import (
     _display_label,
     _file_change_payload,
     _file_removed_payload,
+    _file_written_payload,
     _first_line,
+    _listing_removals,
     _runtime_origin,
     _stamp_reasoning_ms,
     _strip_inline_images,
@@ -79,6 +81,7 @@ from raven.agent.loop._shared import (
 from raven.agent.loop.dead_end import NO_RESPONSE_FALLBACK, dead_reasons
 from raven.agent.loop.first_call import FirstCallGuard
 from raven.agent.loop.recovery import ContinuationGate, DraftGate, cut_reasoning_head, lower_reasoning_effort
+from raven.agent.tools import snapshot as workdir_snapshot
 from raven.agent.tools.registry import call_failed
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
@@ -1173,6 +1176,11 @@ class TurnPathMixin:
                         setter(tool_call.id)
                     set_current_tool_call_id(tool_call.id)
                     tool_t0 = time.monotonic()
+                    # The working directory either side of a command, set by the
+                    # branch below that actually runs one. Nothing here for every
+                    # other call, which is what the empty diff of two Nones means.
+                    exec_before: workdir_snapshot.Snapshot | None = None
+                    exec_after: workdir_snapshot.Snapshot | None = None
                     tracker = self.strategies.get("usage_tracker")
                     if tracker is not None:
                         await tracker.record_tool_call(tool_call.name, tool_call.id)
@@ -1210,10 +1218,31 @@ class TurnPathMixin:
                         if stalled_verdict is NoProgressAction.END_TURN:
                             stalled_tool = tool_call.name
                     else:
+                        # Only around a command: every other tool reports the
+                        # file it touched, and walking the directory twice per
+                        # call would cost the turn far more than the one change
+                        # it could find. Off the loop, because the walk is tens
+                        # of milliseconds of it and every other session on this
+                        # process waits behind them. The directory is the one
+                        # the command runs in, which the tool itself resolves:
+                        # the turn's unless the call names another.
+                        exec_root = (
+                            workdir_snapshot.root_for(
+                                self.tools.get(tool_call.name),
+                                tool_call.arguments,
+                                workdir.current() or self.workspace,
+                            )
+                            if tool_call.name == "exec"
+                            else None
+                        )
+                        if exec_root is not None:
+                            exec_before = await asyncio.to_thread(workdir_snapshot.take, exec_root)
                         result = await self.tools.execute(
                             tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta
                         )
                         duration_ms = int((time.monotonic() - tool_t0) * 1000)
+                        if exec_before is not None:
+                            exec_after = await asyncio.to_thread(workdir_snapshot.take, exec_root)
                         # The result itself is left alone: the note is the
                         # system's own line and is placed by add_tool_result AFTER
                         # the untrusted fence closes, so the model reads it as this
@@ -1254,6 +1283,23 @@ class TurnPathMixin:
                     # so the file it just wrote is not stat'ed to say it exists.
                     tool_removed = removal_watch.settle(getattr(result, "removed", ()))
                     removal_watch.note_write(getattr(result, "file_change", None))
+                    # What the listing found beside what the call said itself. The
+                    # paths the result named are held out of it: the listing sees
+                    # those too, and one write drawn twice is two files to a reader.
+                    tool_change = getattr(result, "file_change", None)
+                    accounted = [removal.path for removal in tool_removed]
+                    if isinstance(getattr(tool_change, "path", None), str):
+                        accounted.append(tool_change.path)
+                    created, modified, deleted = workdir_snapshot.diff(exec_before, exec_after)
+                    # Off the loop for the reason the walks above are: this reads
+                    # every created file to number its lines, and one command can
+                    # create hundreds. The removals stay here -- they read nothing.
+                    tool_written = (
+                        await asyncio.to_thread(_file_written_payload, created, modified, exec_after, already=accounted)
+                        if created or modified
+                        else None
+                    )
+                    tool_removed.extend(_listing_removals(deleted, already=accounted))
                     if emit_tool_event:
                         await on_tool_event(
                             "complete",
@@ -1276,6 +1322,9 @@ class TurnPathMixin:
                                 # The deletions, which no tool reports as its
                                 # result: a command's own watch plus the turn's.
                                 "file_removed": _file_removed_payload(tool_removed),
+                                # And what a command wrote, which it reports even
+                                # less: read off the directory either side of it.
+                                "file_written": tool_written,
                             },
                         )
                     # A skill the model loaded itself never passes through
@@ -1328,6 +1377,11 @@ class TurnPathMixin:
                             {"path": removal.path, "del": len((removal.before or "").splitlines())}
                             for removal in tool_removed
                         ]
+                    if tool_written and messages:
+                        # Same underscore-then-rename convention, and here the
+                        # stored shape is the live one: what it carries is already
+                        # a count and a size rather than a body.
+                        messages[-1]["_file_written"] = tool_written
                     if attach_blocks:
                         pending_images.extend(attach_blocks)
                         pending_sources.extend(sources)
@@ -2680,6 +2734,11 @@ class TurnPathMixin:
                 # plain name is what session.resume puts on the wire, so a
                 # reloaded page draws the deletion the live view drew.
                 entry["file_removed"] = tool_removed
+            if tool_written := entry.pop("_file_written", None):
+                # Renamed for storage for the reason the removals above are: what
+                # a command wrote has no other record, so without this a reloaded
+                # page shows a turn whose commands changed nothing.
+                entry["file_written"] = tool_written
             if tool_metadata := entry.pop(_TOOL_METADATA_KEY, None):
                 entry["metadata"] = tool_metadata
             # Provenance of pictures that lived for this turn only; nothing to file.
@@ -2939,6 +2998,7 @@ class TurnPathMixin:
                         diff=info.get("diff"),
                         file_change=info.get("file_change"),
                         file_removed=info.get("file_removed"),
+                        file_written=info.get("file_written"),
                     )
                 )
 

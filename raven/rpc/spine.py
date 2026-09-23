@@ -388,6 +388,10 @@ class RpcOutlet:
                             # Same rule, same reason: absent when the call
                             # removed nothing, which is nearly every call.
                             **({"file_removed": out.file_removed} if out.file_removed else {}),
+                            # Same rule again: absent when the call wrote
+                            # nothing a listing could see, which is every call
+                            # that was not a command.
+                            **({"file_written": out.file_written} if out.file_written else {}),
                         },
                     },
                 )

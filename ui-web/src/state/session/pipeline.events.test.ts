@@ -445,6 +445,7 @@ describe('tool.complete', () => {
         diff: '@@ -1 +1 @@',
         file_change: { path: '/w/a.md', after: 'now' },
         file_removed: [{ path: '/w/old.md', before: 'was here' }],
+        file_written: [{ path: '/w/made.txt', created: true, size: 9, lines: 1 }],
       },
     })
 
@@ -460,10 +461,13 @@ describe('tool.complete', () => {
     expect(h.live.open.has('c1')).toBe(false)
     expect(h.did('wsOnToolDone')[0]!.slice(1, 4)).toEqual(['exec', { command: 'ls' }, false])
     /* Everything the tool reported about files: the diff, the payload that says
-       whether there was a file under the write at all, and the files this call
-       made vanish -- which for an `exec` is the only report there is. */
+       whether there was a file under the write at all, the files this call made
+       vanish, and the ones a listing found it had left behind -- which for an
+       `exec` are the only report there is. */
     expect(h.did('wsOnToolDone')[0]!.slice(6))
-      .toEqual(['@@ -1 +1 @@', { path: '/w/a.md', after: 'now' }, [{ path: '/w/old.md', before: 'was here' }]])
+      .toEqual(['@@ -1 +1 @@', { path: '/w/a.md', after: 'now' },
+        [{ path: '/w/old.md', before: 'was here' }],
+        [{ path: '/w/made.txt', created: true, size: 9, lines: 1 }]])
   })
 })
 

@@ -28,6 +28,7 @@ from raven.agent.subagent.mcp_grant import (
     resolve_grant,
 )
 from raven.agent.subagent.tool_vocabulary import RAVEN_NAME
+from raven.agent.tools import snapshot
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry, call_failed
 from raven.agent.tools.removals import RemovalWatch
@@ -665,12 +666,15 @@ class RavenLoopBackend:
                     # touched, and walking the workspace twice per call would cost
                     # a run far more than the one change it could find. Off the
                     # loop, because the walk is tens of milliseconds of it and
-                    # every other session on this process waits behind them.
-                    before_files = (
-                        await asyncio.to_thread(take_snapshot, workspace)
+                    # every other session on this process waits behind them. The
+                    # directory is the one the command runs in, which the tool
+                    # itself resolves: the workspace unless the call names another.
+                    exec_root = (
+                        snapshot.root_for(tools.get(tool_call.name), tool_call.arguments, workspace)
                         if RAVEN_NAME.get(tool_call.name, tool_call.name) == "exec"
                         else None
                     )
+                    before_files = await asyncio.to_thread(take_snapshot, exec_root) if exec_root is not None else None
                     result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                     # What this call already accounted for by name, so the listing
                     # below does not report the same change a second time.
@@ -710,7 +714,7 @@ class RavenLoopBackend:
                     if before_files is not None:
                         activity.record_snapshot_changes(
                             before_files,
-                            await asyncio.to_thread(take_snapshot, workspace),
+                            await asyncio.to_thread(take_snapshot, exec_root),
                             workspace,
                             already=accounted,
                         )

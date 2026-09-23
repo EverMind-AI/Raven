@@ -63,6 +63,23 @@ def test_the_skipped_directories_are_never_walked(tmp_path: Path) -> None:
     assert list(listing) == [str(tmp_path / "mine.txt")]
 
 
+def test_the_agents_own_directory_inside_the_tree_is_never_walked(tmp_path: Path) -> None:
+    """Named rather than left to the loop above, because this one is inside the
+    directory a command runs in: the checkpoint keeps a shadow git repo at
+    ``<workdir>/.raven/shadow.git`` and commits into it at every turn's end, so
+    a second turn sharing the directory would otherwise land objects and refs
+    in the middle of this command's listing and be reported as its work."""
+    shadow = tmp_path / ".raven" / "shadow.git" / "objects" / "ab"
+    shadow.mkdir(parents=True)
+    (shadow / "cdef").write_bytes(b"x")
+    (tmp_path / ".raven" / "NOTICE.txt").write_text("x")
+    (tmp_path / "mine.txt").write_text("x")
+
+    listing = snapshot.take(tmp_path)
+    assert listing is not None
+    assert list(listing) == [str(tmp_path / "mine.txt")]
+
+
 def test_a_tree_past_the_ceiling_has_no_listing_at_all(tmp_path: Path, monkeypatch) -> None:
     """Not a partial one: a listing that stopped half way reads, on the next
     comparison, as a run that deleted everything the walk never reached."""
@@ -100,3 +117,31 @@ def test_a_root_that_is_not_a_directory_has_no_listing(tmp_path: Path) -> None:
     """``None``, not an empty listing: empty against a real listing would read
     as a run that deleted the whole tree."""
     assert snapshot.take(tmp_path / "nowhere") is None
+
+
+class _Placed:
+    """A tool that knows where its files land, the way ``ExecTool`` does."""
+
+    def __init__(self, answer: Path | None) -> None:
+        self.answer = answer
+
+    def listing_root(self, params: dict) -> Path | None:
+        return self.answer
+
+
+def test_a_tool_that_knows_where_its_files_land_is_asked(tmp_path: Path) -> None:
+    elsewhere = tmp_path / "elsewhere"
+
+    assert snapshot.root_for(_Placed(elsewhere), {"command": "make"}, tmp_path) == elsewhere
+
+
+def test_a_tool_whose_files_land_on_another_machine_gets_no_listing(tmp_path: Path) -> None:
+    """None rather than the fallback: a command that ran elsewhere changed
+    nothing here, and listing this tree would attribute to it whatever another
+    turn happened to write meanwhile."""
+    assert snapshot.root_for(_Placed(None), {"command": "make", "machine": "prod"}, tmp_path) is None
+
+
+def test_a_tool_that_cannot_say_runs_where_the_lane_does(tmp_path: Path) -> None:
+    assert snapshot.root_for(object(), {"command": "make"}, tmp_path) == tmp_path
+    assert snapshot.root_for(None, {"command": "make"}, str(tmp_path)) == tmp_path

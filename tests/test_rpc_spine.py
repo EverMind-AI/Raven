@@ -718,6 +718,49 @@ async def test_outlet_deliver_tool_complete_forwards_the_files_that_went():
         assert "file_removed" not in emitter.emitted[0][1]["payload"], nothing
 
 
+async def test_outlet_deliver_tool_complete_forwards_the_files_a_command_wrote():
+    """The files a command left behind, which its own result never names.
+
+    Absent rather than null when there are none, for the reason ``file_change``
+    and ``file_removed`` are: every call that is not a command has none, and a
+    payload that grew a null key under all of them would change the shape the
+    wire already had.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t1",
+            result_preview="ok",
+            truncated=False,
+            file_written=[
+                {"path": "/tmp/made.txt", "created": True, "size": 8, "lines": 2},
+                {"path": "/tmp/kept.txt", "created": False, "size": 16, "lines": None},
+            ],
+            conversation_id="tui:c1",
+        )
+    )
+    assert emitter.emitted[0][1]["payload"]["file_written"] == [
+        {"path": "/tmp/made.txt", "created": True, "size": 8, "lines": 2},
+        {"path": "/tmp/kept.txt", "created": False, "size": 16, "lines": None},
+    ]
+
+    for nothing in (None, []):
+        emitter.emitted.clear()
+        await outlet.deliver(
+            ToolEvent(
+                phase=ToolPhase.COMPLETE,
+                tool_call_id="t2",
+                result_preview="ok",
+                truncated=False,
+                file_written=nothing,
+                conversation_id="tui:c1",
+            )
+        )
+        assert "file_written" not in emitter.emitted[0][1]["payload"], nothing
+
+
 async def test_a_blocked_action_rides_notice_and_never_the_token_stream():
     """The one notice that replaces the answer instead of accompanying it.
 
@@ -784,6 +827,13 @@ async def test_every_outlet_emission_validates_against_the_wire_contract():
             tool_call_id="t2",
             result_preview="ok",
             file_removed=[{"path": "/tmp/gone.txt", "before": "one\ntwo\n"}],
+            conversation_id="tui:c1",
+        ),
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t3",
+            result_preview="ok",
+            file_written=[{"path": "/tmp/made.txt", "created": True, "size": 8, "lines": 2}],
             conversation_id="tui:c1",
         ),
         Text(content="hello", conversation_id="tui:c1"),

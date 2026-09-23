@@ -620,6 +620,35 @@ class FileRemoval(_Strict):
     )
 
 
+class FileWritten(_Strict):
+    """One file a command left behind, found by listing its working directory.
+
+    Neither a :class:`FileChange` nor a :class:`FileRemoval`: a command reports
+    its output and nothing else, so what is known of the file is what two
+    listings of the directory said about it -- that it is there, how big it is,
+    and whether it was there before. No contents either way, because one command
+    can write a hundred files and a row draws none of their text.
+    """
+
+    path: str = Field(description="Absolute path of the file the command wrote.")
+    created: bool = Field(
+        description=(
+            "Whether the file was new. False means it was there before the command and is "
+            "different after, which a client draws as a rewrite rather than an addition."
+        )
+    )
+    size: int = Field(description="The file's size in bytes after the command.")
+    lines: int | None = Field(
+        default=None,
+        description=(
+            "Lines in a created file, when it could be counted. Null, not absent: the key is "
+            "always sent, and null says the count is unknown -- too large to read, not text, or "
+            "a file that already existed, whose old contents the listing never held and whose "
+            "change therefore has no number."
+        ),
+    )
+
+
 class ToolCompletePayload(_Strict):
     tool_call_id: str
     result_preview: str
@@ -645,6 +674,13 @@ class ToolCompletePayload(_Strict):
             "The files this call made vanish. Absent on every call that removed nothing, "
             "which is nearly all of them; nothing else on the wire records a deletion, "
             "since the file a command unlinked is gone by the time anyone can look."
+        ),
+    )
+    file_written: list[FileWritten] | None = Field(
+        default=None,
+        description=(
+            "The files a command left behind, which no tool result names. Absent on every "
+            "call that is not a command, and on a command that changed no file."
         ),
     )
 
@@ -3208,6 +3244,14 @@ class TranscriptMessage(_Strict):
     file_removed: list[TranscriptFileRemoval] | None = Field(
         default=None,
         description="The files that call made vanish, on its role='tool' entry. Absent when it removed none.",
+    )
+    file_written: list[FileWritten] | None = Field(
+        default=None,
+        description=(
+            "The files a stored command left behind, on its role='tool' entry. The same shape "
+            "the live event carried: a size and a line count are what a reloaded page needs, so "
+            "unlike a removal there is nothing to reduce."
+        ),
     )
     turn_ended: TranscriptTurnEnded | None = Field(
         default=None,
