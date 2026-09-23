@@ -113,7 +113,7 @@ function Row({ p, m, current, account }: { p: Provider; m: string; current: stri
       <span className="nm">{label(p, m)}</span>
       <ModelTags facts={p.labels?.[m]} />
       {account ? <span className="ct">{p.name}</span> : null}
-      {sameModel(p.id, m, current) ? <span className="tick">✓</span> : null}
+      {sameModel(p, m, current) ? <span className="tick">✓</span> : null}
     </button>
   )
 }
@@ -138,7 +138,7 @@ function Pick(): JSX.Element {
   })
   const anyHit = hits.some((h) => h.length > 0)
   const firstAt = hits.findIndex((h) => h.length > 0)
-  const currentProvider = providers.find((p) => store.column(p).some((m) => sameModel(p.id, m, current)))
+  const currentProvider = providers.find((p) => store.column(p).some((m) => sameModel(p, m, current)))
   /* Where a typed id goes: the provider serving the current model, which is
      the account the reader is already on, else the first listed. One row for
      it rather than one per group, because an id is added to one provider. */
@@ -158,7 +158,7 @@ function Pick(): JSX.Element {
   const recents = !q && !at.offer.title
     ? recent().flatMap((r) => {
       const p = providers.find((x) => x.id === r.provider)
-      const m = p ? store.column(p).find((x) => sameModel(p.id, x, r.model)) : undefined
+      const m = p ? store.column(p).find((x) => sameModel(p, x, r.model)) : undefined
       return p && m ? [{ p, m }] : []
     })
     : []
@@ -269,7 +269,7 @@ function Pick(): JSX.Element {
   const shown = (p: Provider, list: string[]): { rows: string[]; more: number } => {
     if (q || unfolded.has(p.id) || list.length <= FOLD) return { rows: list, more: 0 }
     const head = list.slice(0, FOLD)
-    const cur = list.find((m) => sameModel(p.id, m, current))
+    const cur = list.find((m) => sameModel(p, m, current))
     if (cur && !head.includes(cur)) head.push(cur)
     return { rows: head, more: list.length - head.length }
   }

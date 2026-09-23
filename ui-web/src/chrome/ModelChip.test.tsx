@@ -67,6 +67,22 @@ describe('the model chip', () => {
     expect(mark()).not.toBeNull()
   })
 
+  it('marks it when the list spells the model with a name the account used to answer to', () => {
+    /* A model id written before a provider was renamed. The wire canonicalizes
+       the account's slug but hands back the configured list as it stands, so
+       the two spellings meet here; `merge_key` treats them as one model and the
+       prefixes it strips travel on the row. */
+    install([{
+      id: 'zai', name: 'Z.ai', on: true, routes: ['zai', 'zhipu'],
+      models: ['zhipu/glm-4.6'], configured: ['zhipu/glm-4.6'],
+      labels: { 'zhipu/glm-4.6': { label: 'GLM-4.6', kind: 'text' } },
+    }])
+    store.setCurrent('zai/glm-4.6')
+    mount()
+    expect(mark()).not.toBeNull()
+    expect(name()).toBe('GLM-4.6')
+  })
+
   it('names it by the account\'s label when the spellings differ', () => {
     /* The label map is keyed by the account's spelling, so looking it up with
        the conversation's spelling falls through to the raw id and the chip

@@ -29,6 +29,12 @@ export interface ProviderRow {
      catalogue. What the settings page manages is `configured` below. */
   models: string[]
   configured?: string[]
+  /* Every model-id prefix that names this provider, carried so a page asking
+     whether two spellings are one model can ask what the backend answers
+     (`features/model/types.ts`'s `ModelHost`). These rows are the model
+     feature's own (`features/model/source.ts` builds them), so the field is
+     here to be read rather than to be filled in again. */
+  routes?: readonly string[]
   /* Name and tags per model id, straight off `model.options`. A model with no
      entry is one the registry knows nothing about and nobody has described --
      it lists as its id with no icons. */

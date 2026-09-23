@@ -102,6 +102,9 @@ const wire = (e: Entry, current: string): Provider => ({
   key_url: e.key_url ?? null,
   extra_headers: {},
   gateway: !!e.gateway,
+  /* The prefixes this provider answers to. Canned rows are named once and
+     never renamed, so that is the slug itself. */
+  route_names: [e.slug],
   /* One label per model, because the live reply carries a kind on every row it
      describes and the surfaces file a model by it. */
   model_labels: Object.fromEntries(

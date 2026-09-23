@@ -399,6 +399,11 @@ def _build_provider_entry(
         "protocol_overrides": overrides,
         "total_models": len(models),
         "gateway": bool(spec and spec.is_gateway),
+        # Every prefix that names this provider, for a client comparing two
+        # spellings of one model: `route_names` is what `merge_key` strips, and
+        # the spec says to compare against it rather than rebuild it, so it
+        # travels instead of being mirrored on each surface.
+        "route_names": sorted(spec.route_names) if spec else [],
         # "An address must be supplied" -- the gate's answer, not the shape's:
         # an endpoint-credential spec that ships a usable default (custom's
         # localhost gateway) runs on a bare key, and the picker must not

@@ -44,7 +44,7 @@ const CHEVRON = 'M6 9l6 6 6-6'
 function serving(current: string): { provider: Provider; id: string } | null {
   try {
     for (const p of model.source().providers()) {
-      const id = model.column(p).find((m) => sameModel(p.id, m, current))
+      const id = model.column(p).find((m) => sameModel(p, m, current))
       if (id !== undefined) return { provider: p, id }
     }
     return null

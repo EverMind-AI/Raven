@@ -158,7 +158,7 @@ export const column = (p: Provider, offer: Offer = at.offer): string[] => {
   /* By the backend's identity, not by string: a role stores the spelling it was
      handed while `model.add_model` stores the one it derived, so comparing the
      strings put the same model in the column twice, under one visible name. */
-  return cur && !rows.some((m) => sameModel(p.id, m, cur)) ? [cur, ...rows] : rows
+  return cur && !rows.some((m) => sameModel(p, m, cur)) ? [cur, ...rows] : rows
 }
 
 /* Whether any connected account lists this model as its own. The wire's
@@ -168,7 +168,7 @@ export const column = (p: Provider, offer: Offer = at.offer): string[] => {
    and once, ticked, under the old account. */
 const carried = (m: string): boolean => {
   try {
-    return source().providers().some((q) => q.on && offered(q).some((x) => sameModel(q.id, x, m)))
+    return source().providers().some((q) => q.on && offered(q).some((x) => sameModel(q, x, m)))
   } catch {
     return false
   }

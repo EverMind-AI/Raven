@@ -831,6 +831,21 @@ describe('what the picker offers', () => {
     expect(rows('models').map((x) => x.querySelector('.nm')!.textContent)).toEqual(['my-embedder'])
   })
 
+  it('marks it when the account spells it with a name it used to answer to', () => {
+    /* The same mixed spellings, one rename apart: `merge_key` strips any prefix
+       the provider answers to, and the row carries that set so this page can
+       ask the identity question the backend answers. */
+    install({}, [{
+      id: 'zai', name: 'Z.ai', on: true, routes: ['zai', 'zhipu'],
+      models: ['zhipu/glm-4.6'], configured: ['zhipu/glm-4.6'],
+    }])
+    store.setCurrent('zai/glm-4.6')
+    mount()
+    openIt()
+    expect(rows('models')).toHaveLength(1)
+    expect(rows('models')[0]!.querySelector('.tick')).not.toBeNull()
+  })
+
   it('marks the current model when the account spells it the other way', () => {
     /* The de-dup above is by `sameModel`, so the one row that survives carries
        the provider's spelling while the conversation carries the bare one. A

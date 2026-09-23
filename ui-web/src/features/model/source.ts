@@ -102,7 +102,7 @@ const rowsOf = (list: ProviderWire[]): Provider[] =>
     kind: p.auth_type || 'api_key', needsBase: !!p.needs_api_base,
     // The catalogue page's filter, and the picker's answer to "whose column
     // does the running model belong in": both are facts only the registry has.
-    gateway: !!p.gateway, current: !!p.is_current,
+    gateway: !!p.gateway, current: !!p.is_current, routes: p.route_names || [],
     // Addresses to choose between. A provider that has them is asked which
     // storefront the key came from instead of being handed a host field --
     // the key does not say, and the three are separate accounts.

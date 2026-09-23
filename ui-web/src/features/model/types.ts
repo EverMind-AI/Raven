@@ -31,6 +31,11 @@ export interface Provider {
   /* Resells other vendors' models under vendor/model ids (the registry's
      `is_gateway`). The settings catalogue filters on it. */
   gateway?: boolean
+  /* Every model-id prefix that names this provider, which is what one spelling
+     of a model has to be stripped of before it can be compared with another
+     (`ModelHost` below). Absent on a wire that does not carry the set, and on
+     every offline fixture. */
+  routes?: readonly string[]
   /* The provider the running conversation's model is served by, as the wire
      marks it (`is_current`). The picker uses it to place that model in the
      right column when the column does not carry it. */
@@ -108,17 +113,38 @@ export interface Offer {
 export const modelKind = (facts: ModelTagFacts | undefined): Kind =>
   (KIND_ORDER as readonly string[]).includes(facts?.kind ?? '') ? (facts!.kind as Kind) : 'text'
 
-/* One model, however it was spelled. The backend's identity rule is
-   `providers/wire.py`'s `merge_key`: strip a leading `<provider>/`, lowercase,
-   compare. Two surfaces need it -- a provider's list mixes ids added by hand
-   (as typed) with ids the vendor reports (qualified), and a role stores the
-   spelling it was given while `model.add_model` stores the one it derived. Both
-   drew the same model twice before this. */
-export const bareModel = (slug: string, id: string): string =>
-  (id.toLowerCase().startsWith(`${slug.toLowerCase()}/`) ? id.slice(slug.length + 1) : id).toLowerCase()
+/* What a provider answers to: its own name, and every name it used to answer
+   to. `providers/wire.py`'s `merge_key` strips any of them, so a page holding
+   only the current name asks a narrower question than the backend answers. The
+   set travels on the wire because `ProviderSpec.route_names` says a caller must
+   compare against it rather than rebuild it, and a second copy of the alias
+   table here is exactly the drift that warns against. */
+export interface ModelHost {
+  readonly id: string
+  readonly routes?: readonly string[]
+}
 
-export const sameModel = (slug: string, a: string, b: string): boolean =>
-  bareModel(slug, a) === bareModel(slug, b)
+/* One model, however it was spelled. The backend's identity rule is
+   `providers/wire.py`'s `merge_key`: strip a leading prefix naming this
+   provider, lowercase, compare. Two surfaces need it -- a provider's list mixes
+   ids added by hand (as typed) with ids the vendor reports (qualified), and a
+   role stores the spelling it was given while `model.add_model` stores the one
+   it derived. Both drew the same model twice before this.
+
+   `routes` absent is the provider's own name alone, which is what a wire that
+   does not carry the set, and every offline fixture, gives -- the old rule,
+   narrower than the backend's rather than wrong about a different one. */
+export const bareModel = (host: ModelHost, id: string): string => {
+  const lower = id.toLowerCase()
+  for (const head of host.routes?.length ? host.routes : [host.id]) {
+    const prefix = `${head.toLowerCase()}/`
+    if (lower.startsWith(prefix)) return lower.slice(prefix.length)
+  }
+  return lower
+}
+
+export const sameModel = (host: ModelHost, a: string, b: string): boolean =>
+  bareModel(host, a) === bareModel(host, b)
 
 /* The next kind in the cycle. Both surfaces that let an id be typed offer the
    same wheel, and the arithmetic was written four times between them. */
