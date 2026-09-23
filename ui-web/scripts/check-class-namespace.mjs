@@ -299,7 +299,7 @@ const LEGACY_LOCAL = {
      Up to 71 with the dag renderer's default node box gone: `.tm` was
      shared with it, and the timestamp on a folded turn's own head is this
      domain's alone now. */
-  transcript: 71,
+  transcript: 68,
   /* Up from 37 with the playbooks page gone: `.t` was shared with it. */
   workspace: 38,
 }

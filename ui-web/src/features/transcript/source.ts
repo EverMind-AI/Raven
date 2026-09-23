@@ -101,16 +101,8 @@ export const dagRun = (runId: string) =>
   gateway().call('dag.get', { run_id: runId, session_key: openKey() })
     .then((r) => (r && r.run) || {})
 
-/* One spawned run's messages so far. Answers a MOVING stream while the run is
-   live: the record's own transcript.jsonl is only written when the run finishes,
-   and until then `subagent.context` serves the activity collector's copy, which
-   the acp backend republishes on every update it receives. */
-export const spawnRecord = (callId: string) =>
-  gateway().call('subagent.context', { id: callId, session_id: openKey() })
-
 /* Every delegated call this conversation made. Read once per conversation, to
-   turn a restored card's task id into the record id its stream is read by: a
-   record's directory is `<stamp>-<task_id>`, so the row is found by suffix. */
+   find the record a restored card's run wrote (store.ts `resolveSpawn`). */
 export function spawnList() {
   /* Guarded like sources.subagents.list is: a server without the subagent surface
    answers -32601, and a card that asked would then re-ask on every reopen for
