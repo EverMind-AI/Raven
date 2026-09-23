@@ -599,11 +599,18 @@ class WeixinChannel(ChannelBase):
     async def _poll_once(self) -> None:
         assert self._client is not None
         self._client.timeout = httpx.Timeout(self._poll_timeout_s + 10, connect=30)
+        token_used = self._token
         data = await self._post("ilink/bot/getupdates", {"get_updates_buf": self._updates_buf})
 
         ret, errcode = data.get("ret", 0), data.get("errcode", 0)
         if (ret and ret != 0) or (errcode and errcode != 0):
             if p.ERRCODE_SESSION_EXPIRED in (ret, errcode):
+                if self._token != token_used:
+                    # A rebind confirmed while this request was on the wire, and
+                    # the verdict is about the account it was sent for: dropping
+                    # the one now in hand would undo a pairing that just landed.
+                    logger.info("weixin: errcode {} answered a poll for a session already replaced; ignored", errcode)
+                    return
                 self._drop_session()
                 logger.warning(
                     "weixin session ended (errcode {}), most likely signed in elsewhere; signing in again", errcode

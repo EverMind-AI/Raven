@@ -893,6 +893,28 @@ async def test_a_rebind_keeps_the_running_poll_on_the_wire(tmp_path):
     assert posted == ["ilink/bot/getupdates"]
 
 
+async def test_a_stale_poll_answer_does_not_drop_a_freshly_rebound_session(tmp_path):
+    """A rebind confirms while the old account's long poll is still on the wire;
+    when that request finally answers -14 it speaks for the retired account, and
+    must leave the new token and its state file alone."""
+    ch = _live_channel(tmp_path)
+    release = asyncio.Event()
+
+    async def _post(endpoint, body=None, **kw):
+        await release.wait()
+        return {"ret": 0, "errcode": -14}
+
+    ch._post = _post
+    ch._client = SimpleNamespace(timeout=None)
+    poll = asyncio.create_task(ch._poll_once())
+    await asyncio.sleep(0.01)
+    ch._adopt_account("fresh-token", "")
+    release.set()
+    await poll
+    assert ch._token == "fresh-token"
+    assert (ch._dir() / "account.json").exists()
+
+
 async def test_stopping_the_channel_cancels_a_rebind_in_flight(tmp_path):
     ch = _qr_statuses(_live_channel(tmp_path), [{"status": "waiting"}])
     await ch.begin_rebind()
