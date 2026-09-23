@@ -7,8 +7,9 @@ Two of those names survive anyway, because codex runs those tools as shell
 commands and the command string is on the frame: ``apply_patch`` is argv[0] of a
 real command, and an MCP call names its server and tool in ``rawInput``.
 
-Measured on v1.1.14. See ``docs/specs/2026-08-23-codex-acp-tool-parsing-design.md``
-for the frame captures every row here is read from.
+Measured on v1.1.14, and the read and command frames of v1.13.1 read the same. See
+``docs/specs/2026-08-23-codex-acp-tool-parsing-design.md`` for the frame captures
+every row here is read from.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from raven.acp_client.acp_dialects.base import AcpDialect, DialectResult, ToolCa
 _MCP = "mcpToolCall"
 
 # Three item types all arrive as `kind: "read"` and are separated only by the
-# title the adapter wrote. Pinned to 1.1.14: a rephrased title degrades to
+# title the adapter wrote. Pinned to 1.1.14, and unchanged in 1.13.1: a rephrased title degrades to
 # `commandExecution.read`, which is the honest reading of a `kind: "read"` with
 # no other marker, rather than a wrong one.
 _VIEW_IMAGE_TITLE = "View Image"

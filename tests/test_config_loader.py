@@ -1375,6 +1375,148 @@ def test_the_deep_research_section_also_leaves_the_file_on_disk(tmp_path: Path) 
     assert len([n for n in drain_migration_notices() if "deep_research" in n]) == 1
 
 
+_RETIRED_CODEX = "npx -y @agentclientprotocol/codex-acp@1.1.14"
+_RETIRED_CLAUDE = (
+    "npx -y @agentclientprotocol/claude-agent-acp@0.66.0",
+    "npx -y @agentclientprotocol/claude-agent-acp@0.79.0",
+)
+
+
+def _codex_row(command: object, **extra: object) -> dict:
+    return {
+        "name": "Codex",
+        "kind": "acp",
+        "preset": "codex",
+        "command": command,
+        "env": {"INITIAL_AGENT_MODE": "agent-full-access"},
+        "readyTimeoutMs": 120000,
+        **extra,
+    }
+
+
+def _claude_row(command: object, **extra: object) -> dict:
+    return {
+        "name": "Claude Code",
+        "kind": "acp",
+        "preset": "claude_code",
+        "command": command,
+        "readyTimeoutMs": 120000,
+        **extra,
+    }
+
+
+def test_rows_on_a_retired_shim_pin_follow_their_preset_in_the_file(tmp_path: Path) -> None:
+    """The shim pin decides which models the agent can reach -- codex-acp 1.1.14
+    bundles a codex whose ``model/list`` stops at GPT-5.6, claude-agent-acp 0.66.0
+    offers no Fable 5.1 -- and ``subagents.add`` copies the preset's command into
+    the row, so a bumped pin reached new rows only. A config stamped 10 (the
+    literal a shipped build wrote) has each such row carried to the command its
+    preset ships now, in the file itself, and hears about each once; the rest of
+    every row is left as it was."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+
+    p = tmp_path / "config.json"
+    rows = [_codex_row(_RETIRED_CODEX, description="Mine.", model="gpt-5.6-sol"), _claude_row(_RETIRED_CLAUDE[0])]
+    _write(p, {"subagents": {"agents": rows}})
+    _stamp_path(p).write_text(json.dumps({"version": 10}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    codex = THIRD_PARTY_SUBAGENT_PRESETS["codex"]["command"]
+    claude = THIRD_PARTY_SUBAGENT_PRESETS["claude_code"]["command"]
+    assert [a.command for a in cfg.subagents.agents] == [codex, claude]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [
+        _codex_row(codex, description="Mine.", model="gpt-5.6-sol"),
+        _claude_row(claude),
+    ]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = [n for n in drain_migration_notices() if "-acp@" in n]
+    assert len(notices) == 2, notices
+    assert "subagents.agents[Codex]" in notices[0] and codex in notices[0], notices
+    assert "subagents.agents[Claude Code]" in notices[1] and claude in notices[1], notices
+
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_the_shim_pin_migration_moves_only_a_stock_command_under_its_preset() -> None:
+    """Only a row that names the preset and still carries the exact command that
+    preset shipped: another pin, an added flag, a row carrying another preset's
+    retired command, and a hand-written row that runs the same command without
+    the provenance field are their owners' to keep, and
+    a command that is not a string is left for config validation to name. The legacy
+    list spelling is read too. A second pass has nothing left to say, and a
+    config already at the floor keeps even the stock row.
+
+    The floors are literals, for the reason
+    test_the_retired_deep_research_section_goes_and_its_disabled_entry_stays gives.
+    """
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    current = THIRD_PARTY_SUBAGENT_PRESETS["codex"]["command"]
+    claude = THIRD_PARTY_SUBAGENT_PRESETS["claude_code"]["command"]
+    kept = [
+        _codex_row("npx -y @agentclientprotocol/codex-acp@1.1.13", name="Codex-older"),
+        _codex_row(_RETIRED_CODEX + " --debug", name="Codex-flagged"),
+        {"name": "my-codex", "kind": "acp", "command": _RETIRED_CODEX},
+        _codex_row(["npx", "-y", "@agentclientprotocol/codex-acp@1.1.14"], name="Codex-listed"),
+        _claude_row("npx -y @agentclientprotocol/claude-agent-acp@0.80.0", name="Claude-own-pin"),
+        _claude_row(_RETIRED_CODEX, name="Claude-wearing-codex"),
+    ]
+    loader._migration_notices.clear()
+    data = {
+        "subagents": {
+            "agents": [_codex_row(_RETIRED_CODEX), _claude_row(_RETIRED_CLAUDE[1]), *json.loads(json.dumps(kept))],
+            "thirdParty": [_codex_row(_RETIRED_CODEX, name="Codex-legacy")],
+        }
+    }
+    loader._migrate_config(data, from_version=10)
+
+    assert data["subagents"]["agents"] == [_codex_row(current), _claude_row(claude), *kept]
+    assert data["subagents"]["thirdParty"] == [_codex_row(current, name="Codex-legacy")]
+    notices = loader.drain_migration_notices()
+    assert sorted(n.split("]")[0] for n in notices) == [
+        "Migrated: subagents.agents[Claude Code",
+        "Migrated: subagents.agents[Codex",
+        "Migrated: subagents.thirdParty[Codex-legacy",
+    ], notices
+
+    loader._migrate_config(data, from_version=10)
+    assert loader.drain_migration_notices() == []
+
+    untouched = {"subagents": {"agents": [_codex_row(_RETIRED_CODEX)]}}
+    loader._migrate_config(untouched, from_version=11)
+    assert untouched == {"subagents": {"agents": [_codex_row(_RETIRED_CODEX)]}}
+    assert loader.drain_migration_notices() == []
+
+
+def test_the_retired_pin_table_leads_to_the_command_its_preset_ships_now() -> None:
+    """The migration spells the preset's command rather than importing it --
+    config does not reach up into the agent package, for the reason
+    ``raven.config.agent_names`` gives -- so the two spellings are pinned equal
+    here. A pin bumped without this table would strand every row already
+    configured on the pin before it, which is how the codex rows came to keep a
+    menu that stopped at GPT-5.6.
+
+    The table is not a history of every pin: an entry needs the new build
+    measured reopening the old one's sessions, the property the migration rests
+    on, so a pin that moves without that measurement stays out of it."""
+    from raven.agent.subagent.presets import SHIM_LAUNCHED_PRESETS, THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    assert loader._RETIRED_SHIM_COMMANDS, "nothing to carry: drop the migration rather than this test"
+    for preset, (retired, current) in loader._RETIRED_SHIM_COMMANDS.items():
+        assert preset in SHIM_LAUNCHED_PRESETS, f"{preset} is not a shim: its row runs the user's own install"
+        assert current == THIRD_PARTY_SUBAGENT_PRESETS[preset]["command"], (
+            f"the {preset} pin moved to {THIRD_PARTY_SUBAGENT_PRESETS[preset]['command']!r} without its "
+            f"migration: rows configured on {current!r} would keep it. Add that command to the retired set "
+            "and give the migration a new floor."
+        )
+        assert retired and current not in retired, preset
+
+
 def test_channels_section_settings_are_not_mistaken_for_channels(tmp_path: Path, caplog) -> None:
     """``channels.sendProgress`` is a setting of the section, not a channel whose
     table failed to parse; only an unknown scalar under ``channels`` warns."""
