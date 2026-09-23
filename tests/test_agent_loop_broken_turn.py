@@ -312,28 +312,38 @@ async def test_a_hook_that_salvages_an_answerless_turn_keeps_it_a_finished_turn(
 
 
 @pytest.mark.asyncio
-async def test_a_half_answer_the_call_died_on_is_not_filed_as_the_reason(workspace):
-    """With retries after output on, ``stream_llm_call`` hands a stall back as an
-    error response whose content is the reply that had streamed; the reason is
-    then the classification, never the reader's own half answer."""
+async def test_a_half_answer_is_not_what_the_failed_call_reports(workspace):
+    """A stall after words had streamed used to hand those words back as the error
+    response's content, and the turn then needed a setting to tell it whether the
+    content it held was a diagnosis or half a reply. The account of the failure is
+    the reason; the half answer is filed where a half answer goes."""
     agent = _agent_without_ladder(
-        workspace,
-        DyingProvider([_error_response("half an answer", "first_byte_timeout")]),
-        retry_after_output=True,
+        workspace, _StreamingThenDying(["half an ", "answer"], TimeoutError()), retry_after_output=True
     )
 
-    with pytest.raises(AnswerlessTurnError) as failed:
-        await agent._process_message(_make_msg("hello"))
+    async def _sink(_text: str) -> None:
+        return None
 
-    reason = "Error calling LLM (first_byte_timeout): the call failed after the reply had started streaming"
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await agent._process_message(_make_msg("hello"), on_token_delta=_sink)
+
+    reason = "Error calling LLM (network): TimeoutError"
     assert str(failed.value) == reason
-    assert _persisted(workspace)[-1]["turn_ended"]["reason"] == reason
+    msgs = _persisted(workspace)
+    assert msgs[-1]["turn_ended"]["reason"] == reason
+    assert any(str(m.get("content")) == "half an answer" for m in msgs), "the words the reader saw are still filed"
 
 
 @pytest.mark.asyncio
-async def test_a_providers_own_account_is_the_reason_when_retries_after_output_are_off(workspace):
+@pytest.mark.parametrize("retry_after_output", [False, True])
+async def test_a_providers_own_account_is_the_reason_whatever_the_retry_setting(workspace, retry_after_output):
+    """The reason is read off the response rather than guessed at from a setting:
+    an account that is not the canonical sentence used to be replaced, with
+    retries after output on, by one about a reply that had started streaming."""
     account = "The upstream closed the stream before its first chunk."
-    agent = _agent_without_ladder(workspace, DyingProvider([_error_response(account)]))
+    agent = _agent_without_ladder(
+        workspace, DyingProvider([_error_response(account)]), retry_after_output=retry_after_output
+    )
 
     with pytest.raises(AnswerlessTurnError) as failed:
         await agent._process_message(_make_msg("hello"))
@@ -343,8 +353,8 @@ async def test_a_providers_own_account_is_the_reason_when_retries_after_output_a
 
 @pytest.mark.asyncio
 async def test_a_cut_streams_canonical_account_survives_retries_after_output(workspace):
-    """``stream_llm_call`` words the cut-stream account in the canonical shape so
-    it is kept even where a half answer would be replaced by the classification."""
+    """``stream_llm_call`` words the cut-stream account in the canonical shape, and
+    the loop files that account as the reason whatever the retry setting says."""
     cut = "Error calling LLM (network): the model's reply was cut off by the connection after 30s"
     agent = _agent_without_ladder(workspace, DyingProvider([_error_response(cut)]), retry_after_output=True)
 

@@ -250,7 +250,8 @@ async def test_llm_call_stream_timeout_after_output_fails_the_turn_unless_asked(
     (N-TURNFAILED) unless the caller asked to retry after output. Handed back as a
     retryable response instead, the loop's own ladder asked again and an
     interactive client received the words of two attempts. Asked for, the response
-    is structured and retryable, with the streamed content preserved on it."""
+    is structured and retryable, and its content is the account of the failure --
+    the words that streamed are the caller's to keep, not the error's text."""
 
     class _TimeoutStreamProvider:
         classify_error = LLMProvider.classify_error
@@ -281,7 +282,7 @@ async def test_llm_call_stream_timeout_after_output_fails_the_turn_unless_asked(
     assert response.error_classification is not None
     assert response.error_classification.category == "network"
     assert response.error_classification.retryable is True
-    assert response.content == "partial"
+    assert response.content == "Error calling LLM (network): TimeoutError"
 
 
 class _ApiError(Exception):
@@ -328,6 +329,101 @@ async def test_llm_call_stream_error_delta_is_not_rendered_as_a_token() -> None:
     assert response.content == "Azure OpenAI API Error 404: deployment not found"
     assert response.finish_reason == "error"
     assert response.error_classification is classification
+
+
+def _half_then_error(verdict: ErrorClassification | None) -> list[ChatDelta]:
+    """A stream that said something, then reported its failure as a delta."""
+    return [
+        ChatDelta(content="the first half"),
+        ChatDelta(
+            content="Error calling LLM (server@claude): 503", finish_reason="error", error_classification=verdict
+        ),
+    ]
+
+
+async def test_an_error_delta_after_rendered_output_has_its_retry_spent() -> None:
+    """The shape the Anthropic adapter hands back: it catches a failure that
+    happened mid-stream and reports it as a terminal error delta instead of
+    raising, so the words already on the reader's screen never reach the rule the
+    raise path holds. Left retryable, the caller's own ladder asked again and the
+    same answer was drawn from the top up to four times. The other flags survive:
+    the verdict is spent of one thing, not replaced."""
+    verdict = ErrorClassification("server", retryable=True, should_fallback=True, should_compress=True)
+    provider = _FakeProvider(_half_then_error(verdict))
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    response = await _bind_helper(provider)(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert seen == ["the first half"]
+    assert response.content == "Error calling LLM (server@claude): 503"
+    assert response.error_classification is not None
+    assert response.error_classification.retryable is False
+    assert response.error_classification.category == "server"
+    assert response.error_classification.should_fallback is True
+    assert response.error_classification.should_compress is True
+
+
+async def test_an_error_delta_after_rendered_output_stays_retryable_when_asked() -> None:
+    """The caller that already accepts seeing its output twice keeps the retry."""
+    verdict = ErrorClassification("server", retryable=True, should_fallback=True)
+    fake_self = SimpleNamespace(
+        provider=_FakeProvider(_half_then_error(verdict)),
+        _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
+        _recovery_limits=RecoveryLimits(llm_retry_after_output=True),
+    )
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await AgentLoop._llm_call_stream.__get__(fake_self)(
+        messages=[], tools=None, model="m", on_token_delta=on_delta
+    )
+
+    assert response.error_classification is not None
+    assert response.error_classification.retryable is True
+
+
+async def test_an_error_delta_before_any_output_keeps_its_retry() -> None:
+    """Nothing was rendered, so asking again repeats nothing and the ladder the
+    caller owns is still the right one to wait the failure out on."""
+    verdict = ErrorClassification("server", retryable=True, should_fallback=True)
+    chunks = [
+        ChatDelta(content="Error calling LLM (server@claude): 503", finish_reason="error", error_classification=verdict)
+    ]
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await _bind_helper(_FakeProvider(chunks))(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.error_classification is not None
+    assert response.error_classification.retryable is True
+
+
+async def test_an_unclassified_error_delta_after_output_is_classified_and_spent() -> None:
+    """A delta that carries no verdict leaves the caller to read one out of the
+    error text -- and it would read a retryable failure straight back. So the
+    verdict is built here, where it is still known that something was rendered."""
+
+    class _ErrorDeltaWithoutVerdict:
+        classify_error = LLMProvider.classify_error
+
+        async def chat_stream(self, **_kwargs: Any):
+            yield ChatDelta(content="the first half")
+            yield ChatDelta(content="Error calling LLM (server@claude): 503", finish_reason="error")
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await _bind_helper(_ErrorDeltaWithoutVerdict())(
+        messages=[], tools=None, model="m", on_token_delta=on_delta
+    )
+
+    assert response.error_classification is not None
+    assert response.error_classification.retryable is False
 
 
 async def test_llm_call_stream_does_not_reconnect_after_emitting_deltas() -> None:
@@ -512,9 +608,14 @@ async def test_llm_call_stream_first_byte_timeout_keeps_its_record() -> None:
     assert "120.4s" in (response.content or "")
 
 
-async def test_llm_call_stream_mid_answer_stall_still_keeps_the_words() -> None:
-    """The other side of that change: after output, the content stays the words
-    the reader already saw, not the error text."""
+async def test_llm_call_stream_mid_answer_stall_reports_the_failure_not_the_words() -> None:
+    """An error response's content has one meaning: the account of the failure.
+
+    It used to carry the words that had streamed instead, so a reader of the
+    content could not tell a diagnosis from half an answer and had to consult the
+    retry setting to guess which one it held. What streamed is the caller's --
+    the turn buffers it from the delta callback and files it as the assistant
+    message it was -- so nothing is lost by saying here what went wrong."""
 
     class _StallAfterOutput:
         classify_error = LLMProvider.classify_error
@@ -534,14 +635,16 @@ async def test_llm_call_stream_mid_answer_stall_still_keeps_the_words() -> None:
         _recovery_limits=RecoveryLimits(llm_retry_after_output=True),
     )
     call = AgentLoop._llm_call_stream.__get__(fake_self)
+    seen: list[str] = []
 
-    async def on_delta(_text: str) -> None:
-        return None
+    async def on_delta(text: str) -> None:
+        seen.append(text)
 
     response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
 
+    assert seen == ["half an ans"], "the words still reach the watcher as they arrive"
     assert response.finish_reason == "error"
-    assert (response.content or "") == "half an ans"
+    assert (response.content or "") == "Error calling LLM (network): TimeoutError"
 
 
 async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:

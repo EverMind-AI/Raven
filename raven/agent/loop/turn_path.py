@@ -86,7 +86,6 @@ from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, fil
 from raven.contracts.harness import ActionRequest, CapabilityRequest, PlanningRequest, WindowPressure, WindowState
 from raven.contracts.loop_hooks import HookDecision
 from raven.permissions.turn import set_current_tool_call_id
-from raven.providers.base import parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
 from raven.spine.turn import AnswerlessTurnError
@@ -101,25 +100,19 @@ if TYPE_CHECKING:
     from raven.spine.turn import TurnRequest
 
 
-def _llm_failure_detail(content: str | None, verdict: ErrorClassification | None, *, retry_after_output: bool) -> str:
+def _llm_failure_detail(content: str | None, verdict: ErrorClassification | None) -> str:
     """The one line a model call the loop gave up on is reported by.
 
-    The error response's own text when it is the provider's canonical
-    ``Error calling LLM (...)`` sentence, or when retries after output are off
-    and it is therefore the provider's account of the failure. Otherwise a
-    canonical sentence built from the classification: with retries after
-    output on, ``stream_llm_call`` hands a stall back with the reply that had
-    streamed as its content, and a reader's own half answer must not be filed
-    as the reason the turn ended; and a response with no text at all still
-    needs a sentence the readers of that format can parse.
+    The error response's own text, which is the provider's account of the
+    failure and nothing else -- no setting decides which of two meanings the
+    content carries. A response with no text at all still needs a sentence the
+    readers of that format can parse.
     """
     text = (content or "").strip()
-    if text and (parse_llm_error(text) is not None or not retry_after_output):
+    if text:
         return text
     category = verdict.category if verdict is not None else "unknown"
-    if not text:
-        return f"Error calling LLM ({category}): the provider gave no detail"
-    return f"Error calling LLM ({category}): the call failed after the reply had started streaming"
+    return f"Error calling LLM ({category}): the provider gave no detail"
 
 
 def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, Any] | None, turn_base: int) -> None:
@@ -1512,9 +1505,7 @@ class TurnPathMixin:
                     logger.error("LLM returned error: {}", (clean or "")[:200])
                     final_content = clean or "Sorry, I encountered an error calling the AI model."
                     status = "error"
-                    error_detail = _llm_failure_detail(
-                        clean, verdict, retry_after_output=self._recovery_limits.llm_retry_after_output
-                    )
+                    error_detail = _llm_failure_detail(clean, verdict)
                     break
 
                 # Empty-response recovery: an empty assistant turn would
