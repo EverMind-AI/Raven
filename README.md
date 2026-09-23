@@ -207,6 +207,15 @@ Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible A
 
 ## ❯❯ Quick Start
 
+### 🤖 Install with Your Agent
+
+Let your own agent install Raven for you. Copy this prompt into any agent that
+can read a web page and run shell commands, such as Claude Code or Codex:
+
+```text
+Read https://evermind-ai.github.io/Raven/quick-start/ and follow it to install Raven, or to update it if it is already installed.
+```
+
 ### 📦 Install
 
 Linux, macOS, or WSL2:

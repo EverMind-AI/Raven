@@ -207,6 +207,14 @@ Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 连接并编排 Agent，�
 
 ## ❯❯ 快速开始
 
+### 🤖 让 Agent 帮你安装
+
+让你自己的 Agent 帮你安装 Raven。把下面这段提示词复制给任意一个能读取网页、执行 shell 命令的 Agent，例如 Claude Code 或 Codex：
+
+```text
+阅读 https://evermind-ai.github.io/Raven/zh/quick-start/ 并按照其中的步骤安装 Raven；如果已经安装过，就把它更新到最新版本。
+```
+
 ### 📦 安装
 
 Linux、macOS 或 WSL2：
