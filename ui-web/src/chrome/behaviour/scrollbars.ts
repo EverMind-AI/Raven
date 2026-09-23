@@ -169,6 +169,12 @@ function place(el: HTMLElement, b: Bars, axis: Axis): HTMLElement | undefined {
 }
 
 export function show(el: HTMLElement): void {
+  /* Not on a one-line field. A text input scrolls itself to the caret as you
+     type -- there is no thumb to reach for -- and the bar landed across the
+     bottom of a box one line tall, 6px of it inside 27px, which is what a
+     long conversation name being renamed looked like. A textarea is a real
+     scroller and keeps its bar. */
+  if (el.tagName === 'INPUT') return
   const b = bars(el)
   for (const a of AXES) {
     const t = place(el, b, a)
