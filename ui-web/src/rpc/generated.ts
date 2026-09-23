@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 201 methods, 116 component schemas.
+// 202 methods, 118 component schemas.
 
 /* eslint-disable */
 /**
@@ -207,6 +207,10 @@ export interface TranscriptMessage {
    * A file tool's unified diff of the change it made, on its role='tool' entry.
    */
   diff?: string;
+  /**
+   * The files that call made vanish, on its role='tool' entry. Absent when it removed none.
+   */
+  file_removed?: TranscriptFileRemoval[];
   turn_ended?: TranscriptTurnEnded;
   notice?: TranscriptNotice;
   /**
@@ -226,6 +230,16 @@ export interface TranscriptToolCall {
    * JSON-encoded arguments; re-serialized when stored as an object.
    */
   arguments: string;
+}
+/**
+ * One file a stored tool call made vanish, on its role='tool' entry. The line count and not the body: the text of a removed file is what the live event carries, while a reloaded page needs to know the file went and how big the hole is.
+ */
+export interface TranscriptFileRemoval {
+  path: string;
+  /**
+   * Lines the file held when it went; 0 when unknown.
+   */
+  del: number;
 }
 /**
  * Why a turn's transcript stops where it does.
@@ -1245,6 +1259,19 @@ export interface FileChange {
    */
   before?: string;
 }
+/**
+ * One file a tool call made vanish, with the text it held when known. The counterpart of FileChange and not one of them: a removal has no after, and its before is a best effort -- absent means unknown, not that the file was empty.
+ */
+export interface FileRemoval {
+  /**
+   * Absolute path of the file that is gone.
+   */
+  path: string;
+  /**
+   * The contents the file held before it went, when they could be captured. Absent means unknown -- not that the file was empty -- so a client draws the deletion with whatever it already knew of the file.
+   */
+  before?: string;
+}
 export interface ToolCompleteEvent {
   type: 'tool.complete';
   payload: {
@@ -1263,6 +1290,10 @@ export interface ToolCompleteEvent {
      */
     diff?: string;
     file_change?: FileChange;
+    /**
+     * The files this call made vanish. Absent on every call that removed nothing, which is nearly all of them.
+     */
+    file_removed?: FileRemoval[];
   };
 }
 export interface MessageCompleteEvent {
@@ -1876,7 +1907,7 @@ export interface TaskReplan {
  */
 export interface TaskFile {
   path: string;
-  op: 'write' | 'edit';
+  op: 'add' | 'write' | 'edit' | 'delete';
   add: number;
   del: number;
   /**
@@ -3538,6 +3569,17 @@ export interface FsDirsResult {
    */
   entries: FsDirEntry[];
 }
+export interface FsPickDirParams {}
+export interface FsPickDirResult {
+  /**
+   * The folder chosen, absolute and resolved; absent when the dialog was dismissed.
+   */
+  path?: string;
+  /**
+   * Whether a session may be pinned to the chosen folder (see raven.agent.workdir); false with no path.
+   */
+  ok: boolean;
+}
 export interface FsReadParams {
   path: string;
   max_bytes?: number;
@@ -4082,17 +4124,68 @@ export interface SessionSteerResult {
   hint?: string;
 }
 export interface SessionUsageParams {
-  session_id?: string;
+  /**
+   * Full session_key to report on.
+   */
+  session_id: string;
 }
 export interface SessionUsageResult {
   /**
-   * Human-readable explanation of why this method is not supported in v0.1.
+   * Recorded calls under this session's root.
    */
-  error: string;
+  calls: number;
   /**
-   * Optional hint to the user (e.g., 'Press Ctrl+C').
+   * The model this session runs on now.
    */
-  hint?: string;
+  model: string;
+  /**
+   * Fresh input tokens; cache excluded.
+   */
+  input: number;
+  /**
+   * Output tokens.
+   */
+  output: number;
+  /**
+   * Cache-read tokens.
+   */
+  cache_read: number;
+  /**
+   * Cache-write tokens.
+   */
+  cache_write: number;
+  /**
+   * input + output + cache_read + cache_write.
+   */
+  total: number;
+  /**
+   * Sum of provider-reported USD; null when no call reported a price.
+   */
+  cost_usd?: number | null;
+  /**
+   * exact when every call reported a price; estimated when some did not.
+   */
+  cost_status: 'estimated' | 'exact';
+  /**
+   * Calls with no reported price, left out of cost_usd.
+   */
+  cost_missing_calls: number;
+  /**
+   * Context window of the session's model; 0 when unknown.
+   */
+  context_max: number;
+  /**
+   * Estimated tokens the next call would send.
+   */
+  context_used: number;
+  /**
+   * context_used as a percentage of context_max.
+   */
+  context_percent: number;
+  /**
+   * True when context_used is a tiktoken estimate.
+   */
+  context_estimated: boolean;
 }
 export interface SkillsReloadParams {}
 export interface SkillsReloadResult {
@@ -4982,6 +5075,7 @@ export interface RpcMethods {
   'channels.qr': { params: ChannelsQrParams; result: ChannelsQrResult };
   'fs.list': { params: FsListParams; result: FsListResult };
   'fs.dirs': { params: FsDirsParams; result: FsDirsResult };
+  'fs.pick_dir': { params: FsPickDirParams; result: FsPickDirResult };
   'fs.read': { params: FsReadParams; result: FsReadResult };
   'fs.upload': { params: FsUploadParams; result: FsUploadResult };
   'deck.templates.list': { params: DeckTemplatesListParams; result: DeckTemplatesListResult };
@@ -5126,6 +5220,7 @@ export const RPC_METHODS = [
   "fs.dirs",
   "fs.list",
   "fs.open",
+  "fs.pick_dir",
   "fs.read",
   "fs.reveal",
   "fs.upload",
