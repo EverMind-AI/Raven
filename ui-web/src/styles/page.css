@@ -3389,8 +3389,9 @@ details[open] summary { margin-bottom: 8px; }
 }
 /* An entrance's app icon, in the frame the letter tile above would have had
    (components/ChannelMark.tsx). A store icon is a tile already, so it fills the
-   frame, and the hairline is drawn OVER it: the white-ground icons -- Feishu,
-   WeCom, QQ, Telegram -- otherwise have no edge on the light theme's list. */
+   frame, and the hairline is drawn OVER it: the five on a white or near-white
+   ground -- Feishu, WeCom, QQ, Telegram, Slack -- otherwise have no edge on the
+   light theme's list. */
 .channel-mark {
   position: relative; width: 38px; height: 38px; border-radius: 11px; flex: none;
   display: grid; place-items: center; overflow: hidden;
