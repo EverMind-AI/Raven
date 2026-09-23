@@ -5,13 +5,22 @@
  * have to move it when they change.
  *
  * `lang` is the language the page is in, and it is never null. It is resolved as
- * this module loads: the pick the reader is remembered by if there is one
- * (localStorage, under the key state/lang/pick.ts owns), and otherwise what
- * <html lang> declares -- which for the served page is zh-CN. The gateway's own
- * answer arrives a moment later and wins, the way any pick does
+ * this module loads, from three things in this order: the pick the reader is
+ * remembered by if there is one (localStorage, under the key state/lang/pick.ts
+ * owns), else the first of the reader's own languages this page has a catalogue
+ * for, else what <html lang> declares -- which for the served page is zh-CN. The
+ * gateway's own answer arrives a moment later and wins, the way any pick does
  * (`config.language` through state/lang/pick.ts's `load`). So a region renders
  * one language from its first paint, rather than the served Chinese markup with
  * English words drawn over it by whatever ran from JavaScript.
+ *
+ * The middle step is there for the page that gets no fourth one. A connect that
+ * fails returns before `load` is ever called (src/app/boot.ts), so a reader the
+ * gateway has never answered for has nothing but the declaration -- and the
+ * sign-in notice, the one message whose whole job is to be read on that page,
+ * would be in Chinese for every one of them. A browser naming neither language
+ * still falls through to the declaration, so this step can move a page only
+ * towards a language its reader asked for.
  *
  * `picked` is whether a language was chosen rather than inherited from the
  * document, and it decides exactly one thing: an attribute the served markup
@@ -40,8 +49,30 @@ export type { Lang }
 /** The key a pick is remembered under (state/lang/pick.ts persists it). */
 const REMEMBERED = 'raven.gui.lang'
 
+/* A BCP-47 tag as one of the two languages, or null for a tag that names
+   neither: the primary subtag is the whole question, so zh-Hans-CN and en-GB
+   answer the same as zh and en. */
+const asLang = (tag: string): Lang | null => {
+  const primary = tag.toLowerCase().split('-')[0]
+  return primary === 'zh' ? 'zh' : primary === 'en' ? 'en' : null
+}
+
 /** What the document was served declaring, as one of the two languages. */
-const declared = (): Lang => (/^zh/i.test(document.documentElement.lang) ? 'zh' : 'en')
+const declared = (): Lang => asLang(document.documentElement.lang) ?? 'en'
+
+/* The first language the reader has asked for that this page can render.
+   `languages` is the ordered list the reader set; a browser that has only the
+   one answers through it just the same. */
+function preferred(): Lang | null {
+  const asked = navigator.languages && navigator.languages.length
+    ? navigator.languages
+    : [navigator.language]
+  for (const tag of asked) {
+    const found = typeof tag === 'string' ? asLang(tag) : null
+    if (found) return found
+  }
+  return null
+}
 
 /* Read through a guard, because private mode throws on access rather than
    answering null -- the same guard the persist side uses. */
@@ -63,16 +94,24 @@ export interface LangState {
 }
 
 const kept = remembered()
-const store = makeStore<LangState>({ lang: kept ?? declared(), picked: kept !== null })
+/* `picked` stays with the remembered pick alone: a browser stating a preference
+   is not a reader choosing, and what `picked` decides is an attribute the served
+   markup does not carry (see `attr` below). */
+const store = makeStore<LangState>({ lang: kept ?? preferred() ?? declared(), picked: kept !== null })
 const afterwards = new Set<() => void>()
 
 /** The two facts. Resolved at load, so the language is never null. */
 export const { get, subscribe } = store
 
 /* Applied as this module loads, before anything reads a word: the catalogue's
-   column is the language, and the declaration follows a remembered pick. */
+   column is the language, and the declaration is corrected when the page turns
+   out not to be in the language it was served declaring. That tag is what a
+   screen reader picks a voice from, so a page rendering English must not go on
+   saying zh-CN -- and where the two agree there is nothing to write. */
 setCode(get().lang)
-if (get().picked) document.documentElement.lang = tagOf(get().lang)
+if (tagOf(get().lang) !== document.documentElement.lang) {
+  document.documentElement.lang = tagOf(get().lang)
+}
 
 /** What <html lang> says, which is the language this module resolved. */
 export function tag(): string {

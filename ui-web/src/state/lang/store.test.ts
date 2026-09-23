@@ -34,18 +34,70 @@ async function words(): Promise<typeof import('../../i18n/t')['t']> {
   return (await import('../../i18n/t')).t
 }
 
+/* What the reader's browser asks for, which the resolution reads between a
+   remembered pick and the document's own declaration. Said out loud in every
+   case that turns on it: happy-dom answers en-US, so a case leaving it alone
+   would be decided by the environment rather than by what it means to pin. */
+function browserSays(...tags: string[]): void {
+  Object.defineProperty(navigator, 'languages', { value: tags, configurable: true })
+}
+
 beforeEach(() => {
   /* What the served page declares (src/page.html:2). */
   document.documentElement.lang = 'zh-CN'
   document.body.innerHTML = ''
   localStorage.clear()
+  /* A browser that names neither language, so the cases below that are about
+     the other two steps are not quietly decided by this one. */
+  browserSays('fr-FR')
 })
 
 describe('the language the page resolves', () => {
-  it('is the one the document declares when nobody has picked', async () => {
+  it('is the one the document declares when nobody has picked and the browser names neither', async () => {
     const lang = await fresh()
     expect(lang.get().lang).toBe('zh')
     expect(await (await words())('gui.new_task')).toBe(ZH_NEW_TASK)
+  })
+
+  /* The step this exists for: a page that never reaches the gateway -- a failed
+     connect returns before `load` runs (src/app/boot.ts) -- has the reader's own
+     languages and nothing else, and the sign-in notice is the one message whose
+     whole job is to be read on that page. */
+  it('is the one the reader\'s browser asks for when nobody has picked', async () => {
+    browserSays('en-US')
+    const lang = await fresh()
+    expect(lang.get().lang).toBe('en')
+    expect((await words())('gui.auth.stale')).toBe(catalog.ui['gui.auth.stale'].en)
+  })
+
+  it('takes the first of the reader\'s languages it has a catalogue for', async () => {
+    browserSays('fr-FR', 'en-GB', 'zh-CN')
+    const lang = await fresh()
+    expect(lang.get().lang).toBe('en')
+  })
+
+  it('reads the one language a browser with no list names', async () => {
+    Object.defineProperty(navigator, 'languages', { value: undefined, configurable: true })
+    Object.defineProperty(navigator, 'language', { value: 'en-US', configurable: true })
+    const lang = await fresh()
+    expect(lang.get().lang).toBe('en')
+  })
+
+  it('lets a remembered pick beat the browser', async () => {
+    browserSays('en-US')
+    localStorage.setItem('raven.gui.lang', 'zh')
+    const lang = await fresh()
+    expect(lang.get().lang).toBe('zh')
+  })
+
+  /* The browser stating a preference is not a reader picking one, and `picked`
+     is what puts an aria-label, a title or a data-tip on a page whose markup
+     carries none -- which is what both boot goldens record. */
+  it('does not count the browser\'s preference as a pick', async () => {
+    browserSays('en-US')
+    const lang = await fresh()
+    expect(lang.get().picked).toBe(false)
+    expect(lang.attr('gui.collapse_rail')).toBe(undefined)
   })
 
   it('is the remembered pick when there is one, whatever the document says', async () => {
@@ -58,10 +110,19 @@ describe('the language the page resolves', () => {
   /* A remembered pick is the one case that moves the declaration, and it moves
      it before the first frame: the page is served zh-CN and the reader asked
      for English on it last time. */
-  it('writes the declaration for a remembered pick, and leaves it otherwise', async () => {
+  it('writes the declaration for a language the document does not already declare', async () => {
     await fresh()
     expect(document.documentElement.lang).toBe('zh-CN')
     localStorage.setItem('raven.gui.lang', 'en')
+    await fresh()
+    expect(document.documentElement.lang).toBe('en')
+  })
+
+  /* Same rule, reached the other way: a reader whose browser puts the page in
+     English is looking at English, so the document must not go on declaring
+     Chinese -- that tag is what a screen reader picks a voice from. */
+  it('writes it for a language the browser resolved too', async () => {
+    browserSays('en-US')
     await fresh()
     expect(document.documentElement.lang).toBe('en')
   })
