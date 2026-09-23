@@ -9,6 +9,11 @@ import type { Msg } from '../types.js'
 import { turnController } from '../app/turnController.js'
 import { patchUiState } from '../app/uiStore.js'
 
+// The catalogue sentences, spelled out rather than read back through the helper
+// under test: an expectation built from that helper moves with it.
+const STOPPED_BARE = 'Stopped by user'
+const STOPPED_KEPT = 'Stopped by user - the output above is kept'
+
 afterEach(() => {
   patchUiState({ transcript: 'legacy' })
   turnController.reset()
@@ -71,13 +76,54 @@ describe('turnController episodes commit', () => {
     turnController.finalizeInterruptedTurn({ appendMessage: m => appended.push(m) })
 
     // Exactly one collapsed episodes message — no raw per-segment dump (the bug:
-    // a Ctrl+C used to append every expanded thinking/tool segment).
-    expect(appended.every(m => m.kind === 'episodes')).toBe(true)
+    // a Ctrl+C used to append every expanded thinking/tool segment). The stop
+    // line that closes the turn is the only other row.
     const epMsgs = appended.filter(m => m.kind === 'episodes')
     expect(epMsgs).toHaveLength(1)
+    expect(appended.filter(m => m.kind !== 'episodes').map(m => m.text)).toEqual([STOPPED_KEPT])
     expect(epMsgs[0]!.episodes!).toHaveLength(1)
     expect(epMsgs[0]!.episodes![0]!.tools[0]!.name).toBe('web_search')
     expect(epMsgs[0]!.text).toContain('[interrupted]')
+  })
+
+  it('a cancel with nothing to show says so without promising kept output', () => {
+    patchUiState({ transcript: 'episodes' })
+    turnController.reset()
+
+    const appended: Msg[] = []
+    const sysCalls: string[] = []
+    turnController.finalizeInterruptedTurn({ appendMessage: m => appended.push(m), sys: m => sysCalls.push(m) })
+
+    expect(appended).toHaveLength(0)
+    expect(sysCalls).toEqual([STOPPED_BARE])
+  })
+
+  it('a cancel that kept a partial reply closes on the kept sentence, after it', () => {
+    patchUiState({ transcript: 'episodes' })
+    turnController.reset()
+    turnController.recordMessageDelta({ text: 'half an answer' })
+
+    const appended: Msg[] = []
+    const sysCalls: string[] = []
+    turnController.finalizeInterruptedTurn({ appendMessage: m => appended.push(m), sys: m => sysCalls.push(m) })
+
+    expect(appended.map(m => m.role)).toEqual(['assistant', 'system'])
+    expect(appended[0]!.text).toContain('half an answer')
+    expect(appended[1]!.text).toBe(STOPPED_KEPT)
+    expect(sysCalls).toEqual([])
+  })
+
+  it('a failed turn draws no stop line: the error frame is what reports it', () => {
+    patchUiState({ transcript: 'episodes' })
+    turnController.reset()
+    turnController.recordMessageDelta({ text: 'half an answer' })
+
+    const appended: Msg[] = []
+    const sysCalls: string[] = []
+    turnController.recordError({ appendMessage: m => appended.push(m), sys: m => sysCalls.push(m) })
+
+    expect(appended.map(m => m.role)).toEqual(['assistant'])
+    expect(sysCalls).toEqual([])
   })
 
   it('a failed turn commits what it streamed, like an interrupt does', () => {
