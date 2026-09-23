@@ -681,7 +681,11 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             proposed = str(params["model"])
             choices = [c.value for c in meta.model_choices]
             own_acp = cfg_for_meta.kind == "acp" and getattr(snapshot, "agent_name", "") == "raven"
-            if rule == "agent" and proposed in choices:
+            # An id the agent advertised is one it serves, whichever menu the
+            # page drew. Not keyed on the rule: that names the menu, and keying
+            # the write to it meant an own row stopped taking its own
+            # handshake's ids the moment its menu became raven's catalogue.
+            if proposed in choices:
                 target["model"] = proposed
             elif rule == "agent" and not own_acp:
                 # Mirrors ``SubagentManager.set_instance_model``'s own message: the
