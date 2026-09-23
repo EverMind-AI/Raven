@@ -568,7 +568,12 @@ class RavenLoopBackend:
                     # one it already gave up on. Raised rather than returned: the
                     # error text would otherwise be the run's answer and the
                     # record would read completed (see SubagentNoAnswerError).
-                    activity.note_usage(response.usage)
+                    await activity.note_provider_usage(
+                        response.usage,
+                        model=str(model or ""),
+                        session_key=session_key,
+                        task_id=task_id,
+                    )
                     verdict = response.error_classification
                     raise SubagentNoAnswerError(
                         "sub-agent's model call failed"
@@ -605,7 +610,12 @@ class RavenLoopBackend:
                     # call's tokens were still spent -- a cut mid-thought is 11-15k
                     # reasoning tokens -- so they are billed before the reply is
                     # replaced.
-                    activity.note_usage(response.usage)
+                    await activity.note_provider_usage(
+                        response.usage,
+                        model=str(model or ""),
+                        session_key=session_key,
+                        task_id=task_id,
+                    )
                     verdict = response.error_classification
                     if verdict is None and (classify := getattr(provider, "classify_error", None)) is not None:
                         verdict = classify(content=response.content or None)
@@ -634,7 +644,12 @@ class RavenLoopBackend:
                         model=model,
                     )
                     if response.finish_reason == "error" and not response.has_tool_calls:
-                        activity.note_usage(response.usage)
+                        await activity.note_provider_usage(
+                            response.usage,
+                            model=str(model or ""),
+                            session_key=session_key,
+                            task_id=task_id,
+                        )
                         raise SubagentNoAnswerError(
                             "sub-agent's model call failed in transport twice: " + (response.content or "")[:200]
                         )
@@ -642,7 +657,12 @@ class RavenLoopBackend:
             # the model once per round and the run's cost is their sum, unlike an
             # ACP agent's one cumulative report for the whole turn. Both arms
             # land here -- a streamed reply costs the same as a waited-for one.
-            activity.note_usage(response.usage)
+            await activity.note_provider_usage(
+                response.usage,
+                model=str(model or ""),
+                session_key=session_key,
+                task_id=task_id,
+            )
             cut_at_ceiling = response.truncated
             if response.has_tool_calls:
                 tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
@@ -799,10 +819,20 @@ class RavenLoopBackend:
                 model=model,
             )
             if wrap_up.finish_reason == "error":
-                activity.note_usage(wrap_up.usage)
+                await activity.note_provider_usage(
+                    wrap_up.usage,
+                    model=str(model or ""),
+                    session_key=session_key,
+                    task_id=task_id,
+                )
                 raise SubagentNoAnswerError("sub-agent's wrap-up model call failed: " + (wrap_up.content or "")[:200])
             final_result = (wrap_up.content or "").strip() or None
-            activity.note_usage(wrap_up.usage)
+            await activity.note_provider_usage(
+                wrap_up.usage,
+                model=str(model or ""),
+                session_key=session_key,
+                task_id=task_id,
+            )
             cut_at_ceiling = wrap_up.truncated
         # Reported before the raise below, so a run that ends with no answer at
         # all carries the reason as well -- that is the shape this exists for.

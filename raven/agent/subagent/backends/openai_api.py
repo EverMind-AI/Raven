@@ -99,6 +99,8 @@ class OpenAIApiBackend:
         timeout: "aiohttp.ClientTimeout",
         on_delta: Callable[[str], Awaitable[None]],
         reader: OpenAIStepReader,
+        task_id: str,
+        session_key: str | None,
     ) -> str:
         """Consume a Chat Completions SSE response, returning the assembled text.
 
@@ -165,7 +167,12 @@ class OpenAIApiBackend:
                     for step in steps if isinstance(steps, list) else []:
                         reader.feed_delta(step)
                         activity.note_transcript(turn_rows.rows(reader.events()))
-        activity.note_usage(usage)
+        await activity.note_provider_usage(
+            usage,
+            model=self.model,
+            session_key=session_key,
+            task_id=task_id,
+        )
         # Same fallback as the non-streamed path: some reasoning models put the
         # answer only in a reasoning field. It is collected but never streamed --
         # the wire's reasoning event carries no instance tag, so a direct chat's
@@ -235,6 +242,8 @@ class OpenAIApiBackend:
                 timeout=client_timeout,
                 on_delta=bounded_delta(on_delta, self.max_output_chars),
                 reader=reader,
+                task_id=task_id,
+                session_key=session_key,
             )
         else:
             data = await self._post_chat(url, json=body, headers=headers, timeout=client_timeout)
@@ -247,7 +256,12 @@ class OpenAIApiBackend:
                 # Some reasoning models put the answer only in a reasoning field.
                 content = message.get("reasoning_content") or message.get("reasoning") or ""
             reader.feed_steps(message.get("reasoning_steps"))
-            activity.note_usage(data.get("usage"))
+            await activity.note_provider_usage(
+                data.get("usage"),
+                model=self.model,
+                session_key=session_key,
+                task_id=task_id,
+            )
         # The answer is deliberately not among these rows: the record keeps it and
         # its reader appends it as the closing message, the same contract the acp
         # lane follows.

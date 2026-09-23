@@ -121,6 +121,33 @@ def delegated_usage(
     return acc
 
 
+async def record_delegated_usage(
+    usage: dict[str, Any] | None,
+    *,
+    model: str,
+    root: str,
+    task_id: str,
+) -> None:
+    """Persist one in-process sub-agent call under its delegation root."""
+    if not root:
+        return
+    from raven.providers.usage import normalize_usage
+
+    normalized = normalize_usage(usage)
+    normalized.pop("total_tokens")
+    tracker = UsageTracker()
+    await tracker.after_llm_call(
+        {},
+        UsageSnapshot(
+            model=model,
+            session_key=f"{root}:subagent:{task_id}",
+            root_session_key=root,
+            **normalized,
+        ),
+    )
+    tracker.close()
+
+
 class UsageTracker(TokenStrategy):
     """Observes every LLM call; persists & rolls up token and cost stats."""
 

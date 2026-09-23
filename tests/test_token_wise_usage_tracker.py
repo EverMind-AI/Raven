@@ -386,6 +386,31 @@ async def test_delegated_usage_reads_what_a_child_process_wrote_for_its_root(tmp
     assert got.cost_missing_calls == 1
 
 
+async def test_in_process_subagent_usage_is_written_as_delegated_usage(tmp_path: Path):
+    from datetime import datetime, timedelta, timezone
+
+    from raven.agent.subagent import activity
+    from raven.token_wise import usage_context
+    from raven.token_wise.usage_tracker import delegated_usage
+
+    since = datetime.now(timezone.utc) - timedelta(seconds=1)
+    owner = {"root_session_key": "cli:root", "telemetry_dir": str(tmp_path)}
+    with usage_context.bind("cli:root", owner), activity.collecting() as did:
+        await activity.note_provider_usage(
+            {"prompt_tokens": 40, "completion_tokens": 5, "cost_usd": 0.2},
+            model="provider/model",
+            session_key="cli:root",
+            task_id="worker-1",
+        )
+
+    got = delegated_usage("cli:root", since, telemetry_dir=tmp_path)
+    assert (did.tokens_in, did.tokens_out) == (40, 5)
+    assert got.calls == 1
+    assert got.input_tokens == 40
+    assert got.output_tokens == 5
+    assert got.cost_usd == pytest.approx(0.2)
+
+
 def test_delegated_usage_keeps_to_its_window_and_to_reported_prices(tmp_path: Path):
     from datetime import datetime, timedelta, timezone
 

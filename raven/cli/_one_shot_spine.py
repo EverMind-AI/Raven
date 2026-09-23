@@ -69,8 +69,9 @@ class TurnUsageSummary:
     def turn_started(self, root: str = "") -> None:
         self._baseline = self._tracker.snapshot()
         self._started = time.monotonic()
-        self._root = root
-        self._since = datetime.now(timezone.utc)
+        if self._since is None or root != self._root:
+            self._root = root
+            self._since = datetime.now(timezone.utc)
 
     def _delegated_since_last_line(self) -> UsageSnapshot | None:
         if self._delegated is None or not self._root or self._since is None:
@@ -148,20 +149,16 @@ class _OneShotTurnRunner(AgentTurnRunner):
     same answer a question gets on this surface, and the operator picks smart
     or full for one-shot work that must mutate.
 
-    The bound turn is kept: the gate appends every refusal to it from inside the
-    turn's own task, and an entrance cannot read that context back afterwards
-    (the scheduler builds the task), so this is the handle the caller reads its
-    refusals from. ``last_turn`` is the most recent binding, which is the only
-    one a one-shot run has.
+    Every bound turn is kept: the gate appends refusals to it from inside the
+    turn's own task, including background sub-agents that inherited the object.
+    The caller reads all of them after background work and follow-up turns have
+    settled.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.last_turn: Any = None
-        # Called with this run's refusals once the turn is over. A one-shot has
-        # no other reader: the refusals say a mutation the caller asked for was
-        # turned down, and without them the run reports success either way.
-        self.on_refusals: Callable[[list[Any]], None] | None = None
+        self.turns: list[Any] = []
 
     async def run(self, req: TurnRequest, emit: Any, drain: Any) -> Any:
         from raven.permissions import start_permission_turn
@@ -171,16 +168,12 @@ class _OneShotTurnRunner(AgentTurnRunner):
             conversation_id=req.conversation or "",
             turn_id=req.turn_id or "",
         )
-        try:
-            return await super().run(req, emit, drain)
-        finally:
-            if self.on_refusals is not None:
-                self.on_refusals(self.refusals())
+        self.turns.append(self.last_turn)
+        return await super().run(req, emit, drain)
 
     def refusals(self) -> list[Any]:
         """What this run's turn had refused, in the order it refused it."""
-        turn = self.last_turn
-        return list(getattr(turn, "refusals", ()) or ())
+        return [refusal for turn in self.turns for refusal in (getattr(turn, "refusals", ()) or ())]
 
 
 def _build_turn_summary(agent_loop: Any) -> TurnUsageSummary | None:
@@ -299,8 +292,8 @@ def build_one_shot_spine(
     ``render_error`` draws a failed turn's own words; a caller that omits it
     gets them through ``render``.
 
-    ``on_refusals`` receives what the turn's permission gate refused, once the
-    turn is over. A one-shot run has no human on it, so without this a run whose
+    ``on_refusals`` receives what the run's permission gates refused during
+    teardown. A one-shot run has no human on it, so without this a run whose
     mutations were all refused is indistinguishable from one that made them; a
     caller that omits it keeps the old silence.
 
@@ -319,7 +312,6 @@ def build_one_shot_spine(
         )
     )
     inner: Any = _OneShotTurnRunner(agent_loop, stream=False, inline_tool_stream=True)
-    inner.on_refusals = on_refusals
     runner: Any = inner
     if summary is not None:
         runner = _SummaryTurnRunner(runner, summary)
@@ -340,6 +332,8 @@ def build_one_shot_spine(
 
     async def teardown() -> None:
         await scheduler.shutdown(grace=shutdown_grace)
+        if on_refusals is not None:
+            on_refusals(inner.refusals())
         await hub.aclose()
 
     return scheduler, hub, teardown

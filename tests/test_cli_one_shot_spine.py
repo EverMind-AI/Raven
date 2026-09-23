@@ -426,7 +426,41 @@ async def test_build_one_shot_spine_hands_the_turns_refusals_to_the_caller():
     assert [(r.tool_name, r.source) for r in received] == [("write_file", "unattended")]
 
 
-async def test_a_second_turn_does_not_report_the_first_turns_refusals():
+async def test_background_refusals_are_collected_after_the_parent_turn_finishes():
+    from raven.permissions.turn import note_refusal
+
+    child: asyncio.Task | None = None
+
+    class _BackgroundRefusingLoop:
+        async def run_turn(self, req, emit, drain, **kwargs):
+            nonlocal child
+
+            async def refuse_later():
+                await asyncio.sleep(0)
+                note_refusal("exec", "git push origin topic", "not interactive", "unattended")
+
+            child = asyncio.create_task(refuse_later())
+            await emit(Text(content="parent done", source=req.source))
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+    received: list = []
+    scheduler, _hub, teardown = build_one_shot_spine(
+        _BackgroundRefusingLoop(),
+        "cli",
+        lambda t: None,
+        on_refusals=received.extend,
+    )
+    handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="first", conversation="cli:c1"))
+    await handle.result()
+    assert received == []
+    assert child is not None
+    await child
+    await teardown()
+
+    assert [(r.tool_name, r.action) for r in received] == [("exec", "git push origin topic")]
+
+
+async def test_runner_keeps_refusals_from_each_one_shot_follow_up_turn():
     from raven.cli._one_shot_spine import _OneShotTurnRunner
     from raven.permissions.turn import note_refusal
 
@@ -436,13 +470,11 @@ async def test_a_second_turn_does_not_report_the_first_turns_refusals():
                 note_refusal("exec", "rm x", "not interactive", "unattended")
             return await super().run_turn(req, emit, drain, **kwargs)
 
-    batches: list[list] = []
     runner = _OneShotTurnRunner(_OnceRefusingLoop(), stream=False)
-    runner.on_refusals = batches.append
     _, emit = _collect()
     for text in ("first", "second"):
         await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text=text, conversation="cli:c1"), emit, list)
-    assert [len(batch) for batch in batches] == [1, 0]
+    assert [(r.tool_name, r.action) for r in runner.refusals()] == [("exec", "rm x")]
 
 
 def test_turn_summary_adds_what_sub_agents_billed_the_root():
@@ -473,6 +505,31 @@ def test_turn_summary_adds_what_sub_agents_billed_the_root():
     # delegation would be billed on both.
     summary.take_line()
     assert windows[1][1] == windows[0][2]
+
+
+def test_follow_up_turn_does_not_skip_usage_recorded_after_the_first_reply():
+    from raven.contracts.token_strategy import UsageSnapshot
+
+    windows: list[tuple] = []
+
+    def delegated(root, since, until):
+        windows.append((root, since, until))
+        calls = 1 if len(windows) == 2 else 0
+        return UsageSnapshot(model="d", input_tokens=20 * calls, output_tokens=5 * calls, cost_usd=0.1, calls=calls)
+
+    tracker = _FakeUsageTracker()
+    summary = TurnUsageSummary(tracker, delegated=delegated)
+    summary.turn_started("cli:root")
+    tracker.set(input_tokens=10, output_tokens=2, cost_usd=0.01, calls=1)
+    summary.take_line()
+
+    summary.turn_started("cli:root")
+    line = summary.take_line()
+
+    assert windows[1][1] == windows[0][2]
+    assert line is not None
+    assert "incl. 1 sub-agent calls" in line
+    assert "$0.1" in line
 
 
 def test_turn_summary_prices_a_turn_whose_only_calls_were_delegated():
