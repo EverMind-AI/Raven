@@ -4,6 +4,7 @@ persistence.
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING
 
 from raven.agent.loop._shared import (
@@ -89,11 +90,13 @@ from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, fil
 from raven.contracts.harness import ActionRequest, CapabilityRequest, PlanningRequest, WindowPressure, WindowState
 from raven.contracts.loop_hooks import HookDecision
 from raven.permissions.turn import set_current_tool_call_id
+from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
 from raven.spine.events import bound_failure_text
 from raven.spine.turn import AnswerlessTurnError
+from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
 
 if TYPE_CHECKING:
@@ -976,27 +979,41 @@ class TurnPathMixin:
                 if draft is None and cut_continuation and on_token_delta is not None
                 else None
             )
-            response = await self.harness.action.decide(
-                ActionRequest(
-                    provider=self.provider,
-                    messages=call_messages,
-                    tools=call_tools,
-                    model=call_model,
-                    fallback_models=fallback_models,
-                    stream_call=self._llm_call_stream,
-                    # Spliced here rather than inside the module: both gates are
-                    # the shell's own, and which sink a delta reaches is not a
-                    # strategy decision. The module reads the field it is handed,
-                    # so the stream/retry branch stays exactly the one the loop
-                    # took -- neither gate is built unless ``on_token_delta``
-                    # already is, so the spliced value is None on exactly the
-                    # turns the raw sink was, and a reasoning sink alone still
-                    # streams.
-                    on_token_delta=draft or gate or on_token_delta,
-                    on_reasoning_delta=on_reasoning_delta,
-                    generation_overrides=gen_overrides,
+            # Every provider call ``decide`` makes reaches the provider seam, and
+            # an Action may make more than one (best-of-n, a critic pass: see
+            # ActionRequest), so none of them is claimed here. The session and
+            # the sink are both bound so the seam bills each call to this turn's
+            # conversation and to this loop's own registry -- a caller entering
+            # below ``run_turn`` has bound neither for it, and the sink is bound
+            # per turn because a candidate generation is built while the one it
+            # replaces may still be serving.
+            with (
+                usage_record.bind(self.strategies),
+                usage_context.bind(session_key) if session_key else contextlib.nullcontext(),
+            ):
+                response = await self.harness.action.decide(
+                    ActionRequest(
+                        provider=self.provider,
+                        messages=call_messages,
+                        tools=call_tools,
+                        model=call_model,
+                        fallback_models=fallback_models,
+                        stream_call=self._llm_call_stream,
+                        # Spliced here rather than inside the module: both gates are
+                        # the shell's own, and which sink a delta reaches is not a
+                        # strategy decision. The module reads the field it is handed,
+                        # so the stream/retry branch stays exactly the one the loop
+                        # took -- neither gate is built unless ``on_token_delta``
+                        # already is, so the spliced value is None on exactly the
+                        # turns the raw sink was, and a reasoning sink alone still
+                        # streams.
+                        on_token_delta=draft or gate or on_token_delta,
+                        on_reasoning_delta=on_reasoning_delta,
+                        generation_overrides=gen_overrides,
+                    )
                 )
-            )
+                # Read inside the bind: the count belongs to it and ends with it.
+                recorded_at_seam = usage_record.recorded_inbound()
             # Assigned, not latched: the fact this carries is that the turn's
             # own last word was cut, so a call that recovers clears it. Latching
             # would report a cut to a reader whose question is what the turn
@@ -1019,14 +1036,18 @@ class TurnPathMixin:
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
             usage_snapshot = self._build_usage_snapshot(response, call_model, session_key or "")
-            await self.strategies.after_llm_call(
-                {
-                    "content": response.content,
-                    "finish_reason": response.finish_reason,
-                    "usage": response.usage,
-                },
-                usage_snapshot,
-            )
+            # A call behind this response was recorded at the seam and this row
+            # would be a second copy of one of them; with no sink bound (a test,
+            # an embedder) nothing was recorded and this row is the only one.
+            if not recorded_at_seam:
+                await self.strategies.after_llm_call(
+                    {
+                        "content": response.content,
+                        "finish_reason": response.finish_reason,
+                        "usage": response.usage,
+                    },
+                    usage_snapshot,
+                )
             spend.note(usage_snapshot.cost_usd)
             # The stream caller (turn.* handler) may want the
             # final-iteration usage to populate `message.complete.payload.usage`
