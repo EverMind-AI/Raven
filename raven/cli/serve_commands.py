@@ -955,6 +955,8 @@ def _supervise(port: int) -> None:
 _STOP_WAIT_S = 20.0
 """How long ``--stop`` waits for a signalled process to actually be gone.
 
+Per signalled process, not per command: the supervisor and the gateway are
+stopped in sequence, so a stop that has to wait out both can take twice this.
 Generous on purpose. Exceeding it means a process ignored SIGTERM, which is a
 thing to report rather than to paper over with a longer sleep; the cost of
 waiting is paid only when something is genuinely wedged."""
@@ -962,10 +964,18 @@ waiting is paid only when something is genuinely wedged."""
 _STOP_POLL_S = 0.05
 
 
-def _await_exit(pid: int, deadline: float) -> bool:
-    """Whether ``pid`` is gone by ``deadline`` (a ``time.monotonic`` stamp)."""
+def _await_exit(pid: int, timeout_s: float) -> bool:
+    """Whether ``pid`` is gone within ``timeout_s`` seconds from now.
+
+    A duration, and the deadline derived from it here, so that two waits cannot
+    share one: the caller signals the supervisor and the gateway in sequence, so
+    a single stamp handed to both charges the second for however long the first
+    took -- down to no wait at all -- while the failure it prints still names the
+    whole budget.
+    """
     import time
 
+    deadline = time.monotonic() + timeout_s
     while _pid_alive(pid):
         if time.monotonic() >= deadline:
             return False
@@ -998,18 +1008,16 @@ def _stop_resident() -> bool:
     """
     import os
     import signal
-    import time
 
     stopped = False
     unresponsive: list[str] = []
-    deadline = time.monotonic() + _STOP_WAIT_S
 
     supervisor = _read_web_state()
     if supervisor is not None:
         try:
             os.kill(supervisor, signal.SIGTERM)
             stopped = True
-            if not _await_exit(supervisor, deadline):
+            if not _await_exit(supervisor, _STOP_WAIT_S):
                 unresponsive.append(f"supervisor (pid {supervisor})")
         except OSError as exc:
             typer.echo(f"warning: could not stop the supervisor (pid {supervisor}): {exc}")
@@ -1019,7 +1027,7 @@ def _stop_resident() -> bool:
         try:
             os.kill(gateway, signal.SIGTERM)
             stopped = True
-            if not _await_exit(gateway, deadline):
+            if not _await_exit(gateway, _STOP_WAIT_S):
                 unresponsive.append(f"gateway (pid {gateway})")
         except ProcessLookupError:
             pass
