@@ -1923,3 +1923,91 @@ async def test_oauth_login_maps_each_failure_to_the_pages_vocabulary(
     monkeypatch.setattr(oauth_login, "start", failing)
     with pytest.raises(expected, match=text):
         await model_module.model_oauth_login({"slug": "minimax_global"})
+
+
+# ----------------------------------------------------------------------------
+# A credential edited here has to reach the memory service
+# ----------------------------------------------------------------------------
+
+
+class TestEverosFollowsACredentialChange:
+    """EverOS holds the key it booted with; these handlers are where it changes.
+
+    The four memory roles store a pin -- a model and a provider -- and resolve
+    the address and key from that provider when the server is spawned. Editing
+    the credential here therefore changes what the *next* spawn would hand the
+    server while the running one keeps the old value, and nothing says so:
+    EverOS's /health never touches a model, so a revoked key reads as healthy
+    until memory fails in EverOS's own log.
+    """
+
+    @pytest.fixture
+    def pinned(self, fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """A config where the llm role runs on deepseek, and a recorded restart."""
+        _write_config(
+            fake_home,
+            {
+                "providers": {
+                    "deepseek": {"apiKey": "old-key", "apiBase": "https://api.deepseek.com/v1"},
+                    "openai": {"apiKey": "sk-openai"},
+                },
+                "plugins": {"config": {"everos-memory": {"llm": {"model": "deepseek-chat", "provider": "deepseek"}}}},
+            },
+        )
+        restarts: list[str] = []
+        monkeypatch.setattr(
+            "raven.rpc.methods.console._everos_applied",
+            lambda factory, cost="": restarts.append("restart") or {"applied": True},
+        )
+        return restarts
+
+    async def test_rotating_the_key_of_a_pinned_provider_restarts_memory(self, pinned: list[str]) -> None:
+        """The reported bug: the key moved in raven and never reached EverOS."""
+        await model_save_key({"slug": "deepseek", "api_key": "new-key"})
+        assert pinned == ["restart"]
+
+    async def test_a_provider_no_role_uses_does_not_restart_memory(self, pinned: list[str]) -> None:
+        """Restarting memory over an unrelated vendor costs a session its memory."""
+        await model_save_key({"slug": "openai", "api_key": "sk-new"})
+        assert pinned == []
+
+    async def test_moving_the_address_restarts_memory(self, pinned: list[str]) -> None:
+        """EverOS is handed a base_url too, resolved from the same provider."""
+        await model_module.model_set_fields({"slug": "deepseek", "fields": {"api_base": "https://moved.test/v1"}})
+        assert pinned == ["restart"]
+
+    async def test_a_field_everos_never_sees_does_not_restart_memory(self, pinned: list[str]) -> None:
+        """Only the model, the address and the key travel; headers stay in raven."""
+        await model_module.model_set_fields({"slug": "deepseek", "fields": {"extra_headers": {"X-A": "1"}}})
+        assert pinned == []
+
+    async def test_disconnecting_a_pinned_provider_restarts_memory(self, pinned: list[str]) -> None:
+        await model_disconnect({"slug": "deepseek"})
+        assert pinned == ["restart"]
+
+    async def test_endpoint_edits_restart_memory(self, pinned: list[str]) -> None:
+        """EverOS is handed the first endpoint holding a key, so the list matters."""
+        await model_add_endpoint(
+            {"slug": "deepseek", "label": "backup", "api_key": "k2", "api_base": "https://b.test/v1"}
+        )
+        assert pinned == ["restart"]
+        await model_remove_endpoint({"slug": "deepseek", "label": "backup"})
+        assert pinned == ["restart", "restart"]
+
+    async def test_an_install_without_everos_saves_normally(
+        self, fake_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The plugin is optional; a save must not fail because it is absent."""
+        _write_config(fake_home, {"providers": {"deepseek": {"apiKey": "old-key"}}})
+        import builtins
+
+        real_import = builtins.__import__
+
+        def no_everos(name: str, *args, **kwargs):
+            if name.startswith("raven_everos"):
+                raise ImportError("no everos here")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", no_everos)
+        result = await model_save_key({"slug": "deepseek", "api_key": "new-key"})
+        assert result["provider"]["slug"] == "deepseek"

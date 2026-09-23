@@ -50,6 +50,7 @@ Boot sequence (called by ``make_backend`` / ``make_understand_media_tool``):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -1037,6 +1038,26 @@ def everos_env() -> dict[str, str]:
             if protocol:
                 env[f"{prefix}PROVIDER"] = protocol
     return env
+
+
+def role_env_digest() -> str:
+    """A digest of everything :func:`everos_env` would hand a spawn.
+
+    EverOS builds its model clients once, in the API lifespan, so a running
+    server keeps the credentials it booted with. A key rotated in raven's
+    provider settings afterwards reaches the file and never reaches that
+    process -- and a health probe cannot tell the difference, because it never
+    touches a model. Recording this at the spawn is what lets the next start
+    ask whether the server it is about to adopt is running on what raven still
+    holds.
+
+    Over the emitted environment rather than over the provider sections: an
+    env-managed role is skipped by ``everos_env`` and must be skipped here too,
+    or raven would restart a server over a value it does not own.
+    """
+    env = everos_env()
+    blob = "\n".join(f"{name}={env[name]}" for name in sorted(env))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def everos_toml_role_notes() -> list[str]:
