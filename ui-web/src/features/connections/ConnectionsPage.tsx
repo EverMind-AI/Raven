@@ -328,9 +328,11 @@ function ConnForm({ c }: { c: ConnChannel }): JSX.Element {
      * receiving used to close on the press itself, reporting an answer nothing
      * had given yet; and a rebuild that finishes before the status is re-read
      * shows no intermediate state at all, so the answer has to be read off the
-     * write's own completion rather than waited for as a transition. */
-    void store.apply(c, patch, true).then(() => {
-      if (connState(c) === 'live') store.closeChannel()
+     * write's own completion rather than waited for as a transition. A write
+     * the gateway refused leaves the row as it was, live included, and that is
+     * not an answer either: the card stays with the failure the source toasted. */
+    void store.apply(c, patch, true).then((applied) => {
+      if (applied && connState(c) === 'live') store.closeChannel()
     })
   }
   return (

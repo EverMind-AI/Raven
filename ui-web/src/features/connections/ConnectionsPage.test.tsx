@@ -48,6 +48,7 @@ function install(rows: ConnChannel[], over: Partial<ConnectionsSource> = {}) {
     apply: async (c, patch, enable) => {
       calls.push(['apply', { id: c.id, patch, enable }])
       c.on = enable
+      return true
     },
     qr: async () => null,
     ...over,
@@ -303,6 +304,7 @@ describe('connections island', () => {
           c.on = true
           c.running = true
           c.connected = true
+          return true
         },
       })
       await mount()
@@ -325,7 +327,7 @@ describe('connections island', () => {
       const slack = chan({ on: true, running: true, connected: true })
       let written!: () => void
       const writing = new Promise<void>((resolve) => { written = resolve })
-      install([slack], { apply: async () => { await writing } })
+      install([slack], { apply: async () => { await writing; return true } })
       await mount()
       await act(async () => { openRow('Slack') })
       await act(async () => {
@@ -348,7 +350,7 @@ describe('connections island', () => {
        write's completion, not a transition, is what it keys on. */
     it('closes the form once the correction is applied and the entrance reads live', async () => {
       const slack = chan({ on: true, running: true, connected: true })
-      install([slack], { apply: async () => {} })
+      install([slack], { apply: async () => true })
       await mount()
       await act(async () => { openRow('Slack') })
       await act(async () => {
@@ -369,8 +371,27 @@ describe('connections island', () => {
         apply: async (c) => {
           c.running = false
           c.connected = false
+          return true
         },
       })
+      await mount()
+      await act(async () => { openRow('Slack') })
+      await act(async () => {
+        typeInto(main().querySelector<HTMLInputElement>('#connDlgBody input')!, 'rotated-token')
+      })
+      await act(async () => {
+        ;(paneFoot().querySelector('button.key') as HTMLElement).click()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(main().querySelector('#connDlgBody')).toBeTruthy()
+    })
+
+    /* A write the gateway refused (validation, an unreachable rpc) leaves the row
+       exactly as it was, live included. Closing on that would report the old
+       state as the answer to a save that never landed. */
+    it('keeps the form up when the write itself was refused on a live entrance', async () => {
+      const slack = chan({ on: true, running: true, connected: true })
+      install([slack], { apply: async () => false })
       await mount()
       await act(async () => { openRow('Slack') })
       await act(async () => {
