@@ -1459,7 +1459,15 @@ class SubagentManager:
                 return override
         return self.row_default_model(agent)
 
-    def set_instance_model(self, session_key: str | None, agent: str, handle: str, model: str | None) -> str | None:
+    def set_instance_model(
+        self,
+        session_key: str | None,
+        agent: str,
+        handle: str,
+        model: str | None,
+        *,
+        offered: "list[str] | None" = None,
+    ) -> str | None:
         """Put one instance on ``model`` from its next turn on.
 
         Everything ``set_instance_mode`` says below about where this is held and
@@ -1469,19 +1477,27 @@ class SubagentManager:
         repairs it. A raven restart returns every instance to its agent's own
         model.
 
-        ``None`` clears the override. Raises ``ValueError`` naming what the agent
-        does offer, so a caller is never left guessing at the vocabulary -- the
-        values are opaque provider-qualified ids and guessing at one is how a
-        reader asks for a model the agent will refuse.
+        ``None`` clears the override.
+
+        ``offered`` is the vocabulary to check against, and the caller supplies
+        it because the caller is what knows which one applies: an agent of
+        raven's own runs on this host's providers and takes their ids, which the
+        RPC layer checks the way it checks a row's (``_host_pair``), while a
+        third party takes only what its own handshake advertised. Defaulted to
+        that handshake, which is the answer for every caller that has no better
+        one. Raises ``ValueError`` naming what is on offer, so a caller is never
+        left guessing at the vocabulary -- the values are opaque
+        provider-qualified ids and guessing at one is how a reader asks for a
+        model the agent will refuse.
         """
         key = (session_key or "", agent, handle)
         if model is None:
             self._instance_models.pop(key, None)
             return None
-        offered = [c.value for c in self.agent_model_choices(agent)]
-        if model not in offered:
+        allowed = [c.value for c in self.agent_model_choices(agent)] if offered is None else offered
+        if model not in allowed:
             raise ValueError(
-                f"{agent!r} has no model {model!r}" + (f"; it offers {len(offered)}" if offered else "; it offers none")
+                f"{agent!r} has no model {model!r}" + (f"; it offers {len(allowed)}" if allowed else "; it offers none")
             )
         self._instance_models[key] = model
         logger.info("Instance {}/{} set to model {}", agent, handle, model)
