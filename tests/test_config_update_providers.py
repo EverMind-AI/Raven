@@ -591,6 +591,101 @@ def test_test_provider_names_an_environment_proxy_that_is_not_listening(
     assert dead in result["error"]
 
 
+def test_test_provider_never_returns_the_proxy_credentials(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe's error reaches the browser as a tooltip, so a proxy written as
+    user:password@host must come back as host alone, in every field."""
+    import json
+    import socket
+
+    monkeypatch.undo()
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", f"http://alice:s3cr@t@127.0.0.1:{port}")
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert result["status"] == "proxy_unreachable"
+    assert result["proxy"] == f"http://127.0.0.1:{port}"
+    dumped = json.dumps(result)
+    assert "s3cr" not in dumped and "alice" not in dumped
+
+
+def test_a_proxy_error_that_quotes_the_proxy_is_redacted_too(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Some proxy failures name the proxy in their own message; that copy of the
+    address loses its credentials as well."""
+    import json
+
+    monkeypatch.undo()
+    raw = "http://alice:s3cret@proxy.invalid:3128"
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", raw)
+
+    def refuse(self, url, **kwargs):
+        raise httpx.ProxyError(f"could not tunnel through {raw}")
+
+    monkeypatch.setattr(httpx.Client, "get", refuse)
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert result["status"] == "proxy_unreachable"
+    assert "http://proxy.invalid:3128" in result["error"]
+    assert "s3cret" not in json.dumps(result)
+
+
+def test_a_scheme_less_proxy_quoted_with_the_assumed_scheme_is_redacted(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    monkeypatch.undo()
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "alice:s3cret@proxy.invalid:3128")
+
+    def refuse(self, url, **kwargs):
+        raise httpx.ProxyError("could not tunnel through http://alice:s3cret@proxy.invalid:3128")
+
+    monkeypatch.setattr(httpx.Client, "get", refuse)
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert "http://proxy.invalid:3128" in result["error"]
+    assert "s3cret" not in json.dumps(result)
+
+
+def test_without_userinfo_leaves_a_plain_address_alone() -> None:
+    from raven.config.update_providers import _without_userinfo
+
+    assert _without_userinfo("http://127.0.0.1:7897") == "http://127.0.0.1:7897"
+    assert _without_userinfo("socks5://u:p@proxy.local:1080/") == "socks5://proxy.local:1080/"
+    # httpx takes a proxy with no scheme and reads it as http://; urlsplit files
+    # the userinfo of that form under the path, not the netloc.
+    assert _without_userinfo("alice:secret@127.0.0.1:9") == "127.0.0.1:9"
+    assert _without_userinfo("alice:s@cret@127.0.0.1:9/x") == "127.0.0.1:9/x"
+
+
+def test_a_scheme_less_proxy_loses_its_credentials_in_every_field(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+    import socket
+
+    monkeypatch.undo()
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", f"alice:s3cret@127.0.0.1:{port}")
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert result["status"] == "proxy_unreachable"
+    assert result["proxy"] == f"127.0.0.1:{port}"
+    dumped = json.dumps(result)
+    assert "s3cret" not in dumped and "alice" not in dumped
+
+
 def _public_catalogue(good_key: str):
     """A vendor whose /models answers anyone, and whose /key checks the key."""
 

@@ -1656,7 +1656,11 @@ def _confirm_credential(
 
 
 def _env_proxy_for(url: str) -> str | None:
-    """The proxy httpx takes from the environment for ``url``, or None."""
+    """The proxy httpx takes from the environment for ``url``, or None.
+
+    Verbatim, credentials included: only for matching against error text and
+    for ``_without_userinfo`` -- never for a result that leaves this module.
+    """
     import urllib.request
     from urllib.parse import urlsplit
 
@@ -1665,6 +1669,26 @@ def _env_proxy_for(url: str) -> str | None:
         return None
     proxies = urllib.request.getproxies()
     return proxies.get(parts.scheme) or proxies.get("all") or None
+
+
+def _without_userinfo(url: str) -> str:
+    """``url`` with any ``user:password@`` dropped.
+
+    A proxy is commonly configured as ``http://user:password@host:port``, and a
+    probe's error travels to the browser, where it is shown as a tooltip.
+    httpx also takes one with no scheme (``user:password@host:port``, read as
+    http://), which ``urlsplit`` files under the path, so that form is split by
+    hand.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    if "://" not in url:
+        authority, sep, rest = url.partition("/")
+        return authority.rsplit("@", 1)[-1] + sep + rest
+    parts = urlsplit(url)
+    if "@" not in parts.netloc:
+        return url
+    return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
 
 
 def _probe_models_endpoint(
@@ -1701,7 +1725,11 @@ def _probe_models_endpoint(
         # "connection refused", which reads as the vendor being down or the key
         # being wrong. Naming the proxy is the only thing that points the reader
         # at the real fault.
-        proxy = _env_proxy_for(url) if transport is None else None
+        raw_proxy = _env_proxy_for(url) if transport is None else None
+        proxy = _without_userinfo(raw_proxy) if raw_proxy else None
+        # Also covers httpx quoting a scheme-less proxy with the http:// it
+        # assumed: the value as set is a substring of that.
+        detail = str(exc).replace(raw_proxy, proxy) if raw_proxy and proxy else str(exc)
         if proxy and isinstance(exc, (httpx.ProxyError, httpx.ConnectError, httpx.ConnectTimeout)):
             return {
                 "ok": False,
@@ -1710,7 +1738,7 @@ def _probe_models_endpoint(
                 "http_status": None,
                 "models_count": None,
                 "model_ids": None,
-                "error": f"proxy {proxy} is not reachable: {exc}",
+                "error": f"proxy {proxy} is not reachable: {detail}",
                 "proxy": proxy,
             }
         return {
@@ -1720,7 +1748,7 @@ def _probe_models_endpoint(
             "http_status": None,
             "models_count": None,
             "model_ids": None,
-            "error": str(exc),
+            "error": detail,
         }
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
