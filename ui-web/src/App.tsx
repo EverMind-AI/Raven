@@ -288,8 +288,8 @@ function RailShow(): JSX.Element {
 /* A module page: a heading and the empty box its island roots itself in.
 
    The heading is drawn and then hidden (`.page > header h2{display:none}`,
-   src/styles/page.css): the strip stays for breathing room and the scroll fade,
-   and each page's own hero says the name bigger. It is still the page's
+   src/styles/page.css): the strip stays for breathing room, and each page's
+   own hero says the name bigger. It is still the page's
    accessible name through the aria-label above, which is why the two keys can
    differ (the memory page is announced by its hero's phrase). */
 function ModulePage({ page }: { readonly page: ModulePageRow }): JSX.Element {
