@@ -2504,6 +2504,22 @@ textarea:focus, textarea:focus-visible,
 .meter { font-family: var(--mono); font-size: 11px; color: var(--faint);
   font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: auto;
   min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Past sharing, the bar gives things up whole, in the order they matter
+   least, rather than ellipsizing every label to a stub: the usage line and
+   the words of the folder and permission chips first (their icons stay, the
+   name is the chip's label and a click away), then the folder chip, the
+   context ring and the permission chip, in that order. The "+", the model
+   and send never go -- the model's name keeps its ellipsis instead. Measured
+   on the dock rather than the window, because the desk pane narrows the chat
+   and the window stays put. */
+@container dock (max-width: 480px) {
+  .under .meter { visibility: hidden; width: 0; }
+  .under #permName, .under #wdName { display: none; }
+  .under #permChip, .under #wdChip { padding: 0 9px; }
+}
+@container dock (max-width: 360px) { .under .chrome-anch:has(#wdChip) { display: none; } }
+@container dock (max-width: 320px) { .under #ctxChip { display: none; } }
+@container dock (max-width: 280px) { .under .chrome-anch:has(#permChip) { display: none; } }
 
 /* capability popover above the composer */
 /* model picker: provider column + model column, fixed height so a provider

@@ -301,6 +301,7 @@ export const settingsSource: SettingsSource = {
     .then((r) => (r.info || {}) as SkillDetail)),
   openSkillFile: (name, file) => run(gateway().call('skills.manage', { action: 'open', query: name, file })
     .then(() => undefined)),
+  revealPlace: (place) => run(gateway().call('fs.reveal', { place }).then(() => undefined)),
   uninstallSkill: (name) => run(gateway().call('skillhub.remove', { name }).then(afterExt)),
   serverDetail: (name) => gateway().call('plughub.detail', { id: name })
     .then((r) => {

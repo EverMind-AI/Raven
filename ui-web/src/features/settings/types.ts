@@ -226,6 +226,10 @@ export interface SettingsSource {
   removeSession(id: string): Promise<void>
   inspectSkill(name: string): Promise<SkillDetail>
   openSkillFile(name: string, file: string): Promise<void>
+  /* One of raven's own locations in the host's file manager: the config file
+     shown selected, agent home opened. Named rather than sent as a path -- the
+     gateway resolves both itself, so this reaches nothing else. */
+  revealPlace(place: 'config' | 'workspace'): Promise<void>
   uninstallSkill(name: string): Promise<SettingsSnapshot>
   /* The credential fields the catalogue declares for this server, empty for
      one nobody installed from the catalogue. A read, so no snapshot back. */

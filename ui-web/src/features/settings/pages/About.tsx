@@ -4,6 +4,7 @@
    A47 asks for. */
 import { t } from '../../../i18n/t'
 import { open as copyOrOpen } from '../../../lib/openUrl'
+import { hostIsLocal, hostPlatform } from '../../../lib/platform'
 import { Card, PathVal, Row, Rov } from '../Fields'
 import * as store from '../store'
 
@@ -32,6 +33,21 @@ export function About(): JSX.Element {
      here, which is what A47 asks for: the row offers it once a newer version is
      known, not only when this button was the one that found it. */
   const newer = store.source().newerVersion()
+  const config = s.snap.configPath
+  const storage = workspacePath(s.snap.raw, config)
+  /* A location is somewhere to go, so its button takes the reader there -- in
+     the host's file manager, which is only their own while the gateway is this
+     desktop. Served from elsewhere it would open a window on another machine,
+     so there the button copies the path instead. */
+  const local = hostIsLocal()
+  const platform = hostPlatform()
+  const goLabel = !local
+    ? t('gui.settings.copy_path')
+    : t(platform === 'mac' ? 'gui.ws.reveal_finder' : platform === 'windows' ? 'gui.ws.reveal_explorer' : 'gui.ws.reveal_folder')
+  const go = (place: 'config' | 'workspace', path: string): void => {
+    if (local) void store.source().revealPlace(place)
+    else copyOrOpen(path)
+  }
   return (
     <Card>
       <Row label={t('gui.settings.about.version')}>
@@ -52,10 +68,10 @@ export function About(): JSX.Element {
         ) : null}
       </Row>
       <Row label={t('gui.settings.about.config')}>
-        <PathVal path={s.snap.configPath} onCopy={() => copyOrOpen(s.snap.configPath)} />
+        <PathVal path={config} label={goLabel} onAct={() => go('config', config)} />
       </Row>
       <Row label={t('gui.settings.about.storage')}>
-        <PathVal path={workspacePath(s.snap.raw, s.snap.configPath)} onCopy={() => copyOrOpen(workspacePath(s.snap.raw, s.snap.configPath))} />
+        <PathVal path={storage} label={goLabel} onAct={() => go('workspace', storage)} />
       </Row>
     </Card>
   )

@@ -4,6 +4,7 @@
    an answer makes clickable. The live layer installs both sources onto the
    seam, which replaces the fixture ones before the first paint. */
 
+import { hostIsLocal } from '../../lib/platform'
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { changes as workspaceChanges, showFile } from './store'
@@ -91,10 +92,7 @@ export const liveLinkTargetOf = (u: string): ProseTarget | null => {
   return { p: text, dir }
 }
 
-/* Whether an application launched on the gateway's host would appear on the
-   reader's own screen. `open` and `reveal` run where the gateway runs, so on a
-   remote serve they would drive somebody else's machine. */
-export const hostIsLocal = (): boolean => /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)
+export { hostIsLocal }
 
 export const proseSource: ProseSource = {
   pathOf: livePathOf,

@@ -2160,9 +2160,16 @@ async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
     for the localhost page that is the reader's own desktop, which is the whole
     use. Fenced exactly like the viewer (``resolve_readable``): a path the page
     may not render is not one it may pop a Finder window on either.
+
+    ``place`` is the one way past that fence, and it takes no path: it names one
+    of two locations the gateway resolves from its own config (see
+    :func:`_reveal_place`).
     """
     from raven.rpc.files import resolve_readable
 
+    place = params.get("place")
+    if place:
+        return _reveal_place(str(place))
     raw = str(params.get("path") or "").strip()
     if not raw:
         raise ConfigValidationError("path is required")
@@ -2180,19 +2187,48 @@ async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
         target = resolve_readable(str(p))
     except (ValueError, PermissionError, FileNotFoundError, IsADirectoryError, OSError) as e:
         raise ConfigValidationError(str(e)) from None
+    _show_in_file_manager(target, select=True)
+    return {"ok": True}
+
+
+def _reveal_place(place: str) -> dict:
+    """Show one of raven's own locations: the config file, or agent home.
+
+    The settings page's About rows are addresses, and pressing one should go
+    there. Both live under the state directory the viewer's fence refuses, and
+    agent home is a folder, which the fence refuses too -- so they are named
+    here rather than sent as paths. The page picks one of two places this
+    gateway resolves from its own config, which reaches nothing else and reads
+    nothing back: the reveal opens a window on the host and answers ``ok``.
+    """
+    from raven.config.loader import get_config_path, load_config
+
+    if place == "config":
+        target, select = get_config_path(), True
+    elif place == "workspace":
+        target, select = Path(load_config().workspace_path).expanduser(), False
+    else:
+        raise ConfigValidationError(f"unknown place: {place}")
+    if not target.exists():
+        raise ConfigValidationError(f"{target} does not exist")
+    _show_in_file_manager(target.resolve(), select=select)
+    return {"ok": True}
+
+
+def _show_in_file_manager(target: Path, *, select: bool) -> None:
+    """Open the host's file manager on ``target``: selected in its folder, or opened."""
     if sys.platform == "darwin":
-        argv = ["open", "-R", str(target)]
+        argv = ["open", "-R", str(target)] if select else ["open", str(target)]
     elif sys.platform.startswith("win"):
-        argv = ["explorer", f"/select,{target}"]
+        argv = ["explorer", f"/select,{target}"] if select else ["explorer", str(target)]
     else:
         # No cross-desktop "select this file" verb exists, so the containing
         # folder is the best any Linux file manager can be asked for.
-        argv = ["xdg-open", str(target.parent)]
+        argv = ["xdg-open", str(target.parent if select else target)]
     try:
         subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
         raise ConfigValidationError(f"reveal failed: {e}") from None
-    return {"ok": True}
 
 
 # An application NAME, and nothing that could be anything else. The check is a

@@ -3692,9 +3692,13 @@ export interface DeckTemplatesPickResult {
 }
 export interface FsRevealParams {
   /**
-   * Absolute, or relative to the session's working directory.
+   * Absolute, or relative to the session's working directory. Give this or `place`.
    */
-  path: string;
+  path?: string;
+  /**
+   * One of raven's own locations, resolved by the gateway rather than sent: the config file (shown selected) or agent home (opened). Give this or `path`.
+   */
+  place?: 'config' | 'workspace';
   session?: string;
 }
 export interface FsRevealResult {
