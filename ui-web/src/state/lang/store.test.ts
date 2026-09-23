@@ -5,9 +5,10 @@
  * reader who has picked one is remembered in localStorage and the page is in it
  * before anything renders; a page nobody has picked for is in the language its
  * own markup declares (src/page.html says lang="zh-CN"), because that is the
- * language the reader is looking at. Neither load mode asks the gateway in time
- * to matter -- the fixture config has no `language` key and a page with no
- * gateway never gets that far.
+ * language the reader is looking at. Neither load mode has asked the gateway by
+ * then: the store resolves as it loads, and what the gateway says arrives later
+ * and applies as any pick does (state/lang/pick.ts's `load`, pinned next door
+ * in pick.test.ts).
  *
  * What still waits for a pick is one thing: an attribute the served markup does
  * not carry at all. Every case below that names `attr` is pinning that.

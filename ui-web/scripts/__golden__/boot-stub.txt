@@ -13,11 +13,11 @@ div.app[data-rail=on]
           circle
           path
           path
-      button#railBtn.ghost-ic.tipdn
+      button#railBtn.ghost-ic.tipdn[data-tip]
         svg
           rect
           path
-      button#findBtn.ghost-ic.tipdn
+      button#findBtn.ghost-ic.tipdn[data-tip]
         svg
           circle
           path
@@ -98,7 +98,7 @@ div.app[data-rail=on]
               textarea#ta
             div.under
               span.chrome-anch
-                button#plusBtn.plus
+                button#plusBtn.plus[data-tip]
                   svg
                     path
                 div#plusPop.pop[data-open=false]
@@ -162,12 +162,12 @@ div.app[data-rail=on]
                 path
               svg.in
                 path
-            button#wsClose.ghost-ic.wstog.tipdn
+            button#wsClose.ghost-ic.wstog.tipdn[data-tip]
               svg
                 rect
                 path
         div#wsBody.ws-body
-button#railShow.ghost-ic.tipdn
+button#railShow.ghost-ic.tipdn[data-tip]
   svg
     rect
     path
@@ -195,7 +195,7 @@ div#setVeil.veil.setveil[data-open=false][data-section=usage]
         div.ttl
           h3#setTitle
           p#setSub.sub
-        button#setClose.icb
+        button#setClose.icb[data-tip]
           svg
             path
       div#spanels.spanels
