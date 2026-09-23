@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
+from typing import Any
 
 #: Directories a walk never enters. Machinery rather than work: a run that
 #: installs a dependency or lands a commit would otherwise report thousands of
@@ -94,3 +95,16 @@ def diff(before: Snapshot | None, after: Snapshot | None) -> tuple[list[str], li
     modified = sorted(path for path in after if path in before and after[path] != before[path])
     deleted = sorted(path for path in before if path not in after)
     return created, modified, deleted
+
+
+def root_for(tool: Any, params: dict[str, Any], fallback: Path | str) -> Path | None:
+    """The directory to list around one call of ``tool`` with ``params``.
+
+    A tool that can say where its files land answers for itself through
+    ``listing_root``: a per-call working directory moves the root, and a
+    command sent to a registered machine leaves nothing on this disk, which is
+    ``None`` -- no listing rather than an empty one. A tool that cannot say is
+    taken to run where the lane's own tools run, ``fallback``.
+    """
+    ask = getattr(tool, "listing_root", None)
+    return ask(params) if callable(ask) else Path(fallback)

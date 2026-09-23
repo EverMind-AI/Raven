@@ -376,6 +376,18 @@ class ExecTool(Tool):
         bound = str(workdir.current() or "") if self.follow_binding else ""
         return working_dir or bound or self.working_dir or os.getcwd()
 
+    def listing_root(self, params: dict[str, Any]) -> Path | None:
+        """Where this call's files land, as far as this host can see.
+
+        The directory the command runs in, resolved the way ``execute`` will --
+        a per-call ``working_dir`` moves it off the bound one -- or ``None`` for
+        a command run on a registered machine, whose files are not on this disk
+        and would be described by nothing a listing here could find.
+        """
+        if str(params.get("machine") or "").strip():
+            return None
+        return Path(self._cwd_for(str(params.get("working_dir") or "") or None))
+
     def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any]:
         """The command and where it would run, resolved the way ``execute`` will."""
         command = str(params.get("command") or "")

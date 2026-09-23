@@ -2659,9 +2659,10 @@ async def test_a_node_editing_a_file_it_did_not_create_records_an_edit_entry(tmp
 class _ExecProvider(LLMProvider):
     """One ``exec`` call running the given command, then a final answer."""
 
-    def __init__(self, command: str) -> None:
+    def __init__(self, command: str, **arguments: Any) -> None:
         super().__init__(api_key="test")
         self.command = command
+        self.arguments = arguments
         self.calls = 0
 
     def get_default_model(self) -> str:
@@ -2675,17 +2676,19 @@ class _ExecProvider(LLMProvider):
             return LLMResponse(
                 content="",
                 finish_reason="tool_calls",
-                tool_calls=[ToolCallRequest(id="c1", name="exec", arguments={"command": self.command})],
+                tool_calls=[
+                    ToolCallRequest(id="c1", name="exec", arguments={"command": self.command, **self.arguments})
+                ],
             )
         return LLMResponse(content="done", finish_reason="stop")
 
 
-async def _ran(command: str, workspace) -> list[dict]:
+async def _ran(command: str, workspace, **arguments: Any) -> list[dict]:
     """What one ``exec`` command left in ``workspace``, as the run's own files."""
     from raven.agent.subagent import activity
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
-    backend = RavenLoopBackend(provider=_ExecProvider(command), model="stub", agent_home=workspace.parent)
+    backend = RavenLoopBackend(provider=_ExecProvider(command, **arguments), model="stub", agent_home=workspace.parent)
     with activity.collecting() as did:
         await backend.run("run it", task_id="nx", workspace=workspace, executor=None)
     return did.files
@@ -2727,6 +2730,21 @@ async def test_a_file_a_command_removed_is_recorded_as_a_deletion(tmp_path) -> N
     files = await _ran("rm old.md", work)
 
     assert files == [{"path": "old.md", "op": "delete", "add": 0, "del": 2, "size": None}]
+
+
+async def test_a_command_run_in_another_directory_is_listed_there(tmp_path) -> None:
+    """``exec`` takes a ``working_dir`` of its own; a command sent to one leaves
+    its files there, where a listing of the workspace never looks, and the run
+    would say it made nothing. Outside the workspace the record keeps the
+    absolute path, as every entry for a file not under it does."""
+    work = tmp_path / "ws"
+    work.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    files = await _ran("printf 'a\nb\n' > out.txt", work, working_dir=str(elsewhere))
+
+    assert files == [{"path": str((elsewhere / "out.txt").resolve()), "op": "add", "add": 2, "del": 0, "size": 4}]
 
 
 async def test_a_removal_the_command_never_named_is_still_seen(tmp_path) -> None:

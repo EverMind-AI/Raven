@@ -117,3 +117,31 @@ def test_a_root_that_is_not_a_directory_has_no_listing(tmp_path: Path) -> None:
     """``None``, not an empty listing: empty against a real listing would read
     as a run that deleted the whole tree."""
     assert snapshot.take(tmp_path / "nowhere") is None
+
+
+class _Placed:
+    """A tool that knows where its files land, the way ``ExecTool`` does."""
+
+    def __init__(self, answer: Path | None) -> None:
+        self.answer = answer
+
+    def listing_root(self, params: dict) -> Path | None:
+        return self.answer
+
+
+def test_a_tool_that_knows_where_its_files_land_is_asked(tmp_path: Path) -> None:
+    elsewhere = tmp_path / "elsewhere"
+
+    assert snapshot.root_for(_Placed(elsewhere), {"command": "make"}, tmp_path) == elsewhere
+
+
+def test_a_tool_whose_files_land_on_another_machine_gets_no_listing(tmp_path: Path) -> None:
+    """None rather than the fallback: a command that ran elsewhere changed
+    nothing here, and listing this tree would attribute to it whatever another
+    turn happened to write meanwhile."""
+    assert snapshot.root_for(_Placed(None), {"command": "make", "machine": "prod"}, tmp_path) is None
+
+
+def test_a_tool_that_cannot_say_runs_where_the_lane_does(tmp_path: Path) -> None:
+    assert snapshot.root_for(object(), {"command": "make"}, tmp_path) == tmp_path
+    assert snapshot.root_for(None, {"command": "make"}, str(tmp_path)) == tmp_path

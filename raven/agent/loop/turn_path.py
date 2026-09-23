@@ -1224,8 +1224,17 @@ class TurnPathMixin:
                         # it could find. Off the loop, because the walk is tens
                         # of milliseconds of it and every other session on this
                         # process waits behind them. The directory is the one
-                        # this turn's tools run in.
-                        exec_root = (workdir.current() or self.workspace) if tool_call.name == "exec" else None
+                        # the command runs in, which the tool itself resolves:
+                        # the turn's unless the call names another.
+                        exec_root = (
+                            workdir_snapshot.root_for(
+                                self.tools.get(tool_call.name),
+                                tool_call.arguments,
+                                workdir.current() or self.workspace,
+                            )
+                            if tool_call.name == "exec"
+                            else None
+                        )
                         if exec_root is not None:
                             exec_before = await asyncio.to_thread(workdir_snapshot.take, exec_root)
                         result = await self.tools.execute(

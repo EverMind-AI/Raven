@@ -566,8 +566,11 @@ async def _run_command_turn(workspace: Path, work: Path, script: list[LLMRespons
     return completes
 
 
-def _command_script(command: str = "do it") -> list[LLMResponse]:
-    return [_tool_call("c1", "exec", {"command": command}), LLMResponse(content="done", finish_reason="stop")]
+def _command_script(command: str = "do it", **arguments: Any) -> list[LLMResponse]:
+    return [
+        _tool_call("c1", "exec", {"command": command, **arguments}),
+        LLMResponse(content="done", finish_reason="stop"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -849,3 +852,61 @@ async def test_the_files_a_command_wrote_reach_the_spine_event_a_served_turn_emi
     assert complete.file_written is not None, complete
     assert Path(complete.file_written[0]["path"]).resolve() == made.resolve()
     assert complete.file_written[0]["lines"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_command_run_in_another_directory_is_listed_there(workspace):
+    """``exec`` takes a ``working_dir`` of its own, and a command sent to one
+    writes its files there and nowhere near the turn's directory. The listing
+    has to follow it, or a supported call leaves the diff empty."""
+    work = workspace / "work"
+    work.mkdir()
+    other = workspace / "other"
+    other.mkdir()
+
+    completes = await _run_command_turn(
+        workspace, work, _command_script("printf 'x\\ny\\n' > side.txt", working_dir=str(other))
+    )
+
+    written = completes[0]["file_written"]
+    assert written is not None, completes[0]
+    assert [Path(w["path"]).resolve() for w in written] == [(other / "side.txt").resolve()]
+    assert written[0]["created"] is True
+    assert written[0]["lines"] == 2
+
+
+class _RemoteCommandTool(_CommandTool):
+    """A command that runs on a registered machine: its files are not here."""
+
+    def listing_root(self, params: dict[str, Any]) -> Path | None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_a_command_run_on_another_machine_takes_no_listing(workspace, monkeypatch):
+    """Not an empty listing but none: two walks of this tree around a command
+    that ran elsewhere would attribute to it whatever else was written here in
+    the meantime, and cost the turn the walks for nothing."""
+    from raven.agent.tools import snapshot
+
+    roots: list[Any] = []
+    real = snapshot.take
+
+    def watched(root: Any) -> Any:
+        roots.append(root)
+        return real(root)
+
+    monkeypatch.setattr(snapshot, "take", watched)
+    work = workspace / "work"
+    work.mkdir()
+    made = work / "meanwhile.txt"
+
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        _command_script("make", machine="prod"),
+        _RemoteCommandTool(lambda: made.write_text("written by someone else\n", encoding="utf-8")),
+    )
+
+    assert roots == []
+    assert completes[0]["file_written"] is None
