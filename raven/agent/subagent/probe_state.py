@@ -57,8 +57,8 @@ def default_state_path() -> Path:
     return get_config_path().parent / _FILENAME
 
 
-RemedyKind = Literal["sign_in", "setup", "api_key"]
-_REMEDY_KINDS: frozenset[str] = frozenset(("sign_in", "setup", "api_key"))
+RemedyKind = Literal["sign_in", "setup", "api_key", "download"]
+_REMEDY_KINDS: frozenset[str] = frozenset(("sign_in", "setup", "api_key", "download"))
 
 
 @dataclass(frozen=True)
@@ -74,6 +74,9 @@ class Remedy:
 
     ``sign_in`` and ``setup`` are fixed outside the page, in a terminal;
     ``api_key`` is fixed in the page, since the row is an endpoint and a key.
+    ``download`` is ``npx`` failing to fetch the agent (`npx_fetch_failure`):
+    fixed in the network, the npm registry or the proxy, with the row's own
+    command as the way to fetch it in a terminal, where nothing times it out.
     """
 
     kind: RemedyKind

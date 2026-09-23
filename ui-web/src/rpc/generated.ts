@@ -833,6 +833,10 @@ export interface SubagentRow {
   group: 'builtin' | 'installed' | 'uninstalled';
   probe_status: 'ready' | 'attention' | 'missing' | 'unknown';
   probe_detail: string;
+  /**
+   * The executable the availability probe looked for and did not find, on a `missing` row: what to install. For a preset launched through npx it is `npx`, which Node.js brings -- not the agent's own installer. Null on every other row, and on a server that predates the field.
+   */
+  probe_missing?: string;
   has_api_key: boolean;
   /**
    * The agent answered the handshake and then refused to open a session without a credential. Measured by the capability snapshot, not inferred from probe_status, which reads `attention` both for this and for an installed agent nothing has verified -- two rows that need opposite things from the reader. Always false for a kind with no handshake to be refused in.
@@ -843,13 +847,13 @@ export interface SubagentRow {
   last_test_ok?: boolean;
   last_test_detail?: string;
   /**
-   * What the reader has to do before the last failed test can pass, as data a page renders in its own language. Absent when the failure was not about a credential; last_test_detail stays the English record either way.
+   * What the reader has to do before the last failed test can pass, as data a page renders in its own language. Absent when no fix is known -- a credential, a provider, a key or a download; last_test_detail stays the English record either way.
    */
   last_test_remedy?: {
     /**
-     * sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page.
+     * sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page. download: npx could not fetch the agent -- fixed in the network, the npm registry or the proxy, and `command` is the row's own launch command, which fetches it from a terminal with no time limit.
      */
-    kind: 'sign_in' | 'setup' | 'api_key';
+    kind: 'sign_in' | 'setup' | 'api_key' | 'download';
     /**
      * The command that makes the fix on this machine, when one is known.
      */

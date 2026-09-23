@@ -11210,6 +11210,10 @@
           "probe_detail": {
             "type": "string"
           },
+          "probe_missing": {
+            "type": "string",
+            "description": "The executable the availability probe looked for and did not find, on a `missing` row: what to install. For a preset launched through npx it is `npx`, which Node.js brings -- not the agent's own installer. Null on every other row, and on a server that predates the field."
+          },
           "has_api_key": {
             "type": "boolean"
           },
@@ -11234,7 +11238,7 @@
           },
           "last_test_remedy": {
             "type": "object",
-            "description": "What the reader has to do before the last failed test can pass, as data a page renders in its own language. Absent when the failure was not about a credential; last_test_detail stays the English record either way.",
+            "description": "What the reader has to do before the last failed test can pass, as data a page renders in its own language. Absent when no fix is known -- a credential, a provider, a key or a download; last_test_detail stays the English record either way.",
             "additionalProperties": false,
             "required": [
               "kind"
@@ -11245,9 +11249,10 @@
                 "enum": [
                   "sign_in",
                   "setup",
-                  "api_key"
+                  "api_key",
+                  "download"
                 ],
-                "description": "sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page."
+                "description": "sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page. download: npx could not fetch the agent -- fixed in the network, the npm registry or the proxy, and `command` is the row's own launch command, which fetches it from a terminal with no time limit."
               },
               "command": {
                 "type": "string",
