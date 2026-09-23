@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from raven.agent.subagent.probe_state import LastTest, TestStateStore, fingerprint
+from raven.agent.subagent.probe_state import LastTest, Remedy, TestStateStore, fingerprint
 from raven.config.schema import ThirdPartyCliSubagentConfig, ThirdPartyOpenAISubagentConfig
 
 
@@ -25,6 +25,49 @@ def test_record_then_load_round_trips(tmp_path: Path) -> None:
     store.record(cfg, "config", ok=False, detail="exited 1: ProviderAuthError", tested_at_ms=1700)
     got = store.load([(cfg, "config")])
     assert got == {"config:Coder": LastTest(ok=False, detail="exited 1: ProviderAuthError", tested_at_ms=1700)}
+
+
+def test_a_failed_verdict_remembers_the_fix_it_named(tmp_path: Path) -> None:
+    """The fix is part of the verdict, so the row can still draw it after a reload.
+
+    Without it on disk the sheet would go back to the English sentence the
+    moment the page was reopened, which is when a reader who went off to a
+    terminal comes back to press Test.
+    """
+    store = TestStateStore(path=tmp_path / "state.json")
+    cfg = _cli()
+    store.record(
+        cfg,
+        "config",
+        ok=False,
+        detail="no usable credential",
+        tested_at_ms=1700,
+        remedy=Remedy("setup", "hermes model"),
+    )
+    got = store.load([(cfg, "config")])["config:Coder"]
+    assert got.remedy == Remedy("setup", "hermes model")
+
+    # A verdict with no fix writes no `remedy` key, so a file written before this
+    # field existed and one written after for a plain failure read the same.
+    store.record(cfg, "config", ok=False, detail="exited 1", tested_at_ms=1800)
+    raw = json.loads((tmp_path / "state.json").read_text())
+    assert "remedy" not in raw["verdicts"][0]
+    assert store.load([(cfg, "config")])["config:Coder"].remedy is None
+
+
+def test_a_remembered_fix_that_is_not_one_is_dropped(tmp_path: Path) -> None:
+    """A hand-edited or stale file cannot put a kind on the page it has no words for."""
+    path = tmp_path / "state.json"
+    store = TestStateStore(path=path)
+    cfg = _cli()
+    for junk in ({"kind": "reboot"}, "sign_in", ["sign_in"], {"command": "x"}):
+        store.record(cfg, "config", ok=False, detail="no", tested_at_ms=1)
+        raw = json.loads(path.read_text())
+        raw["verdicts"][0]["remedy"] = junk
+        path.write_text(json.dumps(raw))
+        got = store.load([(cfg, "config")])["config:Coder"]
+        assert got.remedy is None, junk
+        assert got.detail == "no", "the verdict itself still loads"
 
 
 def test_changing_the_command_discards_the_verdict(tmp_path: Path) -> None:

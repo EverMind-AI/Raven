@@ -166,6 +166,15 @@
 .extAgents-by { font-size: 11.5px; color: var(--faint); margin-top: 1px; display: flex; align-items: center; gap: 6px; }
 .extAgents-by .extAgents-led { width: 5px; height: 5px; }
 .extAgents-by-bad { color: var(--clay); }
+/* A refusal with a named fix: the sentence, the command on a line of its own,
+   and the agent's own words folded under both. The dot sits on the first line
+   rather than centred against the block. */
+.extAgents-by-fix { align-items: flex-start; }
+.extAgents-by-fix .extAgents-led { margin-top: 5px; }
+.extAgents-fix { flex: 1; min-width: 0; line-height: 1.5; }
+.extAgents-fix .extAgents-cmd { margin: 6px 0 4px; color: var(--text); }
+.extAgents-raw { color: var(--faint); }
+.extAgents-raw summary { cursor: pointer; }
 
 .extAgents-body { flex: 1; overflow-y: auto; padding: 18px 20px 4px; min-height: 0; }
 .extAgents-fld { display: block; }

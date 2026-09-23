@@ -358,6 +358,7 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "allow_mcp_secrets": bool(getattr(cfg, "allow_mcp_secrets", False)),
                 "last_test_ok": None if last is None else last.ok,
                 "last_test_detail": None if last is None else last.detail,
+                "last_test_remedy": None if last is None or last.remedy is None else last.remedy.to_wire(),
                 "last_test_at_ms": None if last is None else last.tested_at_ms,
                 "test_running": task is not None and not task.done(),
                 "model": getattr(cfg, "model", None),
@@ -918,10 +919,12 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
     # `data` from `detail` only when a handler passed no `data` of its own, so a
     # call site passing both drops the human-readable half.
     detail = f"sub-agent {name!r} did not answer a test message, {refusal}: {result.detail}"
-    raise SubagentNotReadyError(
-        detail,
-        data={"name": name, "field": "enabled", "detail": detail},
-    )
+    # `remedy` beside the sentence: the same verdict as data, for a page that
+    # draws the fix in its reader's language instead of printing the English.
+    data: dict[str, Any] = {"name": name, "field": "enabled", "detail": detail}
+    if result.remedy is not None:
+        data["remedy"] = result.remedy.to_wire()
+    raise SubagentNotReadyError(detail, data=data)
 
 
 def _read_agents() -> list[dict]:
@@ -1171,6 +1174,7 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
         ok=result.ok,
         detail=result.detail,
         tested_at_ms=int(time.time() * 1000),
+        remedy=result.remedy,
     )
     # Exactly the case where `_test_acp` wrote a capability snapshot. What an acp
     # test changes is measured capability, which lives in that store -- and the

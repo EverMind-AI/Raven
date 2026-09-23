@@ -326,6 +326,26 @@ async def test_the_roster_and_the_connect_button_read_one_answer() -> None:
     assert reason in pinged.detail
 
 
+async def test_a_handshake_refused_over_a_credential_carries_its_fix_into_the_test() -> None:
+    """Test is the sheet's way back for an unauthorized row, so its verdict names the fix.
+
+    Read off the handshake's own classification (`needs_auth`), not off the
+    detail: that ends in "(auth methods: ...)", an advertisement a working agent
+    makes too, so a refusal about anything else must not grow a sign-in fix --
+    which the second half pins against the same advertising stub.
+    """
+    from raven.agent.subagent.probe_state import Remedy
+
+    refused = await run_test(stub_config(mode="no_session_sdk"), source="config")
+    assert refused.ok is False
+    assert refused.remedy == Remedy("sign_in"), "no command is known for the stub, so the fix names none"
+
+    other = await run_test(stub_config(mode="no_session_other"), source="config")
+    assert other.ok is False
+    assert other.remedy is None
+    assert "auth methods" in other.detail, "the advertisement is there, and still is not the evidence"
+
+
 async def test_the_credential_verdict_outlives_the_process_that_measured_it(tmp_path: Path) -> None:
     """It is read back from disk on every later page load, so it has to persist.
 

@@ -17,12 +17,13 @@ import { hasBuildFlag } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 
 import type { ResultOf } from '../../rpc/generated'
-import type { ExtAgentRow, ExtAgentsSource } from './types'
+import type { ExtAgentRow, ExtAgentsSource, Remedy } from './types'
 
 /** One agent as `subagents.list` sends it. */
 export type ExtAgentRowWire = ResultOf<'subagents.list'>['rows'][number]
 
 export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
+  const remedy = remedyOf(r.last_test_remedy)
   return {
     name: r.name,
     preset: r.preset,
@@ -53,6 +54,7 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
     description: r.description || '',
     last_test_ok: r.last_test_ok ?? null,
     last_test_detail: r.last_test_detail || '',
+    ...(remedy ? { last_test_remedy: remedy } : {}),
     last_test_at_ms: r.last_test_at_ms || null,
     test_running: !!r.test_running,
     own: !!r.own,
@@ -264,4 +266,12 @@ export const extAgentsSource: ExtAgentsSource = {
 /* Test seam only: the rows carried across a refetch are the module's. */
 export function _resetForTests(): void {
   extAgentsSeen = new Map()
+}
+
+/* A remedy off the wire, or null for anything that is not one. Read from a row
+   and from a refused call's `data` alike, so both land in the one shape. */
+export function remedyOf(raw: unknown): Remedy | null {
+  const r = raw as { kind?: unknown; command?: unknown } | null | undefined
+  if (!r || (r.kind !== 'sign_in' && r.kind !== 'setup' && r.kind !== 'api_key')) return null
+  return { kind: r.kind, command: typeof r.command === 'string' ? r.command : '' }
 }

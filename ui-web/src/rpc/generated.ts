@@ -842,6 +842,19 @@ export interface SubagentRow {
   allow_mcp_secrets: boolean;
   last_test_ok?: boolean;
   last_test_detail?: string;
+  /**
+   * What the reader has to do before the last failed test can pass, as data a page renders in its own language. Absent when the failure was not about a credential; last_test_detail stays the English record either way.
+   */
+  last_test_remedy?: {
+    /**
+     * sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page.
+     */
+    kind: 'sign_in' | 'setup' | 'api_key';
+    /**
+     * The command that makes the fix on this machine, when one is known.
+     */
+    command?: string;
+  };
   last_test_at_ms?: number;
   test_running: boolean;
   /**

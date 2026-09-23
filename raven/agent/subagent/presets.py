@@ -69,7 +69,7 @@ mechanism. For an acp preset they are not spelled out because they are not
 
 from __future__ import annotations
 
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 from raven.agent.subagent.acp_registry_presets import (
     ACP_REGISTRY_INSTALL_HINTS,
@@ -344,6 +344,13 @@ class SignIn(NamedTuple):
     exe: str
     local: str
     anywhere: str | None = None
+    does: Literal["sign_in", "setup"] = "sign_in"
+    """What running the command does, for the page to say in its reader's words.
+
+    ``sign_in`` signs in through a browser; ``setup`` opens the agent's own
+    interactive setup, where a provider is chosen and signed in to. The English
+    advice reads the same for both -- this only lets a page that renders the
+    remedy itself describe the step truthfully."""
 
 
 SIGN_IN_HINTS: dict[str, SignIn] = {
@@ -365,7 +372,7 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # same sentence offers next, adds a pooled credential for a reader who already
     # holds a key. Shim-launched it is not: the command is a bare `hermes`, so the
     # local spelling is the only one it can reach.
-    "hermes": SignIn(exe="hermes", local="hermes model"),
+    "hermes": SignIn(exe="hermes", local="hermes model", does="setup"),
 }
 """How to sign in to the agent a row defers to, by preset key.
 

@@ -33,7 +33,7 @@ from raven.agent.subagent.presets import (
     sign_in_hint_for,
     third_party_subagent_presets,
 )
-from raven.agent.subagent.probe_state import LastTest
+from raven.agent.subagent.probe_state import LastTest, Remedy
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
 Source = Literal["config", "preset", "vendored"]
@@ -125,6 +125,7 @@ class TestResult:
     detail: str
     reply: str | None
     elapsed_ms: int
+    remedy: Remedy | None = None
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -228,11 +229,23 @@ def _refusal_detail(cfg: Any, said: str, answer: str | None = None) -> str:
     rather than a second spelling of it -- the roster already marks such a row
     "go and sign in", and the two disagreeing about one failure is what this is.
     """
+    return _refusal(cfg, said, answer)[0]
+
+
+def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remedy | None]:
+    """`_refusal_detail`'s sentence, and the remedy it was written from.
+
+    One decision with two renderings: the sentence is the record the log, the
+    CLI and the TUI read, and the remedy is the same verdict as data a page can
+    put in its reader's language. ``None`` for a refusal that is not about a
+    credential, whose words are passed through as they came.
+    """
     from raven.acp_client.capabilities import looks_like_auth
 
     if not looks_like_auth(said if answer is None else answer):
-        return said[:_DETAIL_CAP]
-    if getattr(cfg, "kind", None) == "openai":
+        return said[:_DETAIL_CAP], None
+    remedy = _remedy_for(cfg)
+    if remedy.kind == "api_key":
         # Nothing was installed and there is nothing to sign in to: this row is
         # an endpoint and a key. Telling its reader to sign in would send them
         # looking for a CLI that does not exist -- measured, the row that
@@ -241,21 +254,30 @@ def _refusal_detail(cfg: Any, said: str, answer: str | None = None) -> str:
         lead = "it has no usable API key"
         advice = "add one in this agent's settings and connect again"
     else:
-        hint = sign_in_hint_for(cfg)
         lead = "it is installed but has no usable credential"
-        if hint is None:
-            advice = "sign in to it and connect again"
-        else:
-            # Which spelling, decided on this machine rather than in the table: a
-            # shim-launched row runs where the agent's CLI was never installed
-            # globally, and naming a command that is not there answers a credential
-            # failure with a second one. Resolved against the same PATH the probe
-            # resolves every other executable against, so the hint and the probe
-            # cannot disagree about what this machine has.
-            local = shutil.which(hint.exe, path=_login_path()) is not None
-            command = hint.local if local or hint.anywhere is None else hint.anywhere
-            advice = f"sign in with `{command}` and connect again"
-    return f"{lead}; {advice}. It said: {said}"[:_DETAIL_CAP]
+        advice = (
+            f"sign in with `{remedy.command}` and connect again"
+            if remedy.command
+            else "sign in to it and connect again"
+        )
+    return f"{lead}; {advice}. It said: {said}"[:_DETAIL_CAP], remedy
+
+
+def _remedy_for(cfg: Any) -> Remedy:
+    """What fixes a refusal already known to be about a credential, on this machine."""
+    if getattr(cfg, "kind", None) == "openai":
+        return Remedy("api_key")
+    hint = sign_in_hint_for(cfg)
+    if hint is None:
+        return Remedy("sign_in")
+    # Which spelling, decided on this machine rather than in the table: a
+    # shim-launched row runs where the agent's CLI was never installed globally,
+    # and naming a command that is not there answers a credential failure with a
+    # second one. Resolved against the same PATH the probe resolves every other
+    # executable against, so the hint and the probe cannot disagree about what
+    # this machine has.
+    local = shutil.which(hint.exe, path=_login_path()) is not None
+    return Remedy(hint.does, hint.local if local or hint.anywhere is None else hint.anywhere)
 
 
 def _missing_detail(exe: str, hint: str | None) -> str:
@@ -537,7 +559,7 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
             return TestResult(cfg.name, source, "openai", False, probe.detail, None, elapsed())
         answered = await ping_agent(cfg)
         detail = probe.detail if answered.ok else f"{answered.detail}; {probe.detail}"
-        return TestResult(cfg.name, source, "openai", answered.ok, detail, None, elapsed())
+        return TestResult(cfg.name, source, "openai", answered.ok, detail, None, elapsed(), answered.remedy)
     if probe.status != "ready":
         return TestResult(cfg.name, source, "cli", False, probe.detail, None, elapsed())
 
@@ -570,6 +592,7 @@ class PingResult:
 
     ok: bool
     detail: str
+    remedy: Remedy | None = None
 
 
 async def ping_agent(cfg: Any) -> PingResult:
@@ -624,7 +647,7 @@ async def ping_agent(cfg: Any) -> PingResult:
     except asyncio.TimeoutError:
         return PingResult(False, f"it did not answer within {_ENABLE_PING_TIMEOUT_SECONDS}s")
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
-        return PingResult(False, _refusal_detail(cfg, *_said(exc)))
+        return PingResult(False, *_refusal(cfg, *_said(exc)))
     finally:
         # The pool is this call's alone, so nothing else will ever close it, and a
         # pool left open holds the child process it launched for the rest of the
@@ -678,13 +701,18 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     snapshot = await record_capabilities(cfg)
     reply = ", ".join(snapshot.available_models[:5]) or None
     if not snapshot.usable:
-        return TestResult(cfg.name, source, "acp", False, snapshot.detail, reply, elapsed())
+        # The handshake already classified the refusal (`needs_auth`, from the
+        # agent's own answer), so the remedy is read off that verdict rather than
+        # off this detail, whose "(auth methods: ...)" suffix names an
+        # advertisement every working agent makes too.
+        remedy = _remedy_for(cfg) if snapshot.needs_auth else None
+        return TestResult(cfg.name, source, "acp", False, snapshot.detail, reply, elapsed(), remedy)
     answered = await ping_agent(cfg)
     # Verdict first on a failure, the handshake after it: "it connected and then
     # said nothing" is what went wrong, and the half that succeeded is the
     # context that separates it from an agent that is not installed.
     detail = snapshot.detail if answered.ok else f"{answered.detail}; {snapshot.detail}"
-    return TestResult(cfg.name, source, "acp", answered.ok, detail, reply, elapsed())
+    return TestResult(cfg.name, source, "acp", answered.ok, detail, reply, elapsed(), answered.remedy)
 
 
 async def record_capabilities(cfg: Any) -> Any:

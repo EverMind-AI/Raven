@@ -181,6 +181,14 @@ class SubagentRow(_Strict):
     allow_mcp_secrets: bool
     last_test_ok: bool | None = None
     last_test_detail: str | None = None
+    last_test_remedy: "SubagentRemedy | None" = Field(
+        default=None,
+        description=(
+            "What the reader has to do before the last failed test can pass, as data a page renders in its "
+            "own language. Absent when the failure was not about a credential; last_test_detail stays the "
+            "English record either way."
+        ),
+    )
     last_test_at_ms: int | None = None
     test_running: bool
     model: str | None = Field(
@@ -2771,6 +2779,19 @@ class SubagentsInstanceSetModeResult(_Strict):
         alias="availableModes",
         description="Everything this agent offers, so one reply is enough to draw the control.",
     )
+
+
+class SubagentRemedy(_Strict):
+    """What fixes a refusal about a credential, as the page draws it."""
+
+    kind: Literal["sign_in", "setup", "api_key"] = Field(
+        ...,
+        description=(
+            "sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive "
+            "setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page."
+        ),
+    )
+    command: str | None = Field(None, description="The command that makes the fix on this machine, when one is known.")
 
 
 class SubagentModelChoice(_Strict):

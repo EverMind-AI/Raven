@@ -579,6 +579,34 @@ async def test_a_refused_add_stores_nothing_at_all(config_path: Path, monkeypatc
     assert _stored(config_path) == before, "and must leave the rest of the list alone"
 
 
+async def test_a_refused_add_carries_the_fix_it_names(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The page draws the fix from `data.remedy`; `data.detail` stays the sentence.
+
+    Only when the ping named one: a refusal it could not classify must not grow
+    a fix the page would then draw in place of the agent's own words.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+    from raven.agent.subagent.probe_state import Remedy
+
+    async def _named(cfg):
+        return PingResult(False, "it is installed but has no usable credential", Remedy("sign_in", "claude auth login"))
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _named)
+    with pytest.raises(subagents_mod.SubagentNotReadyError) as caught:
+        await subagents_add({"preset": "opencode"})
+    assert caught.value.data["remedy"] == {"kind": "sign_in", "command": "claude auth login"}
+    assert "no usable credential" in caught.value.data["detail"]
+
+    async def _unnamed(cfg):
+        return PingResult(False, "connection ended (exit 127)")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _unnamed)
+    with pytest.raises(subagents_mod.SubagentNotReadyError) as caught:
+        await subagents_add({"preset": "opencode"})
+    assert "remedy" not in caught.value.data
+
+
 async def test_a_refused_add_of_a_cli_preset_stores_nothing_either(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1959,6 +1987,34 @@ async def test_test_records_a_verdict_for_a_configured_agent(config_path: Path, 
     rows = (await subagents_list({}))["rows"]
     coder = next(r for r in rows if r["name"] == "Coder")
     assert coder["last_test_ok"] is True
+
+
+async def test_a_failed_test_s_fix_reaches_the_row(config_path: Path, monkeypatch) -> None:
+    """The row carries the fix the last failed test named, and nothing when it named none."""
+    from raven.agent.subagent.probe import TestResult
+    from raven.agent.subagent.probe_state import Remedy
+
+    verdicts = iter(
+        [
+            TestResult(
+                "Coder", "config", "acp", False, "no usable credential", None, 5, Remedy("setup", "hermes model")
+            ),
+            TestResult("Coder", "config", "acp", False, "exited 1", None, 5),
+        ]
+    )
+
+    async def fake_run_test(cfg, *, source):
+        return next(verdicts)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
+
+    await subagents_test({"name": "Coder", "source": "config"})
+    coder = next(r for r in (await subagents_list({}))["rows"] if r["name"] == "Coder")
+    assert coder["last_test_remedy"] == {"kind": "setup", "command": "hermes model"}
+
+    await subagents_test({"name": "Coder", "source": "config"})
+    coder = next(r for r in (await subagents_list({}))["rows"] if r["name"] == "Coder")
+    assert coder.get("last_test_remedy") is None, "a failure with no fix leaves none behind"
 
 
 async def test_test_rejects_an_unknown_name(config_path: Path) -> None:
