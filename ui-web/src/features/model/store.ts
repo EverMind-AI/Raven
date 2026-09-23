@@ -79,6 +79,15 @@ const announce = (): void => {
 export const openAt = (): OpenAt => at
 export const version = (): number => epoch
 export const isOpen = (): boolean => !!at.host
+
+/* Whether the picker that is up is this element's own. One store serves every
+   opener -- the composer chip, and each settings role pill against its own
+   button (features/settings/providers/Roles.tsx) -- so `isOpen` answers "a
+   picker is up somewhere", which is not the question a control reporting its
+   own state is putting. A chip that answered the first would tell a reader
+   that it had expanded something while the popover belongs to another
+   control. */
+export const openedFrom = (el: Element | null): boolean => !!el && at.host === el
 export const current = (): string => selected
 
 /** The account serving `current`, or '' while nothing has said which. */

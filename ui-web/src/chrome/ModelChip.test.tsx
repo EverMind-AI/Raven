@@ -124,4 +124,21 @@ describe('the model chip, to a screen reader', () => {
     act(() => store.close())
     expect(chip().getAttribute('aria-expanded')).toBe('false')
   })
+
+  it('says nothing about a picker another control opened', () => {
+    /* One store serves every opener, so "a picker is up" is not the same
+       question as "mine is up": the settings role pills open it against their
+       own button (features/settings/providers/Roles.tsx). A chip that answered
+       the first would hand a reader a control and a state that do not belong
+       together. */
+    install([{ id: 'openrouter', name: 'OpenRouter', on: true, models: ['my-model'], configured: ['my-model'] }])
+    store.setCurrent('my-model')
+    mount()
+    const chip = (): HTMLElement => document.getElementById('modelChip')!
+    const pill = document.body.appendChild(document.createElement('button'))
+
+    act(() => store.open(pill, undefined, undefined, { kind: 'text', title: 'Planner model' }))
+
+    expect(chip().getAttribute('aria-expanded')).toBe('false')
+  })
 })
