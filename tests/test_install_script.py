@@ -809,3 +809,25 @@ def test_an_app_already_in_applications_gets_a_launcher_and_no_second_copy(tmp_p
     assert calls == [], "nothing is downloaded or mounted"
     assert "theirs" in existing.read_text(encoding="utf-8")
     assert (home / ".local" / "bin" / "soffice").is_file()
+
+
+def test_a_launcher_that_cannot_be_written_does_not_abort_the_install(tmp_path: Path) -> None:
+    """The step is best effort: an existing app whose launcher cannot be written
+    (here ~/.local is a file, which blocks root as well) is a warning, and the
+    installer carries on under set -e."""
+    harness = _office_step_harness(tmp_path)
+    existing = tmp_path / "Applications" / "LibreOffice.app" / "Contents" / "MacOS" / "soffice"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("#!/bin/sh\n", encoding="utf-8")
+    existing.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".local").write_text("not a directory", encoding="utf-8")
+    harness.write_text(harness.read_text(encoding="utf-8") + "echo STEP_FINISHED\n", encoding="utf-8")
+
+    result, calls, _apps, _home = _run_office_step(tmp_path, harness)
+
+    assert result.returncode == 0, result.stderr
+    assert "STEP_FINISHED" in result.stdout, "set -e must not abort the installer here"
+    assert "Could not write ~/.local/bin/soffice" in result.stderr
+    assert calls == []

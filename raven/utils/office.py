@@ -199,9 +199,13 @@ def default_profile() -> Path | None:
 
 
 def link_han_faces_into_default_profile() -> None:
-    """Give the model's own ``soffice --convert-to`` the host's Chinese faces."""
+    """Give the model's own ``soffice --convert-to`` the host's Chinese faces.
+
+    Only where LibreOffice is installed: this runs on every exec tool built, and a
+    Mac without it should not grow a LibreOffice profile it will never use.
+    """
     profile = default_profile()
-    if profile is not None:
+    if profile is not None and find_soffice():
         link_han_faces(profile)
 
 

@@ -599,7 +599,8 @@ install_office() {
       # install a second copy over it.
       for app in "$MACOS_APPS/LibreOffice.app" "$HOME/Applications/LibreOffice.app"; do
         if [ -x "$app/Contents/MacOS/soffice" ]; then
-          write_soffice_launcher "$app"
+          write_soffice_launcher "$app" \
+            || warn "Could not write ~/.local/bin/soffice; raven still finds $app, but a plain soffice command will not."
           return 0
         fi
       done

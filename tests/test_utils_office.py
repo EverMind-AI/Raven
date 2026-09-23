@@ -401,8 +401,23 @@ def test_the_models_own_soffice_gets_the_faces_in_the_default_profile(
 
     _mac_faces(tmp_path, monkeypatch)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(office, "find_soffice", lambda: "/Applications/LibreOffice.app/Contents/MacOS/soffice")
 
     ExecTool(working_dir=str(tmp_path))
 
     fonts = tmp_path / "home" / "Library" / "Application Support" / "LibreOffice" / "4" / "user" / "fonts"
     assert sorted(p.name for p in fonts.iterdir()) == ["PingFang.ttc", "Songti.ttc"]
+
+
+def test_a_mac_without_libreoffice_grows_no_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every exec tool built seeds the default profile, which on a Mac with no
+    LibreOffice would create a profile directory nothing will ever read."""
+    from raven.agent.tools.shell import ExecTool
+
+    _mac_faces(tmp_path, monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(office, "find_soffice", lambda: None)
+
+    ExecTool(working_dir=str(tmp_path))
+
+    assert not (tmp_path / "home" / "Library" / "Application Support" / "LibreOffice").exists()
