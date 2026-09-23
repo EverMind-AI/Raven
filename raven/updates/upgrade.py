@@ -749,7 +749,10 @@ def editable_checkout_status() -> tuple[Path, int, int]:
     data = _direct_url_data()
     if data is None:
         raise UpgradeError("Editable source checkout metadata is unavailable")
-    url = urlparse(data["url"])
+    source_url = data["url"]
+    if not isinstance(source_url, str):
+        raise UpgradeError("Editable source checkout URL must be a string")
+    url = urlparse(source_url)
     if url.scheme != "file" or url.netloc not in ("", "localhost"):
         raise UpgradeError("Editable source checkout must be a local directory")
     checkout = Path(url2pathname(url.path))
