@@ -427,6 +427,63 @@ describe('a task pane', () => {
       expect((panes[0]! as { change: WsChange }).change.hunks.at(-1)).toMatchObject({ add: 0, del: 2 })
     })
 
+    describe('folding a long strip', () => {
+      const manyFiles = (n: number): TaskRow => task({
+        id: 'a', kind: 'dag', status: 'completed',
+        nodes: [node({
+          node_id: 'n1', status: 'completed',
+          files: Array.from({ length: n }, (_, i) => ({ path: `/w/f${i}.png`, op: 'write' as const, add: 0, del: 0, size: 1024 })),
+        })],
+      })
+      /* happy-dom lays nothing out, so the strip is 300px wide and every file
+         chip 100px, three to a line -- and the +N chip 40px. */
+      let rect: ReturnType<typeof vi.spyOn>
+      beforeEach(() => {
+        rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+          const w = this.classList.contains('tkstrip') ? 300
+            : this.classList.contains('tkfold') ? 40
+              : this.classList.contains('tkover') || this.classList.contains('wchip') ? 100 : 0
+          return { width: w, height: 29, top: 0, left: 0, right: w, bottom: 29, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+        })
+      })
+      afterEach(() => { rect.mockRestore() })
+
+      const visible = (): Element[] => Array.from(document.querySelectorAll('.tkstrip > .wchip:not(.tkfold)'))
+
+      it('keeps every chip when two lines hold them, with no +N chip to click', () => {
+        render(<TaskPane task={manyFiles(6)} />)
+        expect(visible()).toHaveLength(6)
+        const more = document.querySelector('.tkfold') as HTMLElement
+        expect(more.classList.contains('tkover')).toBe(true)
+        expect(more.tabIndex).toBe(-1)
+      })
+
+      it('folds to two lines and leaves the last slot to a +N chip', () => {
+        render(<TaskPane task={manyFiles(8)} />)
+        expect(visible()).toHaveLength(5)
+        expect(document.querySelectorAll('.tkstrip > .tkover')).toHaveLength(3)
+        const more = document.querySelector('.tkfold') as HTMLElement
+        expect(more.textContent).toBe('+3')
+        expect(more.getAttribute('aria-label')).toBe('gui.tasks.files_more {"n":3}')
+      })
+
+      it('unfolds into a box capped at six lines, and folds back from outside it', () => {
+        render(<TaskPane task={manyFiles(40)} />)
+        act(() => { (document.querySelector('.tkfold') as HTMLElement).click() })
+        expect(visible()).toHaveLength(40)
+        expect(document.querySelector('.tkfold')).toBeNull()
+        expect(document.querySelector('.tkchips')?.hasAttribute('data-open')).toBe(true)
+        const strip = document.querySelector('.tkstrip') as HTMLElement
+        expect(strip.style.getPropertyValue('--tkopen-h')).toBe(`${29 * 6}px`)
+        const less = document.querySelector('.tkchips > .tkless') as HTMLElement
+        expect(less.parentElement).not.toBe(strip)
+
+        act(() => { less.click() })
+        expect(visible()).toHaveLength(5)
+        expect(document.querySelector('.tkless')).toBeNull()
+      })
+    })
+
     it('draws no chip strip for a task that left nothing behind', () => {
       render(<TaskPane task={task({ id: 'a', kind: 'dag', status: 'completed' })} />)
       expect(document.querySelector('.tkchips')).toBeNull()

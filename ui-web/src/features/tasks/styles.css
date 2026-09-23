@@ -815,3 +815,98 @@
 @media (prefers-reduced-motion: reduce) {
   .tkcaret { animation: none; }
 }
+
+/* The run's file chips, under the status bar. Two parts: the strip of chips
+   (`.tkstrip`) and, only while it is unfolded, the control that folds it back
+   (`.tkless`), which sits outside the strip so it never scrolls away. */
+.tkchips {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-height: 0;
+  margin-top: 8px;
+}
+/* Unfolded, the strip gives way before the board does: at most this share of
+   the pane, the rest scrolling inside it. */
+.tkchips[data-open] {
+  flex: 0 1 auto;
+  max-height: 45%;
+}
+.tkchips .add { color: var(--moss); font-style: normal; }
+.tkchips .del { color: var(--clay); font-style: normal; }
+
+/* Folded to two lines by TasksPage.tsx's `ChipStrip`, which decides from the
+   chips' own widths how many fit and hides the rest with `.tkover`. Unfolded,
+   `--tkopen-h` (six lines, measured from a real chip) is where it stops
+   growing and starts scrolling. */
+.tkstrip {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-self: stretch;
+  min-height: 0;
+}
+[data-open] > .tkstrip {
+  max-height: var(--tkopen-h, 200px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* The page hides every scrollbar, so a box cut mid-list says so by fading at
+   the edge that has more past it. */
+.tkstrip[data-below] {
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(180deg, #000 calc(100% - 22px), transparent);
+}
+.tkstrip[data-above] {
+  -webkit-mask-image: linear-gradient(0deg, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(0deg, #000 calc(100% - 22px), transparent);
+}
+.tkstrip[data-above][data-below] {
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 22px, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(180deg, transparent, #000 22px, #000 calc(100% - 22px), transparent);
+}
+/* Laid out but not drawn: its width is still there to measure. */
+.tkover {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* The `+N` chip that stands in for what is folded away: a chip in shape, so it
+   sits on the line with the others, but a ghost of one, so it does not read
+   as another file. */
+.tkfold {
+  gap: 3px;
+  padding: 4px 7px 4px 9px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--line-soft);
+}
+.tkfold:hover { color: var(--text); background: var(--raised); border-color: var(--line); }
+.tkfold svg,
+.tkless svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: currentColor;
+}
+.tkless {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--faint);
+  transition: color .14s ease;
+}
+.tkless:hover { color: var(--text); }
+.tkless:focus-visible { outline: 1.5px solid var(--amber); outline-offset: 1px; }
+.tkless svg { transform: rotate(180deg); }

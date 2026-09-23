@@ -6463,6 +6463,14 @@
       "en": "{n} files changed",
       "zh": "{n} 个文件改动"
     },
+    "gui.tasks.files_more": {
+      "en": "Show {n} more files",
+      "zh": "展开其余 {n} 个文件"
+    },
+    "gui.tasks.files_less": {
+      "en": "Show less · {n} files",
+      "zh": "收起 · 共 {n} 个文件"
+    },
     "gui.tasks.step": {
       "en": "step {i}/{n}",
       "zh": "第 {i}/{n} 步"

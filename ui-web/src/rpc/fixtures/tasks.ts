@@ -209,6 +209,37 @@ function scenarioCompletedWithFiles(env: FixtureEnv): TaskRow[] {
   })]
 }
 
+/* Also session 'g': a spawn still running that has already fetched a few
+   dozen images for the deck it is building -- the strip that has to fold
+   rather than push the board out of its own pane. */
+const DECK_ASSETS = [
+  'fetch.sh', 'anthropic.png', 'aws-datacenter.jpg', 'eu-berlaymont.jpg', 'gemini.png', 'gpu.jpg',
+  'huggingface.png', 'meta.png', 'ms-datacenter.jpg', 'nvidia.svg', 'openai.png', 'powerlines.jpg',
+  'stripe.png', 'h100.jpg', 'nvidia-black.png', 'mistral.png', 'deepseek.png', 'xai.png', 'tsmc-fab.jpg',
+  'arm.png', 'amd-mi300.jpg', 'google-tpu.jpg', 'cerebras.png', 'groq.png', 'perplexity.png',
+  'cohere.png', 'baidu.png', 'alibaba-cloud.png', 'bytedance.png', 'moonshot.png', 'zhipu.png',
+  'datacenter-cooling.jpg', 'chip-wafer.jpg', 'outline.md',
+]
+
+function scenarioManyFiles(env: FixtureEnv): TaskRow {
+  const started = env.now() - 3.5 * MIN
+  const nodes = [
+    node({
+      node_id: 'ai-hotspot-deck', agent: 'Raven-Design', status: 'running', instance: 'ai_hotspot_deck',
+      node_summary: 'Turn the AI news survey into a deck',
+      started_at: started, tokens_in: 4200, tokens_out: 900, tool_call_count: 41, tool_failure_count: 0,
+      files: DECK_ASSETS.map((name, i) => ({
+        path: `/work/deck/assets/${name}`, op: 'add' as const, add: 0, del: 0, size: 2300 + ((i * 7919) % 900) * 1024,
+      })),
+    }),
+  ]
+  return row({
+    id: 'ai-hotspot-deck', kind: 'spawn', status: 'running', nodes,
+    task_summary: 'Turn the AI news survey into a deck', agent: 'Raven-Design',
+    handle: 'ai_hotspot_deck', started_at: started,
+  })
+}
+
 /* Scenario 4, session 'h': two finished spawns -- one delivered a file, the
    other stopped on a vendor error. */
 function scenarioTwoSpawns(env: FixtureEnv): TaskRow[] {
@@ -286,7 +317,7 @@ export function createTasks(env: FixtureEnv): TasksFixture {
   const bySession = new Map<string, TaskRow[]>([
     ['a', scenarioForkJoin(env)],
     ['b', scenarioPlaybookFailed(env)],
-    ['g', scenarioCompletedWithFiles(env)],
+    ['g', [...scenarioCompletedWithFiles(env), scenarioManyFiles(env)]],
     ['h', scenarioTwoSpawns(env)],
     ['d', scenarioInterrupted(env)],
   ])
