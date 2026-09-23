@@ -38,6 +38,28 @@ from raven.home import raven_home
 
 _DIRNAME = "background"
 
+_CONFIRM_S = 0.9
+"""How long a launch waits to be contradicted before it calls the task running.
+
+A command that fails at once fails for a reason the model needs: a port already
+bound, a missing binary, a path that does not exist. Reported as "started", the
+reason is nowhere -- the model believes a server is up that never bound, and
+looks for the fault in its client. Long enough for a ``http.server`` that loses
+the port to say so, short enough that every successful launch still returns in
+well under a second.
+
+The check cannot prove the task will keep running, only that it has not already
+stopped, and the note says so rather than promising more.
+"""
+
+_NOTE_TAIL_BYTES = 2000
+"""How much of a dead task's log the launch note quotes back.
+
+The failure is at the end, and a command that died in the first second cannot
+have written much; 2000 covers a Python traceback whole, where a generous cap
+would paste a wall of startup output into the model's context to say the same
+thing."""
+
 
 def _root() -> Path:
     root = raven_home() / _DIRNAME
@@ -270,7 +292,28 @@ def reap_all() -> int:
 
 
 def start_note(task: BackgroundTask) -> str:
-    """What a background launch tells the model: the handle, and how to read it."""
+    """What a background launch tells the model: the handle, and how to read it.
+
+    Or, when the task was already gone by the time this is built, what it said
+    on the way out. ``start`` returns as soon as ``Popen`` does, which is before
+    the command has run a line: a command that fails immediately -- port taken,
+    binary missing -- is reported as running by a note that never looks, and the
+    model then hunts for its own bug in a server that never bound (measured
+    2026-09-22, session 692e5c: ``http.server 8765`` lost the port and the launch
+    still read as success).
+    """
+    proc = _PROCS.get(task.task_id)
+    if proc is None:
+        return _running_note(task)
+    try:
+        code = proc.wait(timeout=_CONFIRM_S)
+    except subprocess.TimeoutExpired:
+        # Still alive, which is all this window can establish.
+        return _running_note(task)
+    return _exited_note(task, code)
+
+
+def _running_note(task: BackgroundTask) -> str:
     return (
         f"Started in the background as {task.task_id} (pid {task.pid}). It runs on THIS "
         f"computer, detached, logging to {task.log_path}. This turn is not held open for "
@@ -278,4 +321,33 @@ def start_note(task: BackgroundTask) -> str:
         f"want to know -- later in this turn, or on a later one (a one-shot reminder "
         f"naming {task.task_id} brings you back if nothing else will). It is tracked and "
         f"will be reaped if the session ends."
+    )
+
+
+def _exited_note(task: BackgroundTask, code: int) -> str:
+    """The launch note for a command that ended before it could be reported.
+
+    The exit code and the log's tail are the whole diagnosis: nothing has
+    happened since the command ran, so whatever went wrong is in there. Named as
+    an ending rather than a "failure", because a command that exits 0 within the
+    window did exactly what it was asked and simply had nothing to do in the
+    background.
+    """
+    if code < 0:
+        try:
+            ended = f"killed by {signal.Signals(-code).name}"
+        except ValueError:  # pragma: no cover - a signal this platform does not have
+            ended = f"killed by signal {-code}"
+    else:
+        ended = f"exited with code {code}"
+    output = tail(task.task_id, max_bytes=_NOTE_TAIL_BYTES).strip()
+    ended_line = "It wrote nothing to its log."
+    if output:
+        ended_line = f"Its log ({task.log_path}) ends with:\n\n{output}"
+    return (
+        f"The background command ended immediately: `{task.command}` ({task.task_id}, "
+        f"pid {task.pid}) {ended} before the launch could report it as running, so it is "
+        f"not running now.\n\n{ended_line}\n\n"
+        "Nothing is running and nothing will be reaped later. If the command was meant to "
+        "keep running, fix what the output names and start it again."
     )

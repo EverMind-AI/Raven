@@ -9,6 +9,7 @@ chosen) and the sandbox boundary still have the last word.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -35,6 +36,15 @@ def _wait_for(predicate, timeout=5.0):
 
 
 # ---- the module: custody itself ----
+
+
+def _task_id_from(out: str) -> str:
+    """The handle out of whichever note the launch produced.
+
+    Both notes name it the same way, but the ended one puts the command after
+    it, so slicing on a trailing space would take part of the command too.
+    """
+    return out.split(" as ", 1)[1].split(" ", 1)[0].rstrip(",.")
 
 
 def test_a_started_task_runs_detached_and_its_log_is_managed(home):
@@ -65,13 +75,76 @@ def test_an_unknown_task_is_none_not_a_traceback(home):
 
 
 def test_the_start_note_hands_over_the_handle_and_the_log(home):
-    task = background_exec.start("true")
+    task = background_exec.start("sleep 30")
     note = background_exec.start_note(task)
 
     assert task.task_id in note
     assert task.log_path in note
     assert "later one" in note, "the model is told how completion becomes visible"
     assert "reminder" in note, "the road back without holding the turn is named"
+
+    background_exec.reap(task.task_id)
+
+
+def test_a_command_that_exits_at_once_is_reported_as_ended_not_started(home):
+    """The bug this file grew the check for: `start` returns when `Popen` does,
+    so a command that never ran -- a port taken, a binary missing -- was handed
+    back as running, and the model went looking for its own bug in a server that
+    had never bound (measured 2026-09-22, session 692e5c)."""
+    task = background_exec.start("echo one-line-then-out; exit 3")
+    note = background_exec.start_note(task)
+
+    assert "ended immediately" in note
+    assert "exited with code 3" in note
+    assert "one-line-then-out" in note, "the log's tail is the diagnosis and comes with it"
+    assert "not running now" in note
+    assert "This turn is not held open" not in note, "nothing is running to read a log of"
+
+
+def test_a_command_killed_by_a_signal_is_named_by_that_signal(home):
+    task = background_exec.start("kill -TERM $$")
+    note = background_exec.start_note(task)
+
+    assert "killed by SIGTERM" in note
+    assert "ended immediately" in note
+
+
+def test_a_command_that_wrote_nothing_says_so_rather_than_showing_an_empty_log(home):
+    task = background_exec.start("exit 1")
+    note = background_exec.start_note(task)
+
+    assert "It wrote nothing to its log." in note
+    assert "exited with code 1" in note
+
+
+def test_a_binary_that_is_not_there_ends_the_launch_rather_than_hanging_around(home):
+    task = background_exec.start("raven-test-no-such-binary --serve")
+    note = background_exec.start_note(task)
+
+    assert "ended immediately" in note
+    assert "not found" in note, "the shell's own words are the whole explanation"
+
+
+def test_a_command_that_keeps_running_is_not_claimed_to_have_ended(home):
+    """The check may not become a guess in the other direction: a task still up
+    after the window is reported as running, which is all the window shows."""
+    task = background_exec.start("sleep 30")
+    note = background_exec.start_note(task)
+
+    assert "Started in the background" in note
+    assert "ended immediately" not in note
+    assert background_exec.status(task.task_id)["running"] is True
+
+    background_exec.reap(task.task_id)
+
+
+def test_an_ended_launch_leaves_nothing_to_reap(home):
+    task = background_exec.start("exit 7")
+    note = background_exec.start_note(task)
+
+    assert "nothing will be reaped later" in note
+    assert background_exec.status(task.task_id)["running"] is False
+    assert background_exec.reap(task.task_id) is False
 
 
 # ---- the tool wiring: the lane changes custody, never the rules ----
@@ -86,8 +159,34 @@ async def test_exec_background_returns_the_note_without_holding_the_turn(home, t
 
     assert time.monotonic() - t0 < 5, "the turn is not held for the command"
     assert "Started in the background as bg-" in out
-    task_id = out.split("Started in the background as ", 1)[1].split(" ", 1)[0]
+    task_id = _task_id_from(out)
     assert background_exec.reap(task_id) is True
+
+
+@pytest.mark.asyncio
+async def test_the_launch_check_waits_off_the_event_loop(home, tmp_path):
+    """The note waits up to a second for the command to contradict it. A launch
+    that keeps running spends that whole second, and on the loop's own thread
+    every other turn in the process would stall for it."""
+    tool = ExecTool(working_dir=str(tmp_path))
+    beats = [time.monotonic()]
+
+    async def ticker():
+        while True:
+            await asyncio.sleep(0.05)
+            beats.append(time.monotonic())
+
+    beat = asyncio.create_task(ticker())
+    try:
+        out = await tool.execute(command="sleep 30", run_in_background=True)
+        await asyncio.sleep(0.1)
+    finally:
+        beat.cancel()
+
+    gaps = [later - earlier for earlier, later in zip(beats, beats[1:])]
+    assert "Started in the background as bg-" in out
+    assert max(gaps) < 0.5, f"the loop stalled for {max(gaps):.2f}s while the launch was confirmed"
+    assert background_exec.reap(_task_id_from(out)) is True
 
 
 @pytest.mark.asyncio
@@ -146,13 +245,10 @@ async def test_the_background_child_gets_the_baseline_env_not_the_host_env(home,
     tool = ExecTool(working_dir=str(tmp_path))
 
     out = await tool.execute(command="env", run_in_background=True)
-    task_id = out.split("Started in the background as ", 1)[1].split(" ", 1)[0]
 
-    assert _wait_for(lambda: "PATH=" in background_exec.tail(task_id))
-    assert _wait_for(lambda: not background_exec.status(task_id)["running"])
-    assert "must-not-leak" not in background_exec.tail(task_id), (
-        "the detached child keeps the executor's allowlist hygiene"
-    )
+    assert "PATH=" in out, "the child got an allowlisted environment and its output came back"
+    assert "must-not-leak" not in out, "the detached child keeps the executor's allowlist hygiene"
+    assert not background_exec.running(), "the command is over; nothing is left to reap"
 
 
 def test_session_exit_reaps_only_its_own_tasks(home, monkeypatch):
