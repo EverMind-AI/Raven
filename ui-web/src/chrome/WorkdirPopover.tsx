@@ -60,8 +60,9 @@ function Row({ row }: { row: wd.WdRow }): JSX.Element {
 /* The menu: the default, a rule, the recent folders, then the row that opens
    the host's folder dialog (or the in-page browser, where the gateway is not
    this desktop), then whatever the last attempt had to say. The rule is drawn
-   only when there is something under it; the last row says it is waiting
-   while the dialog is up, and takes no second press. */
+   only when there is something under it. The native row takes no second press
+   while a dialog it opened is still up -- the menu is closed by then, but a
+   reader who opens it again must not raise a second dialog behind the first. */
 function Menu({ rows, err, picking }: { rows: readonly wd.WdRow[]; err: string | null; picking: boolean }): JSX.Element {
   const [first, ...rest] = rows
   return (
@@ -72,7 +73,7 @@ function Menu({ rows, err, picking }: { rows: readonly wd.WdRow[]; err: string |
         {rest.map((row) => <Row key={row.path ?? ''} row={row} />)}
       </div>
       <button className="prow chrome-wd-open" disabled={picking} onClick={() => void wd.chooseFolder()}>
-        <span className="nm">{picking ? t('gui.wd.picking') : t(wd.nativePick() ? 'gui.wd.open' : 'gui.wd.open_remote')}</span>
+        <span className="nm">{t(wd.nativePick() ? 'gui.wd.open' : 'gui.wd.open_remote')}</span>
       </button>
       {err ? <div className="note chrome-wd-err" role="alert">{err}</div> : null}
     </>

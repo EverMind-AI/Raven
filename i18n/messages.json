@@ -7854,10 +7854,6 @@
     "gui.wd.open_remote": {
       "en": "Browse the host's folders...",
       "zh": "浏览主机上的文件夹…"
-    },
-    "gui.wd.picking": {
-      "en": "Choose the folder in the dialog that opened...",
-      "zh": "在弹出的窗口里选择文件夹…"
     }
   }
 }

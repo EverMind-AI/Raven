@@ -619,6 +619,23 @@ describe('rail island', () => {
       expect(document.getElementById('title')!.textContent).toBe('renamed by hand')
     })
 
+    it('opens the editor at the width the heading was drawn at', () => {
+      /* The workspace tag sits right after the title, and it must not move
+         when the name is clicked. No stylesheet can promise that: a field that
+         measures its own value opens a little wider than the heading it
+         replaces, and a short name is pushed wider still by the floor such a
+         field needs. So the width is taken from the heading's own box and
+         written on the field. jsdom has no layout, so what is assertable here
+         is that mechanism; whether the two line up to the pixel is a question
+         for a browser, and was answered in one. */
+      install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      const host = mount()
+      document.getElementById('title')!.getBoundingClientRect = () => ({ width: 137.5 } as DOMRect)
+      const item = rowItems(host, 'second task').find(x => x !== '-' && x.label === 'gui.sess.rename') as MenuItem
+      act(() => item.fn())
+      expect(document.querySelector<HTMLInputElement>('input.titin')!.style.width).toBe('137.5px')
+    })
+
     it('tells the source on blur too', () => {
       install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
       const said = wire()

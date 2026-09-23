@@ -265,16 +265,27 @@ export function chooseFolder(): Promise<void> {
   return nativePick() ? pickNative() : browse()
 }
 
-/* The dialog is modal on the desktop and the page only waits: the menu says
-   so and stays, a dismissal leaves it where it was, and a folder the create
-   would refuse is said in place rather than staged. Answers that land after
-   the draft became a conversation are dropped -- the pick would be for some
-   later draft nobody asked for. */
+/* Bring the menu back up to say something: the dialog is gone, the popover
+   went down with the click that opened it, and a refusal with nowhere to be
+   said would leave the reader with a folder they did not get and no word
+   about it. The rows are rebuilt as an open builds them, so what comes back
+   is the menu as it stands now, carrying the sentence. */
+function sayInMenu(err: string): void {
+  set({ ...get(), picking: false, open: true, view: 'menu', listed: menuRows(), err, opened: get().opened + 1 })
+}
+
+/* The menu goes down with the click and the desktop's own dialog comes up in
+   its place: the dialog is modal and takes the reader with it, so a menu left
+   standing behind it had nothing to say and only sat in the way. The page
+   waits: a dismissal leaves the folder where it was, and a folder the create
+   would refuse brings the menu back with the reason on it. Answers that land
+   after the draft became a conversation are dropped -- the pick would be for
+   some later draft nobody asked for. */
 async function pickNative(): Promise<void> {
   const fn = ds('workspace').pickDir
   if (!fn || get().picking) return
   const ticket = ++asking
-  set({ ...get(), picking: true, err: null })
+  set({ ...get(), picking: true, err: null, open: false })
   try {
     const r = await fn()
     if (ticket !== asking) return
@@ -282,13 +293,15 @@ async function pickNative(): Promise<void> {
     if (get().paint?.locked) return
     if (!r.path) return
     if (!r.ok) {
-      set({ ...get(), err: t('gui.wd.blocked') })
+      sayInMenu(t('gui.wd.blocked'))
       return
     }
     pick(r.path)
   } catch (e) {
     if (ticket !== asking) return
-    set({ ...get(), picking: false, err: t('gui.wd.failed', { detail: detailOf(e) }) })
+    set({ ...get(), picking: false })
+    if (get().paint?.locked) return
+    sayInMenu(t('gui.wd.failed', { detail: detailOf(e) }))
   }
 }
 

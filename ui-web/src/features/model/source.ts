@@ -11,7 +11,7 @@ import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
-import { open as openSettings, openModels, openProviderModels } from '../settings/store'
+import { openModels, openProviderModels } from '../settings/store'
 import { open as openPickerAt, setCurrent, statedTags } from './store'
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
@@ -224,7 +224,7 @@ export const modelSource: ModelSource = {
     await gateway().call('model.set_protocol', { model, slug: provider, protocol })
     await loadProviders()
   },
-  openSettings: () => openSettings(),
+  openSettings: () => openModels(),
   openProviderModels: (provider: string) => openProviderModels(provider),
 }
 

@@ -15,9 +15,9 @@ interface Geom {
   left: number
 }
 
-function scroller(over: Partial<Geom> = {}): HTMLElement {
+function scroller(over: Partial<Geom> = {}, tag = 'div'): HTMLElement {
   const g: Geom = { clientHeight: 200, scrollHeight: 1000, clientWidth: 300, scrollWidth: 300, top: 10, left: 5, ...over }
-  const el = document.createElement('div')
+  const el = document.createElement(tag)
   document.body.appendChild(el)
   for (const k of ['clientHeight', 'scrollHeight', 'clientWidth', 'scrollWidth'] as const) {
     Object.defineProperty(el, k, { value: g[k], configurable: true })
@@ -100,6 +100,20 @@ describe('overlay scrollbars', () => {
     expect(thumbs()).toHaveLength(0)
     show(scroller({ clientHeight: 30, scrollHeight: 900 }))
     expect(vert()).toBeUndefined()
+  })
+
+  it('draws no thumb over a one-line field, however far its text runs', () => {
+    /* A text input scrolls itself to the caret, so there is nothing to grab,
+       and the bar was laid across the bottom of a box one line tall: 6px of
+       thumb inside 27px of field, which is what renaming a long conversation
+       looked like. A textarea is a real scroller and keeps its bar. */
+    const field = scroller({ clientHeight: 27, clientWidth: 150, scrollWidth: 460 }, 'input')
+    show(field)
+    expect(thumbs()).toHaveLength(0)
+
+    const area = scroller({ clientHeight: 120, scrollHeight: 900 }, 'textarea')
+    show(area)
+    expect(vert()).toBeTruthy()
   })
 
   it('shows the bar, then takes it back after SB_HIDE', () => {

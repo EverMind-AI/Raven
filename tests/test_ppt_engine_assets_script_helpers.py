@@ -4559,6 +4559,10 @@ def _every_shape(slide):
     yield from walk(slide.shapes)
 
 
+# The one case here that actually typesets: the first render imports matplotlib and
+# builds its font cache, which is the whole of the wall clock, as it is for the
+# sibling module (tests/test_ppt_engine_assets_formulas.py).
+@pytest.mark.slow
 def test_a_formula_that_stacks_is_typeset_as_a_picture_in_the_decks_ink(tmp_path) -> None:
     """The attention formula on a delivered page: `softmax(QK^T / sqrt(d_k)) V`, a slash
     for the bar and a stray radical, broken at the equals sign. A text box has one

@@ -130,7 +130,14 @@ function Pages({ row, words, pages, onBack, onUse }: {
         <div className="cp-tpl-strip" ref={strip} tabIndex={0} onScroll={onScroll} onKeyDown={onKey}
           role="group" aria-label={row.label}>
           {urls === null
-            ? <span className="cp-tpl-cover cp-tpl-empty" aria-hidden="true">{row.label}</span>
+            ? (
+              /* The pages are rendered on the other end and the wait is
+                 seconds, not a frame: a page-shaped panel shimmering in the
+                 strip carries it, where the template's name used to sit
+                 saying nothing about whether anything was happening. The
+                 counter beside it says what is being waited for. */
+              <div className="cp-tpl-load" aria-hidden="true" />
+            )
             : urls.length
               ? urls.map((u, i) => <img key={i} src={u} alt={`${row.label} ${i + 1}`} draggable={false} />)
               : <span className="cp-tpl-cover cp-tpl-empty">{words.pagesNone}</span>}

@@ -135,7 +135,12 @@ describe('the deck template picker', () => {
     expect(sheet.querySelector('.q')!.textContent).toBe('Amber Wave Quarterly Summary')
     expect(sheet.querySelector('.cp-tpl-grid')).toBeNull()
     expect(sheet.querySelector('.cp-tpl-pages .cp-tpl-count')!.textContent).toBe('Loading the pages')
+    /* And the wait is carried in the shape of what is coming: the pages are
+       rendered on the other end, which takes seconds, and the strip held the
+       template's name doing nothing while it did. */
+    expect(sheet.querySelector('.cp-tpl-strip > .cp-tpl-load')).not.toBeNull()
     await act(async () => { release({ pages: PAGES }); await settle() })
+    expect(sheet.querySelector('.cp-tpl-load')).toBeNull()
     const strip = sheet.querySelector('.cp-tpl-pages .cp-tpl-strip') as HTMLElement
     expect(Array.from(strip.querySelectorAll('img')).map((i) => i.getAttribute('src'))).toEqual(PAGES)
     expect(sheet.querySelector('.cp-tpl-pages .cp-tpl-count')!.textContent).toBe('1 / 3')

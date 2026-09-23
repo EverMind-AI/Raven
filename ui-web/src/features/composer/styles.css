@@ -79,6 +79,24 @@
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip:focus-visible { border-color: var(--text); }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > img { flex: none; width: 100%; height: 100%; object-fit: contain; scroll-snap-align: start; user-select: none; }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > .cp-tpl-cover.cp-tpl-empty { position: static; width: 100%; height: 100%; border: 0; }
+/* The wait for a template's pages, in the shape of the page that is coming.
+   The pages are rendered on the other end and it takes seconds, which the
+   strip used to spend holding the template's name, saying nothing about
+   whether anything was happening. A wash rather than a named surface, for the
+   reason the rail's skeleton gives: it has to hold its contrast on whatever
+   is behind it, in both themes. */
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > .cp-tpl-load {
+  flex: none; width: 100%; height: 100%; border-radius: 9px;
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--text) 5%, transparent) 30%,
+    color-mix(in oklab, var(--text) 12%, transparent) 50%,
+    color-mix(in oklab, var(--text) 5%, transparent) 70%);
+  background-size: 300% 100%; animation: cptplwait 1.3s linear infinite;
+}
+@keyframes cptplwait { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > .cp-tpl-load { animation: none; }
+}
 
 /* The permission sheet's own parts: why the agent is asking, the evidence
    block by kind, the landed line an answer leaves. The row of answers is laid

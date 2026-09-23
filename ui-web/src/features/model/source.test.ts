@@ -125,6 +125,7 @@ async function live({ session = null, answers = null }: Options = {}) {
     settings,
     overrides,
     calls,
+    source: model.modelSource,
     /* A switch to the new-task screen, which is one of the two paths that
        spends a generation ticket -- the real counter, not a stand-in. */
     bump: () => {
@@ -164,6 +165,18 @@ describe('the first-run provider guard', () => {
     const h = await live()
     expect(h.settings.openModelsForMissingProvider()).toBe(false)
     expect(h.calls.filter((c) => c[0] === 'openModels')).toEqual([])
+  })
+})
+
+describe('the picker\'s settings door', () => {
+  it('lands on Model providers, which is the page it names', async () => {
+    /* The footer says "manage models and accounts", and settings opened
+       wherever it had been left last -- General, on a fresh page -- so the
+       reader who asked for one page got another. Model providers is where a
+       key is entered and a model list is built. */
+    const h = await live()
+    h.source.openSettings()
+    expect(h.calls.filter((c) => c[0] === 'openModels')).toHaveLength(1)
   })
 })
 
