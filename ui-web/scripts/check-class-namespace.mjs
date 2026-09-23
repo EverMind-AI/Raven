@@ -183,7 +183,7 @@ const SHARED = new Set([
 // counted is not.
 const LEGACY_SHARED = {
   a: 3, btn: 2, cap: 2, chgs: 2, cmd: 2, ct: 2, d: 4, foot: 2, k: 3,
-  gap: 2, 'ghost-ic': 3, h: 2, hd: 2, key: 2, lb: 3, n: 3, rm: 2, row: 2,
+  gap: 2, 'ghost-ic': 3, h: 2, hd: 2, key: 2, lb: 3, n: 2, rm: 2, row: 2,
   shot: 3, sk: 2, skel: 2, step: 2, sz: 2, tipdn: 2, v: 3, w: 3, wkg: 3,
   wsnote: 2,
 }
@@ -299,7 +299,7 @@ const LEGACY_LOCAL = {
      Up to 71 with the dag renderer's default node box gone: `.tm` was
      shared with it, and the timestamp on a folded turn's own head is this
      domain's alone now. */
-  transcript: 68,
+  transcript: 60,
   /* Up from 37 with the playbooks page gone: `.t` was shared with it. */
   workspace: 38,
 }
@@ -336,7 +336,7 @@ const LEGACY_EXPR = {
   subagents: 6,
   /* Down from 24 with the node panel: `.tpl`, written only from inside a
      `className={...}` expression, left with it. */
-  transcript: 21,
+  transcript: 20,
   workspace: 7,
 }
 

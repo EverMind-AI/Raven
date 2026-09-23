@@ -1294,9 +1294,7 @@ const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; s
    and as four different miniatures -- that difference is what the extra
    height buys. */
 
-const CHANGE_CAP = 4
-/* Deliveries are capped by a STATED count, like the changes below them. It
-   used to be whatever fitted one row, measured by an observer that starts at
+/* Deliveries are capped by a STATED count. It used to be whatever fitted one row, measured by an observer that starts at
    one -- so a full-width card could sit claiming it had no space for a second
    tile until something happened to resize it, which is how three deliveries
    came to show two. Three is one row at the reading column and three rows in a
@@ -1422,8 +1420,6 @@ const DeliveryTile = memo(function DeliveryTile({ row }: { row: DeliveryRow }): 
   )
 })
 
-const ARTS_CHANGE = { new: 'gui.arts.new', edit: 'gui.arts.edit', deleted: 'gui.arts.deleted' } as const
-
 const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsData }): ReactElement | null {
   useSeg(lane, seg)
   /* And on the registry the deliveries come from, not only on the lane. What a
@@ -1433,13 +1429,10 @@ const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsDa
      the frame it was painted with -- one file greyed out on the shelf and still
      offered here, in the same window, from the same registry. */
   useSyncExternalStore(deliveriesSubscribe, deliveriesVersion)
-  const changes = store.artifactsOf(lane, seg.turn)
   const deliveries = store.deliveriesOf(lane, seg.turn)
-  if (!changes.length && !deliveries.length) return null
+  if (!deliveries.length) return null
   const shownDeliveries = seg.deliveriesOpen ? deliveries : deliveries.slice(0, DELIVERY_CAP)
   const deliveryRest = deliveries.length - shownDeliveries.length
-  const shownChanges = seg.changesOpen ? changes : changes.slice(0, CHANGE_CAP)
-  const changeRest = changes.length - shownChanges.length
   return (
     <div className="arts">
       {/* No heading over the files: each is a card of its own under the reply,
@@ -1449,26 +1442,8 @@ const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsDa
           {shownDeliveries.map((row) => <DeliveryTile key={row.path} row={row} />)}
         </div>
         {deliveryRest > 0 || seg.deliveriesOpen ? <button className="amore"
-          aria-expanded={seg.deliveriesOpen} onClick={() => store.toggleArts(lane, seg, 'deliveries')}>
+          aria-expanded={seg.deliveriesOpen} onClick={() => store.toggleArts(lane, seg)}>
           {seg.deliveriesOpen ? t('gui.arts.less') : t('gui.arts.more', { n: String(deliveryRest) })}
-        </button> : null}
-      </section> : null}
-      {changes.length ? <section className="asec changes">
-        <div className="ahd">
-          <span className="ahm"><span className="lb">{t('gui.arts.changed')}</span><span className="n">{changes.length}</span></span>
-        </div>
-        <div className="achanges">
-          {shownChanges.map((row) => <button key={row.path} className="achange" onClick={() => wsOpenPath(row.path)}>
-            <span className={'ck ' + row.change}>{t(ARTS_CHANGE[row.change])}</span>
-            <span className="cn">{row.name}</span>
-            <span className="ct">{row.ext ? row.ext.toUpperCase() : t('gui.arts.file')}</span>
-            <span className="ca">+{row.lines}</span>
-            <span className="cd">{'\u2212'}{row.deleted}</span>
-          </button>)}
-        </div>
-        {changeRest > 0 || seg.changesOpen ? <button className="amore"
-          aria-expanded={seg.changesOpen} onClick={() => store.toggleArts(lane, seg, 'changes')}>
-          {seg.changesOpen ? t('gui.arts.less') : t('gui.arts.more', { n: String(changeRest) })}
         </button> : null}
       </section> : null}
     </div>

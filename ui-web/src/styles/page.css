@@ -1459,26 +1459,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    What a turn delivered, as the design lays it out (Figma: Raven /
    AssistantMessage, the output-file variants; the flattened layout): no panel
    and no heading, one small white card per file under the reply -- the file's
-   mark or its picture, its name and size, and what can be done with it.
-   The file changes keep a card of their own below them. */
-.arts {
-  display: flex; flex-direction: column; gap: 6px; margin: 0; min-width: 0;
-  container: artifacts / inline-size;
-}
-.arts .ahd {
-  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
-  font-size: 12px; line-height: 1.5; color: var(--faint);
-}
-.arts .ahd .ahm { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
-.arts .ahd .lb { color: var(--muted); font-weight: 500; }
-.arts .ahd .n {
-  min-width: 18px; padding: 1px 5px; border-radius: 999px; background: var(--surface);
-  color: var(--faint); font-family: var(--mono); font-size: 10.5px; line-height: 16px;
-  text-align: center; font-variant-numeric: tabular-nums;
-}
-.arts .asec.changes {
-  padding: 16px; border-radius: 12px; background: var(--ink); box-shadow: 0 0 0 1px var(--ring);
-}
+   mark or its picture, its name and size, and what can be done with it. */
+.arts { display: flex; flex-direction: column; gap: 6px; margin: 0; min-width: 0; }
 .atiles { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
 /* One width for every card, so a stack of them reads as a list rather than a
    ragged edge; a long name gives way inside it. */
@@ -1560,39 +1542,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .transcript-act:hover { color: var(--text); background: var(--surface); }
 .transcript-act:focus-visible { outline: 1px solid var(--amber); outline-offset: 1px; }
-.achanges { overflow: hidden; border: 1px solid var(--line-soft); border-radius: 10px; }
-.achange {
-  display: grid; grid-template-columns: 48px minmax(0, 1fr) 34px 34px 34px; align-items: center;
-  width: 100%; min-width: 0; min-height: 33px; padding: 5px 9px;
-  border: 0; border-bottom: 1px solid var(--line-soft); background: var(--ink);
-  color: var(--muted); text-align: left; cursor: pointer;
-  transition: background-color .14s, color .14s;
-}
-.achange:last-child { border-bottom: 0; }
-.achange:hover { color: var(--text); background: var(--surface); }
-.achange .ck { font-size: 10.5px; font-weight: 600; color: var(--amber); }
-.achange .ck.new { color: var(--moss); }
-.achange .ck.deleted { color: var(--clay); }
-.achange .cn {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text); font-size: 13px; font-weight: 500;
-}
-.achange .ct, .achange .ca, .achange .cd {
-  color: var(--muted); font-family: var(--mono); font-size: 9.5px; text-align: right;
-  font-variant-numeric: tabular-nums; white-space: nowrap;
-}
-.achange .ct { padding-left: 4px; color: var(--faint); font-family: var(--mono); font-size: 9.5px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .amore {
   display: inline-flex; margin: 8px 0 0; padding: 2px 0; border: 0; background: none;
   font-size: 12px; line-height: 1.5; color: var(--faint); cursor: pointer;
 }
 .amore:hover { color: var(--text); }
-@container artifacts (max-width: 430px) {
-  .achange {
-    grid-template-columns: 44px minmax(0, 1fr) 32px 32px 32px;
-    padding-inline: 7px;
-  }
-}
 
 /* an empty target would still spend a flex gap, opening a hole after the verb */
 .wrow .ar:empty { display: none; }

@@ -12,7 +12,6 @@
 
 import type { SnapshotRow } from '../dag/nodes'
 import type { DagNode } from '../dag/types'
-import type { WsChange } from '../workspace/types'
 
 export interface Hunk {
   add: number
@@ -251,17 +250,6 @@ export interface DeliveredData {
   shown: boolean
 }
 
-/* One file this turn produced, as the bar shows it. */
-export interface ArtifactRow {
-  path: string
-  dir: string
-  name: string
-  ext: string
-  lines: number
-  deleted: number
-  change: 'new' | 'edit' | 'deleted'
-}
-
 export interface ArtsData {
   v: number
   id: number
@@ -272,7 +260,6 @@ export interface ArtsData {
      then disagree with it. */
   turn: number
   deliveriesOpen: boolean
-  changesOpen: boolean
 }
 
 export interface FoldData {
@@ -391,16 +378,6 @@ export interface HistoryMessage {
   /* Set on a user entry the runtime merged into a turn already running. It is
      drawn inside that turn -- see the mid-turn branch in history(). */
   mid_turn?: boolean
-}
-
-/* What the artifact bar reads, and all it reads: the workspace record's rows
-   for one turn, exactly as that record holds them.
-   Deliberately NOT the finished list. Which of those rows counts as a product,
-   and what a tile can draw of it, are presentation decisions -- they belong to
-   the island that draws them, where they can be tested, rather than to the
-   workspace record that happens to hold the rows. */
-export interface ArtifactsSource {
-  changes(turn: number): WsChange[]
 }
 
 /* The pull half of the seam. Event pushes arrive through this island's own

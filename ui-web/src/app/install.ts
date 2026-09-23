@@ -43,7 +43,6 @@ import {
 import {
   proseSource, setHostPlatformReader, setShortener, workspaceSource,
 } from '../features/workspace/source'
-import { shared as workspaceShared } from '../features/workspace/store'
 import { slashHelp, slashName } from '../i18n/t'
 import { t } from '../i18n/t'
 import { $ } from '../lib/dom'
@@ -231,19 +230,6 @@ export function installSources(): void {
   setShortener((p) => ds('workspace').shortPath(p))
   sources.prose = proseSource
   sources.workspace = workspaceSource
-
-  /* ── the turn's products ───────────────────────────────────────────────
-     The workspace record's own rows for one turn, unfiltered. Which of them
-     counts as a product, and what a tile can draw of it, are the transcript
-     island's to decide -- see artifactsOf in features/transcript/store.ts.
-
-     The turn number is the one the record files rows under: bumped per turn by
-     the pipeline, and per user message with text by the replay
-     (features/workspace/record.ts). The transcript counts it the same way over
-     the same payload. */
-  sources.artifacts = {
-    changes: (turn) => workspaceShared().changes.filter((c) => c.turn === turn),
-  }
 
   /* Files are uploaded into <workspace>/uploads and handed to the agent as
      paths: every file tool is already workspace-scoped, so a path is all it

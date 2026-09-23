@@ -2183,18 +2183,6 @@
       "en": "Show less",
       "zh": "收起"
     },
-    "gui.arts.new": {
-      "en": "New",
-      "zh": "新建"
-    },
-    "gui.arts.edit": {
-      "en": "Edited",
-      "zh": "编辑"
-    },
-    "gui.arts.deleted": {
-      "en": "Deleted",
-      "zh": "删除"
-    },
     "gui.arts.lines": {
       "en": "{n} lines",
       "zh": "{n} 行"
