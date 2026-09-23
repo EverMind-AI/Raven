@@ -75,8 +75,10 @@ class Remedy:
     ``sign_in`` and ``setup`` are fixed outside the page, in a terminal;
     ``api_key`` is fixed in the page, since the row is an endpoint and a key.
     ``download`` is ``npx`` failing to fetch the agent (`npx_fetch_failure`):
-    fixed in the network, the npm registry or the proxy, with the row's own
-    command as the way to fetch it in a terminal, where nothing times it out.
+    fixed in the network, the npm registry or the proxy, with the preset's own
+    command as the way to fetch it in a terminal, where nothing times it out --
+    and no command at all for a row whose command was edited, since that is
+    its operator's execution config (`probe._shipped_command`).
     """
 
     kind: RemedyKind

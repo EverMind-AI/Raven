@@ -794,6 +794,21 @@ describe('a refusal that names its fix', () => {
     expect(lineOf('Claude Code')).toBe(say('gui.agent.bad_open', { what }))
   })
 
+  it('offers no command for a download when the row\'s command is its own, not the preset\'s', async () => {
+    const r = row({ name: 'my-agent', preset: undefined, configured: true, enabled: false })
+    install([r], {
+      act: async (op) => {
+        if (op === 'toggle') throw { data: { detail: 'npx could not download it (ENOTFOUND)', remedy: { kind: 'download' } } }
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('my-agent')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_download_bare', { agent: 'my-agent', button: 'gui.retry' }))
+    expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
+  })
+
   it.each([
     ['sign_in', 'gui.agent.bad_sign_in'],
     ['setup', 'gui.agent.bad_setup'],

@@ -1486,6 +1486,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.fix_raw': 'Original error',
     'gui.agent.fix_download':
       '{agent} could not be downloaded. Its first connect downloads it, so check the network, the npm registry or the proxy, then press {button}. On a slow network, download it first by running this command in a terminal (once it is downloaded it waits for input; press Ctrl-C to leave), then press {button}:',
+    'gui.agent.fix_download_bare':
+      "{agent} could not be downloaded. Its first connect downloads it, so check the network, the npm registry or the proxy, then press {button}. On a slow network, download it first by running this agent's launch command once in a terminal (once it is downloaded it waits for input; press Ctrl-C to leave), then press {button}.",
     'gui.agent.fix_unknown_connect':
       '{agent} could not connect. The original error below says why; once it is fixed, press {button}.',
     'gui.agent.fix_unknown_save':
@@ -3920,6 +3922,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.fix_raw': '原始报错',
     'gui.agent.fix_download':
       '{agent} 没能下载下来。第一次接入时要联网下载它，请检查网络、npm 源或代理设置，然后点「{button}」。网络慢的话，也可以先在终端运行下面这条命令把它下载好（下载完会停住等待输入，按 Ctrl-C 退出即可），再点「{button}」：',
+    'gui.agent.fix_download_bare':
+      '{agent} 没能下载下来。第一次接入时要联网下载它，请检查网络、npm 源或代理设置，然后点「{button}」。网络慢的话，也可以先在终端运行一次这个智能体的启动命令把它下载好（下载完会停住等待输入，按 Ctrl-C 退出即可），再点「{button}」。',
     'gui.agent.fix_unknown_connect': '{agent} 没接入成功。可以展开下面的原始报错排查原因，处理好后点「{button}」。',
     'gui.agent.fix_unknown_save': '这项修改没保存成功。可以展开下面的原始报错查看原因，或点「{button}」再试一次。',
     'gui.agent.fix_unknown_test': '可以展开下面的原始报错排查原因，处理好后再点「{button}」。',

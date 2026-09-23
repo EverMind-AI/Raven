@@ -1038,7 +1038,7 @@ export interface SubagentRow {
    */
   last_test_remedy?: {
     /**
-     * sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page. download: npx could not fetch the agent -- fixed in the network, the npm registry or the proxy, and `command` is the row's own launch command, which fetches it from a terminal with no time limit.
+     * sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page. download: npx could not fetch the agent -- fixed in the network, the npm registry or the proxy; `command` is the preset's launch command, which fetches it from a terminal with no time limit, sent only when the row's command is the preset's word for word.
      */
     kind: 'sign_in' | 'setup' | 'api_key' | 'download';
     /**

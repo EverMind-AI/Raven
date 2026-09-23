@@ -337,7 +337,7 @@ function Refusal({ agent, detail, remedy, button, unknown, lead = (say) => say }
     : remedy.kind === 'api_key'
       ? t('gui.agent.fix_api_key', { agent, button })
       : remedy.kind === 'download'
-        ? t('gui.agent.fix_download', { agent, button })
+        ? t(command ? 'gui.agent.fix_download' : 'gui.agent.fix_download_bare', { agent, button })
         : !command
           ? t('gui.agent.fix_sign_in_bare', { agent, button })
           : remedy.kind === 'setup'

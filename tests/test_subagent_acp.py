@@ -381,10 +381,13 @@ async def test_npx_that_cannot_reach_the_registry_is_a_download_failure_not_a_si
     cfg = _through_npx(tmp_path, "npm_fetch_fails")
     pinged = await ping_agent(cfg)
     assert pinged.ok is False
-    assert pinged.remedy == Remedy("download", cfg.command)
+    # A hand-written row: its command is its operator's, so it is not quoted back.
+    assert pinged.remedy == Remedy("download")
     assert pinged.detail.startswith(
         "npx could not download it (ECONNREFUSED); check the network, the npm registry or the proxy; "
+        "connect again, or run this agent's launch command once in a terminal"
     ), pinged.detail
+    assert str(tmp_path) not in pinged.detail
     assert "connection ended (exit 1)" in pinged.detail, "the original error is kept for the fold"
 
     # The same death from a command that fetches nothing is not a download.
@@ -406,7 +409,7 @@ async def test_a_start_that_runs_out_under_npx_is_named_a_download_that_may_stil
     cfg = _through_npx(tmp_path, "silent", ready_timeout_ms=1500)
     pinged = await ping_agent(cfg)
     assert pinged.ok is False
-    assert pinged.remedy == Remedy("download", cfg.command)
+    assert pinged.remedy == Remedy("download")
     assert pinged.detail.startswith("it did not finish starting in time, and npx may still have been downloading it; ")
 
     # A session that opens and then says nothing started fine: not this story.
@@ -429,6 +432,9 @@ async def test_a_handshake_npx_could_not_fetch_is_not_recorded_as_an_absent_inst
     assert snapshot.status == "attention"
     assert snapshot.unfetched is True
     assert snapshot.detail.startswith("npx could not download it (ECONNREFUSED)")
+    # What Test persists and the listing serves back: the row's command is its
+    # operator's (the stand-in npx lives under tmp_path) and is not in it.
+    assert str(tmp_path) not in snapshot.detail
 
     store = SnapshotStore(tmp_path / "caps.json")
     store.record(snapshot)
@@ -436,12 +442,67 @@ async def test_a_handshake_npx_could_not_fetch_is_not_recorded_as_an_absent_inst
 
     tested = await run_test(cfg, source="config")
     assert tested.ok is False
-    assert tested.remedy == Remedy("download", cfg.command)
+    assert tested.remedy == Remedy("download")
+    assert str(tmp_path) not in tested.detail
 
     # A process that dies for any other reason is still reported as before.
     other = await verify_agent(stub_config(mode="abort"))
     assert other.status == "missing"
     assert other.unfetched is False
+
+
+async def test_a_download_fix_names_only_the_preset_s_own_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row's command is its operator's execution config, and can carry a credential.
+
+    No row the RPC layer sends carries it, and a refusal must not start to: the
+    connect returns its detail and remedy over RPC, and Test writes them to the
+    test-state file that the listing reads back. So the command is quoted only
+    when it is the preset's own, word for word, and an edited one is not quoted
+    at all -- in the sentence or in the remedy -- on either path.
+    """
+    import raven.agent.subagent.probe as probe_mod
+    from raven.acp_client.capabilities import CapabilitySnapshot
+    from raven.acp_client.protocol import AcpConnectionError
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.agent.subagent.probe_state import Remedy
+
+    shipped = THIRD_PARTY_SUBAGENT_PRESETS["claude_code"]["command"]
+    died = AcpConnectionError("acp agent 'Claude Code': connection ended (exit 1)", stderr=_NPM9_ENOTFOUND)
+    own = ThirdPartyAcpSubagentConfig(name="Claude Code", preset="claude_code", command=shipped)
+    edited = ThirdPartyAcpSubagentConfig(
+        name="Claude Code", preset="claude_code", command=f"{shipped} --token super-secret"
+    )
+
+    detail, remedy = probe_mod._ping_refusal(own, died)
+    assert remedy == Remedy("download", shipped)
+    assert f"`{shipped}`" in detail
+
+    detail, remedy = probe_mod._ping_refusal(edited, died)
+    assert remedy == Remedy("download")
+    assert "super-secret" not in detail
+
+    def _unfetched(cfg):
+        return CapabilitySnapshot(
+            agent=cfg.name,
+            fingerprint="x",
+            status="attention",
+            detail="npx could not download it",
+            measured_at_ms=1,
+            unfetched=True,
+        )
+
+    monkeypatch.setattr(probe_mod, "record_capabilities", _async(_unfetched))
+    assert (await run_test(own, source="config")).remedy == Remedy("download", shipped)
+    # The detail here is the stub's; the real handshake's is checked, command
+    # and all, in test_a_handshake_npx_could_not_fetch_is_not_recorded_as_an_absent_install.
+    assert (await run_test(edited, source="config")).remedy == Remedy("download")
+
+
+def _async(fn):
+    async def wrapped(*args, **kwargs):
+        return fn(*args, **kwargs)
+
+    return wrapped
 
 
 # npm 9.9.4 (`npx -y npm@9.9.4 exec ...`) against an unresolvable registry,

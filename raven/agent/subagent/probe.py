@@ -28,6 +28,7 @@ from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_ba
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.presets import (
+    THIRD_PARTY_SUBAGENT_PRESETS,
     install_hint_for,
     shim_requirement_for,
     sign_in_hint_for,
@@ -637,18 +638,36 @@ def _ping_refusal(cfg: Any, exc: BaseException) -> tuple[str, Remedy | None]:
 
     ``npx`` failing to fetch the agent comes first, because it is not the
     agent's answer at all -- no agent ran -- and it has a fix of its own: the
-    network, the npm registry or the proxy, or the row's own command run once
-    in a terminal, where nothing times the download out. Everything else is the
-    agent's refusal, read the way `_refusal` reads it.
+    network, the npm registry or the proxy, or the agent's launch command run
+    once in a terminal, where nothing times the download out. Everything else
+    is the agent's refusal, read the way `_refusal` reads it.
     """
     from raven.acp_client.capabilities import npx_fetch_failure, npx_fetch_lead
 
-    command = (getattr(cfg, "command", None) or "").strip()
-    unfetched = npx_fetch_failure(command, exc)
+    unfetched = npx_fetch_failure((getattr(cfg, "command", None) or "").strip(), exc)
     if unfetched is None:
         return _refusal(cfg, *_said(exc))
-    advice = f"connect again, or run `{command}` once in a terminal to fetch it with no time limit"
-    return f"{npx_fetch_lead(unfetched)}; {advice}. It said: {exc}"[:_DETAIL_CAP], Remedy("download", command)
+    shipped = _shipped_command(cfg)
+    run = f"`{shipped}`" if shipped else "this agent's launch command"
+    advice = f"connect again, or run {run} once in a terminal to fetch it with no time limit"
+    return f"{npx_fetch_lead(unfetched)}; {advice}. It said: {exc}"[:_DETAIL_CAP], Remedy("download", shipped)
+
+
+def _shipped_command(cfg: Any) -> str | None:
+    """The row's launch command when it is the one this repo ships for its preset, else ``None``.
+
+    A download is best fixed by running that command once in a terminal, so the
+    fix would name it. But a row's command is its operator's execution config,
+    and its arguments can carry a credential (``--token ...``) -- which is why no
+    row the RPC layer sends carries it, and why a refusal must not start to. So
+    it is repeated only when it is the preset's own, word for word: that text is
+    this repo's, and saying it back tells a reader nothing the preset table does
+    not. A row whose command was edited is told to run its launch command
+    without it being quoted.
+    """
+    preset = THIRD_PARTY_SUBAGENT_PRESETS.get(getattr(cfg, "preset", None) or "") or {}
+    shipped = str(preset.get("command") or "").strip()
+    return shipped if shipped and (getattr(cfg, "command", None) or "").strip() == shipped else None
 
 
 @dataclass(frozen=True)
@@ -768,7 +787,7 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
         remedy = (
             _remedy_for(cfg)
             if snapshot.needs_auth
-            else Remedy("download", cfg.command.strip())
+            else Remedy("download", _shipped_command(cfg))
             if snapshot.unfetched
             else None
         )
