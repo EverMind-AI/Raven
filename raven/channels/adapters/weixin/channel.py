@@ -140,9 +140,16 @@ class WeixinChannel(ChannelBase):
 
     @property
     def connected(self) -> bool:
-        """Whether an auth token is held, as opposed to the channel task merely
-        running (which is true before the login QR is even fetched)."""
-        return bool(self._token)
+        """Whether an auth token is held and the session behind it is usable, as
+        opposed to the channel task merely running (which is true before the
+        login QR is even fetched).
+
+        A session pause is not a pairing the reader still has: for the hour
+        errcode -14 buys, the poll idles and every send raises
+        (:meth:`_assert_session_active`), so reporting the token alone drew a
+        live row over an hour in which nothing could arrive.
+        """
+        return bool(self._token) and not self.paused_until
 
     # ── state persistence ─────────────────────────────────────────────
 
@@ -331,6 +338,11 @@ class WeixinChannel(ChannelBase):
         survives a clock the two sides do not share. There is no server-side
         threshold to compare it against -- iLink does not tell us a code's
         lifetime -- so a client that wants to warn before an expiry picks its own.
+
+        ``paused_until`` rides here rather than on a read of its own: a session
+        WeChat killed is the likeliest reason to rebind at all (see
+        :meth:`_adopt_account`), and this snapshot is what the dialog already
+        polls for.
         """
         code_at = float(self._rebind.get("code_at") or 0.0)
         return {
@@ -339,6 +351,7 @@ class WeixinChannel(ChannelBase):
             "max_refreshes": p.MAX_QR_REFRESH_COUNT,
             "code_age_s": round(max(0.0, time.time() - code_at), 1) if code_at else None,
             "detail": str(self._rebind.get("detail") or ""),
+            "paused_until": self.paused_until or None,
         }
 
     async def begin_rebind(self) -> dict:
@@ -499,6 +512,10 @@ class WeixinChannel(ChannelBase):
         if not await self._authenticate():
             logger.error("login failed. Run 'raven channels login weixin' to authenticate.")
             self._running = False
+            # What `login()` does in its finally, for the entrance the gateway
+            # uses: the code the flow gave up on is expired, and left published
+            # the page keeps drawing it as one to scan.
+            self.pending_qr = None
             return
 
         logger.info("channel starting with long-poll...")
@@ -537,6 +554,17 @@ class WeixinChannel(ChannelBase):
             self._client = None
 
     # ── session pause ─────────────────────────────────────────────────
+
+    @property
+    def paused_until(self) -> float:
+        """Unix time an errcode -14 pause lifts; 0.0 while the session is live.
+
+        A deadline rather than a remainder because it is read by pollers that
+        each ask at their own moment; unlike :meth:`_session_remaining_s` it
+        does not clear a pause it finds expired, so a reader cannot mutate the
+        adapter by looking at it.
+        """
+        return self._session_pause_until if self._session_pause_until > time.time() else 0.0
 
     def _session_remaining_s(self) -> int:
         remaining = int(self._session_pause_until - time.time())

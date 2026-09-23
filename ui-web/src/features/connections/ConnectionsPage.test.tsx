@@ -736,6 +736,55 @@ describe('connections island', () => {
     vi.useRealTimers()
   })
 
+  /* A login the adapter gave up on leaves its last code pending, and the row
+     behind this panel goes on saying the entrance is up until the list is
+     re-read -- so the panel is the last place that can catch a dead code, and
+     the only one still on screen to offer the retry. */
+  it('drops a code the adapter is no longer behind and carries the retry itself', async () => {
+    vi.useFakeTimers()
+    const answers: ConnQr[] = [
+      { connected: false, running: true, qr: 'data:image/png;base64,QQ==' },
+      { connected: false, running: false, qr: 'data:image/png;base64,QQ==' },
+    ]
+    let polls = 0
+    const { calls, source } = install(
+      [
+        chan({
+          id: 'weixin',
+          key: 'gui.chan.weixin',
+          fields: [],
+          on: true,
+          qrLogin: true,
+          running: true,
+          connected: false,
+        }),
+      ],
+      { hostRunning: () => true, qr: async () => answers[Math.min(polls++, answers.length - 1)]! },
+    )
+    await mount()
+    await act(async () => { openRow('gui.chan.weixin') })
+    expect(document.querySelector('.qrshot img')).toBeTruthy()
+
+    const rowsSpy = vi.spyOn(source, 'rows')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(document.querySelector('.qrshot img')).toBeNull()
+    expect(screen.getByText('gui.conn.w2_down')).toBeTruthy()
+    /* And the row the reader closes this on is asked for again, so what the
+       list says about the entrance stops contradicting the panel. */
+    expect(rowsSpy.mock.calls.length).toBeGreaterThan(0)
+
+    const retry = [...document.querySelectorAll<HTMLButtonElement>('.qrbox button')].find(
+      (b) => b.textContent === 'gui.conn.w_retry',
+    )!
+    expect(retry, 'the panel offers a retry').toBeTruthy()
+    await act(async () => { retry.click() })
+    expect(calls).toContainEqual(['apply', { id: 'weixin', patch: {}, enable: true }])
+    expect(screen.getByText('gui.conn.qr_wait')).toBeTruthy()
+    vi.useRealTimers()
+  })
+
   it('keeps the scan panel off an unpaired channel that is switched off', async () => {
     install([chan({ on: false, qrLogin: true })])
     await mount()

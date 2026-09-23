@@ -26,11 +26,14 @@ export interface ConnChannel {
   qrLogin?: boolean
 }
 
-/* One channels.qr answer. `connected: true` ends the island's polling. */
+/* One channels.qr answer. `connected: true` ends the island's polling, and
+   `running: false` says the adapter behind the code is gone -- a code it left
+   pending is expired, and the row the panel sits in does not know yet. */
 export interface ConnQr {
   qr?: string
   qr_text?: string
   connected: boolean
+  running?: boolean
 }
 
 /* The DS.connections contract both the offline fixture library and the rpc

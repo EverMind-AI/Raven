@@ -91,6 +91,13 @@ class RebindState(_Strict):
         ..., description="Seconds since the current code was issued; null when none is up."
     )
     detail: str = Field(..., description="Why it failed, when it did: expired | no_token | error.")
+    paused_until: float | None = Field(
+        None,
+        description=(
+            "Unix time a paused session resumes; null when it is not paused. "
+            "Why the channel reports itself unpaired without a code being up."
+        ),
+    )
 
 
 class ChannelLive(_Strict):
