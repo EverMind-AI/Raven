@@ -571,17 +571,15 @@ def test_a_picture_drawn_without_chinese_is_not_served_after_the_host_can_draw_i
     """The source deck is byte-identical either side of a font fix, so a key made
     only of its path, size and mtime keeps serving the boxes. The upgrade would
     land, the pictures would not change, and nothing would say why."""
-    from raven.utils import fonts
+    from raven.utils import office
 
     deck = tmp_path / "deck.pptx"
     deck.write_bytes(b"PK placeholder")
 
-    monkeypatch.setattr(fonts, "han_face", lambda: None)
-    fonts.render_fingerprint.cache_clear()
+    monkeypatch.setattr(office, "RENDER_GENERATION", 1)
     boxes = deck_templates._drawn_key(deck)
 
-    monkeypatch.setattr(fonts, "han_face", lambda: Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"))
-    fonts.render_fingerprint.cache_clear()
+    monkeypatch.setattr(office, "RENDER_GENERATION", 2)
     drawn = deck_templates._drawn_key(deck)
 
     assert boxes != drawn, "a cover drawn with no Han face would be served for one drawn with it"
@@ -595,16 +593,14 @@ def test_a_translated_copy_is_not_redone_just_because_the_fonts_changed(
     """The other half: the copy is a deck, not a picture. Its text swap does not
     depend on what the host can draw, so putting the font state in its name
     would rebuild every translation on a machine that only gained a font."""
-    from raven.utils import fonts
+    from raven.utils import office
 
     deck = tmp_path / "deck.pptx"
     deck.write_bytes(b"PK placeholder")
 
-    monkeypatch.setattr(fonts, "han_face", lambda: None)
-    fonts.render_fingerprint.cache_clear()
+    monkeypatch.setattr(office, "RENDER_GENERATION", 1)
     before = deck_templates._cover_key(deck)
 
-    monkeypatch.setattr(fonts, "han_face", lambda: Path("/some/face.ttc"))
-    fonts.render_fingerprint.cache_clear()
+    monkeypatch.setattr(office, "RENDER_GENERATION", 2)
 
     assert deck_templates._cover_key(deck) == before

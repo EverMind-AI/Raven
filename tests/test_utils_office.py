@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.utils import fonts, office
+from raven.utils import office
 
 
 def test_the_argv_asks_for_a_conversion_and_nothing_else(tmp_path: Path) -> None:
@@ -52,7 +52,7 @@ def test_the_profile_is_this_runs_own_and_is_thrown_away(tmp_path: Path, monkeyp
     the directory it lived in does not outlive the call."""
     seen: list[str] = []
 
-    def _fake(command, *, timeout_s, env=None):
+    def _fake(command, *, timeout_s):
         profile = next(token for token in command if token.startswith("-env:UserInstallation="))
         seen.append(profile)
         Path(command[command.index("--outdir") + 1], "deck.pdf").write_bytes(b"%PDF-1.4")
@@ -277,32 +277,3 @@ def test_a_finished_conversion_leaves_the_registry(monkeypatch: pytest.MonkeyPat
     with pytest.raises(TimeoutError):
         office._run(["soffice", "--version"], timeout_s=0.01)
     assert office._LIVE == set(), "a conversion that timed out leaves it too"
-
-
-def test_a_conversion_carries_the_font_directory_it_was_given(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A .pptx names fonts and carries none, so a render that reaches LibreOffice
-    without raven's font directory draws Chinese as boxes -- and says nothing,
-    because the conversion itself succeeds."""
-    face_dir = tmp_path / "faces"
-    face_dir.mkdir()
-    (face_dir / "NotoSansSC-Regular.otf").write_bytes(b"OTTO not a real font")
-    monkeypatch.setenv(fonts.ENV_FONT_DIR, str(face_dir))
-
-    captured: dict[str, str] = {}
-
-    def _fake(command, *, timeout_s, env=None):
-        # Read here, while the conversion is the one being run: what matters is
-        # what this run was handed, not what the file says afterwards.
-        config = (env or {}).get("FONTCONFIG_FILE", "")
-        captured["config"] = config
-        captured["text"] = Path(config).read_text(encoding="utf-8") if config else ""
-        Path(command[command.index("--outdir") + 1], "deck.pdf").write_bytes(b"%PDF-1.4")
-        return 0, "", ""
-
-    monkeypatch.setattr(office, "_run", _fake)
-    staged = tmp_path / "out"
-    staged.mkdir()
-    office.to_pdf(tmp_path / "deck.pptx", staged, executable="soffice", timeout_s=5)
-
-    assert captured["config"], "the conversion ran without being told where raven's faces are"
-    assert str(face_dir) in captured["text"]

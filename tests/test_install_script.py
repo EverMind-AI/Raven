@@ -535,159 +535,188 @@ def test_the_windows_capability_steps_stay_above_the_closing_launch() -> None:
     assert "libreoffice" not in closing
 
 
-def _sh_function(text: str, name: str) -> str:
-    """One shell function lifted out of install.sh, to be run on its own."""
-    match = re.search(rf"^{name}\(\) \{{$.*?^\}}$", text, re.MULTILINE | re.DOTALL)
-    assert match, f"{name} is not defined in install.sh"
-    return match.group(0)
+# --- the Chinese-font step --------------------------------------------------
+# Every case below is a box on a rendered page when it goes wrong, and none of
+# them raises: the conversion succeeds, the PDF is well formed, and only whoever
+# looks at the picture finds out. So each branch runs for real, against files.
+
+_FONT_STEP = (
+    "sha256_of",
+    "install_linux_cjk_font",
+    "macos_fontconfig_body",
+    "configure_macos_fonts",
+    "install_cjk_fonts",
+)
 
 
-def test_the_font_check_recognises_the_file_the_fallback_writes(tmp_path: Path) -> None:
-    """A second install has to be a no-op. The check runs before the download, so
-    a filename it cannot recognise makes every install fetch the same 8MB again.
-
-    Run with fc-list hidden, because that is the path where it matters: a host
-    that has fontconfig answers from it and never reaches the filename check.
-    """
+def _font_step_harness(tmp_path: Path, *, office: bool = True, **overrides: str) -> Path:
     text = INSTALL_SH.read_text(encoding="utf-8")
-    name = re.search(r'^HAN_FONT_NAME="([^"]+)"$', text, re.MULTILINE)
-    assert name, "install.sh no longer names the font file it installs"
-    installed = name.group(1)
-
-    home = tmp_path / "home"
-    fonts = home / ".local" / "share" / "fonts"
-    fonts.mkdir(parents=True)
-    (fonts / installed).write_bytes(b"OTTO placeholder")
-
-    script = "\n".join(
-        [
-            "set -eu",
-            'have() { case "$1" in fc-list) return 1 ;; *) command -v "$1" >/dev/null 2>&1 ;; esac; }',
-            "NODE_OS=linux",
-            f'HAN_FONT_NAME="{installed}"',
-            _sh_function(text, "han_font_dir"),
-            _sh_function(text, "have_han_font"),
-            "have_han_font",
-        ]
+    bodies = []
+    for name in _FONT_STEP:
+        match = re.search(rf"^{name}\(\) \{{.*?^\}}$", text, re.S | re.M)
+        assert match is not None, name
+        bodies.append(match.group(0))
+    settings = [re.search(rf"^{name}=.*$", text, re.M).group(0) for name in ("HAN_FONT_NAME", "MACOS_FONTCONFIG")]
+    settings += [f"{name}='{value}'" for name, value in overrides.items()]
+    harness = tmp_path / "font-step.sh"
+    harness.write_text(
+        "info() { :; }\n"
+        "ok() { printf 'OK %s\\n' \"$1\"; }\n"
+        "warn() { printf 'WARN %s\\n' \"$1\" >&2; }\n"
+        'have() { command -v "$1" >/dev/null 2>&1; }\n'
+        + (
+            ""
+            if office
+            else 'have() { case "$1" in soffice|libreoffice) return 1 ;; esac; command -v "$1" >/dev/null 2>&1; }\n'
+        )
+        + "\n".join(settings)
+        + "\n"
+        + "\n".join(bodies)
+        + "\ninstall_cjk_fonts\n",
+        encoding="utf-8",
     )
-    done = subprocess.run(  # noqa: S603 - /bin/sh with a script this test built
-        ["/bin/sh", "-c", script],
+    return harness
+
+
+def _run_font_step(tmp_path: Path, harness: Path, *, os_name: str, fc_list: str = "", tools: tuple[str, ...] = ()):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "calls.log"
+    (bin_dir / "fc-list").write_text(f"#!/bin/sh\nprintf '%s' '{fc_list}'\n", encoding="utf-8")
+    (bin_dir / "fc-cache").write_text(f"#!/bin/sh\necho \"fc-cache $*\" >> '{log}'\n", encoding="utf-8")
+    for tool in ("fc-list", "fc-cache"):
+        (bin_dir / tool).chmod(0o755)
+    for tool in tools:
+        (bin_dir / tool).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (bin_dir / tool).chmod(0o755)
+    home = tmp_path / "home"
+    cached = home / ".raven" / "cache" / "pdf-preview" / "old-render.pdf"
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(b"%PDF drawn without a Han face")
+    result = subprocess.run(
+        ["sh", str(harness)],
         capture_output=True,
         text=True,
-        env={"HOME": str(home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
         check=False,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(home),
+            "RAVEN_HOME": str(home / ".raven"),
+            "XDG_DATA_HOME": str(home / "share"),
+            "NODE_OS": os_name,
+            "RAVEN_MACOS_FONTCONFIG": str(tmp_path / "etc" / "fonts" / "fonts.conf"),
+        },
     )
-    assert done.returncode == 0, (
-        f"{installed} sits in the user font directory and the check did not see it, "
-        f"so every later install downloads it again: {done.stderr}"
-    )
+    calls = log.read_text(encoding="utf-8").splitlines() if log.is_file() else []
+    return result, calls, cached, home
 
 
-def test_the_font_check_says_no_on_a_host_that_has_none(tmp_path: Path) -> None:
-    """The other half: an empty directory must not report a font, or the install
-    skips the step that is the whole point of it."""
+def _published_face(tmp_path: Path, payload: bytes = b"OTTO a face that is not really one") -> dict[str, str]:
+    import hashlib
+
+    source = tmp_path / "upstream" / "NotoSansSC-Regular.otf"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(payload)
+    return {
+        "HAN_FONT_URL": source.as_uri(),
+        "HAN_FONT_SHA256": hashlib.sha256(payload).hexdigest(),
+        "HAN_FONT_BYTES": str(len(payload)),
+    }
+
+
+def test_the_font_step_is_skippable_and_runs_before_the_launch() -> None:
     text = INSTALL_SH.read_text(encoding="utf-8")
-    home = tmp_path / "home"
-    (home / ".local" / "share" / "fonts").mkdir(parents=True)
+    assert "install_cjk_fonts() {" in text
+    assert '[ -n "${RAVEN_MINIMAL:-}" ] || install_cjk_fonts' in text
+    main_body = text[text.index("main() {") :]
+    assert main_body.index("install_cjk_fonts") < main_body.index("launch_web")
 
-    script = "\n".join(
-        [
-            "set -eu",
-            'have() { case "$1" in fc-list) return 1 ;; *) command -v "$1" >/dev/null 2>&1 ;; esac; }',
-            "NODE_OS=linux",
-            'HAN_FONT_NAME="NotoSansSC-Regular.otf"',
-            _sh_function(text, "han_font_dir"),
-            _sh_function(text, "have_han_font"),
-            "have_han_font",
-        ]
+
+def test_a_linux_host_with_a_han_face_downloads_nothing_and_keeps_its_previews(tmp_path: Path) -> None:
+    """LibreOffice reads the same fontconfig as fc-list on Linux, so a Chinese
+    family listed there is one a page is drawn with."""
+    harness = _font_step_harness(tmp_path, **_published_face(tmp_path))
+    result, calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux", fc_list="Noto Sans CJK SC\n")
+
+    assert result.returncode == 0, result.stderr
+    assert not (home / "share" / "fonts").exists()
+    assert cached.is_file(), "previews drawn with a Han face are not thrown away"
+    assert calls == []
+
+
+def test_a_linux_host_without_one_gets_the_face_and_loses_its_stale_previews(tmp_path: Path) -> None:
+    harness = _font_step_harness(tmp_path, **_published_face(tmp_path))
+    result, calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux")
+
+    installed = home / "share" / "fonts" / "NotoSansSC-Regular.otf"
+    assert result.returncode == 0, result.stderr
+    assert installed.is_file()
+    assert calls == [f"fc-cache -f {installed.parent}"], "fontconfig only sees a new face once its cache is rebuilt"
+    assert not cached.exists(), "a preview cached before the face existed shows boxes forever"
+
+
+def test_a_download_that_does_not_match_its_digest_is_not_installed(tmp_path: Path) -> None:
+    """A truncated or substituted OTF still parses and draws nothing, which is
+    exactly the failure the step is for -- so a mismatch installs nothing."""
+    pins = _published_face(tmp_path)
+    pins["HAN_FONT_SHA256"] = "0" * 64
+    harness = _font_step_harness(tmp_path, **pins)
+    result, _calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux")
+
+    fonts_dir = home / "share" / "fonts"
+    assert result.returncode == 0, "a failed download is a warning, not the end of the install"
+    assert list(fonts_dir.iterdir()) == [], "neither the face nor its partial download is left behind"
+    assert "fonts-noto-cjk" in result.stderr
+    assert cached.is_file()
+
+
+def test_a_mac_gets_the_file_its_libreoffice_reads(tmp_path: Path) -> None:
+    """LibreOffice's bundled fontconfig reads one file and, without it, no
+    system or user font at all. Writing it with the Mac's own font directories
+    is the whole fix, and it reaches every LibreOffice process."""
+    from xml.etree import ElementTree
+
+    harness = _font_step_harness(tmp_path)
+    result, _calls, cached, _home = _run_font_step(tmp_path, harness, os_name="darwin", tools=("soffice",))
+
+    config = tmp_path / "etc" / "fonts" / "fonts.conf"
+    assert result.returncode == 0, result.stderr
+    root = ElementTree.fromstring(config.read_text(encoding="utf-8"))
+    dirs = [element.text for element in root.findall("dir")]
+    assert dirs[:3] == ["/System/Library/Fonts", "/Library/Fonts", "~/Library/Fonts"]
+    assert [element.get("prefix") for element in root.findall("cachedir")] == ["xdg"], (
+        "the compiled-in cache directory is root's; a cache the user cannot write is rebuilt on every conversion"
     )
-    done = subprocess.run(  # noqa: S603 - /bin/sh with a script this test built
-        ["/bin/sh", "-c", script],
-        capture_output=True,
-        text=True,
-        env={"HOME": str(home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
-        check=False,
-    )
-    assert done.returncode != 0, "an empty font directory reported a font"
+    assert not cached.exists()
 
 
-def _han_font_check(text: str, *, node_os: str, home: Path, macos_root: Path, fc_list: Path | None) -> int:
-    """Run install.sh's `have_han_font` alone, against directories this test owns.
+def test_a_mac_that_already_has_the_file_keeps_it(tmp_path: Path) -> None:
+    """On an Intel Mac that file is Homebrew's own and already names the system
+    fonts; on any Mac it may be one an earlier run wrote. Either way it stays."""
+    config = tmp_path / "etc" / "fonts" / "fonts.conf"
+    config.parent.mkdir(parents=True)
+    config.write_text("<fontconfig><!-- theirs --></fontconfig>", encoding="utf-8")
+    harness = _font_step_harness(tmp_path)
+    result, _calls, cached, _home = _run_font_step(tmp_path, harness, os_name="darwin", tools=("soffice",))
 
-    `fc-list` is a real executable on PATH rather than a shell function, because
-    a name with a hyphen is not a function name POSIX sh will accept -- and
-    because what is under test is whether the check consults it at all.
-    """
-    path = os.environ.get("PATH", "/usr/bin:/bin")
-    if fc_list is not None:
-        fc_list.parent.mkdir(parents=True, exist_ok=True)
-        fc_list.write_text("#!/bin/sh\nprintf 'Noto Sans CJK SC\\n'\n", encoding="utf-8")
-        fc_list.chmod(0o755)
-        path = f"{fc_list.parent}{os.pathsep}{path}"
-    script = "\n".join(
-        [
-            "set -eu",
-            'have() { command -v "$1" >/dev/null 2>&1; }',
-            f"NODE_OS={node_os}",
-            'HAN_FONT_NAME="NotoSansSC-Regular.otf"',
-            f'MACOS_FONT_ROOT="{macos_root}"',
-            _sh_function(text, "han_font_dir"),
-            _sh_function(text, "have_han_font"),
-            "have_han_font",
-        ]
-    )
-    return subprocess.run(  # noqa: S603 - /bin/sh with a script this test built
-        ["/bin/sh", "-c", script],
-        capture_output=True,
-        text=True,
-        env={"HOME": str(home), "PATH": path},
-        check=False,
-    ).returncode
+    assert result.returncode == 0, result.stderr
+    assert "theirs" in config.read_text(encoding="utf-8")
+    assert cached.is_file()
 
 
-def test_a_mac_needs_no_font_because_it_already_ships_one(tmp_path: Path) -> None:
-    """Nothing is missing on a Mac: what kept LibreOffice from drawing Chinese
-    was an unconfigured fontconfig, which raven now configures per conversion.
-    Fetching 8MB here would fix nothing and would still be fetched on every
-    install, because the file it writes is not what the renderer was short of.
-    """
+@pytest.mark.skipif(Path("/Applications/LibreOffice.app").is_dir(), reason="this Mac has LibreOffice installed")
+def test_a_mac_without_libreoffice_is_not_asked_for_a_password(tmp_path: Path) -> None:
+    harness = _font_step_harness(tmp_path, office=False)
+    result, _calls, _cached, _home = _run_font_step(tmp_path, harness, os_name="darwin")
+
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "etc" / "fonts" / "fonts.conf").exists()
+
+
+def test_the_mac_password_prompt_reads_the_tty_and_a_failed_read_declines() -> None:
     text = INSTALL_SH.read_text(encoding="utf-8")
-    home = tmp_path / "home"
-    (home / "Library" / "Fonts").mkdir(parents=True)
-    root = tmp_path / "System" / "Library" / "Fonts"
-    (root / "Supplemental").mkdir(parents=True)
-    (root / "Supplemental" / "Arial Unicode.ttf").write_bytes(b"true placeholder")
-
-    assert _han_font_check(text, node_os="darwin", home=home, macos_root=root, fc_list=None) == 0
-
-
-def test_a_mac_is_not_talked_out_of_its_own_faces_by_homebrews_fc_list(tmp_path: Path) -> None:
-    """fc-list arrives with plenty of brew formulae and describes a configuration
-    the converter never reads, so its answer says nothing about this Mac either
-    way. Consulting it is how a Mac stripped of its own faces gets told it has
-    one, and the deck then renders as boxes with nothing reporting it."""
-    text = INSTALL_SH.read_text(encoding="utf-8")
-    home = tmp_path / "home"
-    (home / "Library" / "Fonts").mkdir(parents=True)
-    bare = tmp_path / "System" / "Library" / "Fonts"
-    bare.mkdir(parents=True)
-
-    fc_list = tmp_path / "bin" / "fc-list"
-    assert _han_font_check(text, node_os="darwin", home=home, macos_root=bare, fc_list=fc_list) != 0
-
-
-def test_the_installer_and_the_renderer_agree_on_what_a_mac_already_has() -> None:
-    """Two answers to one question, and a disagreement is silent both ways: a
-    face the installer counts but the renderer does not leaves a Mac with no
-    download and no Chinese, and one the renderer counts but the installer does
-    not fetches 8MB that were never needed."""
-    from raven.utils import fonts
-
-    text = INSTALL_SH.read_text(encoding="utf-8")
-    checked = re.findall(r'\[ -f "\$MACOS_FONT_ROOT(/[^"]+)" \]', text)
-    assert checked, "install.sh no longer checks any of the faces macOS ships"
-
-    root = "/System/Library/Fonts"
-    assert [f"{root}{suffix}" for suffix in checked] == [
-        path for path in fonts._SYSTEM_HAN_FACES if path.startswith(root)
-    ]
+    body = re.search(r"^configure_macos_fonts\(\) \{.*?^\}$", text, re.S | re.M).group(0)
+    assert ": < /dev/tty; } 2>/dev/null || ! have sudo" in body
+    assert "read -r answer < /dev/tty || {" in body
+    assert "n|N|[nN][oO])" in body
+    assert 'sudo tee "$MACOS_FONTCONFIG"' in body

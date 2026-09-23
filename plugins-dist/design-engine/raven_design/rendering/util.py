@@ -108,19 +108,3 @@ def evenly_spaced(items: list[Any], limit: int) -> list[Any]:
         return [items[0]]
     indexes = {round(index * (len(items) - 1) / (limit - 1)) for index in range(limit)}
     return [items[index] for index in sorted(indexes)]
-
-
-def font_env(base: dict[str, str] | None = None) -> dict[str, str] | None:
-    """The environment a LibreOffice run needs to reach the host's CJK faces.
-
-    On a Mac the converter's bundled fontconfig starts with no configuration and
-    draws Chinese as nothing; raven's font module writes the one that names the
-    host's font directories. Imported lazily and treated as optional so that
-    this renderer keeps working where raven itself is not importable, such as an
-    isolated worker. ``None`` means "inherit", as Popen reads it.
-    """
-    try:
-        from raven.utils import fonts
-    except ImportError:
-        return base
-    return fonts.render_env(base)

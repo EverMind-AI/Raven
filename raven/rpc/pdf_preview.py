@@ -50,7 +50,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from raven.utils import fonts, office
+from raven.utils import office
 
 # What LibreOffice is asked to turn into a PDF. Decks were the first, because
 # the page can frame a PDF and cannot draw a .pptx; a knowledge base takes
@@ -198,7 +198,7 @@ def cache_key(source: Path) -> str:
     # The font state belongs in the key: a deck whose Chinese came out as boxes
     # has the same path, size and mtime as the one that draws it, so without
     # this the host keeps serving the boxes after the fix that ended them.
-    fingerprint = fonts.render_fingerprint()
+    fingerprint = office.render_fingerprint()
     digest = hashlib.sha256(f"{source}\0{st.st_size}\0{st.st_mtime_ns}\0{fingerprint}".encode()).hexdigest()
     return digest[:32]
 

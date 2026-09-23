@@ -559,7 +559,7 @@ install_office() {
       # (the whole render-truth capability is soffice being present), and the
       # macOS path already installs it without asking. sudo's own password
       # prompt still stands between Enter and any change.
-      printf 'Install LibreOffice and a CJK font for deck preview (needs sudo)? Without them a deck still builds, but no page is ever rendered, measured or checked -- and Chinese pages come out as boxes. [Y/n] '
+      printf 'Install LibreOffice and a Chinese font for deck preview (needs sudo)? Without them a deck still builds, but no page is ever rendered, measured or checked. [Y/n] '
       # A failed read is not an Enter: Ctrl-D, or a tty that closed after the
       # gate passed, must decline -- only a deliberate empty Enter accepts.
       answer=""
@@ -582,87 +582,32 @@ install_office() {
   esac
 }
 
-# --- 4b. the face a Chinese deck is drawn with -------------------------------
-# A .pptx names its fonts and carries none of them, so whether a Chinese page
-# comes out as characters or as boxes is decided by this machine rather than by
-# the file -- the same deck that renders here as boxes opens correctly in
-# PowerPoint. Nothing else installs one: apt's libreoffice recommends the Latin
-# Noto packages and never the CJK one. A Mac is the exception and needs nothing
-# from this step, for the reason `have_han_font` gives. The failure is silent,
-# which is what makes it worth its own step rather than a note in the docs: the
-# conversion succeeds, the PDF is well formed, and the boxes are visible only to
-# whoever looks at the page -- including the model that renders a deck to check
-# its own work, which was reviewing pages it could not read.
+# --- 4b. Chinese on a rendered page -----------------------------------------
+# A .pptx names its fonts and carries none, so a deck's Chinese is drawn with
+# whatever this machine's LibreOffice can reach. With nothing, the conversion
+# still succeeds and every Han glyph comes out as a box -- in the preview panel,
+# in the delivery thumbnail, and in the page the model renders to check its work.
 #
-# So this step ends with a Han face present, not with advice about one. The
-# package manager is asked first because a system font serves every program on
-# the machine, and where that cannot happen -- no brew, no sudo, no apt -- the
-# font is fetched into the user's own font directory, which needs no privileges
-# and which a conversion is told to read.
+# Linux: LibreOffice's apt package brings no CJK face. The offer above installs
+# fonts-noto-cjk alongside it; otherwise a pinned Noto Sans SC goes into the
+# user's font directory, which fontconfig reads without being told.
+#
+# macOS already ships Han faces (Songti, STHeiti, Hiragino Sans GB, PingFang).
+# What is missing is LibreOffice looking at them: its bundled fontconfig reads
+# /usr/local/etc/fonts/fonts.conf, which an Apple Silicon Mac does not have, and
+# without it sees no system or user font at all -- a face installed into
+# ~/Library/Fonts is not reached either, and neither is a per-user fontconfig
+# file. So the fix is that one file, naming the Mac's own font directories;
+# every LibreOffice process reads it, whoever starts it.
 
-# Pinned to a tag rather than a branch: a branch moves, and a font that changes
-# under a recorded digest turns every later install into a failed checksum.
 HAN_FONT_URL="https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf"
 HAN_FONT_SHA256="faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9"
 HAN_FONT_BYTES="8331336"
 HAN_FONT_NAME="NotoSansSC-Regular.otf"
 
-han_font_hint() {
-  case "$NODE_OS" in
-    darwin) printf '%s' "brew install --cask font-noto-sans-cjk" ;;
-    linux) have apt-get && printf '%s' "sudo apt-get install -y fonts-noto-cjk" || printf '%s' "your package manager's fonts-noto-cjk" ;;
-    *) printf '%s' "your package manager's fonts-noto-cjk" ;;
-  esac
-}
-
-# The root the faces macOS itself ships sit under, named so a test can point the
-# check at a directory it controls.
-MACOS_FONT_ROOT="/System/Library/Fonts"
-
-# Where this platform reads a font installed by a user who is not root.
-han_font_dir() {
-  case "$NODE_OS" in
-    darwin) printf '%s' "$HOME/Library/Fonts" ;;
-    *) printf '%s' "${XDG_DATA_HOME:-$HOME/.local/share}/fonts" ;;
-  esac
-}
-have_han_font() {
-  # The file this script installs, by its own name, before anything else: it is
-  # the one check that does not depend on how the host reports its fonts, and it
-  # is what makes a second install a no-op instead of another 8MB download.
-  [ -f "$(han_font_dir)/$HAN_FONT_NAME" ] && return 0
-  # A Mac is asked first and separately, because nothing is missing there: it
-  # ships Arial Unicode and Songti, and what kept LibreOffice from drawing with
-  # them was a bundled fontconfig left unconfigured, which raven now configures
-  # for every conversion and every command the agent runs. Downloading a face
-  # would not have helped and is not needed. PingFang is not asked about: it is
-  # a downloaded asset with no fixed path to test for, and the two above are
-  # stock on every macOS release raven supports. The
-  # host's own fc-list must not be consulted here either -- brew installs it
-  # alongside plenty of formulae, and it describes a configuration the converter
-  # does not read.
-  if [ "$NODE_OS" = darwin ]; then
-    [ -f "$MACOS_FONT_ROOT/Supplemental/Arial Unicode.ttf" ] && return 0
-    [ -f "$MACOS_FONT_ROOT/Supplemental/Songti.ttc" ] && return 0
-  elif have fc-list; then
-    # Everywhere else LibreOffice and fc-list read the same configuration, so
-    # this answers the general question.
-    [ -n "$(fc-list :lang=zh family 2>/dev/null)" ] && return 0
-    return 1
-  fi
-  # Left: a Mac stripped of its own faces, and a host whose fontconfig cannot be
-  # asked. Look at the directories a font can be installed into without
-  # privileges, under both namings that can appear there -- the cask writes
-  # NotoSansCJK, the fallback writes NotoSansSC, and either may sit in either.
-  for face in "$HOME/Library/Fonts"/*CJK* "$HOME/Library/Fonts"/*NotoSans[ST]C* \
-              "/Library/Fonts"/*CJK* "/Library/Fonts"/*NotoSans[ST]C* \
-              "${XDG_DATA_HOME:-$HOME/.local/share}/fonts"/*CJK* \
-              "${XDG_DATA_HOME:-$HOME/.local/share}/fonts"/*NotoSans[ST]C*; do
-    [ -f "$face" ] && return 0
-  done
-  return 1
-}
-
+# Where LibreOffice's bundled fontconfig looks; overridable so a test can point
+# it into a directory of its own.
+MACOS_FONTCONFIG="${RAVEN_MACOS_FONTCONFIG:-/usr/local/etc/fonts/fonts.conf}"
 
 sha256_of() {
   if have sha256sum; then sha256sum "$1" | cut -d' ' -f1
@@ -670,67 +615,86 @@ sha256_of() {
   else printf ''; fi
 }
 
-# The fallback, and the only part of this guaranteed to be available: a font
-# file copied into the user's own font directory. Verified before it is put in
-# place, because a truncated download is not a visible failure -- a half-written
-# OTF still parses, still reports its glyph count, and still draws nothing.
-fetch_han_font() {
-  target_dir="$(han_font_dir)"
-  mkdir -p "$target_dir" || {
-    warn "Could not create $target_dir; Chinese pages in a deck will render as boxes."
-    return 1
-  }
-  # Per-process, so two installs under one account cannot write the same
-  # scratch file: the checks below would catch the interleaving and both runs
-  # would fail, which is a needless way to lose an install.
-  part="$target_dir/.$HAN_FONT_NAME.$$.part"
-  info "Downloading a CJK font (Chinese pages in a deck)..."
-  if ! curl -fsSL --max-time 120 -o "$part" "$HAN_FONT_URL"; then
-    rm -f "$part"
-    warn "Font download failed; Chinese pages in a deck will render as boxes."
-    return 1
+# Both platform steps succeed only when they changed what LibreOffice can reach.
+install_linux_cjk_font() {
+  # LibreOffice reads the same fontconfig as fc-list here, so its answer holds.
+  [ -n "$(fc-list :lang=zh family 2>/dev/null)" ] && return 1
+  dir="${XDG_DATA_HOME:-$HOME/.local/share}/fonts"
+  [ -f "$dir/$HAN_FONT_NAME" ] && return 1
+  mkdir -p "$dir" || { warn "Could not create $dir; Chinese pages in a deck will render as boxes."; return 1; }
+  part="$dir/.$HAN_FONT_NAME.$$.part"
+  info "Downloading a Chinese font for deck preview..."
+  # Size and digest both, before the file is put in place: a truncated OTF
+  # still parses and draws nothing, which is the failure this step exists for.
+  if curl -fsSL --max-time 120 -o "$part" "$HAN_FONT_URL" \
+    && [ "$(wc -c < "$part" | tr -d ' ')" = "$HAN_FONT_BYTES" ] \
+    && { actual="$(sha256_of "$part")"; [ -z "$actual" ] || [ "$actual" = "$HAN_FONT_SHA256" ]; } \
+    && mv -f "$part" "$dir/$HAN_FONT_NAME"; then
+    have fc-cache && fc-cache -f "$dir" >/dev/null 2>&1
+    ok "Chinese font installed to $dir/$HAN_FONT_NAME"
+    return 0
   fi
-  size="$(wc -c < "$part" | tr -d ' ')"
-  if [ "$size" != "$HAN_FONT_BYTES" ]; then
-    rm -f "$part"
-    warn "Font download was incomplete ($size of $HAN_FONT_BYTES bytes); Chinese pages will render as boxes."
-    return 1
-  fi
-  actual="$(sha256_of "$part")"
-  if [ -n "$actual" ] && [ "$actual" != "$HAN_FONT_SHA256" ]; then
-    rm -f "$part"
-    warn "Font download did not match its recorded checksum; discarded it. Chinese pages will render as boxes."
-    return 1
-  fi
-  mv -f "$part" "$target_dir/$HAN_FONT_NAME" || {
-    rm -f "$part"
-    return 1
-  }
-  # fontconfig reads from a cache; a font dropped in after it was built is
-  # invisible until the cache is rebuilt. CoreText needs no such step.
-  have fc-cache && fc-cache -f "$target_dir" >/dev/null 2>&1
-  ok "CJK font installed to $target_dir/$HAN_FONT_NAME"
-  return 0
+  rm -f "$part"
+  warn "The Chinese font download failed; Chinese pages in a deck will render as boxes. Install one later with: sudo apt-get install -y fonts-noto-cjk"
+  return 1
 }
 
-install_han_font() {
-  have_han_font && return 0
-  # A system font serves every program here, not only raven, so it is worth the
-  # attempt -- but never worth a second sudo prompt: the Linux package above
-  # already carries this one for anybody who answered yes to it, so reaching
-  # here on Linux means that path did not happen, and the fallback is the
-  # answer rather than another question.
-  case "$NODE_OS" in
-    darwin)
-      if have brew; then
-        info "Installing a CJK font (Chinese pages in a deck)..."
-        brew install --cask font-noto-sans-cjk >/dev/null 2>&1 \
-          || warn "The font cask did not install; falling back to a direct download."
-      fi
-      ;;
+macos_fontconfig_body() {
+  printf '%s\n' '<?xml version="1.0"?>' '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">' '<fontconfig>' \
+    '  <dir>/System/Library/Fonts</dir>' '  <dir>/Library/Fonts</dir>' '  <dir>~/Library/Fonts</dir>'
+  # PingFang is a downloaded system asset, not under /System/Library/Fonts.
+  # Only the font asset folders: the rest of AssetsV2 is some 16k files that a
+  # first scan would open one by one.
+  for asset in /System/Library/AssetsV2/com_apple_MobileAsset_Font* /System/Library/Assets/com_apple_MobileAsset_Font*; do
+    [ -d "$asset" ] && printf '  <dir>%s</dir>\n' "$asset"
+  done
+  # The cache must be somewhere the user can write, or every conversion rescans
+  # every face; conf.d keeps a later Homebrew fontconfig under /usr/local working.
+  printf '%s\n' '  <cachedir prefix="xdg">fontconfig</cachedir>' \
+    '  <include ignore_missing="yes">conf.d</include>' '</fontconfig>'
+}
+
+configure_macos_fonts() {
+  # Already there: written by an earlier run, or Homebrew's own on an Intel Mac,
+  # which LibreOffice reads and which names the system fonts already.
+  [ -f "$MACOS_FONTCONFIG" ] && return 1
+  if ! have soffice && ! have libreoffice && [ ! -d /Applications/LibreOffice.app ]; then
+    return 1
+  fi
+  target_dir="$(dirname "$MACOS_FONTCONFIG")"
+  if mkdir -p "$target_dir" 2>/dev/null && { macos_fontconfig_body > "$MACOS_FONTCONFIG"; } 2>/dev/null; then
+    ok "LibreOffice now reads the Mac's own fonts ($MACOS_FONTCONFIG)"
+    return 0
+  fi
+  later="Chinese pages in deck previews render as boxes until $MACOS_FONTCONFIG exists; rerun this installer in a terminal to create it."
+  if ! { : < /dev/tty; } 2>/dev/null || ! have sudo; then
+    warn "$later"
+    return 1
+  fi
+  printf 'Let LibreOffice use the Chinese fonts macOS already has? This writes %s and needs your password once. [Y/n] ' "$MACOS_FONTCONFIG"
+  answer=""
+  read -r answer < /dev/tty || { warn "No answer read. $later"; return 1; }
+  case "$answer" in
+    n|N|[nN][oO]) warn "Skipped. $later"; return 1 ;;
   esac
-  have_han_font && return 0
-  fetch_han_font || warn "No CJK font could be installed. Every Chinese page in a deck will render as boxes (the deck file itself is fine, and opens correctly in PowerPoint). Install one later with: $(han_font_hint)"
+  # sudo prompts on the tty itself; its stdin here carries the file.
+  if sudo mkdir -p "$target_dir" && macos_fontconfig_body | sudo tee "$MACOS_FONTCONFIG" >/dev/null; then
+    ok "LibreOffice now reads the Mac's own fonts ($MACOS_FONTCONFIG)"
+    return 0
+  fi
+  warn "Could not write $MACOS_FONTCONFIG. $later"
+  return 1
+}
+
+install_cjk_fonts() {
+  case "$NODE_OS" in
+    darwin) configure_macos_fonts || return 0 ;;
+    *) install_linux_cjk_font || return 0 ;;
+  esac
+  # Previews and gallery covers cached before this were drawn without a Han
+  # face, and they are keyed by the deck's own stamp, so nothing else would
+  # ever replace them.
+  rm -rf "$RAVEN_HOME/cache/pdf-preview" "$RAVEN_HOME/cache/deck-template-covers"
 }
 
 
@@ -774,7 +738,7 @@ main() {
 
   [ -n "${RAVEN_MINIMAL:-}" ] || install_browser
   [ -n "${RAVEN_MINIMAL:-}" ] || install_office
-  [ -n "${RAVEN_MINIMAL:-}" ] || install_han_font
+  [ -n "${RAVEN_MINIMAL:-}" ] || install_cjk_fonts
 
   # Before the launch, not after: the page holds this terminal until Ctrl-C,
   # and `uv tool update-shell` only reaches future shells.

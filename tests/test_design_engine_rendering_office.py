@@ -144,39 +144,3 @@ def test_libreoffice_timeout_is_retryable(
 
     assert raised.value.code == "render_timeout"
     assert raised.value.retryable is True
-
-
-def test_libreoffice_is_given_the_hosts_font_configuration(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A Mac's LibreOffice starts with an unconfigured fontconfig and draws a
-    pptx's Chinese as nothing; the preview is only as readable as the fonts
-    this run is handed."""
-    from raven.utils import fonts
-
-    faces = tmp_path / "faces"
-    faces.mkdir()
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
-    monkeypatch.setattr(fonts, "bundled_face", lambda: None)
-    monkeypatch.setattr(fonts, "unconfigured_font_dirs", lambda: (faces,))
-    source = tmp_path / "input.pptx"
-    source.write_bytes(b"not-used")
-    config = RenderConfig(chrome_path=None, libreoffice_path="/usr/bin/libreoffice")
-    seen: dict[str, str] = {}
-
-    def run(*args, **kwargs):
-        seen.update(kwargs.get("env") or {})
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(subprocess, "run", run)
-
-    with pytest.raises(RenderError):
-        LibreOfficeBackend(config).render(
-            source,
-            tmp_path / "bundle",
-            _detection("pptx"),
-            _request(source, tmp_path),
-        )
-
-    assert seen.get("FONTCONFIG_FILE") == str(fonts.config_dir() / "fonts.conf")

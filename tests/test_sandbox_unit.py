@@ -294,40 +294,6 @@ class TestDirectExecutor:
         assert result.stdout.strip() == "hello"
         assert result.exit_code == 0
 
-    async def test_a_command_is_given_the_fonts_a_renderer_needs(self, tmp_path, monkeypatch):
-        """The model checks a deck by running ``soffice --convert-to pdf`` through
-        this executor, and on a Mac the converter's bundled fontconfig starts with
-        no configuration. The font configuration raven writes has to reach that
-        command, or every Chinese page it renders comes back blank. Measured
-        2026-09-23 (macOS 15.7, LibreOffice 26.8): without it the command's PDF
-        embedded no Han face; with it, PingFang and Songti."""
-        from raven.utils import fonts
-
-        faces = tmp_path / "faces"
-        faces.mkdir()
-        monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
-        monkeypatch.setattr(fonts, "bundled_face", lambda: None)
-        monkeypatch.setattr(fonts, "unconfigured_font_dirs", lambda: (faces,))
-
-        result = await DirectExecutor().exec('printf %s "$FONTCONFIG_FILE"')
-
-        config = Path(result.stdout)
-        assert config == fonts.config_dir() / "fonts.conf"
-        assert str(faces) in config.read_text(encoding="utf-8")
-
-    async def test_a_host_with_nothing_to_add_runs_its_commands_unchanged(self, monkeypatch):
-        """Everywhere the host's fontconfig already reads the system's fonts --
-        every Linux host -- the command gets no configuration of raven's."""
-        from raven.utils import fonts
-
-        monkeypatch.delenv("FONTCONFIG_FILE", raising=False)
-        monkeypatch.setattr(fonts, "bundled_face", lambda: None)
-        monkeypatch.setattr(fonts, "unconfigured_font_dirs", tuple)
-
-        result = await DirectExecutor().exec('printf %s "${FONTCONFIG_FILE-unset}"')
-
-        assert result.stdout == "unset"
-
     async def test_exec_timeout(self):
         e = DirectExecutor()
         result = await e.exec("sleep 10", timeout=0.1)
@@ -2092,27 +2058,3 @@ def test_instance_identity_survives_into_the_child(monkeypatch):
     assert env["RAVEN_HOME"] == "/tmp/some-instance"
     assert env["RAVEN_CONNECTIONS"] == "/tmp/some-instance/connections.json"
     assert "ONCALL_API_KEY" not in env, "the allowlist stays a list of paths, never keys"
-
-
-def test_a_hosts_own_font_configuration_survives_into_the_child(tmp_path, monkeypatch):
-    """A host that set FONTCONFIG_FILE chose its fonts on purpose. Stripping it
-    would give every renderer the agent starts a different set from the one the
-    owner's own terminal draws with -- and raven's configuration, where it adds
-    one, includes the host's rather than replacing it."""
-    from raven.sandbox.direct_executor import _baseline_env
-    from raven.utils import fonts
-
-    theirs = tmp_path / "theirs.conf"
-    theirs.write_text("<fontconfig/>", encoding="utf-8")
-    monkeypatch.setenv("FONTCONFIG_FILE", str(theirs))
-    monkeypatch.setattr(fonts, "bundled_face", lambda: None)
-    monkeypatch.setattr(fonts, "unconfigured_font_dirs", tuple)
-    assert _baseline_env()["FONTCONFIG_FILE"] == str(theirs)
-
-    faces = tmp_path / "faces"
-    faces.mkdir()
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
-    monkeypatch.setattr(fonts, "unconfigured_font_dirs", lambda: (faces,))
-    wrapped = Path(_baseline_env()["FONTCONFIG_FILE"])
-    assert wrapped != theirs
-    assert str(theirs) in wrapped.read_text(encoding="utf-8")

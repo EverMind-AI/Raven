@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from raven_design.rendering.models import RenderConfig, RenderError
-from raven_design.rendering.util import font_env, json_write
+from raven_design.rendering.util import json_write
 
 _DISPLAY_NUMBERS = range(90, 200)
 _DISPLAY_WAIT_ATTEMPTS = 40
@@ -90,7 +90,7 @@ def run_spreadsheet_worker(
     capture_path = shutil.which("import")
     capture_viewports = bool(xvfb_path and capture_path)
     display = _free_x_display() if capture_viewports else None
-    environment = font_env(os.environ.copy()) or os.environ.copy()
+    environment = os.environ.copy()
     xvfb_process: subprocess.Popen[Any] | None = None
     if display is not None:
         xvfb_process = _start_xvfb(

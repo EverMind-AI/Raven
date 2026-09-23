@@ -50,8 +50,6 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from raven.utils import fonts
-
 KILL_TIMEOUT_S = 10.0
 """Long enough for a tree kill to walk the tree, short enough that a wedged one
 does not hold the caller past the budget it has already given up on."""
@@ -64,6 +62,22 @@ does not hold the caller past the budget it has already given up on."""
 # installation's `program` directory, and these are the roots an install picks
 # from.
 _WINDOWS_PROGRAM_ROOT_VARS = ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA")
+
+
+RENDER_GENERATION = 2
+"""Bumped whenever a change alters what a conversion on some host draws.
+
+A cached PDF or page image is keyed by its source deck, and the deck does not
+change when the fonts around it do, so a host keeps serving the boxes it drew
+before a fix for as long as the cache lives. Mixed into those keys, a bump
+retires every render made under the old answer. 1 is every release before
+LibreOffice was given the host's Chinese fonts.
+"""
+
+
+def render_fingerprint() -> str:
+    """The part of a cached render's key that stands for how it was drawn."""
+    return f"g{RENDER_GENERATION}"
 
 
 def find_soffice() -> str | None:
@@ -169,13 +183,7 @@ def to_pdf(
         profile = Path(scratch) / "profile"
         profile.mkdir()
         command = convert_command(Path(source), Path(staged), profile, executable=executable, fmt=fmt)
-        # The faces the host has, named for the renderer. Without them the
-        # conversion draws whatever the converter can find on its own, which on
-        # a stock Mac is nothing that carries Han -- and the boxes that come back
-        # are not reported by anything, because the conversion itself succeeds.
-        # The configuration is the shared one rather than this run's own: its
-        # font cache is what makes the second conversion cheap.
-        returncode, stdout, stderr = _run(command, timeout_s=timeout_s, env=fonts.render_env())
+        returncode, stdout, stderr = _run(command, timeout_s=timeout_s)
     return Converted(
         produced=sorted(Path(staged).glob(f"*.{fmt}")), returncode=returncode, stdout=stdout, stderr=stderr
     )
@@ -207,14 +215,13 @@ def stop_running() -> int:
     return len(live)
 
 
-def _run(command: Sequence[str], *, timeout_s: float, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+def _run(command: Sequence[str], *, timeout_s: float) -> tuple[int, str, str]:
     windows = sys.platform == "win32"
     process = subprocess.Popen(  # noqa: S603 - fixed argv, never a shell string
         list(command),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=env,
         # Its own session where there are sessions, and the process group the
         # teardown can signal where there are not.
         start_new_session=not windows,

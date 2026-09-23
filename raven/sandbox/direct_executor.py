@@ -7,7 +7,6 @@ import os
 import signal
 
 from raven.sandbox.interfaces import ExecResult, SandboxExecutor
-from raven.utils import fonts
 
 _DEFAULT_TIMEOUT = 60
 _MAX_TIMEOUT = 600
@@ -51,12 +50,6 @@ _ENV_ALLOWLIST = (
     # and the loop offered to ssh in by hand.
     "RAVEN_HOME",
     "RAVEN_CONNECTIONS",
-    # Which fonts a child can draw with. Paths, not secrets, and a host that set
-    # them chose its fonts on purpose -- dropping them would quietly give every
-    # renderer the agent starts a different set from the one the owner's own
-    # terminal has.
-    "FONTCONFIG_FILE",
-    "FONTCONFIG_PATH",
     # TLS trust + proxy (so git / curl / https tools work behind corp setups).
     # These are config, not crown-jewel secrets (API keys / cloud creds / SSH
     # are deliberately NOT here).
@@ -97,16 +90,7 @@ _ENV_ALLOWLIST = (
 
 
 def _baseline_env() -> dict[str, str]:
-    env = {k: v for k in _ENV_ALLOWLIST if (v := os.environ.get(k)) is not None}
-    # The fonts a renderer the agent starts can reach. The model checks a deck by
-    # running LibreOffice itself -- `soffice --convert-to pdf`, or a render.sh it
-    # wrote that does -- and on a Mac the converter's bundled fontconfig starts
-    # with no configuration, so without this every Chinese page it looked at came
-    # back blank and was approved unread. Measured 2026-09-23 (macOS 15.7,
-    # LibreOffice 26.8, no CJK face in the app bundle): the same command drew no
-    # Han without it and every row with it. Unchanged where the host's
-    # fontconfig already reads the system's fonts, which is everywhere else.
-    return fonts.render_env(env)
+    return {k: v for k in _ENV_ALLOWLIST if (v := os.environ.get(k)) is not None}
 
 
 class _ExitNotifyingProtocol(asyncio.subprocess.SubprocessStreamProtocol):

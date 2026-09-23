@@ -13,8 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from raven.utils import fonts as raven_fonts
 from raven_ppt.services.assets import text_metrics
+from raven_ppt.services.assets.fonts import (
+    _SYSTEM_CJK as SYSTEM_CJK,
+)
 from raven_ppt.services.assets.fonts import (
     BUNDLED_FONT_DIR,
     ENV_BOLD,
@@ -43,15 +45,12 @@ def test_resolution_prefers_the_packaged_copies(monkeypatch: pytest.MonkeyPatch)
     resolved = measurement_fonts()
     assert Path(resolved.regular) == BUNDLED_FONT_DIR / "DejaVuSans.ttf"
     assert Path(resolved.bold) == BUNDLED_FONT_DIR / "DejaVuSans-Bold.ttf"
-    # No CJK face is bundled -- one is 8MB and Han measures exactly one em, so the
-    # full-em advance is correct without it. Whatever face this host has is used
-    # when there is one, because full-em is *not* correct for CJK punctuation, and
-    # a deck in Chinese is most of this fork's traffic. Which file that is depends
-    # on the machine and on how the font got there, so what is asserted is the
-    # property -- resolution agrees with the locator, and names a file that exists.
-    located = raven_fonts.han_face()
-    assert resolved.cjk == (str(located) if located is not None else "")
-    assert resolved.cjk == "" or Path(resolved.cjk).is_file()
+    # No CJK face is bundled -- one is 20MB and Han measures exactly one em, so the
+    # full-em advance is correct without it. The system Noto CJK is used when the
+    # renderer has it, because full-em is *not* correct for CJK punctuation, and a
+    # deck in Chinese is most of this fork's traffic.
+    assert resolved.cjk in ("", SYSTEM_CJK)
+    assert (resolved.cjk == SYSTEM_CJK) is Path(SYSTEM_CJK).is_file()
 
 
 def test_an_environment_override_wins_and_is_read_on_call(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -327,9 +327,9 @@ def _drawn_key(path: Path) -> str:
     set Chinese have the same source and would be served in place of the render
     that fixed them.
     """
-    from raven.utils import fonts
+    from raven.utils import office
 
-    return f"{_cover_key(path)}-{fonts.render_fingerprint()}"
+    return f"{_cover_key(path)}-{office.render_fingerprint()}"
 
 
 def _write_page(page: Any, target: Path, *, width: int, quality: int) -> None:
