@@ -1405,7 +1405,7 @@ async def test_channels_configure_carries_the_gateway_refusal_and_what_to_do(iso
     """
     from raven.gateway.manager import missing_dep_hint
 
-    async def refusing(name: str, *, enabled: bool = True) -> str:
+    async def refusing(name: str, *, enabled: bool = True, restart: bool = False) -> str:
         return "missing_dep"
 
     import raven.gateway.live_probe as probe
