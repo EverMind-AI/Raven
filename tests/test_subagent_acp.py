@@ -4798,6 +4798,152 @@ async def test_no_model_asked_for_sends_no_frame(tmp_path: Path) -> None:
     assert "session/set_config_option" not in connection.client.stderr_tail()
 
 
+def _own_backend(cfg: Any) -> AcpAgentBackend:
+    """A row of raven's own: the same build as the roster's, with a handshake that named raven."""
+    return AcpAgentBackend(
+        name=cfg.name,
+        command=cfg.command,
+        env=dict(cfg.env),
+        ready_timeout_ms=cfg.ready_timeout_ms,
+        snapshot=replace(_snapshot(cfg.name, cfg, can_resume=False), agent_name="raven"),
+    )
+
+
+_PARENT = {"RAVEN_PARENT_MODEL": "model-b", "RAVEN_PARENT_PROVIDER": "stub"}
+
+
+async def _parent_bound_connection(cfg: Any, tmp_path: Path) -> Any:
+    """The connection a run under the parent binding above was served from.
+
+    The pool keys a connection on its binding, so reading the frames of that
+    run means asking for the same binding; a bare acquire would launch a second,
+    silent process."""
+    return await get_pool().acquire(
+        name=cfg.name, command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), binding=_PARENT, ready_timeout_s=15.0
+    )
+
+
+async def test_one_of_ravens_own_with_no_pin_is_put_on_the_parents_binding(tmp_path: Path) -> None:
+    """The row reads "follows the main Raven" while it carries no pin, and the
+    launch binding makes a fresh worker do so. A resumed session does not: it
+    keeps whatever it was last put on. So the parent's binding is said to the
+    session itself on every route in, as `<slug>/<id>`, the value the child's
+    own selector takes. (The stub refuses that spelling, which is fine here:
+    the frame is logged on entry, and a refused switch still runs the task.)"""
+    cfg = stub_config("ownfollow")
+    backend = _own_backend(cfg)
+
+    reply = await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=SimpleNamespace(provider_name="stub"),
+        model="model-b",
+    )
+
+    connection = await _parent_bound_connection(cfg, tmp_path)
+    assert reply == "pong"
+    assert "session/set_config_option model=stub/model-b" in connection.client.stderr_tail()
+
+
+async def test_a_product_on_its_own_key_is_not_moved_onto_the_parents_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reason this is a refusal and not a no-op: a product files its own key
+    under a vendor section (Raven-Research uses `providers.openrouter`), so when
+    the host is on that vendor too the switch SUCCEEDS -- the child answers on
+    the host's model, billed to the product's key, off the model its folder was
+    configured to run. The listing already says such a row manages its own
+    model; the dispatch has to agree."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = tmp_path / "agents"
+    folder = root / "raven-ownkey"
+    folder.mkdir(parents=True)
+    (folder / "subagent.json").write_text(
+        json.dumps({"name": "ownkey", "kind": "acp", "description": "d", "command": "x"}), encoding="utf-8"
+    )
+    (folder / ".env").write_text("OWNKEY_API_KEY=sk-its-own\n", encoding="utf-8")
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    monkeypatch.delenv("OWNKEY_API_KEY", raising=False)
+
+    cfg = stub_config("ownkey")
+    backend = _own_backend(cfg)
+
+    await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=SimpleNamespace(provider_name="stub"),
+        model="model-b",
+    )
+
+    assert "session/set_config_option" not in (await _parent_bound_connection(cfg, tmp_path)).client.stderr_tail()
+
+
+async def test_a_pin_on_one_of_ravens_own_outranks_the_parents_binding(tmp_path: Path) -> None:
+    cfg = stub_config("ownpinned")
+    backend = _own_backend(cfg)
+
+    await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=SimpleNamespace(provider_name="stub"),
+        model="model-b",
+        session_model="stub:model-a",
+    )
+
+    frames = [
+        ln
+        for ln in (await _parent_bound_connection(cfg, tmp_path)).client.stderr_tail(4000).splitlines()
+        if "set_config_option" in ln
+    ]
+    assert frames == ["stub: session/set_config_option model=stub:model-a"]
+
+
+async def test_a_parent_provider_with_no_slug_leaves_the_launch_binding_to_speak(tmp_path: Path) -> None:
+    """Nothing to route by, so nothing is pushed: a value with no slug is a
+    refusal on every turn, and the launch binding already carries the model."""
+    cfg = stub_config("ownnoslug")
+    backend = _own_backend(cfg)
+
+    await backend.run(
+        "ping", task_id="t1", workspace=tmp_path, executor=None, provider=SimpleNamespace(), model="model-b"
+    )
+
+    connection = await get_pool().acquire(
+        name=cfg.name,
+        command=cfg.command,
+        cwd=str(tmp_path),
+        env=dict(cfg.env),
+        binding={"RAVEN_PARENT_MODEL": "model-b"},
+        ready_timeout_s=15.0,
+    )
+    assert "session/set_config_option" not in connection.client.stderr_tail()
+
+
+async def test_a_third_party_under_a_parent_binding_is_left_on_its_own_model(tmp_path: Path) -> None:
+    """The parent's model is not one of a third party's choices; the frame would
+    be refused on every dispatch, and its own default is the right answer."""
+    cfg = stub_config("thirdfollow")
+    backend = build_third_party_backend(cfg)
+
+    await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=SimpleNamespace(provider_name="stub"),
+        model="model-b",
+    )
+
+    assert "session/set_config_option" not in (await _parent_bound_connection(cfg, tmp_path)).client.stderr_tail()
+
+
 async def test_clearing_a_model_puts_the_session_back_on_the_agents_own(tmp_path: Path) -> None:
     """The option takes a value and has no "unset", so dropping the host's record
     restores nothing on its own: the session keeps answering on whatever it was

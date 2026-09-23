@@ -25,7 +25,7 @@ vi.mock('../../state/toast', () => ({
 
 /* The host's provider list, which the built-in row's pill picks from. */
 const hostModels = vi.hoisted(() => ({
-  providers: [] as Array<{ id: string; name: string; models: string[]; on: boolean }>,
+  providers: [] as Array<{ id: string; name: string; models: string[]; configured?: string[]; on: boolean }>,
   loads: 0,
 }))
 vi.mock('../model/source', () => ({
@@ -832,6 +832,30 @@ describe('the model pill', () => {
     expect(acts).toEqual([['model', 'Raven-Code', { model: 'z-ai/glm-5.3-flash', provider: 'openrouter' }]])
   })
 
+  it("offers one of raven's own the column the composer offers, shortlist and all", async () => {
+    /* A connected vendor with nothing added yet: the composer's column falls
+       back to the registry's shortlist, and this picker read the added list
+       alone -- a vendor with four models on one and none on the other. */
+    hostModels.providers = [
+      { id: 'gemini', name: 'Gemini', models: ['gemini-2.5-pro', 'gemini-2.5-flash'], configured: [], on: true },
+      { id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4-pro', 'deepseek-v4-flash'], configured: ['deepseek-v4-pro'], on: true },
+    ]
+    const { acts } = install([
+      row({ name: 'Raven-Code', preset: undefined, kind: 'acp', own: true, model_source: 'raven', model_choices: [] }),
+    ])
+    await mount()
+    await openSheet('Raven-Code')
+    await click(pill())
+    expect(picker()!.textContent).toContain('Gemini')
+    expect(modelButton('gemini-2.5-pro')).toBeDefined()
+    expect(modelButton('gemini-2.5-flash')).toBeDefined()
+    await click([...picker()!.querySelectorAll('.model-picker-prov')].find((b) => b.textContent!.includes('DeepSeek')))
+    expect(modelButton('deepseek-v4-pro')).toBeDefined()
+    expect(modelButton('deepseek-v4-flash')).toBeUndefined()
+    await click(modelButton('deepseek-v4-pro'))
+    expect(acts).toEqual([['model', 'Raven-Code', { model: 'deepseek-v4-pro', provider: 'deepseek' }]])
+  })
+
   it("draws a host id one of raven's own kept across a re-measure under the provider it is stored on", async () => {
     /* The pick was made while the row's menu was empty and its rule `raven`;
        the handshake behind the page has given it one since, so it reads under
@@ -855,6 +879,22 @@ describe('the model pill', () => {
     expect(pill()!.querySelector('.extAgents-mpv')!.textContent).toBe('OpenRouter')
     await click(sheet()!.querySelector('.extAgents-mx'))
     expect(acts).toEqual([['model', 'Raven-Code', { clear_model: true }]])
+  })
+
+  it("says a product on its own key manages its own model, not that it follows", async () => {
+    /* One of raven's own, so `own` is set -- but its folder carries the chat
+       credential its launcher branches on, which is the one case where an own
+       row does not inherit the host's model at all. The server says so with
+       `fixed`, and ownership must not draw over it. */
+    hostModels.providers = [{ id: 'openrouter', name: 'OpenRouter', models: ['anthropic/claude-opus-5'], on: true }]
+    install([
+      row({ name: 'Raven-Research', preset: undefined, kind: 'acp', own: true, vendored: true, model_source: 'fixed' }),
+    ])
+    await mount()
+    await openSheet('Raven-Research')
+    expect(pill()!.textContent).toBe('gui.agent.model_managed')
+    expect(pill()!.disabled).toBe(true)
+    expect(sheet()!.querySelector('.extAgents-mx')).toBeNull()
   })
 
   it("does not show an endpoint's configured model as a pick, and still lets a menuless acp row clear one", async () => {

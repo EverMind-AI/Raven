@@ -130,9 +130,13 @@ function InstallBlock({ row }: { row: ExtAgentRow }): JSX.Element | null {
    bucketed them. Empty is "no menu", whatever the rule. */
 function pickerProvidersFor(row: ExtAgentRow): PickerProvider[] {
   if (row.model_source === 'raven') {
+    /* The text models this host offers, by the same rule the composer's column
+       reads: a provider with nothing added yet offers the registry's shortlist
+       here too. Reading the added list alone drew a connected vendor with zero
+       models beside a composer listing four. No pin -- the tick is the row's. */
     return hostProviders()
       .filter((p) => p.on)
-      .map((p) => ({ id: p.id, name: p.name, models: offered(p), labels: p.labels }))
+      .map((p) => ({ id: p.id, name: p.name, models: offered(p, 'text'), labels: p.labels }))
   }
   if (row.model_source !== 'agent') return []
   const groups = new Map<string, PickerProvider>()
@@ -209,7 +213,10 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
   /* The built-in row's list may simply not have landed yet; its click loads it. */
   const menuless = fixed || (row.model_source === 'agent' && !provs.length)
   const shown = fixed ? null : shownModel(row)
-  const unset = own ? 'gui.agent.model_follow' : menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default'
+  /* `fixed` outranks ownership: one of raven's own whose folder carries its own
+     chat credential runs on that key and the model beside it, so "follows the
+     main Raven" was the one thing it does not do. */
+  const unset = own && !fixed ? 'gui.agent.model_follow' : menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default'
   const cls = [
     'extAgents-pill',
     menuless ? 'extAgents-pill-fixed' : '',

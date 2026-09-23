@@ -513,22 +513,32 @@ def _model_rule(cfg: Any, snapshot: Any, meta: Any) -> str:
     vocabulary: one of raven's own also takes a host-qualified id under either
     rule, since it runs on raven's providers whatever it advertised.
 
-    The rule is the row's, not its kind's: an acp row picks from the choices its
-    handshake advertised, except when it is one of raven's own and advertised
-    none. Those run on raven's own provider catalogue -- a product installed
-    beside this raven inherits its providers -- so an empty menu there is a
-    handshake that predates the catalogue rather than an agent with nothing to
-    offer, and falling back to raven's own ids gives the reader the same menu
-    the built-in row gets. A third party that advertised none is taken at its
-    word: its own credentials decide what it can run, and raven's ids would be
-    refused by the agent itself.
+    The rule is the row's, not its kind's: a third-party acp row picks from the
+    choices its handshake advertised, and one of raven's own picks from raven's
+    own provider catalogue whatever it advertised. An own row runs on this
+    host's providers -- a product installed beside this raven inherits them --
+    so the catalogue is the live list of what it can serve, while its handshake
+    is a launch-time capture of the same list: measured once on a probe
+    session, capped per provider, and stale from the first credential edit
+    after it. Drawing that capture beside the composer's live picker put two
+    different menus on one catalogue. A third party that advertised none is
+    taken at its word: its own credentials decide what it can run, and raven's
+    ids would be refused by the agent itself.
     """
     if cfg.kind == "builtin":
         return "raven"
+    # A product whose folder carries its own chat credential is not on this
+    # host's catalogue at all: its launcher takes that key with the provider and
+    # model beside it and never reads what the host would have lent. Nothing
+    # here can name what it answers with, and a pick made from raven's ids would
+    # be pushed at a session whose own config has never heard of them -- so the
+    # model is the folder's, the way an openai row's is its section's.
+    from raven.agent.subagent.vendored_agents import product_llm_key
+
+    if product_llm_key(getattr(cfg, "name", "") or ""):
+        return "fixed"
     if cfg.kind != "acp":
         return "fixed"
-    if meta.model_choices:
-        return "agent"
     return "raven" if getattr(snapshot, "agent_name", "") == "raven" else "agent"
 
 
@@ -681,7 +691,11 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             proposed = str(params["model"])
             choices = [c.value for c in meta.model_choices]
             own_acp = cfg_for_meta.kind == "acp" and getattr(snapshot, "agent_name", "") == "raven"
-            if rule == "agent" and proposed in choices:
+            # An id the agent advertised is one it serves, whichever menu the
+            # page drew. Not keyed on the rule: that names the menu, and keying
+            # the write to it meant an own row stopped taking its own
+            # handshake's ids the moment its menu became raven's catalogue.
+            if proposed in choices:
                 target["model"] = proposed
             elif rule == "agent" and not own_acp:
                 # Mirrors ``SubagentManager.set_instance_model``'s own message: the
