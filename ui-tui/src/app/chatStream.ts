@@ -149,8 +149,9 @@ interface InternalState {
  *
  * Read off the event, never off `$directChat.active`: Esc returns to the main
  * agent while a direct turn is still streaming, so "what is on screen" and
- * "what this text belongs to" routinely disagree. Only four variants can carry
- * a tag -- a direct turn emits one reply and no tool or reasoning output.
+ * "what this text belongs to" routinely disagree. Only five variants can carry
+ * a tag -- a direct turn emits one reply, the runtime's own notices about it,
+ * and no tool or reasoning output.
  */
 const targetOf = (event: TurnEvent): null | { agent: string; handle: string } => {
   switch (event.type) {
@@ -158,9 +159,54 @@ const targetOf = (event: TurnEvent): null | { agent: string; handle: string } =>
     case 'token.delta':
     case 'message.complete':
     case 'error':
+    case 'notice':
       return event.payload.target ?? null
     default:
       return null
+  }
+}
+
+/**
+ * What the status line said before a transient notice borrowed it, or null when
+ * none has. Module state rather than per-turn: the line itself is global, and
+ * what it should go back to is whatever the lane that owns it last wrote -- the
+ * instance label for a direct turn, `running…` for the main agent.
+ */
+let statusBeforeNotice: null | string = null
+
+/** The status line a runtime notice claims while the turn it reports on runs on. */
+const showTransientNotice = (kind: string): void => {
+  if (statusBeforeNotice === null) {
+    statusBeforeNotice = getUiState().status
+  }
+  patchUiState({ status: t(`gui.notice.${kind}`, kind).slice(0, 80) })
+}
+
+/**
+ * Give the status line back on the first frame of real output, and forget what
+ * it said once a turn starts or ends.
+ *
+ * Nothing else resets the line before the turn ends, so a call that failed once
+ * and then answered would run to completion still saying it was trying again --
+ * and a turn that died during the wait would hand its stale line to the next
+ * turn's first retry.
+ */
+const settleTransientNotice = (type: TurnEvent['type']): void => {
+  if (statusBeforeNotice === null) {
+    return
+  }
+  if (type === 'token.delta' || type === 'thinking.delta' || type === 'tool.start') {
+    patchUiState({ status: statusBeforeNotice })
+    statusBeforeNotice = null
+
+    return
+  }
+  // A turn boundary: whoever writes the line next owns it, so there is nothing
+  // to give back. Every other frame is left alone -- `episode.start` opens the
+  // retried call, and forgetting the line there would leave the wait on screen
+  // for the rest of the turn.
+  if (type === 'message.start' || type === 'message.complete' || type === 'error') {
+    statusBeforeNotice = null
   }
 }
 
@@ -192,6 +238,16 @@ const dispatchDirect = (
       return
     case 'token.delta':
       appendDirectDelta(key, 'assistant', event.payload.text)
+      return
+    case 'notice':
+      // The instance's own transcript, never the main one: the whole point of a
+      // direct chat is that its exchanges stay out of the main agent's view, and
+      // a notice reports on the turn it arrived with.
+      if (event.payload.transient) {
+        showTransientNotice(event.payload.kind)
+        return
+      }
+      appendDirectMessage(key, { role: 'system', text: noticeLine(event.payload) })
       return
     case 'message.complete':
       // No recordMessageComplete: that commits turnController's buffer into the
@@ -275,6 +331,12 @@ const dispatch = (
   sys?: (msg: string) => void,
   appendMessage?: (msg: Msg) => void
 ): void => {
+  // Before the lane split, because a retry notice and the output that answers it
+  // can belong to either lane and there is only one status line between them.
+  if (event.type !== 'notice') {
+    settleTransientNotice(event.type)
+  }
+
   const target = targetOf(event)
 
   if (target !== null) {
@@ -344,6 +406,14 @@ const dispatch = (
       return
     }
     case 'notice': {
+      // A transient one reports on a turn still running -- the runtime waiting
+      // out a failed model call -- so it belongs on the status line, which the
+      // next frame of real output takes back. Committed as a row it would read
+      // as the turn's outcome.
+      if (event.payload.transient) {
+        showTransientNotice(event.payload.kind)
+        return
+      }
       // Runtime prose, not the model's: never merged into the streamed answer.
       // Handed to the turn rather than appended here, because it arrives mid-turn
       // and this turn's steps reach the transcript only at `message.complete` --

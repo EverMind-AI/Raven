@@ -2299,6 +2299,10 @@
       "en": "A safety rule stopped this operation, so the turn ended here. Say the word and I will carry on with the parts that do not need it.",
       "zh": "这一步被安全规则拦下了，本回合到此结束。要继续做不依赖它的部分，说一声就行。"
     },
+    "gui.notice.llm_retry": {
+      "en": "The model did not answer; trying again.",
+      "zh": "模型这次没有回应，正在重试。"
+    },
     "gui.hub.auto_use": {
       "zh": "技能由 Raven 按需自动使用，暂不支持单独停用",
       "en": "Skills are picked up by Raven on demand; per-skill toggling is not supported yet"

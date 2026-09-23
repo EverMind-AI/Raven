@@ -364,6 +364,27 @@ describe('notice', () => {
     expect(h.live.st).toBeNull()
     expect(h.did('noteRow')).toEqual([['noteRow', 'gui.notice.budget', 'out of tokens', ['quiet']]])
   })
+
+  it('names a retry wait on the status line and leaves the turn open', async () => {
+    const h = await harness()
+    h.dispatch({ type: 'thinking.delta', payload: { text: 'thinking' } })
+
+    h.dispatch({ type: 'notice', payload: { kind: 'llm_retry', detail: 'server', transient: true } })
+
+    expect(h.did('showStatus')).toEqual([['showStatus', 'gui.notice.llm_retry']])
+    expect(h.did('noteRow')).toEqual([])
+    expect(h.did('seal')).toEqual([])
+    expect(h.live.st).not.toBeNull()
+  })
+
+  it('lets the next frame of real output take the status line back', async () => {
+    const h = await harness()
+
+    h.dispatch({ type: 'notice', payload: { kind: 'llm_retry', detail: 'server', transient: true } })
+    h.dispatch({ type: 'token.delta', payload: { text: 'the answer' } })
+
+    expect(h.did('killStatus')).toHaveLength(1)
+  })
 })
 
 describe('permission.review', () => {

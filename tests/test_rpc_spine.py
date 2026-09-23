@@ -741,7 +741,11 @@ async def test_a_blocked_action_rides_notice_and_never_the_token_stream():
             "tui:c1",
             {
                 "type": "notice",
-                "payload": {"kind": "action_blocked", "detail": "Error: Command blocked by safety guard"},
+                "payload": {
+                    "kind": "action_blocked",
+                    "detail": "Error: Command blocked by safety guard",
+                    "transient": False,
+                },
             },
         )
     ]

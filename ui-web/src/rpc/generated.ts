@@ -1198,13 +1198,18 @@ export interface NoticeEvent {
   type: 'notice';
   payload: {
     /**
-     * Which runtime decision this reports; `action_blocked` today.
+     * Which runtime decision this reports: `action_blocked`, `llm_retry` or `organ_degraded`.
      */
     kind: string;
     /**
-     * The blocking tool's own first line, when it gave one.
+     * What `kind` says it is: the blocking tool's own first line, the failed call's error category, or the organ that dropped out.
      */
     detail?: string;
+    /**
+     * True when the turn is still running and the next frame of output replaces this: draw it as a status, not as a row. False means it stands in for the answer.
+     */
+    transient?: boolean;
+    target?: DirectTarget;
   };
 }
 export interface TokenDeltaEvent {

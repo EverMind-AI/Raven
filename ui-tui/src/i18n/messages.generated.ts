@@ -762,6 +762,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.notice.by_raven': 'Raven',
     'gui.notice.action_blocked':
       'A safety rule stopped this operation, so the turn ended here. Say the word and I will carry on with the parts that do not need it.',
+    'gui.notice.llm_retry': 'The model did not answer; trying again.',
     'gui.hub.auto_use': 'Skills are picked up by Raven on demand; per-skill toggling is not supported yet',
     'gui.hub.empty_filter': 'No skill under this filter.',
     'gui.hub.empty_installed': 'No skills installed yet - browse the market.',
@@ -2658,6 +2659,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.turn_died': '回合中断 · {e}',
     'gui.notice.by_raven': 'Raven 提示',
     'gui.notice.action_blocked': '这一步被安全规则拦下了，本回合到此结束。要继续做不依赖它的部分，说一声就行。',
+    'gui.notice.llm_retry': '模型这次没有回应，正在重试。',
     'gui.hub.auto_use': '技能由 Raven 按需自动使用，暂不支持单独停用',
     'gui.hub.empty_filter': '这个筛选下没有技能。',
     'gui.hub.empty_installed': '还没有安装技能，去市场逛逛。',

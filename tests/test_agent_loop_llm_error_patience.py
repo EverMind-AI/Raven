@@ -21,6 +21,7 @@ from raven.agent.loop.recovery import RecoveryLimits, limits_from_defaults
 from raven.agent.window import shrink
 from raven.contracts.tool import Tool, ToolResult
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
+from raven.spine.events import NoticeKind
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 from raven.utils.images import image_block, is_image_part, text_block
@@ -72,7 +73,11 @@ def _agent(workspace: Path, provider: LLMProvider, delays: tuple[float, ...]) ->
     )
 
 
-async def _turn(agent: AgentLoop):
+async def _turn(agent: AgentLoop, notices: list[tuple[NoticeKind, str]] | None = None):
+    async def on_notice(kind: NoticeKind, detail: str) -> None:
+        assert notices is not None
+        notices.append((kind, detail))
+
     return await agent._process_message(
         TurnRequest(
             origin=Origin.USER,
@@ -80,6 +85,7 @@ async def _turn(agent: AgentLoop):
             text="build the deck",
         ),
         session_key="s1",
+        on_notice=None if notices is None else on_notice,
     )
 
 
@@ -117,6 +123,38 @@ async def test_a_non_retryable_error_is_not_asked_again(workspace):
 
     assert provider.calls == 1
     assert "Error calling LLM" in str(failed.value)
+
+
+@pytest.mark.asyncio
+async def test_each_wait_is_announced_with_the_error_category(workspace):
+    """The wait is the longest silence a turn has, and nothing said so.
+
+    Worst case the ladder plus a first-byte budget per rung is minutes of a page
+    showing the last thing the model said, which reads as a wedged runtime. One
+    notice per wait -- carrying the category and not the vendor's own body, which
+    can hold a masked key and an account URL.
+    """
+    provider = _FailsThenAnswers(2, ErrorClassification("server", retryable=True, should_fallback=True))
+    notices: list[tuple[NoticeKind, str]] = []
+
+    out = await _turn(_agent(workspace, provider, delays=(0.0, 0.0, 0.0)), notices)
+
+    assert out is not None and out[0] == "real answer"
+    assert notices == [(NoticeKind.LLM_RETRY, "server"), (NoticeKind.LLM_RETRY, "server")]
+
+
+@pytest.mark.asyncio
+async def test_an_error_nobody_will_ask_again_about_is_not_announced(workspace):
+    """No wait, nothing to say: the turn is about to fail and its own report is
+    what the reader gets, so a "trying again" left on the status line would
+    contradict it."""
+    provider = _FailsThenAnswers(1, ErrorClassification("invalid_request", retryable=False))
+    notices: list[tuple[NoticeKind, str]] = []
+
+    with pytest.raises(AnswerlessTurnError):
+        await _turn(_agent(workspace, provider, delays=(0.0, 0.0, 0.0)), notices)
+
+    assert notices == []
 
 
 class _StallsThenAnswers(LLMProvider):

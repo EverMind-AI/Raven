@@ -30,6 +30,18 @@ class NoticeKind(StrEnum):
     # this one replaces the answer rather than accompanying it, so an outlet
     # that renders nothing else should still render this.
     ACTION_BLOCKED = "action_blocked"
+    # A model call failed and the Model-Error Ladder is waiting before asking
+    # again. The turn is still running: the detail is the error category, never
+    # the vendor's own body.
+    LLM_RETRY = "llm_retry"
+
+
+# Which notices pass with the turn and which stand in for its answer. An outlet
+# draws a transient one where it draws a status -- a place the next frame of
+# real output overwrites -- and a closing one as a row that stays. Stated once
+# here rather than as a kind list repeated at every surface, because a kind
+# added there and forgotten here is drawn as the turn's outcome.
+TRANSIENT_NOTICE_KINDS = frozenset({NoticeKind.LLM_RETRY})
 
 
 class ToolPhase(StrEnum):

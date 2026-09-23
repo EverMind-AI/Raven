@@ -158,6 +158,13 @@ export const STAGES: readonly Stage[] = [
   arm('session.naming_ended', (_rt, p) => { void namingEnded(p.session_id, p.reason) }),
 
   arm('notice', (rt, p) => {
+    /* A transient one reports on a turn still running -- the runtime waiting out
+       a failed model call -- so it goes where `permission.review` puts its pause:
+       the status line, which the next thinking/token/tool frame kills. Sealing
+       the step and writing a row would end the turn's prose on a wait it is
+       about to come back from. `episode.start` does not kill the status, so the
+       line survives the whole silence and dies on the first real output. */
+    if (p.transient) { transcript.status(t('gui.notice.' + (p.kind || ''), null, p.kind || '')); return }
     transcript.killStatus()
     /* Seals the open step first: this ends the turn, so the streamed prose
        above stays where it was said. */
