@@ -47,10 +47,23 @@
      stay where the page has always served it. -->
 <div id="onb" hidden></div>
 
+<!-- Said twice, once per language, because this is the one notice no translator
+     can reach: it is on screen exactly when the bundle did not run, so the
+     message catalogue and the language resolver are both unreachable, and the advice it
+     gives -- open the saved file -- puts the reader on file:// with no server
+     left to negotiate one either. Each block declares its own language rather
+     than leaning on <html lang>, so neither is mislabelled if that changes. -->
 <div id="noJs" style="position:fixed;left:0;right:0;top:0;z-index:99;background:#e0a030;color:#16150f;
   font:13px/1.6 -apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;padding:10px 16px">
-  <b>这个页面的脚本没有运行</b> —— 所以只剩空壳：没有会话列表、没有对话、发送键是空的。
-  多半是当前预览环境不执行 JavaScript。把文件保存到本地，用 Chrome 或 Safari 直接打开即可。
+  <p lang="en" style="margin:0">
+    <b>This page's script is not running</b> -- so all that is left is a shell: no session list,
+    no conversation, and a send key that does nothing. Most likely this preview environment does
+    not run JavaScript. Save the file to disk and open it directly in Chrome or Safari.
+  </p>
+  <p lang="zh-CN" style="margin:3px 0 0">
+    <b>这个页面的脚本没有运行</b> —— 所以只剩空壳：没有会话列表、没有对话、发送键是空的。
+    多半是当前预览环境不执行 JavaScript。把文件保存到本地，用 Chrome 或 Safari 直接打开即可。
+  </p>
 </div>
 
 <script>
