@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import catalogue from '../../../../i18n/messages.json'
+import messages from '../../../../i18n/messages.json'
 import { fakeGateway, loadPart, looseQuery, moduleText } from '../../../scripts/module-harness.mjs'
 
 type Naming = typeof import('./naming')
@@ -14,7 +14,7 @@ interface Row { id: string; title: string; naming?: boolean }
 /* Both spellings of the default title, read from the message catalogue rather
    than typed here: the case below is about a title written under one language and
    read under the other, and either one typed in would only agree with itself. */
-const NEW_TASK = (catalogue as { ui: Record<string, Record<string, string>> }).ui['gui.new_task']!
+const NEW_TASK = (messages as { ui: Record<string, Record<string, string>> }).ui['gui.new_task']!
 
 /* The four naming verbs driven together: they only make sense that way, and
    each one on its own would only assert that it exists. */
@@ -76,9 +76,10 @@ describe('the live naming block', () => {
     expect(h.heading.classList.contains('skel')).toBe(false)
   })
 
-  /* A conversation is created with the default title the catalogue spells in
-     the language of whoever created it, and the title is stored. Read back in
-     the other language, that spelling is still the default and not a name. */
+  /* A conversation is created with the default title the message catalogue
+     spells in the language of whoever created it, and the title is stored.
+     Read back in the other language, that spelling is still the default and
+     not a name. */
   it('names a conversation left at the default of the other language', async () => {
     const rows: Row[] = [{ id: 's1', title: NEW_TASK.en! }]
     const h = await harness({
