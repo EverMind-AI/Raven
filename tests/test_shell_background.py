@@ -164,6 +164,23 @@ async def test_exec_background_returns_the_note_without_holding_the_turn(home, t
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("command", "failed"), [("exit 7", True), ("exit 0", False), ("sleep 30", False)])
+async def test_the_registry_reads_an_early_exit_as_the_call_s_verdict(home, tmp_path, command, failed):
+    """An exit the launch saw is the call's result, as it is on the synchronous
+    lane: nonzero is a failed call, zero and still-running are not."""
+    from raven.agent.tools.registry import ToolRegistry, call_failed
+
+    registry = ToolRegistry()
+    registry.register(ExecTool(working_dir=str(tmp_path)))
+
+    out = await registry.execute("exec", {"command": command, "run_in_background": True})
+
+    assert call_failed(out) is failed
+    if command.startswith("sleep"):
+        assert background_exec.reap(_task_id_from(out)) is True
+
+
+@pytest.mark.asyncio
 async def test_the_launch_check_waits_off_the_event_loop(home, tmp_path):
     """The note waits up to a second for the command to contradict it. A launch
     that keeps running spends that whole second, and on the loop's own thread

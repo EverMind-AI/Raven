@@ -34,6 +34,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from raven.contracts.tool import ToolOutput
 from raven.home import raven_home
 
 _DIRNAME = "background"
@@ -291,7 +292,7 @@ def reap_all() -> int:
     return sum(1 for data in running() if reap(str(data.get("task_id") or "")))
 
 
-def start_note(task: BackgroundTask) -> str:
+def start_note(task: BackgroundTask) -> ToolOutput:
     """What a background launch tells the model: the handle, and how to read it.
 
     Or, when the task was already gone by the time this is built, what it said
@@ -301,16 +302,20 @@ def start_note(task: BackgroundTask) -> str:
     model then hunts for its own bug in a server that never bound (measured
     2026-09-22, session 692e5c: ``http.server 8765`` lost the port and the launch
     still read as success).
+
+    The verdict travels with the text: a command that already exited nonzero is
+    a failed call, the same answer the synchronous lane gives, and one that
+    exited 0 in the window did what it was asked.
     """
     proc = _PROCS.get(task.task_id)
     if proc is None:
-        return _running_note(task)
+        return ToolOutput(_running_note(task))
     try:
         code = proc.wait(timeout=_CONFIRM_S)
     except subprocess.TimeoutExpired:
         # Still alive, which is all this window can establish.
-        return _running_note(task)
-    return _exited_note(task, code)
+        return ToolOutput(_running_note(task))
+    return ToolOutput(_exited_note(task, code), ok=code == 0)
 
 
 def _running_note(task: BackgroundTask) -> str:
