@@ -260,7 +260,7 @@ async def test_warming_draws_only_the_covers_that_are_missing(tmp_path: Path, mo
     two = deck_templates.find("two")
     assert two is not None
     (tmp_path / "covers").mkdir()
-    (tmp_path / "covers" / f"{deck_templates._cover_key(two.path)}.jpg").write_bytes(b"\xff\xd8")
+    (tmp_path / "covers" / f"{deck_templates._drawn_key(two.path)}.jpg").write_bytes(b"\xff\xd8")
     drawn: list[str] = []
 
     async def draw(template, *_):
@@ -281,7 +281,7 @@ async def test_warming_draws_nothing_when_every_cover_is_on_disk(templates: Path
     template = deck_templates.bundled()[0]
     covers = deck_templates.cover_cache_dir()
     covers.mkdir(parents=True, exist_ok=True)
-    (covers / f"{deck_templates._cover_key(template.path)}.jpg").write_bytes(b"\xff\xd8")
+    (covers / f"{deck_templates._drawn_key(template.path)}.jpg").write_bytes(b"\xff\xd8")
     drawn: list[str] = []
 
     async def draw(t, *_):
@@ -563,3 +563,48 @@ def test_a_width_is_read_in_ems_whatever_the_writing(tmp_path: Path, monkeypatch
     assert deck_templates._width("\u76ee\u5f55") == 2
     assert deck_templates._width("Contents") == pytest.approx(8 * deck_templates.LATIN_WIDTH)
     assert deck_templates._width("") == 0
+
+
+def test_a_picture_drawn_without_chinese_is_not_served_after_the_host_can_draw_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The source deck is byte-identical either side of a font fix, so a key made
+    only of its path, size and mtime keeps serving the boxes. The upgrade would
+    land, the pictures would not change, and nothing would say why."""
+    from raven.utils import fonts
+
+    deck = tmp_path / "deck.pptx"
+    deck.write_bytes(b"PK placeholder")
+
+    monkeypatch.setattr(fonts, "han_face", lambda: None)
+    fonts.render_fingerprint.cache_clear()
+    boxes = deck_templates._drawn_key(deck)
+
+    monkeypatch.setattr(fonts, "han_face", lambda: Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"))
+    fonts.render_fingerprint.cache_clear()
+    drawn = deck_templates._drawn_key(deck)
+
+    assert boxes != drawn, "a cover drawn with no Han face would be served for one drawn with it"
+    assert deck_templates._cover_key(deck) in boxes
+    assert deck_templates._cover_key(deck) in drawn
+
+
+def test_a_translated_copy_is_not_redone_just_because_the_fonts_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half: the copy is a deck, not a picture. Its text swap does not
+    depend on what the host can draw, so putting the font state in its name
+    would rebuild every translation on a machine that only gained a font."""
+    from raven.utils import fonts
+
+    deck = tmp_path / "deck.pptx"
+    deck.write_bytes(b"PK placeholder")
+
+    monkeypatch.setattr(fonts, "han_face", lambda: None)
+    fonts.render_fingerprint.cache_clear()
+    before = deck_templates._cover_key(deck)
+
+    monkeypatch.setattr(fonts, "han_face", lambda: Path("/some/face.ttc"))
+    fonts.render_fingerprint.cache_clear()
+
+    assert deck_templates._cover_key(deck) == before

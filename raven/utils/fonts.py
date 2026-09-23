@@ -53,10 +53,12 @@ touching the system's configuration or needing privileges.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -421,6 +423,31 @@ def can_draw_han() -> bool:
     if host_han_faces():
         return True
     return sys.platform == "win32"
+
+
+RENDER_GENERATION = 2
+"""Bumped whenever a change in this module alters what a conversion draws.
+
+Version 1 is every release before a Mac was given its own font directories.
+"""
+
+
+@lru_cache(maxsize=1)
+def render_fingerprint() -> str:
+    """A token standing for the font state a render was made under.
+
+    A cached PDF or page image is keyed by its source file, and the source does
+    not change when the fonts around it do. So a host that renders correctly
+    after this fix still serves the boxes it drew before it, for as long as the
+    cache lives -- the upgrade lands and nothing visibly changes, which is the
+    same silent failure one layer up. Mixing this into those keys retires the
+    renders made under the old answer.
+
+    Cached for the process: :func:`han_face` walks directories and may run
+    fc-list, and a cache key is asked for on every preview.
+    """
+    face = han_face()
+    return hashlib.sha256(f"{RENDER_GENERATION}\0{face or ''}".encode()).hexdigest()[:12]
 
 
 def install_hint() -> str:

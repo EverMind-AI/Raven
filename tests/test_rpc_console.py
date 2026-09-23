@@ -2106,7 +2106,7 @@ async def test_deck_templates_list_answers_at_once_and_draws_the_covers_behind_i
 
     async def draw(template, *_):
         drawn.append(template.name)
-        target = deck_templates.cover_cache_dir() / f"{deck_templates._cover_key(template.path)}.jpg"
+        target = deck_templates.cover_cache_dir() / f"{deck_templates._drawn_key(template.path)}.jpg"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"\xff\xd8jpeg")
         return target

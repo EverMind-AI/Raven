@@ -319,6 +319,19 @@ def _cover_key(path: Path) -> str:
     return hashlib.sha256(f"{path}\0{st.st_size}\0{st.st_mtime_ns}\0{COVER_WIDTH_PX}".encode()).hexdigest()[:32]
 
 
+def _drawn_key(path: Path) -> str:
+    """The key for a picture, as against the key for the deck it was drawn from.
+
+    A translated copy is the same file whatever fonts the host has, so it keeps
+    :func:`_cover_key`. A picture is not: the boxes a host drew before it could
+    set Chinese have the same source and would be served in place of the render
+    that fixed them.
+    """
+    from raven.utils import fonts
+
+    return f"{_cover_key(path)}-{fonts.render_fingerprint()}"
+
+
 def _write_page(page: Any, target: Path, *, width: int, quality: int) -> None:
     """One PDF page as a JPEG ``width`` wide, written atomically."""
     pymupdf = _pymupdf()
@@ -373,7 +386,7 @@ async def cover_for(template: Template, language: str = SOURCE_LANGUAGE) -> Path
     out) are the host's, logged once here and not worth failing the list for.
     """
     source = source_for(template, language)
-    cached = cover_cache_dir() / f"{_cover_key(source)}.jpg"
+    cached = cover_cache_dir() / f"{_drawn_key(source)}.jpg"
     if cached.is_file():
         return cached
     if not _rasteriser_available():
@@ -402,7 +415,7 @@ async def pages_for(template: Template, language: str = SOURCE_LANGUAGE) -> list
     if not _rasteriser_available():
         return []
     source = source_for(template, language)
-    stem = cover_cache_dir() / _cover_key(source)
+    stem = cover_cache_dir() / _drawn_key(source)
     from raven.rpc import pdf_preview
 
     try:
@@ -438,7 +451,7 @@ def cached_cover(template: Template, language: str = SOURCE_LANGUAGE) -> Path | 
             return None
     else:
         source = template.path
-    cached = cover_cache_dir() / f"{_cover_key(source)}.jpg"
+    cached = cover_cache_dir() / f"{_drawn_key(source)}.jpg"
     return cached if cached.is_file() else None
 
 
