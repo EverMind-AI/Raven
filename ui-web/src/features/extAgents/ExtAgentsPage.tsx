@@ -9,7 +9,7 @@ import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
 import { offered } from '../model/types'
 import { byOf, installOf, isOwnRow } from './catalogue'
-import { SectionBlock, Spin, Tile, connect, ordered, pendingLabel, shownOf } from './Rows'
+import { CardGrid, Spin, Tile, connect, ordered, pendingLabel, shownOf } from './Rows'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
@@ -23,12 +23,13 @@ import './styles.css'
 
 /* The agents this machine can hand work to, drawn to the Agent Hub prototype.
  *
- * Three sections answer the reader's three questions -- which agents work for
- * me now, which could I connect, which are not on this machine -- and a row
- * answers three more: who it is (mark, name, a line about what it is good at),
- * how it is doing (a dot that is only there when there is something to say),
- * and the one thing to do about it now. Everything else is in the sheet the
- * row opens: what the agent is good at, as the reader words it; a key, where
+ * One grid of cards, filtered by tabs that answer the reader's three questions
+ * -- which agents work for me now, which could I connect, which are not on
+ * this machine -- and a card answers three more: who it is (mark, name, a line
+ * about what it is good at), how it is doing (a dot that is only there when
+ * there is something to say), and the one thing to do about it now. Everything
+ * else is in the sheet the card opens: what the agent is good at, as the
+ * reader words it; a key, where
  * one is needed; how to install one that is absent; and the actions its state
  * calls for, in one bar.
  *
@@ -460,28 +461,54 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   )
 }
 
+type Tab = 'all' | Section
+
+const TABS: Array<{ tab: Tab; label: string; empty: string }> = [
+  { tab: 'all', label: 'gui.filter.all', empty: 'gui.agent.none' },
+  { tab: 'on', label: 'gui.agent.g_on', empty: 'gui.agent.none' },
+  { tab: 'avail', label: 'gui.agent.g_avail', empty: 'gui.agent.none_avail' },
+  { tab: 'missing', label: 'gui.agent.g_missing', empty: 'gui.agent.none_missing' },
+]
+
 export function ExtAgentsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). */
   useSyncExternalStore(lang.subscribe, lang.get)
+  const [tab, setTab] = useState<Tab>('all')
   const by = (section: Section): ExtAgentRow[] => ordered(s.rows.filter((row) => sectionOf(row) === section))
-  const on = by('on')
-  const avail = by('avail')
-  const missing = by('missing')
+  const rows: Record<Tab, ExtAgentRow[]> = { all: [], on: by('on'), avail: by('avail'), missing: by('missing') }
+  rows.all = [...rows.on, ...rows.avail, ...rows.missing]
+  const current = TABS.find((x) => x.tab === tab)!
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
   return (
-    <>
+    <div className="extAgents-hub">
       <div className="pmhero">
-        <h3>{t('gui.page.agents')}</h3>
+        <div>
+          <h3>{t('gui.page.agents')}</h3>
+          <p>{t('gui.page.agents_sub')}</p>
+        </div>
       </div>
-      {/* The connected section is always there, even empty: it is the answer to
-          the page's first question. The other two are only drawn with rows in
-          them -- a heading over nothing is a heading about nothing. */}
-      <SectionBlock label={t('gui.agent.g_on')} onOpen={store.sheetOpen} rows={on} s={s} />
-      {avail.length ? <SectionBlock label={t('gui.agent.g_avail')} onOpen={store.sheetOpen} rows={avail} s={s} /> : null}
-      {missing.length ? <SectionBlock label={t('gui.agent.g_missing')} onOpen={store.sheetOpen} rows={missing} s={s} /> : null}
+      {/* All and Connected are always offered; the other two only with agents in
+          them, or while they are the tab being read -- so connecting the last
+          one leaves the reader on an emptied tab rather than moving them. */}
+      <div className="extAgents-tabs" role="tablist">
+        {TABS.filter((x) => x.tab === 'all' || x.tab === 'on' || x.tab === tab || rows[x.tab].length).map((x) => (
+          <button
+            aria-selected={tab === x.tab}
+            className="extAgents-tab"
+            key={x.tab}
+            onClick={() => setTab(x.tab)}
+            role="tab"
+            type="button"
+          >
+            {t(x.label)}
+            <span className="extAgents-tn">{String(rows[x.tab].length)}</span>
+          </button>
+        ))}
+      </div>
+      <CardGrid empty={t(current.empty)} rows={rows[tab]} s={s} />
       {sheetRow ? <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} /> : null}
-    </>
+    </div>
   )
 }

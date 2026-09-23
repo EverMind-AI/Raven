@@ -847,6 +847,14 @@
       "en": "Nothing connected yet.",
       "zh": "还没有连接任何智能体。"
     },
+    "gui.agent.none_avail": {
+      "en": "Nothing left to connect.",
+      "zh": "没有待接入的智能体了。"
+    },
+    "gui.agent.none_missing": {
+      "en": "Everything is installed.",
+      "zh": "都已装好。"
+    },
     "gui.agent.save": {
       "en": "Save",
       "zh": "保存"
@@ -3160,7 +3168,7 @@
       "zh": "{n} 失败"
     },
     "gui.nav.agents": {
-      "en": "Agent Hub",
+      "en": "Agent Connector",
       "zh": "智能体连接"
     },
     "gui.nav.conn": {
@@ -3396,8 +3404,12 @@
       "zh": "新任务"
     },
     "gui.page.agents": {
-      "en": "Agents",
-      "zh": "智能体"
+      "en": "Agent Connector",
+      "zh": "智能体连接"
+    },
+    "gui.page.agents_sub": {
+      "en": "Raven coordinates the agents you connect: it delegates tasks, orchestrates the work and brings the results together.",
+      "zh": "Raven 可以统一调度已连接的智能体，委派任务、协调执行、整合结果"
     },
     "gui.page.conn": {
       "en": "Channels",
