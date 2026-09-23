@@ -339,11 +339,19 @@ class SignIn(NamedTuple):
     reader who has no such install never reaches a credential failure in the
     first place: the probe stops at the absent executable, which is a different
     message with a different answer.
+
+    ``stderr_marks`` is how this agent says, on its own stderr, that it has no
+    credential -- for the agents whose protocol answer carries nothing. Each is a
+    literal the agent's own code emits, read from its source; a line containing
+    one is the agent reporting the failure in its own machine-readable terms,
+    which is the only kind of stderr line this repo trusts. An agent with none
+    listed never has its stderr read for this at all.
     """
 
     exe: str
     local: str
     anywhere: str | None = None
+    stderr_marks: tuple[str, ...] = ()
 
 
 SIGN_IN_HINTS: dict[str, SignIn] = {
@@ -363,7 +371,20 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # your inference provider and default model") is what the runtime's own
     # check tells the reader to run. Shim-launched it is not: the command is a
     # bare `hermes`, so the local spelling is the only one it can reach.
-    "hermes": SignIn(exe="hermes", local="hermes model"),
+    #
+    # The marks are hermes's own `_NOUS_AUTH_MISSING_CODES` (hermes_cli/auth.py,
+    # "no login, no token pair"), as `agent/auxiliary_unavailable.py` renders
+    # them onto the line: f"{message} (code: {code})". Only the Portal's codes:
+    # hermes can be pointed at other providers, whose codes were not measured.
+    "hermes": SignIn(
+        exe="hermes",
+        local="hermes model",
+        stderr_marks=(
+            "(code: nous_auth_missing)",
+            "(code: nous_auth_missing_access_token)",
+            "(code: nous_auth_missing_refresh_token)",
+        ),
+    ),
 }
 """How to sign in to the agent a row defers to, by preset key.
 

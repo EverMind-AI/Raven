@@ -4387,19 +4387,20 @@ def test_an_agent_that_answers_nothing_is_read_from_its_own_stderr() -> None:
     )
 
 
-def test_ordinary_startup_chatter_is_not_a_diagnosis() -> None:
-    """A log line that mentions authentication is not a line that says it failed.
+def test_stderr_prose_is_never_a_diagnosis() -> None:
+    """Only the agent's own mark on a line is read; what the line says is not.
 
-    The rule the *answer* is read against asks whether a text is about
-    authentication, which is right for a message that arrived because the call
-    failed. A stderr tail is not that -- it is whatever the agent logged on its
-    way up -- and asking the same question of it promotes chatter into a cause,
-    while discarding the real failure behind a credential story.
+    A stderr tail is whatever the agent logged on its way up, and prose there
+    cannot be told apart from a failure. Two rounds of review each found a line
+    the last prose rule promoted -- "INFO oauth callback server started", then
+    "no authentication required for localhost" -- and a red-team pass found 319
+    more among 864 realistic lines, against a phrase list with a denial veto and
+    a level gate. Every line below mentions authentication (the witness is the
+    refusal rule accepting it); none of them is the agent saying it has no
+    credential, and none of them may turn a bare error into "sign in".
 
-    Every line below was classified as a credential failure by that rule when
-    measured on 2026-09-23: `oauth` and `authoring` both contain `auth`. The
-    last one is why pairing an auth token with a failure word is not the fix
-    either -- it has both, and is still about a port.
+    The last one carries the right code in the wrong shape: a mark is the literal
+    the agent renders, not a word that happens to appear.
     """
     from types import SimpleNamespace
 
@@ -4411,21 +4412,77 @@ def test_ordinary_startup_chatter_is_not_a_diagnosis() -> None:
         "Plugin authoring guide loaded",
         "retrying after 401 backoff sweep",
         "oauth callback server failed to bind port 8080",
+        "INFO no authentication required for localhost",
+        "INFO no API key required for local mode",
+        "no authentication required for localhost",
+        "registered handler for http 401",
+        'WARN config: on_unauthorized = "prompt"',
+        "WARN error mapper: 'invalid api key' -> AuthError(code=invalid_key)",
+        "WARN fallback chain: primary -> secondary when primary reports unauthorized",
+        "WARN auth pool: code nous_auth_missing is terminal, not retried",
     )
     cfg = SimpleNamespace(preset="hermes")
     said = "request failed: [-32603] Internal error"
 
     for line in benign:
-        assert looks_like_auth(line), "the pinned hazard is that the refusal rule accepts these"
+        assert looks_like_auth(line), "the pinned hazard is a line that is about authentication"
         out = _refusal_detail(cfg, said, stderr=line)
         assert out == said, f"{line!r} was promoted to a credential failure"
-        assert "credential" not in out
-        assert "hermes model" not in out
 
-    # The same tail with the real line in it still classifies: the narrowing
-    # must not have cost the case this path exists for.
-    real = "\n".join((*benign, "Nous Portal runtime credentials unavailable: not logged in"))
+    # The same tail with the agent's own line in it still classifies.
+    real = "\n".join(
+        (
+            *benign,
+            "2026-09-23 14:28:42 [WARNING] agent.auxiliary_unavailable: Hermes is not logged into "
+            "Nous Portal. Run `hermes model` to re-authenticate. (code: nous_auth_missing)",
+        )
+    )
     assert "`hermes model`" in _refusal_detail(cfg, said, stderr=real)
+
+
+def test_an_agent_nobody_measured_never_has_its_stderr_read() -> None:
+    """The price of reading marks only, stated as a test so it is chosen, not found.
+
+    An agent with no marks listed gets its bare protocol error even when its log
+    says, in plain words, that the credential failed. That is where its reader
+    was before this path existed; the alternative -- reading prose for agents
+    nobody measured -- is the rule that misread hundreds of benign lines.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.presets import SIGN_IN_HINTS
+    from raven.agent.subagent.probe import _refusal_detail
+
+    said = "request failed: [-32603] Internal error"
+    plain = "ERROR authentication failed: invalid api key"
+    for preset in ("opencode", "claude_code", "codex"):
+        hint = SIGN_IN_HINTS.get(preset)
+        assert not (hint and hint.stderr_marks), f"{preset} is expected to have no measured marks"
+        assert _refusal_detail(SimpleNamespace(preset=preset), said, stderr=plain) == said
+
+
+def test_every_code_hermes_counts_as_no_login_is_recognised() -> None:
+    """The marks are hermes's own set, as hermes renders them onto the line.
+
+    Read from its source: `_NOUS_AUTH_MISSING_CODES` in hermes_cli/auth.py --
+    "no login, no token pair" -- rendered by agent/auxiliary_unavailable.py as
+    f"{message} (code: {code})". The three codes are pinned here so that a
+    change to the list is a change someone made on purpose.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.presets import SIGN_IN_HINTS
+    from raven.agent.subagent.probe import _refusal_detail
+
+    codes = ("nous_auth_missing", "nous_auth_missing_access_token", "nous_auth_missing_refresh_token")
+    assert SIGN_IN_HINTS["hermes"].stderr_marks == tuple(f"(code: {c})" for c in codes)
+
+    said = "request failed: [-32603] Internal error"
+    for code in codes:
+        line = f"[WARNING] agent.auxiliary_unavailable: Nous Portal login is unusable. (code: {code})"
+        out = _refusal_detail(SimpleNamespace(preset="hermes"), said, stderr=line)
+        assert "`hermes model`" in out, code
+        assert said in out, "the protocol's own failure is kept beside the log line"
 
 
 async def test_the_child_is_asked_before_its_connection_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4445,7 +4502,7 @@ async def test_the_child_is_asked_before_its_connection_is_closed(monkeypatch: p
     from raven.acp_client import pool as acp_pool
     from raven.agent.subagent import probe as probe_mod
 
-    said = "Hermes is not logged into Nous Portal. Run `hermes model` to re-authenticate."
+    said = "Hermes is not logged into Nous Portal. Run `hermes model` to re-authenticate. (code: nous_auth_missing)"
 
     class _Client:
         def __init__(self) -> None:

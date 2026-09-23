@@ -174,70 +174,35 @@ def _missing_exe_detail(cfg: Any, exe: str) -> str:
     return _missing_detail(exe, install_hint_for(cfg))
 
 
-_CREDENTIAL_FAILS = (
-    "not logged in",
-    "not signed in",
-    "not authenticated",
-    "unauthenticated",
-    "unauthorized",
-    "authentication required",
-    "authentication failed",
-    "failed to authenticate",
-    "login required",
-    "credentials unavailable",
-    "credential unavailable",
-    "no credential",
-    "no authentication",
-    "missing api key",
-    "invalid api key",
-    "no api key",
-    "api key required",
-    "session expired",
-    "token expired",
-    "http 401",
-)
-"""Phrases that each state, on their own, that a credential is absent or refused.
-
-Deliberately not `looks_like_auth`, which the refusal path above uses. That one
-asks whether a text is *about* authentication, which is the right question for
-a refusal -- a message that arrived because the call failed. A stderr tail is
-not that: it is whatever the agent logged while starting up, and asking only
-what a line is about promotes ordinary chatter into a diagnosis. Measured
-against the live matcher on 2026-09-23, all four of these were classified as
-credential failures: "INFO oauth callback server started", "oauth callback
-server failed to bind port 8080", "Plugin authoring guide loaded", "retrying
-after 401 backoff sweep" -- `oauth` and `authoring` both contain `auth`.
-
-Pairing an `auth` token with a failure word would not fix it either: the second
-of those four has both. So each entry here is itself the claim being made, and
-a line that does not contain one is left alone. The cost is asymmetric and the
-list is sized for it -- a phrase missing from it returns the reader to the bare
-protocol error, which is where they were before this path existed, while a
-wrong hit sends them to fix a credential that was never the problem.
-"""
-
-
-def _auth_line(stderr: str) -> str | None:
-    """The first line of a child's stderr that states a credential failure.
+def _auth_line(stderr: str, marks: Sequence[str]) -> str | None:
+    """The first stderr line carrying one of the agent's own credential marks.
 
     For the agents that answer the protocol with a bare code and write the
     reason nowhere but here. Measured 2026-09-23: `hermes acp` returned
     ``[-32603] Internal error`` -- six words, none of them actionable -- while
     its own stderr carried "Hermes is not logged into Nous Portal. Run `hermes
-    model` to re-authenticate." The tail this reads is already kept, for the
-    neighbouring case where the protocol reports success and only stderr says
-    the provider refused (`AcpClient.stderr_tail`).
+    model` to re-authenticate. (code: nous_auth_missing)". The tail this reads
+    is already kept, for the neighbouring case where the protocol reports
+    success and only stderr says the provider refused (`AcpClient.stderr_tail`).
+
+    Only marks, never prose. A stderr tail is whatever the agent logged on its
+    way up, and reading its prose for a diagnosis cannot tell "registered a
+    handler for http 401" from "http 401", or "no authentication required" from
+    "authentication required": a red-team pass of 864 realistic lines against a
+    phrase list with a denial veto and a level gate misclassified 319 benign ones
+    as credential failures. A mark is the agent reporting the failure in its own
+    machine-readable terms, read from its source (`SignIn.stderr_marks`), so an
+    agent nobody measured gets its bare protocol error -- which is where its
+    reader was before this path existed.
 
     The *first* such line rather than the newest, because the lines after it
-    are the same missing credential reported again downstream: hermes names the
-    Portal once, then its auxiliary client reports what it could not do without
-    it. Taking the newest would quote a consequence and, in that agent's case,
-    a command that does not address the cause.
+    are the same missing credential reported again downstream.
     """
+    if not marks:
+        return None
     for line in stderr.splitlines():
         text = line.strip()
-        lowered = text.lower()
-        if text and any(phrase in lowered for phrase in _CREDENTIAL_FAILS):
+        if text and any(mark in text for mark in marks):
             return text
     return None
 
@@ -280,8 +245,8 @@ def _refusal_detail(cfg: Any, said: str, *, stderr: str = "") -> str:
     Where they carry nothing -- measured, an agent whose whole answer was
     ``[-32603] Internal error`` while its own stderr named the missing
     credential and the command for it -- the child's stderr is read as well,
-    against a narrower rule than the one the answer is read against, and on a
-    hit the log line is added to the failure rather than put in its place. The
+    for that agent's own measured marks only, and on a hit the log line is
+    added to the failure rather than put in its place. The
     rest are unchanged: a failure neither source can classify keeps the words
     it came with rather than being given a guess about what they mean.
 
@@ -296,7 +261,8 @@ def _refusal_detail(cfg: Any, said: str, *, stderr: str = "") -> str:
     if not looks_like_auth(evidence):
         # The words the protocol carried say nothing. Before giving up on
         # classifying, ask the child what it said on its own channel.
-        logged = _auth_line(stderr) or ""
+        hint = sign_in_hint_for(cfg)
+        logged = _auth_line(stderr, hint.stderr_marks if hint else ()) or ""
         if not logged:
             return said[:_DETAIL_CAP]
     if getattr(cfg, "kind", None) == "openai":
