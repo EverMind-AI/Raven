@@ -50,6 +50,11 @@ ok()    { printf '\033[1;32m+\033[0m %s\n' "$1"; }
 warn()  { printf '\033[1;33m!\033[0m %s\n' "$1" >&2; }
 die()   { printf '\033[1;31mx\033[0m %s\n' "$1" >&2; exit 1; }
 have()  { command -v "$1" >/dev/null 2>&1; }
+sha256_of() {
+  if have sha256sum; then sha256sum "$1" | cut -d' ' -f1
+  elif have shasum; then shasum -a 256 "$1" | cut -d' ' -f1
+  else printf ''; fi
+}
 
 # --- 0. platform detection -------------------------------------------------
 detect_platform() {
@@ -662,7 +667,10 @@ install_office() {
 #
 # Linux: LibreOffice's apt package brings no CJK face. The offer above installs
 # fonts-noto-cjk alongside it; otherwise a pinned Noto Sans SC goes into the
-# user's font directory, which fontconfig reads without being told.
+# user's font directory, which fontconfig reads without being told. The pin is
+# the Simplified Chinese subset, Regular weight only: bold is synthesized, and
+# Traditional Chinese or Japanese glyphs outside the subset still draw as boxes.
+# Enough for zh-CN decks; fonts-noto-cjk is the full answer.
 #
 # macOS needs nothing here. The system already ships Han faces; LibreOffice's
 # macOS build just cannot see them when it renders headless, and raven links
@@ -675,19 +683,17 @@ HAN_FONT_SHA256="faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea
 HAN_FONT_BYTES="8331336"
 HAN_FONT_NAME="NotoSansSC-Regular.otf"
 
-sha256_of() {
-  if have sha256sum; then sha256sum "$1" | cut -d' ' -f1
-  elif have shasum; then shasum -a 256 "$1" | cut -d' ' -f1
-  else printf ''; fi
+# LibreOffice reads the same fontconfig as fc-list here, so its answer holds;
+# the pinned file is checked by name for a host with the library but no fc-list.
+linux_has_han_face() {
+  [ -n "$(fc-list :lang=zh family 2>/dev/null)" ] && return 0
+  [ -f "${XDG_DATA_HOME:-$HOME/.local/share}/fonts/$HAN_FONT_NAME" ]
 }
 
-# Succeeds only when it changed what LibreOffice can reach.
 install_linux_cjk_font() {
-  # LibreOffice reads the same fontconfig as fc-list here, so its answer holds.
-  [ -n "$(fc-list :lang=zh family 2>/dev/null)" ] && return 1
   dir="${XDG_DATA_HOME:-$HOME/.local/share}/fonts"
-  [ -f "$dir/$HAN_FONT_NAME" ] && return 1
-  mkdir -p "$dir" || { warn "Could not create $dir; Chinese pages in a deck will render as boxes."; return 1; }
+  hint="Install one with your system package manager (package: fonts-noto-cjk)."
+  mkdir -p "$dir" || { warn "Could not create $dir; Chinese pages in a deck will render as boxes. $hint"; return 1; }
   part="$dir/.$HAN_FONT_NAME.$$.part"
   info "Downloading a Chinese font for deck preview..."
   # Size and digest both, before the file is put in place: a truncated OTF
@@ -701,12 +707,16 @@ install_linux_cjk_font() {
     return 0
   fi
   rm -f "$part"
-  warn "The Chinese font download failed; Chinese pages in a deck will render as boxes. Install one later with: sudo apt-get install -y fonts-noto-cjk"
+  warn "The Chinese font download failed; Chinese pages in a deck will render as boxes. $hint"
   return 1
 }
 
 install_cjk_fonts() {
   [ "$NODE_OS" = linux ] || return 0
+  # No LibreOffice (the offer declined, a distro without apt): nothing renders,
+  # so the face would be 8 MB nobody reads.
+  have soffice || have libreoffice || return 0
+  linux_has_han_face && return 0
   install_linux_cjk_font || return 0
   # Previews and gallery covers cached before this were drawn without a Han
   # face, and they are keyed by the deck's own stamp, so nothing else would

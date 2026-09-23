@@ -542,12 +542,13 @@ def test_the_windows_capability_steps_stay_above_the_closing_launch() -> None:
 
 _FONT_STEP = (
     "sha256_of",
+    "linux_has_han_face",
     "install_linux_cjk_font",
     "install_cjk_fonts",
 )
 
 
-def _font_step_harness(tmp_path: Path, **overrides: str) -> Path:
+def _font_step_harness(tmp_path: Path, *, office: bool = True, **overrides: str) -> Path:
     text = INSTALL_SH.read_text(encoding="utf-8")
     bodies = []
     for name in _FONT_STEP:
@@ -563,6 +564,11 @@ def _font_step_harness(tmp_path: Path, **overrides: str) -> Path:
         "ok() { printf 'OK %s\\n' \"$1\"; }\n"
         "warn() { printf 'WARN %s\\n' \"$1\" >&2; }\n"
         'have() { command -v "$1" >/dev/null 2>&1; }\n'
+        + (
+            ""
+            if office
+            else 'have() { case "$1" in soffice|libreoffice) return 1 ;; esac; command -v "$1" >/dev/null 2>&1; }\n'
+        )
         + "\n".join(settings)
         + "\n"
         + "\n".join(bodies)
@@ -630,7 +636,9 @@ def test_a_linux_host_with_a_han_face_downloads_nothing_and_keeps_its_previews(t
     """LibreOffice reads the same fontconfig as fc-list on Linux, so a Chinese
     family listed there is one a page is drawn with."""
     harness = _font_step_harness(tmp_path, **_published_face(tmp_path))
-    result, calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux", fc_list="Noto Sans CJK SC\n")
+    result, calls, cached, home = _run_font_step(
+        tmp_path, harness, os_name="linux", fc_list="Noto Sans CJK SC\n", tools=("soffice",)
+    )
 
     assert result.returncode == 0, result.stderr
     assert not (home / "share" / "fonts").exists()
@@ -640,7 +648,7 @@ def test_a_linux_host_with_a_han_face_downloads_nothing_and_keeps_its_previews(t
 
 def test_a_linux_host_without_one_gets_the_face_and_loses_its_stale_previews(tmp_path: Path) -> None:
     harness = _font_step_harness(tmp_path, **_published_face(tmp_path))
-    result, calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux")
+    result, calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux", tools=("soffice",))
 
     installed = home / "share" / "fonts" / "NotoSansSC-Regular.otf"
     assert result.returncode == 0, result.stderr
@@ -655,12 +663,13 @@ def test_a_download_that_does_not_match_its_digest_is_not_installed(tmp_path: Pa
     pins = _published_face(tmp_path)
     pins["HAN_FONT_SHA256"] = "0" * 64
     harness = _font_step_harness(tmp_path, **pins)
-    result, _calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux")
+    result, _calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux", tools=("soffice",))
 
     fonts_dir = home / "share" / "fonts"
     assert result.returncode == 0, "a failed download is a warning, not the end of the install"
     assert list(fonts_dir.iterdir()) == [], "neither the face nor its partial download is left behind"
-    assert "fonts-noto-cjk" in result.stderr
+    assert "package: fonts-noto-cjk" in result.stderr, "the hint names the package, not one distro's command"
+    assert "apt-get" not in result.stderr
     assert cached.is_file()
 
 
@@ -831,3 +840,39 @@ def test_a_launcher_that_cannot_be_written_does_not_abort_the_install(tmp_path: 
     assert "STEP_FINISHED" in result.stdout, "set -e must not abort the installer here"
     assert "Could not write ~/.local/bin/soffice" in result.stderr
     assert calls == []
+
+
+def test_a_linux_host_without_libreoffice_downloads_no_font(tmp_path: Path) -> None:
+    """The LibreOffice offer declined, or a distro without apt: nothing will
+    render, so the 8 MB face would be fetched for nobody."""
+    harness = _font_step_harness(tmp_path, office=False, **_published_face(tmp_path))
+    result, calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "" and result.stderr == ""
+    assert not (home / "share" / "fonts").exists()
+    assert calls == []
+    assert cached.is_file()
+
+
+def test_the_pinned_face_by_name_counts_as_a_han_face(tmp_path: Path) -> None:
+    """A host with the fontconfig library but no fc-list binary: the file this
+    step installs, found by its own name, means a second run downloads nothing."""
+    harness = _font_step_harness(tmp_path, **_published_face(tmp_path))
+    fonts = tmp_path / "home" / "share" / "fonts"
+    fonts.mkdir(parents=True)
+    (fonts / "NotoSansSC-Regular.otf").write_bytes(b"already here")
+    result, calls, cached, _home = _run_font_step(tmp_path, harness, os_name="linux", tools=("soffice",))
+
+    assert result.returncode == 0, result.stderr
+    assert (fonts / "NotoSansSC-Regular.otf").read_bytes() == b"already here"
+    assert calls == []
+    assert cached.is_file()
+
+
+def test_the_helpers_are_defined_before_the_sections_that_use_them() -> None:
+    """The file reads top-down; sha256_of is first called from the LibreOffice
+    step, so it lives with the other helpers."""
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    assert text.index("sha256_of() {") < text.index("install_libreoffice_dmg() {")
+    assert text.index("sha256_of() {") < text.index("# --- 0. platform detection")
