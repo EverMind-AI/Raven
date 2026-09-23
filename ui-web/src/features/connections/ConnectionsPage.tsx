@@ -172,7 +172,7 @@ function ConnSide({ rows, loaded, q, onQ, pickedId }: {
         key={c.id}
         current={c.id === pickedId}
         off={!c.on}
-        icon={<ChannelMark id={c.id} name={cn} />}
+        icon={<ChannelMark id={c.id} />}
         name={cn}
         sub={sub.text}
         {...(sub.tone ? { tone: sub.tone } : {})}
@@ -224,7 +224,7 @@ function ConnDetail({ c }: { c: ConnChannel }): JSX.Element {
   return (
     <>
       <TwoPaneHead
-        icon={<ChannelMark id={c.id} name={chanName(c)} />}
+        icon={<ChannelMark id={c.id} />}
         name={chanName(c)}
         meta={signing ? t('gui.conn.cost_scan_line') : <span className={'st ' + st.cls}>{st.text}</span>}
       />

@@ -3436,51 +3436,8 @@ details[open] summary { margin-bottom: 8px; }
 .pmcard.dim { opacity: .68; }
 .pmcard.pmbad { border-left: 2px solid var(--clay); }
 .pmhead { display: flex; align-items: center; gap: 11px; min-width: 0; }
-/* Brand tile: one steady hue per plugin (hashed from its name in JS via a
-   .th0-.th7 class), a soft top light for material, and the mono display face.
-   Colour identifies the row before the name is read -- same trick as the
-   skill-market category icons. */
-.pmtile {
-  width: 38px; height: 38px; border-radius: 11px; flex: none;
-  display: flex; align-items: center; justify-content: center;
-  background-color: var(--raised); color: var(--muted);
-  background-image: linear-gradient(160deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, 0) 58%);
-  box-shadow: inset 0 0 0 1px rgba(28, 27, 25, .06);
-  font-family: var(--mono); font-weight: 700; font-size: 15px; letter-spacing: -.02em;
-}
-:root[data-theme="dark"] .pmtile { background-image: linear-gradient(160deg, rgba(255, 255, 255, .1), rgba(255, 255, 255, 0) 58%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .pmtile { background-image: linear-gradient(160deg, rgba(255, 255, 255, .1), rgba(255, 255, 255, 0) 58%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06); }
-}
-.pmtile.th0 { background-color: #f6edd8; color: #8a6410; }
-.pmtile.th1 { background-color: #f7e6e2; color: #a03d2c; }
-.pmtile.th2 { background-color: #e9f0e4; color: #3d6e2c; }
-.pmtile.th3 { background-color: #e3edf5; color: #2d648f; }
-.pmtile.th4 { background-color: #ede9f6; color: #5b4b9c; }
-.pmtile.th5 { background-color: #e2f0ee; color: #2b7568; }
-.pmtile.th6 { background-color: #f6e7ef; color: #9c3a68; }
-.pmtile.th7 { background-color: #eaecef; color: #4c5560; }
-:root[data-theme="dark"] .pmtile.th0 { background-color: #46390f; color: #ecc95c; }
-:root[data-theme="dark"] .pmtile.th1 { background-color: #47241c; color: #e89684; }
-:root[data-theme="dark"] .pmtile.th2 { background-color: #25381c; color: #9ccb84; }
-:root[data-theme="dark"] .pmtile.th3 { background-color: #1d3346; color: #8fc0e8; }
-:root[data-theme="dark"] .pmtile.th4 { background-color: #302946; color: #b3a4e8; }
-:root[data-theme="dark"] .pmtile.th5 { background-color: #1b3c37; color: #86cfc2; }
-:root[data-theme="dark"] .pmtile.th6 { background-color: #43202f; color: #e392b8; }
-:root[data-theme="dark"] .pmtile.th7 { background-color: #2b2f35; color: #aeb8c4; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .pmtile.th0 { background-color: #46390f; color: #ecc95c; }
-  :root:not([data-theme="light"]) .pmtile.th1 { background-color: #47241c; color: #e89684; }
-  :root:not([data-theme="light"]) .pmtile.th2 { background-color: #25381c; color: #9ccb84; }
-  :root:not([data-theme="light"]) .pmtile.th3 { background-color: #1d3346; color: #8fc0e8; }
-  :root:not([data-theme="light"]) .pmtile.th4 { background-color: #302946; color: #b3a4e8; }
-  :root:not([data-theme="light"]) .pmtile.th5 { background-color: #1b3c37; color: #86cfc2; }
-  :root:not([data-theme="light"]) .pmtile.th6 { background-color: #43202f; color: #e392b8; }
-  :root:not([data-theme="light"]) .pmtile.th7 { background-color: #2b2f35; color: #aeb8c4; }
-}
-/* An entrance's app icon, in the frame the letter tile above would have had
-   (components/ChannelMark.tsx). A store icon is a tile already, so it fills the
-   frame, and the hairline is drawn OVER it: the five on a white or near-white
+/* An entrance's app icon (components/ChannelMark.tsx). A store icon is a tile
+   already, so it fills the frame, and the hairline is drawn OVER it: the five on a white or near-white
    ground -- Feishu, WeCom, QQ, Telegram, Slack -- otherwise have no edge on the
    light theme's list. */
 .channel-mark {
@@ -3506,7 +3463,7 @@ details[open] summary { margin-bottom: 8px; }
    root's data-theme -- the same hand-over .agent-mark img makes. */
 :root[data-theme="dark"] .channel-mark img { color-scheme: dark; }
 :root[data-theme="light"] .channel-mark img { color-scheme: light; }
-/* name + publisher stack beside the tile */
+/* name + publisher stack beside the mark */
 .pmid { min-width: 0; display: grid; gap: 1px; }
 .pmnm { display: flex; align-items: center; gap: 5px; min-width: 0;
   font-family: var(--mono); font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; }
@@ -3564,9 +3521,8 @@ details[open] summary { margin-bottom: 8px; }
   justify-content: center; padding: 0 4px;
 }
 .pmdhead { display: flex; align-items: center; gap: 13px; margin-bottom: 10px; }
-.pmdhead .pmtile { width: 46px; height: 46px; font-size: 19px; border-radius: 13px; }
-/* A brand mark stands in for the letter tile here as it does in a row, so it
-   takes the header's geometry rather than its own roster size -- left at 20px
+/* A brand mark takes the header's geometry rather than its own roster size,
+   as it does in a row -- left at 20px
    the card's identity came out smaller than the 28px mark on the row that
    opened it, which reads as the header mattering less. */
 .pmdhead > .agent-mark { width: 46px; height: 46px; border-radius: 13px; }
@@ -3651,7 +3607,6 @@ details[open] summary { margin-bottom: 8px; }
 .chrow + .chrow { border-top: 1px solid var(--line); }
 .chrow:hover { background: var(--raised); }
 .chrow:focus-visible { outline: 1px solid var(--amber); outline-offset: -1px; }
-.chrow > .pmtile { flex: none; }
 .chrow > .bd { flex: 1; min-width: 0; }
 .chrow .nm { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .chrow .nm .tt { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3701,11 +3656,10 @@ details[open] summary { margin-bottom: 8px; }
 /* A row that cannot run wears the mark on its edge, not as a red wash: the
    state line already says what is wrong, in words. */
 .surow.bad { box-shadow: inset 2px 0 0 var(--clay); }
-.surow > .pmtile { grid-column: 1; grid-row: 1 / span 2; width: 28px; height: 28px; font-size: 12px; border-radius: 8px; }
-/* A brand mark is the other thing that can fill that one slot, so it takes the
-   same cell at the same size rather than its own 20px roster size -- one column
-   of marks down a page whose other lists draw letter tiles. Spanning both rows
-   is what stops a row with a second line from hanging its mark off the first. */
+/* A brand mark fills that one slot at the row's own size rather than its own
+   20px roster size, so a list draws one even column of marks down its edge.
+   Spanning both rows is what stops a row with a second line from hanging its
+   mark off the first. */
 .surow > .agent-mark { grid-column: 1; grid-row: 1 / span 2; width: 28px; height: 28px; border-radius: 8px; }
 .surow > .agent-mark img { width: 20px; height: 20px; }
 .surow > .nm {
@@ -3817,7 +3771,6 @@ details[open] summary { margin-bottom: 8px; }
   width: 30px; height: 30px; border-radius: 8px; background: var(--raised);
   display: grid; place-items: center; font-family: var(--mono); font-size: 13px; color: var(--muted);
 }
-.card .pmtile { grid-column: 1; grid-row: 1 / span 3; width: 30px; height: 30px; font-size: 13px; border-radius: 9px; }
 .card .nm {
   grid-column: 2; grid-row: 1;
   display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13.5px; font-weight: 600;
@@ -6344,7 +6297,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    Everything under it steps down in real jumps -- a page whose whole range is
    11px to 13px has no emphasis anywhere, only uniform grey. */
 .pbhead { display: flex; align-items: center; gap: 15px; margin: 2px 0 13px; }
-.pbhead .pmtile { width: 48px; height: 48px; border-radius: 14px; font-size: 18px; flex: none; }
 .pbhead h1 {
   margin: 0; font-family: var(--mono); font-size: var(--step-3); font-weight: 700;
   letter-spacing: -.025em; line-height: 1.15; min-width: 0; overflow-wrap: anywhere;

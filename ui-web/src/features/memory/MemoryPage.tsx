@@ -45,14 +45,6 @@ function Meter({ v }: { v: number | null | undefined }): JSX.Element {
   )
 }
 
-/* Same drawer tile as the plugin / skill pages, same formula: a stable
-   per-name hue, so the same subject gets the same colour every render. */
-function Tile({ name }: { name: string }): JSX.Element {
-  let h = 0
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
-  return <span className={'pmtile th' + (h % 8)}>{(name[0] || '?').toUpperCase()}</span>
-}
-
 export function MemoryApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: memWhen
@@ -217,7 +209,6 @@ function MemDetail({ it }: { it: MemItem }): JSX.Element {
   return (
     <>
       <TwoPaneHead
-        icon={<Tile name={name} />}
         name={name}
         meta={
           <>
