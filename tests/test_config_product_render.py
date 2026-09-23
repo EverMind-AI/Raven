@@ -487,3 +487,79 @@ def test_every_launcher_writes_its_render_through_write_rendered(launcher):
     source = launcher.read_text(encoding="utf-8")
     assert "render.write_rendered(" in source
     assert ".config.rendered" not in source
+
+
+# --- plugin opt-outs: what the host switched off stays off in its products ----
+
+
+def test_opt_outs_carry_the_hosts_list_after_the_products_own():
+    config = {"plugins": {"disabled": ["mine"], "config": {"x": {}}}}
+    host = {"plugins": {"disabled": ["everme-memory", "ppt-engine", "mine", 3, "everme-memory"]}}
+
+    carried = render.inherit_plugin_opt_outs(config, host, own=("ppt-engine",))
+
+    assert carried == ["everme-memory"]
+    assert config["plugins"] == {"disabled": ["mine", "everme-memory"], "config": {"x": {}}}
+
+
+def test_opt_outs_leave_a_config_alone_when_the_host_has_none_to_lend():
+    for host in ({}, {"plugins": None}, {"plugins": {"disabled": "everme-memory"}}, {"plugins": {"disabled": []}}):
+        config: dict = {}
+        assert render.inherit_plugin_opt_outs(config, host) == []
+        assert config == {}
+
+
+def test_opt_outs_never_carry_the_products_own_engine():
+    config: dict = {}
+    assert (
+        render.inherit_plugin_opt_outs(config, {"plugins": {"disabled": ["design-engine"]}}, own=("design-engine",))
+        == []
+    )
+    assert config == {}
+
+
+def test_write_rendered_carries_the_hosts_opt_outs(homed, tmp_path):
+    (homed / "config.json").write_text(
+        json.dumps({"plugins": {"disabled": ["everme-memory", "research-flow"]}}), encoding="utf-8"
+    )
+    out = tmp_path / "out"
+    out.mkdir()
+
+    rendered = render.write_rendered({"plugins": {"dirs": ["/p"]}}, out, own_plugins=("research-flow",))
+
+    assert json.loads(rendered.read_text())["plugins"] == {"dirs": ["/p"], "disabled": ["everme-memory"]}
+
+
+def test_every_launcher_names_its_engine_when_it_writes_the_render():
+    """A launcher that names no engine inherits every opt-out, its own included,
+    so a host that switched the product's engine off for itself would start the
+    product without it. Each launcher's render call is read here, the scaffold
+    a new product is copied from included."""
+    import ast
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    launchers = sorted((repo / "agents").glob("*/run.py")) + [repo / "raven/templates/agents_scaffold/run.py"]
+    assert len(launchers) >= 6
+    for path in launchers:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        constants = {
+            node.targets[0].id: node.value.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id.endswith("_PLUGIN_ID")
+            and isinstance(node.value, ast.Constant)
+        }
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "write_rendered"
+        ]
+        assert len(calls) == 1, path
+        [keyword] = [k for k in calls[0].keywords if k.arg == "own_plugins"] or [None]
+        assert keyword is not None, f"{path} writes its render without naming its engine"
+        named = {constants[e.id] for e in keyword.value.elts if isinstance(e, ast.Name) and e.id in constants}
+        assert named == set(constants.values()) and named, path

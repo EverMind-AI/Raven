@@ -259,6 +259,41 @@ def inherit_host_denials(config: dict, host: dict) -> list[str]:
     return carried
 
 
+def inherit_plugin_opt_outs(config: dict, host: dict, *, own: Iterable[str] = ()) -> list[str]:
+    """Carry the host's ``plugins.disabled`` into the product config.
+
+    A product engine scans the host's plugin roots -- the launcher inherits
+    ``RAVEN_HOME``, so ``<home>/plugins`` is the host's -- and the entry points
+    of the interpreter they share, but it reads its opt-outs only from the
+    rendered file. So a plugin the host operator switched off, most often one
+    that fails to load, came back in every product the host dispatched.
+
+    ``own`` names the product's own engine plugins, which never travel: the
+    product is that plugin, and a host turning it off for its own agent is not
+    a request to run the product without it. Merged after what the product
+    already disables, in order, without repeats. Returns what was carried.
+    """
+    host_plugins = host.get("plugins")
+    wanted = host_plugins.get("disabled") if isinstance(host_plugins, dict) else None
+    if not isinstance(wanted, list):
+        return []
+    keep = set(own)
+    plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
+    already = plugins.get("disabled") if isinstance(plugins.get("disabled"), list) else []
+    carried: list[str] = []
+    for plugin_id in wanted:
+        if (
+            isinstance(plugin_id, str)
+            and plugin_id not in keep
+            and plugin_id not in already
+            and plugin_id not in carried
+        ):
+            carried.append(plugin_id)
+    if carried:
+        config.setdefault("plugins", {})["disabled"] = [*already, *carried]
+    return carried
+
+
 def inherit_media_image(config: dict, host: dict) -> dict:
     """Take the host raven's image-generation section, and keep following it.
 
@@ -540,7 +575,7 @@ def sweep_stale_renders(root: Path) -> None:
             continue
 
 
-def write_rendered(config: dict, root: Path) -> Path:
+def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ()) -> Path:
     """Write the rendered config under ``root``, owner-only, named by pid.
 
     The location is the mechanism: raven derives its data dir from the
@@ -548,11 +583,16 @@ def write_rendered(config: dict, root: Path) -> Path:
     go too. Owner-only because the render is where the secrets landed; the
     pid in the name is what :func:`sweep_stale_renders` reads back.
 
-    The host's refusals are merged in here rather than by each launcher
-    (:func:`inherit_host_denials`): every product render ends in this call, so
-    a launcher cannot write a config that forgot them.
+    The host's refusals (:func:`inherit_host_denials`) and plugin opt-outs
+    (:func:`inherit_plugin_opt_outs`) are merged in here rather than by each
+    launcher: every product render ends in this call, so a launcher cannot
+    write a config that forgot them. ``own_plugins`` is the product's engine,
+    which the opt-outs leave alone; a launcher that names none inherits them
+    all.
     """
-    inherit_host_denials(config, host_config())
+    host = host_config()
+    inherit_host_denials(config, host)
+    inherit_plugin_opt_outs(config, host, own=own_plugins)
     rendered = root / f".config.rendered.{os.getpid()}.json"
     fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.fchmod(fd, 0o600)

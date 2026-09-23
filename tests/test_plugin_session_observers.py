@@ -29,7 +29,6 @@ from raven.plugins import (
     Contributes,
     DiscoveredPlugin,
     ManifestOrigin,
-    PluginConflictError,
     PluginManifest,
     PluginRegistry,
     SessionObserverContribution,
@@ -153,11 +152,15 @@ class TestRegistrySessionObservers:
         assert built == "observer-instance"
         assert seen["config"] == {"mode": "strict"}
 
-    def test_cross_plugin_name_conflict_raises(self) -> None:
+    def test_cross_plugin_name_conflict_skips_the_later_plugin(self) -> None:
         _install_module("_po_b", {"make": lambda ctx: None})
         reg = PluginRegistry()
-        with pytest.raises(PluginConflictError, match="session_observer 'same'"):
-            reg.activate([_discovered("one", [("same", "_po_b:make")]), _discovered("two", [("same", "_po_b:make")])])
+        reg.activate([_discovered("one", [("same", "_po_b:make")]), _discovered("two", [("same", "_po_b:make")])])
+        assert reg.activated_ids() == ["one"]
+        assert reg.session_observer_plugin_id("same") == "one"
+        [failure] = reg.activation_failures()
+        assert failure.plugin_id == "two"
+        assert "session_observer 'same' contributed by both 'one' and 'two'" in failure.reason
 
 
 class TestBuildPluginSessionObservers:

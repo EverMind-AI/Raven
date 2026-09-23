@@ -579,7 +579,7 @@ def render_config(source: Path) -> Path:
         acp["modes"] = catalogue
         acp["defaultMode"] = DEFAULT_MODE
         log(f"[run] modes: {', '.join(catalogue)} (default {DEFAULT_MODE})")
-    return render.write_rendered(config, root)
+    return render.write_rendered(config, root, own_plugins=(ENGINE_PLUGIN_ID,))
 
 
 def serve(args: argparse.Namespace) -> int:

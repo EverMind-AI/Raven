@@ -257,7 +257,7 @@ def render_config(source: Path) -> Path:
         exec_config["pathAppend"] = os.pathsep.join(part for part in (own, bin_dir) if part)
 
     render.sweep_stale_renders(root)
-    return render.write_rendered(config, root)
+    return render.write_rendered(config, root, own_plugins=(ENGINE_PLUGIN_ID,))
 
 
 def serve(args: argparse.Namespace) -> int:

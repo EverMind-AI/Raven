@@ -12,9 +12,9 @@ AgentLoop expects (a ready-to-use :class:`MemoryBackend` instance):
   return ``None`` when no backend is selected / the requested
   contribution isn't available.
 
-Both functions are intentionally lenient: a missing
-plugin / activation error logs a warning and falls through to ``None``
-rather than crashing the host.
+Both functions are intentionally lenient: a plugin that fails to
+activate is skipped alone and said to the user, and a missing backend falls
+through to ``None`` rather than crashing the host.
 
 Lifecycle (``backend.start()`` / ``backend.stop()``) is the **caller's**
 responsibility. These helpers only construct; CLI bootstrap code does
@@ -39,8 +39,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from raven.plugins import (
-    PluginConflictError,
-    PluginFactoryImportError,
+    PluginActivationFailure,
     PluginNotFoundError,
     PluginRegistry,
     ServiceLocator,
@@ -169,14 +168,16 @@ def discover_plugins(config: "RavenConfig | None" = None) -> "list[DiscoveredPlu
 
 def build_plugin_registry(
     config: "RavenConfig",
+    *,
+    notify: "Callable[[str], None] | None" = None,
 ) -> PluginRegistry:
     """Discover + activate every installed plugin admitted by ``config``.
 
     Reads ``config.plugins.disabled`` and forwards it to
-    :func:`assemble_plugin_registry`. Activation errors
-    (:class:`PluginConflictError`, :class:`PluginFactoryImportError`) are
-    caught and logged — the caller receives an **empty** registry so
-    AgentLoop can still boot and fall back to the legacy path.
+    :func:`assemble_plugin_registry`. A plugin that fails to activate is
+    skipped on its own -- the rest of the registry is unaffected -- and each
+    one is said to the user through ``notify`` when the host lent one, else on
+    stderr, because a plugin that vanished leaves no other trace a user sees.
 
     Discovery spans three fixed sources plus the roots ``plugins.dirs``
     names (priority user > project = named roots > entry_points):
@@ -186,19 +187,37 @@ def build_plugin_registry(
     - **entry_points** — the ``raven.plugins`` group, where
       third-party pip-installed plugins register their factories.
     """
-    disabled = frozenset(config.plugins.disabled)
-    try:
-        return assemble_plugin_registry(
-            **plugin_discovery_sources(),
-            extra_dirs=named_plugin_roots(config),
-            disabled=disabled,
-        )
-    except (PluginConflictError, PluginFactoryImportError) as e:
-        logger.warning(
-            "plugin activation failed (%s); continuing without plugins. AgentLoop will use its legacy memory path.",
-            e,
-        )
-        return PluginRegistry()
+    registry = assemble_plugin_registry(
+        **plugin_discovery_sources(),
+        extra_dirs=named_plugin_roots(config),
+        disabled=frozenset(config.plugins.disabled),
+    )
+    for failure in registry.activation_failures():
+        message = plugin_failure_note(failure)
+        if notify is not None:
+            notify(message)
+        else:
+            print(message, file=sys.stderr)
+    return registry
+
+
+PLUGIN_FAILURE_MARKER = "did not load and is off for this session"
+"""The words every failed-plugin notice carries; the agent smoke check reads a
+child's stderr for them, so the notice and that check change together."""
+
+
+def _failure_cause(failure: "PluginActivationFailure") -> str:
+    """The failure's reason without the plugin-id prefix the sentence already carries."""
+    return failure.reason.removeprefix(f"plugin {failure.plugin_id!r}: ").rstrip(".")
+
+
+def plugin_failure_note(failure: "PluginActivationFailure") -> str:
+    """The sentence a user reads about one plugin that did not load."""
+    return (
+        f"Plugin {failure.plugin_id!r} {PLUGIN_FAILURE_MARKER}: {_failure_cause(failure)}. "
+        f"Other plugins continue loading. Fix or remove it, or add {failure.plugin_id!r} "
+        f"to plugins.disabled to stop loading it."
+    )
 
 
 def maybe_build_memory_backend(
@@ -262,6 +281,19 @@ def maybe_build_memory_backend(
             f"Long-term memory is off: memory.backend={name!r} but no installed plugin provides it "
             f"(installed: {', '.join(registry.memory_backend_names()) or 'none'})."
         )
+        # A provider that is installed but failed to activate is not "no
+        # installed plugin": name it and its reason, so the reader fixes the
+        # plugin instead of reinstalling something that is there.
+        failed = [
+            f
+            for f in registry.activation_failures()
+            if any(c.name == name for c in f.manifest.contributes.memory_backends)
+        ]
+        if failed:
+            message = (
+                f"Long-term memory is off: memory.backend={name!r} is provided by plugin "
+                f"{failed[0].plugin_id!r}, which did not load: {_failure_cause(failed[0])}."
+            )
         # The shipped default names a backend that ships separately, so the
         # commonest way to reach this line is an install that simply lacks the
         # distribution. Saying only which backends are installed leaves that
@@ -770,6 +802,7 @@ async def cancel_pending_backend_starts(backend: Any) -> None:
 
 
 __all__ = [
+    "PLUGIN_FAILURE_MARKER",
     "build_onboard_steps",
     "build_plugin_hooks",
     "build_plugin_registry",
@@ -781,5 +814,6 @@ __all__ = [
     "discover_plugins",
     "maybe_build_memory_backend",
     "plugin_discovery_sources",
+    "plugin_failure_note",
     "start_backend_detached",
 ]
