@@ -27,6 +27,7 @@ import { ModelTags, TagGlyph } from '../../../components/ModelTags'
 import { t } from '../../../i18n/t'
 import { KIND_GLYPH, KIND_LABEL, KIND_ORDER, bareModel as bare, guessKind, modelKind, nextKind } from '../../model/types'
 import { Rov } from '../Fields'
+import { ModelListWait } from '../Skeletons'
 import * as store from '../store'
 import { roleName, rolesUsing } from './Roles'
 
@@ -239,7 +240,12 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
         </div>
       )}
       <div className="settings-apbody">
-        {sheet.state === 'loading' && <div className="settings-apwait">{t('gui.settings.providers.fetching', { name: p.name })}</div>}
+        {sheet.state === 'loading' && (
+          <>
+            <div className="settings-apwait">{t('gui.settings.providers.fetching', { name: p.name })}</div>
+            <ModelListWait />
+          </>
+        )}
         {/* A vendor with no list endpoint still has models -- the ones somebody
             typed in. Saying so above them beats replacing them with the
             message, which is what hid a provider's own list behind its

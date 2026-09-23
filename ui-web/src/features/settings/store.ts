@@ -437,6 +437,11 @@ export function _resetForTests(): void {
   oauthStop()
   if (refreshTimer) clearTimeout(refreshTimer)
   refreshTimer = null
+  /* A case that mounts the dialog on a load it never resolves leaves this
+     holding that promise, and `refresh` hands the same one to every later
+     caller -- so one failed assertion turned the four cases after it into
+     timeouts inside `open()`. */
+  loading = null
   store._resetForTests()
   store.set(initial())
   lazy = false

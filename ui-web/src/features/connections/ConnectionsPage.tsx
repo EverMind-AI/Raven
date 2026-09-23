@@ -4,6 +4,7 @@ import { Tile } from '../../components/SetupRow'
 import { Field } from '../../components/SetupSheet'
 import {
   TwoPane, TwoPaneFind, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow, TwoPaneSwitch,
+  TwoPaneWait,
 } from '../../components/TwoPane'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
@@ -198,7 +199,7 @@ function ConnSide({ rows, loaded, q, onQ, pickedId }: {
     <>
       <TwoPaneFind value={q} onChange={onQ} placeholder={t('gui.conn.search')} />
       <TwoPaneList>
-        {!loaded && !rows.length ? null : shown.length === 0 ? (
+        {!loaded && !rows.length ? <TwoPaneWait /> : shown.length === 0 ? (
           <div className="empty-note">{t('gui.conn.none_match')}</div>
         ) : (
           <>

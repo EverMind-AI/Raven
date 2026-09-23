@@ -1651,6 +1651,10 @@
       "zh": "定时任务",
       "en": "Scheduled tasks"
     },
+    "gui.cron.reading": {
+      "en": "reading...",
+      "zh": "读取中…"
+    },
     "gui.cron.hist_none": {
       "en": "Never run.",
       "zh": "还没跑过。"

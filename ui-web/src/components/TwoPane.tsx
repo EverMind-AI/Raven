@@ -74,6 +74,36 @@ export function TwoPaneList({ children }: { children: ReactNode }): JSX.Element 
   return <div className="two-pane-list">{children}</div>
 }
 
+/* The list before its rows are in.
+ *
+ * All three sections drawn in this frame answered the wait with nothing at
+ * all -- `!loaded && !rows.length ? null` in channels and schedules, a line of
+ * grey text in memory -- so opening one of them showed an empty column beside
+ * an empty pane, which is what "there are no channels" looks like. The rows
+ * this becomes are two lines and a trailing control, so that is what waits
+ * here, at the row's own height.
+ *
+ * Here rather than in each of the three: the frame owns `two-pane*` (see this
+ * file's header), and a domain drawing its own bars would be a fourth name for
+ * one shape.
+ */
+export function TwoPaneWait({ rows = 7 }: { rows?: number }): JSX.Element {
+  return (
+    <div className="two-pane-wait" role="status" aria-busy="true" aria-label={t('gui.settings.loading')}>
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="two-pane-row">
+          <span className="two-pane-hit">
+            <span className="two-pane-txt">
+              <span className="two-pane-wbar" style={{ width: `${46 + ((i * 23) % 38)}%`, height: '11px' }} />
+              <span className="two-pane-wbar" style={{ width: `${34 + ((i * 17) % 30)}%`, height: '9px' }} />
+            </span>
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** A heading between two runs of rows (on and off, a memory's kind). */
 export function TwoPaneGroup({ children }: { children: ReactNode }): JSX.Element {
   return <div className="two-pane-grp">{children}</div>

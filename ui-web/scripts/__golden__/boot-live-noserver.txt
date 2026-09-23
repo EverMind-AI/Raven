@@ -207,6 +207,42 @@ div#setVeil.veil.setveil[data-open=false][data-section=usage]
                   path
                 input
             div.two-pane-list
+              div.two-pane-wait
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
           div.two-pane-main
             div.two-pane-none
       div#cronBody.spanels[data-for=cron]

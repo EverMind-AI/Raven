@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import {
   TwoPane, TwoPaneFind, TwoPaneFoot, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow,
-  TwoPaneSection, TwoPaneSwitch,
+  TwoPaneSection, TwoPaneSwitch, TwoPaneWait,
 } from '../../components/TwoPane'
 import { t } from '../../i18n/t'
 import { ask as confirmAsk } from '../../state/confirm'
@@ -176,6 +176,22 @@ const failing = (j: CronJob): boolean => j.on && !!j.runs[0] && !j.runs[0].ok
    than three filter chips: what a reader arrives asking is "did anything
    break", and a job whose last run failed says so on its own second line, in
    the colour, where a chip could only ever say how many. */
+/* The run history before it is in: the rows it becomes, at their own height,
+   with a bar where the stamp and the note will be. */
+function RunsWait(): JSX.Element {
+  return (
+    <div className="cronwait" role="status" aria-busy="true" aria-label={t('gui.cron.reading')}>
+      {[0, 1, 2, 3].map((i) => (
+        <div key={i} className="cronrun">
+          <i />
+          <span className="cronwbar" style={{ width: '104px' }} />
+          <span className="cronwbar" style={{ width: `${34 + ((i * 19) % 30)}%` }} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function CronSide({ rows, loaded, q, onQ, viewId }: {
   rows: CronJob[]
   loaded: boolean
@@ -225,7 +241,7 @@ function CronSide({ rows, loaded, q, onQ, viewId }: {
         addLabel={t('gui.cron_new')}
       />
       <TwoPaneList>
-        {!loaded && !rows.length ? null : shown.length === 0 ? (
+        {!loaded && !rows.length ? <TwoPaneWait /> : shown.length === 0 ? (
           <div className="empty-note">{t(rows.length ? 'gui.cron.f_none' : 'gui.cron.none')}</div>
         ) : (
           <>
@@ -317,7 +333,9 @@ function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft;
         }
       >
         <div className="cronruns">
-          {runs === null ? null : runs.length === 0 ? (
+          {/* The history is fetched when the job opens, and drawing nothing
+              until it lands said the same thing as "it has never run". */}
+          {runs === null ? <RunsWait /> : runs.length === 0 ? (
             <div className="dnote">{t('gui.cron.hist_none')}</div>
           ) : (
             runs.map((run, i) => (

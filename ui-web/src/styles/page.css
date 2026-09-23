@@ -3997,6 +3997,25 @@ details[open] summary { margin-bottom: 8px; }
 /* The side's own "nothing here": the prototype states it where the first row
    would have been, not centred in the column's whole height. */
 .two-pane-list > .empty-note { padding: 12px 9px; text-align: left; font-size: 13px; line-height: 1.6; }
+/* The same column while its rows are still being read: the rows' own boxes
+   with a bar where each line of text will be, so the list fills in rather than
+   appearing (components/TwoPane.tsx's TwoPaneWait says what it replaces).
+   A translucent wash rather than --raised: on this column --raised IS the
+   ground a picked row paints, so a bar in it would be invisible at rest and
+   visible only as the shimmer swept past. */
+.two-pane-wait { display: flex; flex-direction: column; gap: 1px; }
+.two-pane-wait .two-pane-row:hover { background: none; }
+.two-pane-wait .two-pane-hit { cursor: default; }
+.two-pane-wbar {
+  display: block; border-radius: 5px;
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--text) 7%, transparent) 30%,
+    color-mix(in oklab, var(--text) 15%, transparent) 50%,
+    color-mix(in oklab, var(--text) 7%, transparent) 70%);
+  background-size: 300% 100%; animation: two-pane-wshine 1.3s linear infinite;
+}
+@keyframes two-pane-wshine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .two-pane-wbar { animation: none; } }
 .two-pane-row { display: flex; align-items: center; gap: 4px; min-width: 0; border-radius: 8px; }
 .two-pane-row:hover { background: var(--surface); }
 .two-pane-row[aria-current="true"] { background: var(--raised); }
