@@ -1,9 +1,9 @@
-/* The Agent Hub's rows, shared by the agents page and the onboarding wizard's
- * agents step. A row answers three questions -- who it is (mark, name, a line
- * about what it is good at), how it is doing (a dot only where there is
- * something to say), and the one thing to do about it now -- and a section is
- * a heading, a count and its rows. What differs between the two callers is
- * only whether a row opens the sheet, which is the caller's `onOpen`.
+/* The Agent Hub's rows and cards. The agents page lays its agents out as cards
+ * in a grid; the onboarding wizard's agents step keeps the rows, a list under
+ * section headings. Both answer the same three questions -- who it is (mark,
+ * name, a line about what it is good at), how it is doing (a dot only where
+ * there is something to say), and the one thing to do about it now. A row
+ * opens the sheet only when its caller passes `onOpen`; a card always does.
  *
  * Connecting is the server's readiness ping -- one real prompt through the
  * agent, up to a minute -- so the row says "testing" for
@@ -13,6 +13,7 @@
  */
 
 import { AgentMark } from '../../components/AgentMark'
+import { Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import { ask as confirmAsk } from '../../state/confirm'
 import { isOwnRow, shortOf } from './catalogue'
@@ -205,6 +206,87 @@ function AgentRow({
       <div className="extAgents-ctl" onClick={(e) => e.stopPropagation()}>
         <RowControl row={row} s={s} shown={shown} />
       </div>
+    </div>
+  )
+}
+
+const PLUS = 'M12 5v14M5 12h14'
+const DOWNLOAD = 'M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14'
+const RETRY = 'M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4'
+
+/* The card's corner control: Connect, Install, Retry, or the sign-in the
+   agent wants. A connected card carries none -- Disconnect is in the sheet,
+   one click away and out of reach of a stray click -- and a write in flight is
+   said by the line itself. */
+function CardControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
+  const iconButton = (label: string, d: string, onClick: () => void, cls = ''): JSX.Element => (
+    <button
+      aria-label={label}
+      className={'extAgents-cbtn' + (cls ? ' ' + cls : '')}
+      onClick={onClick}
+      title={label}
+      type="button"
+    >
+      <Glyph d={d} />
+    </button>
+  )
+  if (shown === 'failed') return iconButton(t('gui.retry'), RETRY, () => store.retry(row), 'extAgents-cbtn-bad')
+  if (shown === 'missing') return iconButton(t('gui.agent.go_install'), DOWNLOAD, () => store.sheetOpen(row))
+  if (shown !== 'off') return null
+  if (stageOf(row) === 'unauthorized') return <span className="extAgents-ctag">{t('gui.agent.unauthorized')}</span>
+  return iconButton(t('gui.agent.connect'), PLUS, () => connect(row))
+}
+
+function AgentCard({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Element {
+  const shown = shownOf(row, s)
+  const failed = s.failed[row.name]
+  const open = (): void => store.sheetOpen(row)
+  return (
+    <div
+      className="extAgents-card"
+      role="button"
+      tabIndex={0}
+      aria-current={s.sheet === row.name ? 'true' : undefined}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          open()
+        }
+      }}
+    >
+      <div className="extAgents-ctop">
+        <Tile row={row} />
+        <div className="extAgents-nm">
+          <span className="extAgents-t">{row.name}</span>
+          <Led row={row} shown={shown} />
+        </div>
+        <div className="extAgents-ctl" onClick={(e) => e.stopPropagation()}>
+          <CardControl row={row} shown={shown} />
+        </div>
+      </div>
+      {shown === 'pending' ? (
+        <div className="extAgents-one extAgents-one-work">
+          <Spin />
+          {t(pendingLabel(row, s))}
+        </div>
+      ) : shown === 'failed' && failed ? (
+        <div className="extAgents-one extAgents-one-bad">{failed.detail}</div>
+      ) : (
+        <div className="extAgents-one">{oneLine(row)}</div>
+      )}
+    </div>
+  )
+}
+
+export function CardGrid({ rows, s, empty }: { rows: ExtAgentRow[]; s: ExtAgentsState; empty: string }): JSX.Element {
+  if (!rows.length) return <div className="extAgents-empty">{empty}</div>
+  return (
+    <div className="extAgents-grid">
+      {rows.map((row) => (
+        <AgentCard key={row.name} row={row} s={s} />
+      ))}
     </div>
   )
 }
