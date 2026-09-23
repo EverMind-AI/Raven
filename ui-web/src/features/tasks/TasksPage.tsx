@@ -327,10 +327,10 @@ interface RecordLoad {
   retry: () => void
 }
 
-/* The beat a running spawn's record is re-read on: the one the transcript's
-   own spawn card reads `subagent.context` on (TranscriptPage.tsx), so the
-   two views of one run move together. */
-const SPAWN_READ_BEAT_MS = 1000
+/* The beat a running node's record is re-read on, whichever lane runs it:
+   the one the transcript's own spawn card reads `subagent.context` on
+   (TranscriptPage.tsx), so the two views of one run move together. */
+const READ_BEAT_MS = 1000
 
 /* Fetched once per (row, node) and shared by both tabs: the order tab's
    "instruction" is the same rendered prompt the context tab's dispatch is,
@@ -339,17 +339,21 @@ const SPAWN_READ_BEAT_MS = 1000
    dispatched -- there is nothing yet to read.
 
    Refetched on every live event that names this node (`store.nodeVersion`)
-   and on every status transition, on top of the (row, node) identity.
-   `dag.node_updated` fires once per tool call while a dag node runs, so a
-   dag node opened mid-run keeps reading its own steps and its answer as they
-   arrive rather than freezing at the first read. A spawn has no per-step
-   event -- `subagent.status` moves on pending, running and the terminal word
-   only -- so while one runs its record is re-read on a beat instead, skipping
-   a beat while a read is still out; the status key then covers the terminal
-   frame, so the answer lands without the reader closing and reopening the
-   node. A stale record is kept on screen through a refetch rather than
-   cleared back to `null` -- the reader is watching a node run, not watching
-   it flicker blank once a second. */
+   and on every status transition, on top of the (row, node) identity -- and,
+   while the node runs, on a beat. No lane sends a per-step event: a dag's
+   `dag.node_updated` marks a node's transitions (running, then the terminal
+   word; its `tool_call_id` is the parent turn's `run_subagent_dag` call, not
+   a step of the node's own), and a spawn's `subagent.status` moves on
+   pending, running and the terminal word only. The steps in between exist
+   only on the server's live account, which `dag.node` / `subagent.context`
+   already serve mid-run, so a running node of either kind is re-read on the
+   beat, skipping a beat while a read is still out -- the same read the TUI's
+   own dag node poll makes. Left to the frames alone, a dag node opened as it
+   started froze at its dispatch until it settled. The status key then covers
+   the terminal frame, so the answer lands without the reader closing and
+   reopening the node. A stale record is kept on screen through a refetch
+   rather than cleared back to `null` -- the reader is watching a node run,
+   not watching it flicker blank once a second. */
 function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
   const dispatched = node.status !== 'pending' && node.status !== 'skipped'
   const version = useSyncExternalStore(store.subscribe, () => store.nodeVersion(row.kind, row.id, node.node_id))
@@ -369,8 +373,8 @@ function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
     /* The row too, while the node runs: its usage and tool counts grow on the
        server as the lane reports them (`tasks.list` reads the live activity),
        and no frame carries them -- so the subtitle's token total moves with
-       the record. One row read out at a time: a dag node's frames arrive once
-       per tool call, and stacking a read per frame would multiply requests
+       the record. One row read out at a time: a beat and a frame can land
+       close together, and stacking a read per trigger would multiply requests
        the way the record's own `reading` guard exists to prevent. Once the
        node settles, the terminal frame's own reconcile brings the final copy. */
     if (node.status === 'running' && !reconciling.current) {
@@ -386,10 +390,10 @@ function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
   }, [row.kind, row.id, node.node_id, node.status, version, nonce])
   /* No source, no beat: with nothing to read from, a beat would only re-run
      the effect into its failed branch once a second. */
-  const beating = row.kind === 'spawn' && node.status === 'running' && !!store.source()
+  const beating = node.status === 'running' && !!store.source()
   useEffect(() => {
     if (!beating) return
-    const beat = setInterval(() => { if (!reading.current) setNonce((n) => n + 1) }, SPAWN_READ_BEAT_MS)
+    const beat = setInterval(() => { if (!reading.current) setNonce((n) => n + 1) }, READ_BEAT_MS)
     return () => clearInterval(beat)
   }, [beating])
   return { ...state, retry: () => setNonce((n) => n + 1) }

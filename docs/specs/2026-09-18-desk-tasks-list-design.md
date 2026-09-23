@@ -125,10 +125,14 @@ dispatch leaves no record and is withdrawn by the `subagent.status{cancelled}` f
 `dag.node(run_id, node, session_key)` and `subagent.context(id, session_id)` return
 `messages[]` in the `session.resume` shape; the tab draws them with the transcript's own
 renderer, including the synthetic `role=console` row an in-flight `cli` lane emits. The
-record is re-read on every status transition and, for a dag node, on each `dag.node_updated`
-frame; a spawn gets no per-step frame, so its record is re-read on a one-second beat while it
-runs (a beat is skipped while a read is still out), the cadence the transcript's spawn card
-already reads on. Each such read of a running node also re-reads its row through
+record is re-read on every status transition, on each `dag.node_updated` frame that names the
+node, and -- for a node of either kind -- on a one-second beat while it runs (a beat is skipped
+while a read is still out), the cadence the transcript's spawn card already reads on. No lane
+sends a per-step frame: `dag.node_updated` marks a node's transitions (its `tool_call_id` is the
+parent turn's `run_subagent_dag` call), and `subagent.status` moves on pending, running and the
+terminal word only; the steps in between are served from the live account the server keeps
+(`dag.node` and `subagent.context` both fall back to it), which is what the beat reads.
+Each such read of a running node also re-reads its row through
 `tasks.list(kind, id)`, which is how the panel's token total moves during the run. The answer
 row is the run's closing message when the lane left one (`<node_id>.closing.md`), the whole
 output otherwise, so a narrating agent's progress notes are read once, on the steps they
