@@ -45,7 +45,7 @@ export const PARAMS = {
   'skillhub.install': { id: 'sh-meeting-notes' },
   'skillhub.remove': { name: 'SQL 规范' },
   'plughub.search': { q: '', category: '' },
-  'plughub.detail': { id: 'github-mcp' },
+  'plughub.detail': { id: 'github' },
   'plug.install': { id: 'notion', form: {} },
   'plug.remove': { name: 'notion' },
   'plug.toggle': { name: 'github', enabled: false },

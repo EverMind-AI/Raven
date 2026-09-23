@@ -32,14 +32,14 @@ interface Entry {
 const CATS = ['developer', 'productivity', 'data']
 
 const MARKET: Entry[] = [
-  { id: 'github-mcp', name: 'GitHub', publisher: 'github.com', verified: true,
+  { id: 'github', name: 'GitHub', publisher: 'github.com', verified: true,
     summary: '读 issue 与 PR，提交评论', category: 'developer',
     tool_preview_count: 3, risk_tier: 1, installed: false,
     version: '1.4.0', homepage: 'https://github.com/mcp',
     description: '连上 GitHub 的官方 MCP 服务，读写 issue、PR 与评论。',
     contributes: [{ kind: 'mcp',
       connection: { type: 'http', url: 'https://api.githubcopilot.com/mcp' },
-      auth: { mode: 'oauth' },
+      auth: { mode: 'apikey', fields: [{ key: 'token', label: 'Token', secret: true, help_url: 'https://github.com/settings/tokens' }] },
       tools_preview: ['list_issues', 'get_pr', 'create_comment'] }] },
   { id: 'websearch', name: '网页搜索', publisher: 'serper.dev', verified: true,
     summary: '让 Raven 查得到网上的实时信息', category: 'data',
@@ -48,7 +48,7 @@ const MARKET: Entry[] = [
     description: '接入 serper.dev 的搜索接口，Raven 可以自己找资料。',
     contributes: [{ kind: 'mcp',
       connection: { type: 'http', url: 'https://mcp.serper.dev' },
-      auth: { mode: 'apikey', fields: [{ key: 'api_key', label: 'API Key', secret: true, help_url: 'https://serper.dev' }] },
+      auth: { mode: 'oauth' },
       tools_preview: ['web_search', 'web_news'] }] },
   { id: 'sqlite', name: 'SQLite', publisher: 'raven-tools', verified: false,
     summary: '在本机查询与修改 SQLite 数据库', category: 'data',

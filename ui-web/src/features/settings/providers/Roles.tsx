@@ -315,15 +315,55 @@ const modelWindow = (snap: SettingsSnapshot): number | null => {
   return typeof win === 'number' && win > 0 ? win : null
 }
 
+const EFFORTS: Array<[string, string]> = [
+  ['minimal', 'gui.settings.roles.effort_minimal'], ['low', 'gui.settings.roles.effort_low'],
+  ['medium', 'gui.settings.roles.effort_medium'], ['high', 'gui.settings.roles.effort_high'],
+]
+
+const effortWord = (v: string): string =>
+  t(EFFORTS.find(([id]) => id === v)?.[1] ?? 'gui.settings.roles.effort_low')
+
+/* The three values the parameters drawer edits. Read out here rather than
+   inside it, because the closed trigger says what they are. */
+function chatParams(raw: Record<string, unknown>): { effort: string; iters: number; pin: number | null } {
+  const pinned = dig(raw, 'agents.defaults.contextWindowTokens')
+  return {
+    effort: (dig(raw, 'agents.defaults.reasoningEffort') as string) || 'low',
+    iters: Number(dig(raw, 'agents.defaults.maxToolIterations')) || 40,
+    pin: typeof pinned === 'number' && pinned > 0 ? pinned : null,
+  }
+}
+
+/* The disclosure the chat row carries: a chevron, the word, and -- while it is
+   closed -- the values behind it, so none of the three has to be opened to be
+   read. The labels are shorter than the drawer's own rows use: the summary has
+   to sit on one line beside the role's name, where the full ones would not. */
+function ParamsDisc(): JSX.Element {
+  const s = store.get()
+  const open = s.chatCfg
+  const { effort, iters, pin } = chatParams(s.snap.raw)
+  const sum: Array<[string, string]> = [
+    [t('gui.settings.roles.sum_effort'), effortWord(effort)],
+    [t('gui.settings.roles.sum_iters'), `${iters} ${t('gui.settings.roles.times')}`],
+    [t('gui.settings.roles.sum_ctx'), pin ? `${pin.toLocaleString()} tok` : t('gui.settings.roles.ctx_auto')],
+  ]
+  return (
+    <button type="button" className="foldcap settings-disc" aria-expanded={open} onClick={() => store.set({ chatCfg: !open })}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+      <span className="settings-sl">{t('gui.settings.roles.params')}</span>
+      {!open && sum.map(([label, value]) => (
+        <span className="settings-sv" key={label}><span className="settings-sn">{label}</span>{value}</span>
+      ))}
+    </button>
+  )
+}
+
 /* The chat model's parameters: effort, the tool-iteration cap, the context
    window. Refusals are the page's: outside 1-200, below 1024 tokens. */
 function ChatParams(): JSX.Element {
   const s = store.get()
   const raw = s.snap.raw
-  const effort = (dig(raw, 'agents.defaults.reasoningEffort') as string) || 'low'
-  const iters = Number(dig(raw, 'agents.defaults.maxToolIterations')) || 40
-  const pinned = dig(raw, 'agents.defaults.contextWindowTokens')
-  const pin = typeof pinned === 'number' && pinned > 0 ? pinned : null
+  const { effort, iters, pin } = chatParams(raw)
   const win = modelWindow(s.snap)
   const bump = (d: number): void => {
     const step = iters >= 100 ? 10 : 1
@@ -341,8 +381,7 @@ function ChatParams(): JSX.Element {
     <div className="settings-cfg">
       <Row label={t('gui.settings.roles.effort')}>
         <Seg
-          opts={[['minimal', t('gui.settings.roles.effort_minimal')], ['low', t('gui.settings.roles.effort_low')],
-            ['medium', t('gui.settings.roles.effort_medium')], ['high', t('gui.settings.roles.effort_high')]]}
+          opts={EFFORTS.map(([v, key]): [string, string] => [v, t(key)])}
           value={effort}
           onPick={(v) => void store.write('agents.defaults.reasoningEffort', v)}
         />
@@ -351,26 +390,27 @@ function ChatParams(): JSX.Element {
         <Stepper value={iters} unit={t('gui.settings.roles.times')} onBump={bump} />
       </Row>
       <Row label={t('gui.settings.roles.ctx')}>
-        <Seg
-          opts={[['auto', t('gui.settings.roles.ctx_auto')], ['pin', t('gui.settings.roles.ctx_pin')]]}
-          value={pin ? 'pin' : 'auto'}
-          onPick={(v) => void store.write('agents.defaults.contextWindowTokens', v === 'auto' ? null : (win || 128000))}
-        />
+        <span className="settings-taglist">
+          {pin ? (
+            <>
+              <input className="settings-tbox settings-ctxbox" defaultValue={pin} inputMode="numeric"
+                aria-label={t('gui.settings.roles.ctx_fixed')}
+                onBlur={(e) => { if (Number(e.currentTarget.value) !== pin) pinChange(e.currentTarget.value) }}
+                onKeyDown={(e) => { if (e.key === 'Enter') pinChange(e.currentTarget.value) }} />
+              <span className="settings-fl2">tok</span>
+            </>
+          ) : (
+            <Rov>{win ? `${win.toLocaleString()} tok` : t('gui.settings.roles.ctx_unknown')}</Rov>
+          )}
+          <Seg
+            opts={[['auto', t('gui.settings.roles.ctx_auto')], ['pin', t('gui.settings.roles.ctx_pin')]]}
+            value={pin ? 'pin' : 'auto'}
+            onPick={(v) => void store.write('agents.defaults.contextWindowTokens', v === 'auto' ? null : (win || 128000))}
+          />
+        </span>
       </Row>
-      {pin ? (
-        <Row label={t('gui.settings.roles.ctx_fixed')}>
-          <span className="settings-taglist">
-            <input className="settings-tbox" defaultValue={pin} inputMode="numeric" aria-label={t('gui.settings.roles.ctx_fixed')}
-              onBlur={(e) => { if (Number(e.currentTarget.value) !== pin) pinChange(e.currentTarget.value) }}
-              onKeyDown={(e) => { if (e.key === 'Enter') pinChange(e.currentTarget.value) }} />
-            <span className="settings-fl2">tok</span>
-            {win && pin > win && <Rov warn>{t('gui.settings.roles.ctx_over', { n: win.toLocaleString() })}</Rov>}
-          </span>
-        </Row>
-      ) : (
-        <Row label={t('gui.settings.roles.ctx_current')}>
-          <Rov>{win ? `${win.toLocaleString()} tok` : t('gui.settings.roles.ctx_unknown')}</Rov>
-        </Row>
+      {pin && win && pin > win && (
+        <div className="settings-cfnote">{t('gui.settings.roles.ctx_over', { n: win.toLocaleString() })}</div>
       )}
     </div>
   )
@@ -382,12 +422,8 @@ export function Roles(): JSX.Element {
     <Card title={t('gui.settings.roles.title_card')}>
       {ROLES.map((r) => (
         <div key={r.id}>
-          <Row k={(
-            <RoleLabel role={r} extra={r.id === 'chat' ? (
-              <button type="button" className="settings-lnk" aria-expanded={s.chatCfg} onClick={() => store.set({ chatCfg: !s.chatCfg })}>
-                {t('gui.settings.roles.params')} <span className="settings-ch">{'⌄'}</span>
-              </button>
-            ) : undefined} />
+          <Row open={r.id === 'chat' && s.chatCfg} k={(
+            <RoleLabel role={r} extra={r.id === 'chat' ? <ParamsDisc /> : undefined} />
           )}>
             <RolePill role={r} />
           </Row>

@@ -182,7 +182,12 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
     uninstallSkill: async (name) => rec('uninstallSkill', name),
     /* A read the credential panel makes on its own, so it is not recorded: a
        case asserting what a row's buttons wrote would have to skip past it. */
-    serverAuthFields: async () => [{ key: 'token', label: 'Token', help_url: 'https://github.com/settings/tokens' }],
+    serverDetail: async () => ({
+      known: true,
+      fields: [{ key: 'token', label: 'Token', help_url: 'https://github.com/settings/tokens' }],
+      address: 'https://api.githubcopilot.com/mcp',
+      tools: ['list_issues', 'get_pr'],
+    }),
     toggleServer: async (name, on) => rec('toggleServer', { name, on }),
     retryServer: async (name) => rec('retryServer', name),
     revokeServer: async (name) => rec('revokeServer', name),

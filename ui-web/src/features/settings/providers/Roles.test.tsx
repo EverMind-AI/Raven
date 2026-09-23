@@ -315,4 +315,42 @@ describe('model roles', () => {
     expect(second.calls).toEqual([])
     expect(screen.getByRole('alert').textContent).toBe('gui.settings.roles.ctx_min {"n":1024}')
   })
+
+  it('the closed disclosure reads out all three values, and opening it hands them to the drawer', async () => {
+    install()
+    await mount('model')
+    const disc = screen.getByText('gui.settings.roles.params').closest('button') as HTMLButtonElement
+    const chunks = (): string[] => [...disc.querySelectorAll('.settings-sv')].map((n) => n.textContent || '')
+    expect(disc.getAttribute('aria-expanded')).toBe('false')
+    expect(chunks()).toEqual([
+      'gui.settings.roles.sum_effortgui.settings.roles.effort_low',
+      'gui.settings.roles.sum_iters40 gui.settings.roles.times',
+      'gui.settings.roles.sum_ctxgui.settings.roles.ctx_auto',
+    ])
+    expect(document.querySelector('.settings-cfg')).toBeNull()
+    const row = disc.closest('.settings-row') as HTMLElement
+    expect(row.className).not.toContain('settings-open')
+    await act(async () => { fireEvent.click(disc) })
+    expect(disc.getAttribute('aria-expanded')).toBe('true')
+    expect(chunks()).toEqual([])
+    expect(document.querySelector('.settings-cfg')).toBeTruthy()
+    /* The row hands over its separator, which it only grows at all because the
+       drawer stopped it being the last child of its wrapper. */
+    expect(row.className).toContain('settings-open')
+  })
+
+  it('a pinned window is the value the closed disclosure shows, and the mode sits beside it when open', async () => {
+    const pinned = snap()
+    ;(pinned.raw.agents as { defaults: Record<string, unknown> }).defaults.contextWindowTokens = 300000
+    install(pinned)
+    await mount('model')
+    const disc = screen.getByText('gui.settings.roles.params').closest('button') as HTMLButtonElement
+    expect([...disc.querySelectorAll('.settings-sv')].map((n) => n.textContent)).toContain('gui.settings.roles.sum_ctx300,000 tok')
+    await act(async () => { fireEvent.click(disc) })
+    /* One row owns the window: the box that holds it and the two modes. */
+    const row = screen.getByLabelText('gui.settings.roles.ctx_fixed').closest('.settings-row') as HTMLElement
+    expect(row.querySelector('.settings-k')?.textContent).toBe('gui.settings.roles.ctx')
+    expect([...row.querySelectorAll('.settings-seg button')].map((b) => b.textContent))
+      .toEqual(['gui.settings.roles.ctx_auto', 'gui.settings.roles.ctx_pin'])
+  })
 })

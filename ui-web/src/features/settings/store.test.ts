@@ -33,7 +33,7 @@ describe('settings store', () => {
   })
 
   it('setTab closes every drawer of the section it leaves', () => {
-    store.set({ provider: 'openai', sheet: { slug: 'openai', q: '', state: 'ready', items: [], kind: 'all', folded: {}, typed: null }, skill: 's', toolOpen: 'exec', plugOpen: 'p', err: 'oops' })
+    store.set({ provider: 'openai', sheet: { slug: 'openai', q: '', state: 'ready', items: [], kind: 'all', picked: [], typed: null }, skill: 's', toolOpen: 'exec', plugOpen: 'p', err: 'oops' })
     store.setTab('tools')
     const s = store.get()
     expect(s.tab).toBe('tools')

@@ -248,8 +248,15 @@ export function dockLift(): void {
   /* Scoped to the dock on purpose: a clarify sheet lives in the transcript, so
      a global match would anchor the pill to wherever that sheet has scrolled.
      The card itself is included: its border and padding are visual height too,
-     and measuring only its children parked the pill 6px into the glass. */
-  dock.querySelectorAll('.dock-in, .dock-in > *, .sheets > *').forEach((n) => {
+     and measuring only its children parked the pill 6px into the glass.
+
+     Every direct child counts, rather than a list of classes to keep in step.
+     The running-task chip is one of them (`.tkruns`, which chrome/Dock mounts
+     above the card) and it was not on the list, so the height it added went
+     unmeasured: the chat reserved and faded for the card alone and the chip
+     covered the tail of the transcript instead of moving it up. */
+  const boxes = [...dock.children, ...dock.querySelectorAll('.dock-in > *, .sheets > *')]
+  boxes.forEach((n) => {
     const r = n.getBoundingClientRect()
     if (r.height > 0) top = Math.min(top, r.top)
   })

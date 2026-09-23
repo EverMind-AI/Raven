@@ -10,7 +10,7 @@ import { SettingsApp } from './SettingsApp'
 import * as store from './store'
 
 import type { SectionId } from './store'
-import type { SettingsSnapshot } from './types'
+import type { McpDetail, SettingsSnapshot } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -139,13 +139,13 @@ describe('the waits a settings page owns', () => {
   })
 
   it('draws a plugin\'s credential fields as a key row until the catalogue answers', async () => {
-    let land: ((f: never[]) => void) | null = null
-    install(undefined, { serverAuthFields: () => new Promise((resolve) => { land = resolve }) })
+    let land: ((d: McpDetail) => void) | null = null
+    install(undefined, { serverDetail: () => new Promise((resolve) => { land = resolve }) })
     await mount('plugins')
     await act(async () => { fireEvent.click(screen.getByText('github')) })
     expect(count('.settings-wait .settings-row.settings-stack')).toBe(1)
 
-    await act(async () => { land!([]); await Promise.resolve() })
+    await act(async () => { land!({ known: true, fields: [], tools: [] }); await Promise.resolve() })
     expect(count('.settings-wbar')).toBe(0)
     expect(screen.getByText('gui.settings.plugins.no_credential')).toBeTruthy()
   })
