@@ -3047,6 +3047,15 @@ textarea:focus, textarea:focus-visible,
 .fpane .fbody:has(> .fview.workspace-fill) { overflow: hidden; display: flex; flex-direction: column; }
 .fview.workspace-fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .fview.workspace-fill iframe { flex: 1; height: auto; min-height: 0; }
+/* A PDF drawn as pictures of its pages rather than framed. They stack down the
+   panel and scroll with it, each as wide as the column and as tall as its own
+   page makes it -- a deck's slides and a report's pages are different shapes,
+   and a height fixed here would letterbox one to suit the other. The gap is
+   what says where a page ends, since a page's own ground is usually the same
+   colour as the panel it is read on. */
+.workspace-pages { display: flex; flex-direction: column; gap: 10px; padding: 2px 0; overflow-y: auto; }
+.fview.workspace-fill .workspace-pages { flex: 1; min-height: 0; }
+.workspace-page { display: block; width: 100%; height: auto; border-radius: 6px; background: var(--paper); }
 .fview.workspace-fill .vspin { flex: none; }
 .fview .csvw { overflow-x: auto; padding: 12px 14px 26px; }
 .fview table.csvt { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }

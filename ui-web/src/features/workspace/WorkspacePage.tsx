@@ -7,7 +7,7 @@ import { show as menuAt } from '../../state/menu'
 import { show as toast } from '../../state/toast'
 import * as deliveries from './deliveries'
 import {
-  RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL, framedRenderURL,
+  RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL, pageURL,
   hostPlatform, mdHtml, openInApp, renderURL, runURL, setAppFor,
 } from './store'
 import * as store from './store'
@@ -577,23 +577,30 @@ function FileBody({ f, running, onRun }: { f: WsFile; running: boolean; onRun: (
    read -- and a failure falls back to the note a deck used to get, with the
    gateway's words beside it. */
 function DeckBody({ f }: { f: WsFile }): JSX.Element {
-  const [stage, setStage] = useState<'convert' | 'frame' | 'shown'>('convert')
+  const [pages, setPages] = useState<number | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   /* A deck the agent rebuilt and delivered again keeps its path; the delivery's
-     own stamp is what tells this frame the bytes behind the path moved. */
+     own stamp is what tells this view the bytes behind the path moved. */
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
   const version = (deliveries.byPath(f.path) as { when?: number | null } | null)?.when ?? null
-  const url = renderURL(f.path) + (version ? '&v=' + version : '')
+  const first = pageURL(f.path, 1, version)
   useEffect(() => {
-    setStage('convert')
+    setPages(null)
     setFailed(null)
     let alive = true
     const said = (e: unknown): string => ((e as Error) && (e as Error).message) || String(e)
-    fetch(url, { credentials: 'same-origin' }).then(async (r) => {
+    /* The first page is asked for before any of them are drawn, and it answers
+       two questions at once: whether the rendering can be made at all -- a host
+       with no LibreOffice, a deck that will not convert -- and how many pages
+       there are to ask for, which the route puts on the picture it returns.
+       One round trip, and the rest are ordinary pictures the browser fetches
+       as the reader reaches them. */
+    fetch(first, { credentials: 'same-origin' }).then(async (r) => {
       if (!alive) return
       if (r.ok) {
         void r.body?.cancel()
-        setStage('frame')
+        const said_ = Number(r.headers.get('X-Raven-Pdf-Pages'))
+        setPages(Number.isFinite(said_) && said_ > 0 ? said_ : 1)
         return
       }
       let text = ''
@@ -605,7 +612,7 @@ function DeckBody({ f }: { f: WsFile }): JSX.Element {
       if (alive) setFailed(text || `${r.status} ${r.statusText}`.trim())
     }, (e: unknown) => { if (alive) setFailed(said(e)) })
     return () => { alive = false }
-  }, [url])
+  }, [first])
   if (failed != null) {
     return (
       <>
@@ -614,13 +621,24 @@ function DeckBody({ f }: { f: WsFile }): JSX.Element {
       </>
     )
   }
+  if (pages == null) return <div className="vspin">{t('gui.ws.file_rendering')}</div>
   return (
-    <>
-      {stage !== 'shown' ? <div className="vspin">{t('gui.ws.file_rendering')}</div> : null}
-      {stage !== 'convert'
-        ? <iframe key={url} referrerPolicy="no-referrer" src={framedRenderURL(f.path, version)} onLoad={() => setStage('shown')} />
-        : null}
-    </>
+    <div className="workspace-pages">
+      {Array.from({ length: pages }, (_, i) => (
+        /* Lazy, so a long document costs the pages the reader actually reaches
+           rather than all of them at once -- each one is a render on the
+           gateway the first time it is asked for. The first is eager: it is
+           already fetched by the round trip above, and waiting for the
+           observer to notice it would blank the panel it just proved. */
+        <img
+          key={i}
+          className="workspace-page"
+          src={pageURL(f.path, i + 1, version)}
+          loading={i === 0 ? 'eager' : 'lazy'}
+          alt={t('gui.ws.page_n', { n: i + 1 })}
+        />
+      ))}
+    </div>
   )
 }
 

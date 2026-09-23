@@ -4583,6 +4583,10 @@
       "en": "rendering as PDF...",
       "zh": "正在转成 PDF…"
     },
+    "gui.ws.page_n": {
+      "en": "Page {n}",
+      "zh": "第 {n} 页"
+    },
     "gui.ws.render_failed": {
       "en": "This file could not be rendered as a PDF.",
       "zh": "这个文件没法转成 PDF。"

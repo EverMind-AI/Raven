@@ -1293,3 +1293,100 @@ async def test_only_the_kinds_that_can_need_it_may_be_asked_to_run(client: TestC
     r = await client.get("/file", params={"path": str(notes), "run": "1"}, headers=auth())
 
     assert r.headers["Content-Security-Policy"] == "sandbox"
+
+
+async def _page(client: TestClient, source: Path, p: int | str | None = None):
+    params: dict[str, str] = {"path": str(source), "render": "page"}
+    if p is not None:
+        params["p"] = str(p)
+    return await client.get("/file", params=params, headers=auth())
+
+
+async def test_a_pdf_is_served_as_pictures_of_its_pages(
+    client: TestClient, tmp_path: Path, soffice: FakeSoffice, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The viewer draws a PDF page by page rather than framing the document.
+
+    Safari does not draw a framed PDF served under the sandbox policy every file
+    here carries, and that policy is what keeps an agent's document away from the
+    page's cookie and its socket -- so the pictures are what changed. Each answer
+    carries the page count, which is how one round trip both proves the rendering
+    can be made and sizes the rest of it.
+    """
+    from raven.rpc import pdf_preview
+
+    drawn: list[int] = []
+
+    def rasterise(source: Path, target: Path, width: int, timeout_s: float, page: int = 1) -> None:
+        drawn.append(page)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(FAKE_PNG)
+
+    monkeypatch.setattr(pdf_preview, "_rasterise_pdf_page", rasterise)
+    monkeypatch.setattr(pdf_preview, "_count_pages", lambda pdf: 3)
+    report = _deck(tmp_path, "report.pdf", FAKE_PDF)
+
+    first = await _page(client, report)
+    assert first.status == 200
+    assert first.headers["Content-Type"] == "image/png"
+    assert first.headers["X-Raven-Pdf-Pages"] == "3"
+    assert await first.read() == FAKE_PNG
+
+    last = await _page(client, report, 3)
+    assert last.status == 200 and last.headers["X-Raven-Pdf-Pages"] == "3"
+    assert drawn == [1, 3]
+
+    again = await _page(client, report, 3)
+    assert again.status == 200
+    assert drawn == [1, 3], "a page already drawn is read from the cache"
+
+
+async def test_a_page_past_the_end_is_refused_rather_than_drawn(
+    client: TestClient, tmp_path: Path, soffice: FakeSoffice, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A page number that is not one, and one past the end, are both 400.
+
+    The viewer asks for what the count told it exists, so a page past the end is
+    this route's answer to get right rather than the reader's mistake to report.
+    """
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "_count_pages", lambda pdf: 2)
+    report = _deck(tmp_path, "report.pdf", FAKE_PDF)
+
+    for asked in (0, 3, "x"):
+        r = await _page(client, report, asked)
+        assert r.status == 400, f"page {asked!r} should be refused"
+
+
+async def test_a_deck_is_paged_through_its_own_pdf(
+    client: TestClient, tmp_path: Path, soffice: FakeSoffice, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deck is converted once and its pages come from that one rendering.
+
+    The count and the pages the reader then sees are read off the same PDF, so
+    the two cannot disagree, and the conversion is the one the viewer had
+    already cached.
+    """
+    from raven.rpc import pdf_preview
+
+    drawn: list[Path] = []
+
+    def rasterise(source: Path, target: Path, width: int, timeout_s: float, page: int = 1) -> None:
+        drawn.append(source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(FAKE_PNG)
+
+    monkeypatch.setattr(pdf_preview, "_rasterise_pdf_page", rasterise)
+    monkeypatch.setattr(pdf_preview, "_count_pages", lambda pdf: 2)
+    deck = _deck(tmp_path)
+
+    one = await _page(client, deck, 1)
+    two = await _page(client, deck, 2)
+
+    assert one.status == two.status == 200
+    assert one.headers["X-Raven-Pdf-Pages"] == "2"
+    # LibreOffice ran once, for the PDF; both pages were drawn from it.
+    assert sum("--convert-to pdf" in c for c in soffice.calls()) == 1
+    assert len(drawn) == 2 and drawn[0] == drawn[1]
+    assert drawn[0].suffix == ".pdf"
