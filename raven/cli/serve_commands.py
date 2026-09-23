@@ -895,6 +895,7 @@ def _supervise(port: int) -> None:
     fast_failures = 0
     target = port
     proc = None
+    group = None
     try:
         # Recorded inside the guard rather than before it. The handler above is
         # armed the moment it is installed, so a SIGTERM arriving between the
@@ -920,6 +921,7 @@ def _supervise(port: int) -> None:
             except OSError as exc:
                 print(f"raven web: could not start the gateway: {exc}", flush=True)
                 return
+            group = _owned_group(proc)
             # The port it asked for is not always the port it got: the first
             # launch probes forward past whatever else holds 18792. Restarting on
             # the preferred port would then bind a different one from the open
@@ -968,7 +970,7 @@ def _supervise(port: int) -> None:
         # from here on the only signal that ends this process is SIGKILL.
         with suppress(ValueError):
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        _stop_child(proc)
+        _stop_child(proc, group)
         # Only now: `web.json` is how the next `raven web` knows a supervisor is
         # up, so removing it while the gateway still held the lock is what let a
         # second supervisor start beside it -- one whose gateway could only come
@@ -977,54 +979,94 @@ def _supervise(port: int) -> None:
         sys.stdout.flush()
 
 
-def _stop_child(proc: object) -> None:
-    """End the gateway this supervisor started, SIGKILL after ``_CHILD_STOP_S``.
+def _owned_group(proc: object) -> Optional[int]:
+    """The process group ``proc`` leads, read while it is certainly alive.
 
-    A child that already exited is left alone; so is one never started.
-
-    The escalation is group-wide, because the gateway is not the only thing the
-    supervisor owns: it leads a session of its own (see the ``Popen`` in
-    ``_supervise``), and anything it started without a session is in there with
-    it. Killing the pid alone ends the gateway and leaves those behind, holding
-    the port or the lock, with ``web.json`` already gone and the stop reported
-    successful. The group is only ever this child's, so the signal cannot reach
-    the supervisor that sent it.
+    Read at spawn rather than at stop: the stop has to reach this group after
+    the gateway itself has exited and been reaped, when its pid no longer says
+    which group it led. ``None`` where there are no groups, and for a group the
+    child does not lead or that is this process's own -- signalling either would
+    reach somebody else's processes, the supervisor's included.
     """
-    import subprocess
-
-    if proc is None or getattr(proc, "poll", lambda: 0)() is not None:
-        return
-    with suppress(OSError):
-        proc.terminate()  # type: ignore[attr-defined]
-    try:
-        proc.wait(timeout=_CHILD_STOP_S)  # type: ignore[attr-defined]
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    print(f"raven web: the gateway ignored SIGTERM for {_CHILD_STOP_S:.0f}s; killing it", flush=True)
     import os
-    import signal
     import sys
 
-    if sys.platform == "win32":  # pragma: no cover - no process groups, no SIGKILL
-        with suppress(OSError):
-            proc.kill()  # type: ignore[attr-defined]
-    else:
-        pid = getattr(proc, "pid", None)
+    if sys.platform == "win32":  # pragma: no cover - no process groups
+        return None
+    pid = getattr(proc, "pid", None)
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    try:
+        group = os.getpgid(pid)
+    except OSError:
+        return None
+    return group if group == pid and group != os.getpgrp() else None
+
+
+def _group_gone(group: int, deadline: float) -> bool:
+    """Whether every process in ``group`` is gone by ``deadline``."""
+    import os
+    import time
+
+    while True:
         try:
-            group = os.getpgid(pid) if pid is not None else None
+            os.killpg(group, 0)
+        except ProcessLookupError:
+            return True
         except OSError:
-            group = None
-        # Only a group this child leads: one it does not lead belongs to
-        # somebody else, and signalling that would take down a stranger's tree.
-        if group is not None and group == pid and group != os.getpgrp():
-            with suppress(OSError):
-                os.killpg(group, signal.SIGKILL)
-        else:
-            with suppress(OSError):
-                proc.kill()  # type: ignore[attr-defined]
-    with suppress(subprocess.TimeoutExpired):
-        proc.wait(timeout=_KILL_WAIT_S)  # type: ignore[attr-defined]
+            return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_STOP_POLL_S)
+
+
+def _stop_child(proc: object, group: Optional[int] = None) -> None:
+    """End the gateway this supervisor started and everything in its group.
+
+    The gateway leads a session of its own (see the ``Popen`` in
+    ``_supervise``), and anything it started without one is in that group with
+    it. So the gateway exiting is not the end of the stop: a descendant that
+    ignored SIGTERM outlives a gateway that honoured it, holding the port or
+    the lock after ``web.json`` is gone and the stop reported a success. The
+    group is settled on every path -- the gateway stopped here, killed here, or
+    already gone -- with SIGTERM first and SIGKILL once ``_CHILD_STOP_S`` from
+    the start of the stop has run out, a single budget for the gateway and its
+    group together, so the whole stop fits inside the wait ``--stop`` gives
+    the supervisor.
+    """
+    import os
+    import signal
+    import subprocess
+    import time
+
+    deadline = time.monotonic() + _CHILD_STOP_S
+    if proc is not None and getattr(proc, "poll", lambda: 0)() is None:
+        with suppress(OSError):
+            proc.terminate()  # type: ignore[attr-defined]
+        try:
+            proc.wait(timeout=_CHILD_STOP_S)  # type: ignore[attr-defined]
+        except subprocess.TimeoutExpired:
+            print(f"raven web: the gateway ignored SIGTERM for {_CHILD_STOP_S:.0f}s; killing it", flush=True)
+            if group is not None:
+                with suppress(OSError):
+                    os.killpg(group, signal.SIGKILL)
+            else:
+                with suppress(OSError):
+                    proc.kill()  # type: ignore[attr-defined]
+            with suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=_KILL_WAIT_S)  # type: ignore[attr-defined]
+    if group is None:
+        return
+    try:
+        os.killpg(group, signal.SIGTERM)
+    except OSError:
+        return
+    if _group_gone(group, deadline):
+        return
+    print("raven web: the gateway's own processes ignored SIGTERM; killing them", flush=True)
+    with suppress(OSError):
+        os.killpg(group, signal.SIGKILL)
+    _group_gone(group, time.monotonic() + _KILL_WAIT_S)
 
 
 _STOP_WAIT_S = 20.0
