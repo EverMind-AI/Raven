@@ -92,14 +92,25 @@ async def model_option(call: Call, *, session_id: str | None = None) -> dict[str
         # from the environment reports no provider as "authenticated" -- returning
         # early on the group list alone hid the model that was actually running.
         return None
+    # Said in the option a person reads, not only in a log here: a menu of forty
+    # looks complete, so an account serving two hundred is a hundred and sixty
+    # models nobody can see the absence of. The same reason the replay announces
+    # its own truncation in the transcript rather than trimming quietly.
+    description = MODEL_DESCRIPTION
+    if cut := _cut(groups):
+        listed = ", ".join(f"{name} {MAX_MODELS_PER_PROVIDER} of {total}" for name, total in cut)
+        description = f"{description} This list is shortened: {listed}."
     return {
         "id": MODEL_OPTION_ID,
         "name": "Model",
-        "description": MODEL_DESCRIPTION,
+        "description": description,
         "category": "model",
         "type": "select",
         "currentValue": current,
-        "options": groups,
+        # Without the count each group carried for the sentence above: the
+        # schema forbids unknown fields, so a validating client would drop the
+        # whole option rather than the key it does not know.
+        "options": [{k: v for k, v in g.items() if k != "_total"} for g in groups],
     }
 
 
@@ -144,6 +155,20 @@ def _current_value(options: Any) -> str:
     return _qualified(provider, model)
 
 
+def _cut(groups: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    """Which groups lost ids to ``MAX_MODELS_PER_PROVIDER``, and how many each holds.
+
+    Returned rather than logged because the client is who has to be told: a
+    person reading a menu of forty cannot see that the account serves two
+    hundred, and nothing else on the wire says so.
+    """
+    return [
+        (str(g.get("name") or g.get("group") or ""), int(g["_total"]))
+        for g in groups
+        if isinstance(g.get("_total"), int) and g["_total"] > len(g.get("options") or ())
+    ]
+
+
 def _groups(options: Any, *, current_provider: str = "") -> list[dict[str, Any]]:
     """One group per usable provider, each holding its models.
 
@@ -170,7 +195,8 @@ def _groups(options: Any, *, current_provider: str = "") -> list[dict[str, Any]]
         if not isinstance(slug, str) or not slug:
             continue
         labels = entry.get("model_labels") if isinstance(entry.get("model_labels"), dict) else {}
-        models = [m for m in (entry.get("models") or ()) if isinstance(m, str) and m][:MAX_MODELS_PER_PROVIDER]
+        offered = [m for m in (entry.get("models") or ()) if isinstance(m, str) and m]
+        models = offered[:MAX_MODELS_PER_PROVIDER]
         if not models:
             continue
         groups.append(
@@ -178,6 +204,11 @@ def _groups(options: Any, *, current_provider: str = "") -> list[dict[str, Any]]
                 "group": slug,
                 "name": entry.get("name") if isinstance(entry.get("name"), str) and entry.get("name") else slug,
                 "options": [_option(slug, model, labels.get(model)) for model in models],
+                # How many this account actually serves, so the description can
+                # say what was left out. Stripped before the group goes on the
+                # wire: the schema forbids unknown fields, and a validating
+                # client drops the whole option rather than the unknown key.
+                "_total": len(offered),
             }
         )
     return groups

@@ -117,6 +117,71 @@ class TestTheOffer:
         assert "next turn" in option["description"]
         assert "every session" not in option["description"], "the process-wide caveat is no longer true"
 
+    async def test_a_shortened_list_says_so_where_a_person_reads_it(self):
+        """The one truncation on this wire that used to be silent.
+
+        A menu of forty looks complete. An account serving two hundred is then a
+        hundred and sixty models nobody can see the absence of, and nothing else
+        on the wire says so -- the replay announces its own truncation in the
+        transcript for the same reason. The assertions are on the substance, not
+        the sentence, so a reword is not a behaviour change.
+        """
+        many = [f"m-{i}" for i in range(MAX_MODELS_PER_PROVIDER + 12)]
+        call, _ = _caller(
+            catalogue=_catalogue(
+                providers=[
+                    {
+                        "slug": "anthropic",
+                        "name": "Anthropic",
+                        "authenticated": True,
+                        "models": many,
+                        "model_labels": {},
+                    }
+                ]
+            )
+        )
+
+        option = await model_option(call)
+
+        # By name, not by index: the current value is not in this list, so the
+        # `Current` group is prepended ahead of the account's own.
+        listed = next(g for g in option["options"] if g["group"] == "anthropic")
+        assert len(listed["options"]) == MAX_MODELS_PER_PROVIDER
+        assert "shortened" in option["description"]
+        assert str(len(many)) in option["description"], "the count a reader needs is the one they cannot see"
+        assert "Anthropic" in option["description"], "and which account it was"
+        validate_def("SessionConfigOption", option)
+
+    async def test_a_list_that_fits_says_nothing_extra(self):
+        """The caveat is about a list that was cut, so an uncut one carries none."""
+        call, _ = _caller()
+
+        option = await model_option(call)
+
+        assert option["description"] == MODEL_DESCRIPTION
+
+    async def test_the_count_behind_the_caveat_never_reaches_the_wire(self):
+        """The schema forbids unknown fields, so a validating client drops the
+        whole option rather than the key it does not know."""
+        many = [f"m-{i}" for i in range(MAX_MODELS_PER_PROVIDER + 3)]
+        call, _ = _caller(
+            catalogue=_catalogue(
+                providers=[
+                    {
+                        "slug": "anthropic",
+                        "name": "Anthropic",
+                        "authenticated": True,
+                        "models": many,
+                        "model_labels": {},
+                    }
+                ]
+            )
+        )
+
+        option = await model_option(call)
+
+        assert all("_total" not in g for g in option["options"])
+
     async def test_the_current_value_names_its_provider(self):
         """Stored the way every other surface stores it, so the value a client
         sends back is the one ``config.set`` already understands."""
