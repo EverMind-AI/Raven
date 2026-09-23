@@ -10,10 +10,12 @@
  *
  * Nothing is reported until the form is finished. A step keeps what was picked,
  * what was typed and whether it was skipped, so going back to it shows it as it
- * was left, and the last step's Submit reports every step at once. The one
- * exception is the question that is on its own: picking an option answers it,
- * because there is nowhere to go back to and that is what the sheet has always
- * done.
+ * was left, and the last step's Submit reports every step at once -- but not
+ * before every step is answered or skipped: a step the reader came back to and
+ * emptied is unanswered however far they had got, and a Skip on the last step
+ * lands on such a step instead of reporting. The one exception is the question
+ * that is on its own: picking an option answers it, because there is nowhere to
+ * go back to and that is what the sheet has always done.
  *
  * The field is uncontrolled and listened to natively, for the two reasons the
  * composer's own field states (features/composer/mount.tsx): a component owning
@@ -186,26 +188,39 @@ export function ClarifySheet(
     [steps],
   )
 
-  /* Next and Submit are one control: on the last step it reports, everywhere
-     else it moves on. */
+  /* What Submit waits for: every step answered or skipped. Next reads only the
+     step on screen, and the chips can carry the reader past a step they came
+     back to and emptied. */
+  const complete = useCallback(
+    (f: Form): boolean => f.steps.every((one, i) => one.skipped || answerAt(f, i) !== ''),
+    [answerAt],
+  )
+
+  /* Next and Submit are one control: on the last step it reports the form as
+     it stands, everywhere else it moves on from an answered step. */
   const forward = useCallback((): void => {
     const f = live.current
     const i = f.step
+    if (i === steps.length - 1) {
+      if (complete(f)) finish(f)
+      return
+    }
     if (!answerAt(f, i)) return
-    const next = edited(f, i, { skipped: false })
-    if (i === steps.length - 1) finish(next)
-    else go(next, i + 1)
-  }, [answerAt, finish, go, steps.length])
+    go(edited(f, i, { skipped: false }), i + 1)
+  }, [answerAt, complete, finish, go, steps.length])
 
   /* Skipping is an answer, not a drop: the engine is waiting either way, and
-     what it hears is this sheet's own wording for "no answer". */
+     what it hears is this sheet's own wording for "no answer". Skipping the
+     last step reports the form, unless a step before it is still unanswered,
+     in which case the reader lands on that step. */
   const skipStep = useCallback((): void => {
     const f = live.current
     const i = f.step
     const next = edited(f, i, { skipped: true })
-    if (i === steps.length - 1) finish(next)
-    else go(next, i + 1)
-  }, [finish, go, steps.length])
+    if (i !== steps.length - 1) go(next, i + 1)
+    else if (complete(next)) finish(next)
+    else go(next, next.steps.findIndex((one, j) => !one.skipped && !answerAt(next, j)))
+  }, [answerAt, complete, finish, go, steps.length])
 
   const choose = useCallback((label: string): void => {
     const f = live.current
@@ -341,7 +356,8 @@ export function ClarifySheet(
       <div className="foot">
         {at > 0 ? <button className="btn cp-back" onClick={() => { move(-1) }}>{words.back}</button> : null}
         <button className="btn" onClick={skipStep}>{words.skip}</button>
-        <button className="btn key" disabled={!answerOf(step, filled)} onClick={forward}>
+        <button className="btn key" onClick={forward}
+          disabled={at === steps.length - 1 ? !complete(form) : !answerOf(step, filled)}>
           {at === steps.length - 1 ? words.submit : words.next}
         </button>
       </div>
