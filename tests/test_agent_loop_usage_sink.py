@@ -12,12 +12,14 @@ import json
 import tempfile
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
 import pytest
 
 import raven.agent.loop.turn_path as agent_loop_main
+from raven.agent.harness.action import DefaultAction
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.config.raven import ContextConfig
@@ -645,6 +647,37 @@ async def test_a_turn_is_billed_once_while_the_provider_seam_listens_too(workspa
     assert billed.cost_usd == pytest.approx(0.005)
     assert tracker.total.calls == 2
     assert sink["cost_usd"] == pytest.approx(0.005)
+
+
+class _BestOfTwoAction(DefaultAction):
+    """An Action that asks twice and keeps the second answer -- the shape
+    ``ActionRequest`` names (best-of-n, a critic pass): one decision, two
+    requests, one response handed back to the loop."""
+
+    async def decide(self, request):
+        await super().decide(request)
+        return await super().decide(request)
+
+
+@pytest.mark.asyncio
+async def test_every_call_a_multi_call_action_makes_is_billed(workspace):
+    """The loop records the one response ``decide`` returns. A claim over the
+    whole decision would bill that one and lose the other request; the seam
+    records both, under the turn's session, and the loop adds nothing."""
+    tracker = UsageTracker(persist=False)
+    registry = StrategyRegistry([tracker])
+    usage_record.install(registry.after_llm_call)
+    agent = _costing_agent(workspace, [_says("draft", 0.002), _says("final", 0.003)], strategies=registry)
+    agent.harness = replace(agent.harness, action=_BestOfTwoAction())
+    sink: dict = {}
+
+    await _turn(agent, sink)
+
+    assert agent.provider.calls == 2
+    billed = tracker.snapshot("s1")
+    assert billed.calls == 2, "both requests of the one decision, each once"
+    assert billed.cost_usd == pytest.approx(0.005)
+    assert tracker.total.calls == 2
 
 
 @pytest.mark.asyncio

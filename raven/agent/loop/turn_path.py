@@ -4,6 +4,7 @@ persistence.
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING
 
 from raven.agent.loop._shared import (
@@ -95,6 +96,7 @@ from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
 from raven.spine.events import bound_failure_text
 from raven.spine.turn import AnswerlessTurnError
+from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
 
 if TYPE_CHECKING:
@@ -977,9 +979,12 @@ class TurnPathMixin:
                 if draft is None and cut_continuation and on_token_delta is not None
                 else None
             )
-            # Recorded below with the turn's own session and spend, so the
-            # provider seam must not record it as a call of its own.
-            with usage_record.recorded_by_caller():
+            # Every provider call ``decide`` makes reaches the provider seam, and
+            # an Action may make more than one (best-of-n, a critic pass: see
+            # ActionRequest), so none of them is claimed here. The session is
+            # bound so the seam bills each to this turn's conversation, which a
+            # caller entering below ``run_turn`` has not bound for it.
+            with usage_context.bind(session_key) if session_key else contextlib.nullcontext():
                 response = await self.harness.action.decide(
                     ActionRequest(
                         provider=self.provider,
@@ -1023,14 +1028,20 @@ class TurnPathMixin:
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
             usage_snapshot = self._build_usage_snapshot(response, call_model, session_key or "")
-            await self.strategies.after_llm_call(
-                {
-                    "content": response.content,
-                    "finish_reason": response.finish_reason,
-                    "usage": response.usage,
-                },
-                usage_snapshot,
-            )
+            # When the seam reports to this loop's own registry it has already
+            # recorded every call behind this response, and the row here would
+            # be a second copy of one of them. Reporting elsewhere or nowhere (a
+            # test, an embedder), it recorded nothing this registry hears, and
+            # this row is the only one.
+            if not usage_record.hears(self.strategies):
+                await self.strategies.after_llm_call(
+                    {
+                        "content": response.content,
+                        "finish_reason": response.finish_reason,
+                        "usage": response.usage,
+                    },
+                    usage_snapshot,
+                )
             spend.note(usage_snapshot.cost_usd)
             # The stream caller (turn.* handler) may want the
             # final-iteration usage to populate `message.complete.payload.usage`

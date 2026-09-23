@@ -21,10 +21,13 @@ Once, in three senses:
   The outermost call is the one whose answer the caller received, so a retried
   or fallen-back call is one row, under the response that came back -- the same
   unit the turn loop has always recorded.
-- **A caller that records the call itself says so.** The turn loop builds a
-  richer snapshot than this module can (the session it is billing, the turn's
-  spend) and keeps doing that; it runs its call inside :func:`recorded_by_caller`
-  and nothing here records it a second time.
+- **A caller that records the call itself says so.** A caller that makes one
+  call and records it can run it inside :func:`recorded_by_caller` and nothing
+  here records it a second time. The turn loop does *not* do that: one Action
+  decision may make several calls (best-of-n, a critic pass), and a claim over
+  the whole decision would lose every call but the one returned. The seam
+  records each of them instead, and the loop checks :func:`hears` and skips its
+  own row when that would copy one of them.
 - **A stream is one row, recorded when it is exhausted.** Usage and the finish
   reason may arrive on different deltas, so neither alone is the trigger. The
   wrapper nearest the wire owns the stream: it marks the deltas it passes on,
@@ -71,6 +74,15 @@ def install(sink: Sink | None) -> None:
     """
     global _sink
     _sink = sink
+
+
+def hears(registry: Any) -> bool:
+    """Whether the calls this module records reach ``registry``.
+
+    True when the installed sink is that registry's own ``after_llm_call``,
+    which is what the runtime assembly installs for the loop it builds.
+    """
+    return _sink is not None and _sink == getattr(registry, "after_llm_call", None)
 
 
 @contextmanager
@@ -194,4 +206,4 @@ def instrument(cls: type) -> None:
         setattr(cls, name, wrap(method))
 
 
-__all__ = ["install", "instrument", "recorded_by_caller"]
+__all__ = ["hears", "install", "instrument", "recorded_by_caller"]
