@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import socket
+import threading
+import time
+from contextlib import suppress
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -311,7 +317,7 @@ async def test_invalid_json_is_ignored(tmp_path, monkeypatch):
 
 async def test_send_emits_ws_payload(tmp_path, monkeypatch):
     ch = _make_channel(monkeypatch, tmp_path)
-    ch._connected = True
+    ch._bridge_up = True
     sent = {}
     ch._ws = MagicMock()
     ch._ws.send = AsyncMock(side_effect=lambda p: sent.update(payload=p))
@@ -347,7 +353,7 @@ def test_ensure_bridge_dir_raises_without_npm(tmp_path, monkeypatch):
 async def test_send_reraises_transient_for_manager_retry(monkeypatch, tmp_path):
     """A ws drop propagates so manager._send_with_retry can back off."""
     ch = _make_channel(monkeypatch, tmp_path)
-    ch._connected = True
+    ch._bridge_up = True
     ch._ws = MagicMock()
     ch._ws.send = AsyncMock(side_effect=ConnectionError("ws closed"))
     with pytest.raises(ConnectionError):
@@ -358,7 +364,7 @@ async def test_send_media_surfaced_as_notice(monkeypatch, tmp_path):
     """The bridge send protocol is text-only — dropped attachments become a
     visible notice in the outgoing text instead of vanishing."""
     ch = _make_channel(monkeypatch, tmp_path)
-    ch._connected = True
+    ch._bridge_up = True
     ch._ws = MagicMock()
     ch._ws.send = AsyncMock()
     await ch.send("u1", "hi", media=["/m/report.pdf"])
@@ -368,7 +374,7 @@ async def test_send_media_surfaced_as_notice(monkeypatch, tmp_path):
 
 async def test_send_media_only_still_sends_notice(monkeypatch, tmp_path):
     ch = _make_channel(monkeypatch, tmp_path)
-    ch._connected = True
+    ch._bridge_up = True
     ch._ws = MagicMock()
     ch._ws.send = AsyncMock()
     await ch.send("u1", "", media=["/m/a.jpg"])
@@ -378,7 +384,7 @@ async def test_send_media_only_still_sends_notice(monkeypatch, tmp_path):
 
 async def test_send_swallows_permanent_error(monkeypatch, tmp_path):
     ch = _make_channel(monkeypatch, tmp_path)
-    ch._connected = True
+    ch._bridge_up = True
     ch._ws = MagicMock()
     ch._ws.send = AsyncMock(side_effect=RuntimeError("bad payload"))
     await ch.send("u1", "hi")  # no raise
@@ -449,3 +455,286 @@ def test_the_default_progress_is_a_log_line_not_a_terminal(caplog) -> None:
     assert bridge.progress is bridge._log_progress
     with bridge.progress("step"):
         pass
+
+
+# ---------------------------------------------------------------------------
+# lifecycle: the adapter owns the bridge process
+# ---------------------------------------------------------------------------
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+async def _wait_for(predicate, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition was never reached")
+
+
+class _FakeBridge:
+    """In-process stand-in for the Node bridge: takes the auth frame, then emits
+    whatever frames the test wants the adapter to react to."""
+
+    def __init__(self) -> None:
+        self.tokens: list[str] = []
+        self.clients: list[Any] = []
+        self._server = None
+
+    async def start(self, port: int) -> None:
+        import websockets
+
+        self._server = await websockets.serve(self._serve, "127.0.0.1", port)
+
+    async def _serve(self, ws) -> None:
+        self.tokens.append(json.loads(await ws.recv())["token"])
+        self.clients.append(ws)
+        await ws.wait_closed()
+
+    async def emit(self, frame: dict) -> None:
+        for ws in self.clients:
+            await ws.send(json.dumps(frame))
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+
+
+class _FakeProcess:
+    """Stands in for the spawned bridge process."""
+
+    pid = 4242
+
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+        self.terminated = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = 0
+
+    async def wait(self) -> int | None:
+        return self.returncode
+
+
+async def _stop_adapter(ch, task) -> None:
+    """Stop a started adapter and wind down its client task."""
+    await ch.stop()
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+
+def test_bridge_endpoint_reads_host_and_port():
+    assert wb.bridge_endpoint("ws://localhost:3001") == ("localhost", 3001)
+    assert wb.bridge_endpoint("ws://127.0.0.1") == ("127.0.0.1", wb.DEFAULT_BRIDGE_PORT)
+    assert wb.is_local_bridge("ws://127.0.0.1:3002") is True
+    assert wb.is_local_bridge("ws://bridge.example.net:3001") is False
+
+
+async def test_start_spawns_the_local_bridge_and_stop_terminates_it(tmp_path, monkeypatch):
+    """Nothing listens on the local bridge port, so the adapter runs the bridge
+    itself -- without that, enabling WhatsApp from the page can never show a QR."""
+    port = _free_port()
+    fake, proc = _FakeBridge(), _FakeProcess()
+    spawned: dict[str, Any] = {}
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):
+        spawned.update(dir=bridge_dir, token=token, auth_dir=auth_dir, port=spawn_port)
+        await fake.start(spawn_port)
+        return proc
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}", bridge_token="t0k")
+    monkeypatch.setattr(wb, "ensure_bridge_dir", lambda: tmp_path / "bridge")
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+
+    task = asyncio.create_task(ch.start())
+    try:
+        await _wait_for(lambda: bool(fake.tokens))
+        assert spawned == {
+            "dir": tmp_path / "bridge",
+            "token": "t0k",
+            "auth_dir": str(tmp_path / "whatsapp-auth"),
+            "port": port,
+        }
+        assert fake.tokens == ["t0k"]
+    finally:
+        await _stop_adapter(ch, task)
+        await fake.stop()
+
+    assert proc.terminated is True
+
+
+async def test_pairing_is_the_status_frame_not_the_bridge_handshake(tmp_path, monkeypatch):
+    """Reaching the bridge is not being signed in: until the bridge says
+    connected the row has to stay on "waiting to be signed in"."""
+    port = _free_port()
+    fake, proc = _FakeBridge(), _FakeProcess()
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        await fake.start(spawn_port)
+        return proc
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}")
+    monkeypatch.setattr(wb, "ensure_bridge_dir", lambda: tmp_path / "bridge")
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+
+    task = asyncio.create_task(ch.start())
+    try:
+        await _wait_for(lambda: ch._bridge_up)
+        assert ch.connected is False
+
+        await fake.emit({"type": "qr", "qr": "2@abc"})
+        await _wait_for(lambda: ch.pending_qr == "2@abc")
+        assert ch.connected is False
+
+        await fake.emit({"type": "status", "status": "connected"})
+        await _wait_for(lambda: ch.connected)
+        assert ch.pending_qr is None
+    finally:
+        await _stop_adapter(ch, task)
+        await fake.stop()
+
+
+async def test_a_remote_bridge_url_is_never_spawned_locally(tmp_path, monkeypatch):
+    """A bridge someone else hosts stays client-only."""
+
+    def _never(*args, **kwargs):
+        raise AssertionError("a remote bridge must not be started here")
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url="ws://bridge.example.net:3001")
+    monkeypatch.setattr(wb, "ensure_bridge_dir", _never)
+    monkeypatch.setattr(wb, "spawn_bridge", _never)
+
+    assert await ch._ensure_bridge_process() is True
+
+
+async def test_start_gives_up_when_the_bridge_cannot_be_built(tmp_path, monkeypatch):
+    """Without node the bridge will not come up on any retry, so the adapter
+    stops instead of looping every five seconds with the row reading running."""
+
+    def _boom():
+        raise RuntimeError("node not found. Please install Node.js >= 20.")
+
+    async def _closed(host, port, timeout=1.0):  # noqa: ARG001
+        return False
+
+    ch = _make_channel(monkeypatch, tmp_path)
+    monkeypatch.setattr(wb, "port_is_open", _closed)
+    monkeypatch.setattr(wb, "ensure_bridge_dir", _boom)
+
+    await asyncio.wait_for(ch.start(), timeout=5)
+
+    assert ch.is_running is False
+
+
+async def test_stop_during_the_build_terminates_the_bridge_it_spawned(tmp_path, monkeypatch):
+    """Gateway shutdown calls stop() without cancelling the channel task, so a
+    stop landing while the first build runs finds no process to stop; the child
+    spawned right after it must not outlive the gateway holding the session."""
+    port = _free_port()
+    proc = _FakeProcess()
+    building, release = threading.Event(), threading.Event()
+    spawned = False
+
+    def _build():
+        building.set()
+        release.wait(5)
+        return tmp_path / "bridge"
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        nonlocal spawned
+        spawned = True
+        return proc
+
+    async def _port_is_open(host, probe_port, timeout=1.0):  # noqa: ARG001
+        return spawned
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}")
+    monkeypatch.setattr(wb, "port_is_open", _port_is_open)
+    monkeypatch.setattr(wb, "ensure_bridge_dir", _build)
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+
+    task = asyncio.create_task(ch.start())
+    try:
+        await _wait_for(building.is_set)
+        await ch.stop()
+        release.set()
+        await asyncio.wait_for(task, timeout=5)
+    finally:
+        release.set()
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+    assert proc.terminated is True
+    assert ch._bridge_proc is None
+
+
+async def test_a_bridge_that_never_listens_is_not_retried_forever(tmp_path, monkeypatch):
+    """A child that spawns but never binds is as dead as one that cannot be
+    built: retrying the connect every five seconds leaves the row reading
+    running with nothing behind it and no failure anyone can act on."""
+    proc = _FakeProcess()
+
+    async def _closed(host, port, timeout=1.0):  # noqa: ARG001
+        return False
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        return proc
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{_free_port()}")
+    monkeypatch.setattr(wb, "port_is_open", _closed)
+    monkeypatch.setattr(wb, "ensure_bridge_dir", lambda: tmp_path / "bridge")
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+    monkeypatch.setattr("raven.channels.adapters.whatsapp.channel._BRIDGE_READY_SECONDS", 0.05)
+
+    await asyncio.wait_for(ch.start(), timeout=2)
+
+    assert ch.is_running is False
+    assert proc.terminated is True
+
+
+async def test_send_raises_a_transient_error_while_the_bridge_is_down(tmp_path, monkeypatch):
+    """A reply written while the socket is down must reach the delivery hub as a
+    failure it retries and counts, not as a delivered message."""
+    from raven.channels.errors import transient_network
+
+    ch = _make_channel(monkeypatch, tmp_path)
+    with pytest.raises(Exception) as excinfo:  # noqa: PT011
+        await ch.send("u1", "hi")
+    assert transient_network(excinfo.value)
+
+
+async def test_login_returns_once_the_bridge_reports_a_paired_session(tmp_path, monkeypatch):
+    """`raven channels login whatsapp` runs the same bridge the gateway runs and
+    ends when the phone has scanned."""
+    port = _free_port()
+    fake, proc = _FakeBridge(), _FakeProcess()
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        await fake.start(spawn_port)
+        return proc
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}")
+    monkeypatch.setattr(wb, "ensure_bridge_dir", lambda: tmp_path / "bridge")
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+
+    login = asyncio.create_task(ch.login())
+    try:
+        await _wait_for(lambda: bool(fake.clients))
+        await fake.emit({"type": "status", "status": "connected"})
+        assert await asyncio.wait_for(login, timeout=5) is True
+    finally:
+        login.cancel()
+        with suppress(asyncio.CancelledError):
+            await login
+        await fake.stop()
+
+    assert proc.terminated is True

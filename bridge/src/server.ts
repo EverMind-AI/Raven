@@ -33,6 +33,8 @@ export class BridgeServer {
   private wss: WebSocketServer | null = null
   private wa: WhatsAppClient | null = null
   private clients: Set<WebSocket> = new Set()
+  private lastQr: string | null = null
+  private lastStatus: string | null = null
 
   constructor(
     private port: number,
@@ -65,8 +67,17 @@ export class BridgeServer {
     this.wa = new WhatsAppClient({
       authDir: this.authDir,
       onMessage: msg => this.broadcast({ type: 'message', ...msg }),
-      onQR: qr => this.broadcast({ type: 'qr', qr }),
-      onStatus: status => this.broadcast({ type: 'status', status })
+      onQR: qr => {
+        this.lastQr = qr
+        this.broadcast({ type: 'qr', qr })
+      },
+      onStatus: status => {
+        this.lastStatus = status
+        if (status === 'connected') {
+          this.lastQr = null
+        }
+        this.broadcast({ type: 'status', status })
+      }
     })
 
     this.wss.on('connection', ws => {
@@ -93,6 +104,16 @@ export class BridgeServer {
 
   private setupClient(ws: WebSocket): void {
     this.clients.add(ws)
+
+    // Baileys emits a QR (and a pairing status) once, roughly every 60s. A client
+    // that attaches between two of those would otherwise show nothing until the
+    // next one, so replay what the bridge knows right now.
+    if (this.lastStatus) {
+      ws.send(JSON.stringify({ type: 'status', status: this.lastStatus }))
+    }
+    if (this.lastQr) {
+      ws.send(JSON.stringify({ type: 'qr', qr: this.lastQr }))
+    }
 
     ws.on('message', async data => {
       try {
