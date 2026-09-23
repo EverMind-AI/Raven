@@ -1,22 +1,29 @@
-"""WhatsApp Node.js bridge: token persistence, build/setup, and login spawn.
+"""WhatsApp Node.js bridge: token persistence, build/setup, and the process itself.
 
 The bridge (using @whiskeysockets/baileys) speaks the WhatsApp Web protocol;
 this module owns the local process/filesystem side — building it, minting the
-shared auth token, and launching the QR-login run. Live process flows are
+shared auth token, and running it as a child of whoever needs it (the channel
+adapter under the gateway, or the CLI login). Live process flows are
 integration/manual tested.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import secrets
 import shutil
 import subprocess
+import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, suppress
 from pathlib import Path
+from urllib.parse import urlparse
 
 from loguru import logger
+
+DEFAULT_BRIDGE_PORT = 3001
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 # How a long step (npm install, tsc) shows progress. The adapter owns no terminal;
 # the CLI login command installs a spinner here, everything else gets log lines.
@@ -97,15 +104,64 @@ def ensure_bridge_dir() -> Path:
     return install_dir
 
 
-def run_login(bridge_dir: Path, token: str, auth_dir: str) -> bool:
-    """Spawn `npm start` for the interactive QR login; blocks until it exits."""
-    npm = shutil.which("npm")
-    if not npm:
-        logger.error("npm not found. Please install Node.js.")
-        return False
-    env = {**os.environ, "BRIDGE_TOKEN": token, "AUTH_DIR": auth_dir}
+def bridge_endpoint(bridge_url: str) -> tuple[str, int]:
+    """The host and port a ``ws://`` bridge URL points at."""
+    parsed = urlparse(bridge_url)
+    return parsed.hostname or "localhost", parsed.port or DEFAULT_BRIDGE_PORT
+
+
+def is_local_bridge(bridge_url: str) -> bool:
+    """Whether the URL names this machine, i.e. whether raven may run the bridge
+    itself; a remote URL belongs to someone else and is only connected to."""
+    host, _ = bridge_endpoint(bridge_url)
+    return host in _LOCAL_HOSTS
+
+
+async def port_is_open(host: str, port: int, timeout: float = 1.0) -> bool:
+    """Whether something accepts a TCP connection there right now."""
     try:
-        subprocess.run([npm, "start"], cwd=bridge_dir, check=True, env=env)
-    except subprocess.CalledProcessError:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
+    except (OSError, TimeoutError):
         return False
+    writer.close()
+    with suppress(Exception):
+        await writer.wait_closed()
     return True
+
+
+async def wait_for_port(host: str, port: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if await port_is_open(host, port):
+            return True
+        await asyncio.sleep(0.25)
+    return False
+
+
+async def spawn_bridge(bridge_dir: Path, token: str, auth_dir: str, port: int) -> asyncio.subprocess.Process:
+    """Run the built bridge as a child process. Raises RuntimeError without node.
+
+    Standard streams are inherited rather than piped: the bridge prints the
+    pairing QR and its own diagnostics, which belong in the login terminal or in
+    the gateway log, and a pipe nobody drains would eventually block the child.
+    """
+    node = shutil.which("node")
+    if not node:
+        raise RuntimeError("node not found. Please install Node.js >= 20.")
+    env = {**os.environ, "BRIDGE_TOKEN": token, "AUTH_DIR": auth_dir, "BRIDGE_PORT": str(port)}
+    return await asyncio.create_subprocess_exec(node, "dist/index.js", cwd=bridge_dir, env=env)
+
+
+async def terminate_bridge(proc: asyncio.subprocess.Process, timeout: float = 5.0) -> None:
+    """Ask the bridge to quit, and kill it if it is still up after ``timeout``."""
+    if proc.returncode is not None:
+        return
+    with suppress(ProcessLookupError):
+        proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout)
+    except TimeoutError:
+        with suppress(ProcessLookupError):
+            proc.kill()
+        with suppress(Exception):
+            await proc.wait()

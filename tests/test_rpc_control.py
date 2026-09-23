@@ -278,6 +278,12 @@ async def test_channels_qr_reads_a_real_whatsapp_adapter(tmp_path: Path, monkeyp
     # pairs by QR but has no rebind of its own yet.
     assert r == {"qr": None, "qr_text": None, "connected": False, "running": True, "rebind": None}
 
+    # Reaching the bridge is not being paired either -- the page has to keep
+    # asking for a scan until the bridge says a phone answered.
+    ch._bridge_up = True
+    r = (await _dispatch(d, "gateway.channels.qr", {"name": "whatsapp"}))["result"]
+    assert r["connected"] is False
+
     await ch._handle_bridge_message(_json.dumps({"type": "qr", "qr": "2@abc"}))
     r = (await _dispatch(d, "gateway.channels.qr", {"name": "whatsapp"}))["result"]
     assert r["qr"].startswith("data:image/png;base64,")
