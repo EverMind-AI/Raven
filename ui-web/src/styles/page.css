@@ -3387,6 +3387,34 @@ details[open] summary { margin-bottom: 8px; }
   :root:not([data-theme="light"]) .pmtile.th6 { background-color: #43202f; color: #e392b8; }
   :root:not([data-theme="light"]) .pmtile.th7 { background-color: #2b2f35; color: #aeb8c4; }
 }
+/* An entrance's app icon, in the frame the letter tile above would have had
+   (components/ChannelMark.tsx). A store icon is a tile already, so it fills the
+   frame, and the hairline is drawn OVER it: the five on a white or near-white
+   ground -- Feishu, WeCom, QQ, Telegram, Slack -- otherwise have no edge on the
+   light theme's list. */
+.channel-mark {
+  position: relative; width: 38px; height: 38px; border-radius: 11px; flex: none;
+  display: grid; place-items: center; overflow: hidden;
+}
+.channel-mark::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(28, 27, 25, .08);
+}
+:root[data-theme="dark"] .channel-mark::after { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .channel-mark::after { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
+}
+.channel-mark img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* The marks that are not tiles, set on a plate of the frame's own: Matrix's
+   bracketed m, and the envelope mail is drawn with. */
+.channel-mark-inset { background: var(--paper); color: var(--muted); }
+.channel-mark-inset img, .channel-mark-inset svg { width: 22px; height: 22px; }
+.channel-mark-inset svg { stroke-linecap: round; stroke-linejoin: round; }
+/* matrix.svg flips its ink with a prefers-color-scheme rule inside the file,
+   which an <img> evaluates against its own used color-scheme rather than the
+   root's data-theme -- the same hand-over .agent-mark img makes. */
+:root[data-theme="dark"] .channel-mark img { color-scheme: dark; }
+:root[data-theme="light"] .channel-mark img { color-scheme: light; }
 /* name + publisher stack beside the tile */
 .pmid { min-width: 0; display: grid; gap: 1px; }
 .pmnm { display: flex; align-items: center; gap: 5px; min-width: 0;

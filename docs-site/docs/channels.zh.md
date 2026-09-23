@@ -37,7 +37,7 @@ Platform message
 | `matrix` | Matrix sync | Homeserver、user id、access token | 是 |
 | `qq` | QQ bot | App id 和 secret | 否 |
 | `email` | IMAP / SMTP | 收发账户设置 | 否 |
-| `mochat` | Mochat | 服务配置与 claw token | 否 |
+| `mochat` | MoChat | 服务配置与 claw token | 否 |
 
 用已安装版本的命令查字段，不要猜测：
 

@@ -40,7 +40,7 @@ nothing by itself about every inbound media format or platform size limit.
 | `matrix` | Matrix sync | Homeserver, user id, access token | Yes |
 | `qq` | QQ bot | App id and secret | No |
 | `email` | IMAP / SMTP | Receiving and sending account settings | No |
-| `mochat` | Mochat | Service configuration and claw token | No |
+| `mochat` | MoChat | Service configuration and claw token | No |
 
 Use the installed version's commands to inspect fields without guessing:
 

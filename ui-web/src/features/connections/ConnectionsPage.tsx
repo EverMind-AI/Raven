@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { Tile } from '../../components/SetupRow'
+import { ChannelMark } from '../../components/ChannelMark'
 import { Field } from '../../components/SetupSheet'
 import {
   TwoPane, TwoPaneFind, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow, TwoPaneSwitch,
@@ -8,6 +8,7 @@ import {
 } from '../../components/TwoPane'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
+import { chanName } from './catalogue'
 import * as store from './store'
 
 import type { ConnChannel, ConnField } from './types'
@@ -18,10 +19,6 @@ import type { JSX } from 'react'
    pane draws come from the channel's own Pydantic schema, shipped on
    channels.status, so the form cannot drift from the model.
  */
-
-/* One accessor so a renderer never has to know which of the catalogue's two
-   spellings an entry uses (i18n key vs verbatim brand name). */
-const chanName = (c: ConnChannel): string => (c.key ? t(c.key) : (c.name ?? c.id))
 
 /* Configured means the schema's required fields are all set. Entries whose
    schema declares no required fields count as configured out of the box. */
@@ -175,7 +172,7 @@ function ConnSide({ rows, loaded, q, onQ, pickedId }: {
         key={c.id}
         current={c.id === pickedId}
         off={!c.on}
-        icon={<Tile name={cn} />}
+        icon={<ChannelMark id={c.id} name={cn} />}
         name={cn}
         sub={sub.text}
         {...(sub.tone ? { tone: sub.tone } : {})}
@@ -227,7 +224,7 @@ function ConnDetail({ c }: { c: ConnChannel }): JSX.Element {
   return (
     <>
       <TwoPaneHead
-        icon={<Tile name={chanName(c)} />}
+        icon={<ChannelMark id={c.id} name={chanName(c)} />}
         name={chanName(c)}
         meta={signing ? t('gui.conn.cost_scan_line') : <span className={'st ' + st.cls}>{st.text}</span>}
       />

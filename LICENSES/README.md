@@ -20,6 +20,17 @@ history.
   header; the stylesheet lifts it in the light theme rather than editing the
   file. Neither icon set below carries an AMD mark, which is why this one comes
   straight from the vendor.
+- The channel marks under `ui-web/src/assets/channels/` come straight from the
+  vendors too, on the same nominative basis: each identifies the channel row it
+  sits on. Nine are the app icons the vendors publish on their App Store
+  listings, resampled from the listing's 512px artwork to 96x96 PNG. For the
+  five Chinese apps the listing is where a colour icon was found: the
+  permissively licensed icon sets checked (lobe-icons, `@cherrystudio/ui`, SVG
+  Logos, Simple Icons and the brand sets on Iconify) carry them only as
+  single-colour glyphs. `matrix.svg` and `mochat.svg` are the files matrix.org
+  and MoChat serve as their own marks, copied byte for byte.
+  `scripts/refresh_channel_marks.py`
+  names the listing or URL behind every file and regenerates the directory.
 - `MIT-cherry-studio.txt` - the provider and model brand marks under
   `ui-web/src/assets/providers/`, taken from `@cherrystudio/ui`
   (CherryHQ/cherry-studio, commit 6beb5e1b7e, 2026-09-07) at
