@@ -1,0 +1,5 @@
+section#extAgentsPage.page[data-open=false]
+  header
+    h2
+  div.work
+    div#extAgentsBody.wrap

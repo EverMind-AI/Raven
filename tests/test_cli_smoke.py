@@ -186,7 +186,6 @@ REGISTERED_COMMAND_NAMES = {
     "agents",
     "channels",
     "cron",
-    "deep-research",
     "doctor",
     "gateway",
     "import",

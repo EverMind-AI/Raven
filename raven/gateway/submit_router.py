@@ -3,11 +3,11 @@
 The gateway hosting the page runs two spines over one engine: its own, whose
 hub delivers to the IM channels, and the page's (``build_rpc_stack``), whose
 lanes carry the browser's turns. A turn the runtime submits on a conversation's
-behalf -- a sub-agent's result relay, a deep-research delivery -- used to go to
-the gateway spine whatever the conversation, so a relay into a page session ran
-on a lane of its own while the page's next turn ran on the page spine's lane for
-the same session: two turns in one conversation at once, the session written
-from both sides, and ``turn.send``'s one-turn-per-session guard seeing neither
+behalf -- a sub-agent's result relay -- used to go to the gateway spine
+whatever the conversation, so a relay into a page session ran on a lane of its
+own while the page's next turn ran on the page spine's lane for the same
+session: two turns in one conversation at once, the session written from both
+sides, and ``turn.send``'s one-turn-per-session guard seeing neither
 (2026-09-08, the same tool calls drawn twice and the result delivered twice).
 
 Routing by conversation key, the way ``RoutingQuestionBroker`` routes questions:

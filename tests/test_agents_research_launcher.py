@@ -20,9 +20,16 @@ import pytest
 
 #: The vendored twin's visible tool face -- its config disables everything
 #: else its fork registers. The B side must show exactly this face: trunk
-#: grew tools the fork never had (the deep_research offer stub above all,
-#: which would have a research agent offering to outsource research), and
-#: every one of them must be disabled by the product config, not by luck.
+#: grew tools the fork never had, and every one of them must be disabled by
+#: the product config, not by luck. The `deep_research` row outlives the
+#: tool: the list is a name denylist, and a plugin tool may carry that name.
+#:
+#: tool_call is the one name this face carries that no config row put there:
+#: raven reserves the tool-search meta-pair from tools.disabledTools, because
+#: the fold reads their absence from an array as "this request has no search
+#: route" and answers by shipping every schema. tool_call registers whatever
+#: the fold is doing; tool_search follows tools.toolSearch.enabled, off in this
+#: product's config, so it stays out.
 VENDORED_TOOL_FACE = {
     "read_file",
     "write_file",
@@ -33,6 +40,8 @@ VENDORED_TOOL_FACE = {
     "web_search",
     "web_fetch",
     "ask_user",
+    "tool_call",
+    "tool_search",
 }
 
 REPO = Path(__file__).resolve().parent.parent

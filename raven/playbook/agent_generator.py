@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.agent.harness_capabilities import function_enabled, parameter_enabled
 from raven.agent.subagent.delegate import DelegateTable, Worker
 from raven.playbook.agent_spec import AgentPlaybookSpec
 
@@ -83,6 +84,12 @@ the dataclass would carry the field names without the reason for any of them.
 The two are held together by :func:`_spec_from_args`, which validates what
 comes back against the real model.
 """
+
+_PARTICIPANT_FUNCTIONS: tuple[tuple[str, str, str], ...] = (
+    ("memory", "intake", "Define intake(text, step). Return a dict with optional text, reply, and note keys, or None."),
+    ("planning", "advise", "Define advise(step). Return guidance text for the next model call, or None."),
+    ("action", "salvage", "Define salvage(step). Return a final reply string when the turn has no answer, or None."),
+)
 
 
 def roster_note(meta: Any) -> str:
@@ -160,7 +167,7 @@ def emit_tool(
             },
             "systemPrompt": {
                 "type": "string",
-                "description": "What this worker should and should not do. Omit when the agent's own job covers it.",
+                "description": "Task-specific instructions appended to the worker's existing identity. Omit when the brief is enough.",
             },
             "stopWhen": {"type": "string", "description": "Optional: what, once obtained, means this worker is done."},
             "tools": {
@@ -203,6 +210,33 @@ def emit_tool(
         "required": ["name"],
         "additionalProperties": False,
     }
+    properties = worker["properties"]
+    for module, name, field in (
+        ("memory", "systemPrompt", "systemPrompt"),
+        ("memory", "stopWhen", "stopWhen"),
+        ("capability", "tools", "tools"),
+        ("action", "checks", "checks"),
+    ):
+        if not parameter_enabled(module, name):
+            properties.pop(field, None)
+    if not function_enabled("action", "participant", "judge"):
+        properties.pop("code", None)
+    function_properties = {
+        name: {
+            "type": "string",
+            "description": description
+            + " The step argument is a read-only JSON-like dict with session_key, iteration, response, transcript, history, turn_base, question, rollbacks, mode, mode_overlay, phase, tools, window, max_iterations, and tools_ran; use only the allow-listed Python subset.",
+        }
+        for module, name, description in _PARTICIPANT_FUNCTIONS
+        if function_enabled(module, "participant", name)
+    }
+    if function_properties:
+        properties["functions"] = {
+            "type": "object",
+            "properties": function_properties,
+            "additionalProperties": False,
+            "description": "Optional generated participant functions, keyed by their loop verb.",
+        }
     return [
         {
             "type": "function",
@@ -231,13 +265,13 @@ def render_charter(brief: str, system_prompt: str, stop_when: str, tools: list[s
     drift.
     """
     lines: list[str] = []
-    if system_prompt.strip():
-        lines.append(system_prompt.strip())
-    elif brief.strip():
+    if brief.strip():
         lines.append(brief.strip())
-    if tools:
+    if parameter_enabled("memory", "systemPrompt") and system_prompt.strip():
+        lines.append(system_prompt.strip())
+    if parameter_enabled("capability", "tools") and tools:
         lines.append(f"Tools this job calls for: {', '.join(tools)}.")
-    if stop_when.strip():
+    if parameter_enabled("memory", "stopWhen") and stop_when.strip():
         lines.append(f"Done when: {stop_when.strip()}")
     if not lines:
         return ""
@@ -253,24 +287,43 @@ def build_payload(brief: str, spec: "SubPlaybook | None") -> dict[str, Any] | No
     preamble. Both are built from one source so the two can never say different
     things.
     """
-    prompt = (spec.memory.system_prompt if spec else "") or brief
-    tools = spec.capability.tools if spec else None
+    instruction_addendum = (
+        (spec.memory.system_prompt if spec else "") if parameter_enabled("memory", "systemPrompt") else ""
+    )
+    tools = spec.capability.tools if spec and parameter_enabled("capability", "tools") else None
     checks = spec.action.checks if spec and spec.action.checks else None
-    stop_when = spec.stop_when if spec else ""
+    stop_when = spec.stop_when if spec and parameter_enabled("memory", "stopWhen") else ""
     payload: dict[str, Any] = {}
-    if prompt.strip():
-        payload["prompt"] = prompt.strip()
+    if brief.strip():
+        payload["brief"] = brief.strip()
+    if instruction_addendum.strip():
+        payload["instructionAddendum"] = instruction_addendum.strip()
+    legacy_prompt = "\n\n".join(part for part in (brief.strip(), instruction_addendum.strip()) if part)
+    if legacy_prompt:
+        payload["prompt"] = legacy_prompt
     if tools is not None:
         payload["tools"] = list(tools)
     if stop_when.strip():
         payload["stopWhen"] = stop_when.strip()
-    if checks and checks.rules:
+    if parameter_enabled("action", "checks") and checks and checks.rules:
         payload["checks"] = [rule.model_dump(by_alias=True, exclude_defaults=True) for rule in checks.rules]
     # Carried whether or not there are rules beside it: a judgement some jobs
     # can only state as code is the reason the field exists, and one written
     # without any declarative rule would otherwise be dropped on the way out.
-    if checks and checks.code.strip():
+    if function_enabled("action", "participant", "judge") and checks and checks.code.strip():
         payload["code"] = checks.code
+    generated_functions: dict[str, str] = {}
+    if spec:
+        for module, functions in (
+            ("memory", spec.memory.functions),
+            ("planning", spec.planning.functions),
+            ("action", spec.action.functions),
+        ):
+            for name, source in functions.items():
+                if function_enabled(module, "participant", name) and source.strip():
+                    generated_functions[name] = source
+    if generated_functions:
+        payload["functions"] = generated_functions
     if spec and spec.timeout_seconds:
         payload["timeoutSeconds"] = spec.timeout_seconds
     return payload or None
@@ -318,11 +371,54 @@ def _spec_from_args(args: dict[str, Any], roster: set[str]) -> tuple[AgentPlaybo
             logger.info("agent playbook: dropping worker {!r} -- not on the roster", name)
             continue
         label = str(row.get("as") or "") or name
+        switches = (
+            ("systemPrompt", parameter_enabled("memory", "systemPrompt")),
+            ("stopWhen", parameter_enabled("memory", "stopWhen")),
+            ("tools", parameter_enabled("capability", "tools")),
+            ("checks", parameter_enabled("action", "checks")),
+            ("code", function_enabled("action", "participant", "judge")),
+        )
+        disabled = [field for field, enabled in switches if field in row and not enabled]
+        if disabled:
+            errors.append(f"{index}. disabled harness field(s): {', '.join(disabled)}")
+            continue
+        raw_functions = row.get("functions")
+        if "functions" in row and not isinstance(raw_functions, dict):
+            errors.append(f"{index}. functions must be an object")
+            continue
+        function_modules = {function_name: module for module, function_name, _ in _PARTICIPANT_FUNCTIONS}
+        generated_functions: dict[str, tuple[str, str]] = {}
+        for function_name, source in (raw_functions or {}).items():
+            module = function_modules.get(function_name)
+            if module is None:
+                errors.append(f"{index}. unknown generated participant function: {function_name}")
+                continue
+            if not function_enabled(module, "participant", function_name):
+                errors.append(f"{index}. disabled harness field(s): functions.{function_name}")
+                continue
+            if not isinstance(source, str) or not source.strip():
+                errors.append(f"{index}. functions.{function_name} must be non-empty Python source")
+                continue
+            if len(source) > MAX_CODE_CHARS:
+                errors.append(f"{index}. functions.{function_name} exceeds {MAX_CODE_CHARS} characters")
+                continue
+            try:
+                from raven.agent.subagent.charter_code import compile_function
+
+                compile_function(source, function_name)
+            except Exception as exc:
+                errors.append(f"{index}. functions.{function_name} was refused: {exc}")
+                continue
+            generated_functions[function_name] = (module, source)
+        if any(message.startswith(f"{index}.") for message in errors):
+            continue
         sub: dict[str, Any] = {}
         if row.get("systemPrompt"):
             sub.setdefault("memory", {})["systemPrompt"] = str(row["systemPrompt"])
         if row.get("stopWhen"):
             sub["stopWhen"] = str(row["stopWhen"])
+        for function_name, (module, source) in generated_functions.items():
+            sub.setdefault(module, {}).setdefault("functions", {})[function_name] = source
         if isinstance(row.get("tools"), list):
             sub.setdefault("capability", {})["tools"] = [str(x) for x in row["tools"]]
         # Both halves of the judgement seat land under one key, because a

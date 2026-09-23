@@ -1,4 +1,8 @@
-# Tracing API
+# Tracing and Instrumentation API { #tracing-api }
+
+To inspect a failed task, export a reviewed report, or create a replay-based
+regression, start with [Trajectory debugging and replay](trajectory-debugging.md).
+This page is the instrumentation contract.
 
 The contract between **raven** (and any other adopter) and the in-tree
 `raven.tracing` implementation. `raven-tracing` is the planned standalone
@@ -101,7 +105,7 @@ from raven.observability import semconv
 async def chat_with_retry(self, ...): ...
 ```
 
-`trace.instrument(name, *, kind=None, seed=None, on_open=None, extract=None)`
+`trace.instrument(name, *, kind=None, detached=False, root=False, seed=None, on_open=None, extract=None)`
 wraps a sync **or** async method:
 
 - `extract(span, bound_args, result, exc)` — runs in `finally` (input captured
@@ -197,7 +201,8 @@ logged.
 
 Naming rules:
 - `name` = `<domain>.<verb>`, lowercase dotted.
-- attribute keys = `<domain>.<field>`, matching the span's domain.
+- attribute keys = `<domain>.<field>`, following the semantic conventions above;
+  the attribute namespace can differ from the span name, as with `turn.*` on `session.turn`.
 - kind is a closed vocabulary: `session|model|tool|subagent|skill|memory|plugin`.
 
 ## 3. Custom nodes
@@ -231,9 +236,9 @@ Rules:
    (env override). The API no-ops when disabled.
 4. The app never imports the SDK internals (storage/viewer) — only the facade.
 
-There is no monkeypatch / auto-instrumentation path: all instrumentation is the
-explicit `@trace.instrument` annotations in raven's own source, so it moves with
-the code and shows up in diffs (never silently breaks on a refactor).
+Raven adds instrumentation explicitly through `@trace.instrument` and
+`trace.span` in its own source. It does not install a monkeypatch-based probe.
+Keep instrumentation tests with the affected code when refactoring.
 
 ## 5. Versioning & governance
 

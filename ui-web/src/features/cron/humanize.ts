@@ -1,6 +1,11 @@
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 
 import type { CronJob } from './types'
+
+/* The mark between two items of a list, which is a word of the language like
+   the items themselves: an ideographic comma reads as Chinese whatever it
+   holds together. */
+const sep = (): string => t('gui.cron.h.sep')
 
 /* What a schedule means, in words. The raw five-field expression stays in
    the editor for whoever writes one, but nobody should have to read it. */
@@ -11,8 +16,14 @@ export function cronExprHuman(expr: string): string {
   const raw = `cron ${expr}`
   if (p.length !== 5) return raw
   const [m, h, dom, mon, dow] = p as [string, string, string, string, string]
-  if (dom !== '*' || mon !== '*') return raw
+  if (mon !== '*') return raw
   const pad = (n: string | number) => String(n).padStart(2, '0')
+  /* A day of the month is the one shape the rest of this reader cannot word:
+     everything below is a weekday-and-time sentence. */
+  if (dom !== '*') {
+    if (dow !== '*' || !/^\d{1,2}$/.test(dom) || !/^\d+$/.test(m) || !/^\d+$/.test(h)) return raw
+    return t('gui.cron.h.monthly', { d: Number(dom), hm: `${pad(h)}:${pad(m)}` })
+  }
   let day: string
   if (dow === '*') day = t('gui.cron.h.daily')
   else if (dow === '1-5') day = t('gui.cron.h.weekdays')
@@ -21,7 +32,7 @@ export function cronExprHuman(expr: string): string {
     day = dow
       .split(',')
       .map((d) => t('gui.cron.h.dow' + d))
-      .join('、')
+      .join(sep())
   } else return raw
   let time: string
   const mN = /^\d+$/.test(m)
@@ -35,7 +46,7 @@ export function cronExprHuman(expr: string): string {
     time = h
       .split(',')
       .map((x) => `${pad(x)}:${pad(m)}`)
-      .join('、')
+      .join(sep())
   } else if (hStep && mN) time = t('gui.cron.h.every_h', { n: hStep[1]! })
   else if (mStep && h === '*') time = t('gui.cron.h.every_m', { n: mStep[1]! })
   else {

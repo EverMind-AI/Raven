@@ -3,6 +3,8 @@
 import asyncio
 from dataclasses import replace
 
+import pytest
+
 from raven.acp_client.asker import current_ask
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.message import MessageTool
@@ -23,6 +25,7 @@ from raven.rpc.spine import (
 )
 from raven.sandbox import ExecResult, SandboxExecutor
 from raven.spine import (
+    AnswerlessTurnError,
     ChatType,
     EpisodeStart,
     MediaOut,
@@ -77,9 +80,7 @@ class _RunTurnLoop:
         self.tools = tools if tools is not None else {}
         self.last_stream = None
 
-    async def run_turn(
-        self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None, text_sink=None
-    ) -> TurnOutcome:
+    async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None) -> TurnOutcome:
         self.last_stream = stream
         for ev in self._events:
             await emit(ev)
@@ -193,6 +194,30 @@ async def test_user_turn_receives_tui_approval_capability(tmp_path):
 
     assert executor.commands == ["rm file.txt"]
     assert responder.requests[0]["turn_id"] == "turn-a"
+    assert (responder.requests[0]["origin"], responder.requests[0]["origin_name"]) == ("user", "")
+
+
+async def test_a_direct_chat_names_the_instance_on_the_prompt(tmp_path):
+    # The person typed it, but the instance's tools are the ones that will ask,
+    # so the prompt says which sub-agent wants to act.
+    executor = _DirectRecordingExecutor()
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    loop = _ApprovalRunLoop(tool)
+    responder = _ApprovalResponder(True)
+    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {}, approval_responder=responder)
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=_src(),
+        text="delete",
+        conversation="tui:c1#raven-code/h1",
+        turn_id="turn-d",
+        direct_target=("raven-code", "h1"),
+    )
+    _events, emit = _collect()
+
+    await runner.run(req, emit, lambda: [])
+
+    assert (responder.requests[0]["origin"], responder.requests[0]["origin_name"]) == ("subagent", "raven-code")
 
 
 async def test_a_subagent_relay_in_a_watched_conversation_receives_the_approval_capability(tmp_path):
@@ -214,6 +239,7 @@ async def test_a_subagent_relay_in_a_watched_conversation_receives_the_approval_
 
     assert executor.commands == ["rm file.txt"]
     assert responder.requests[0]["turn_id"] == "turn-s"
+    assert responder.requests[0]["origin"] == "subagent"
 
 
 async def test_a_subagent_relay_nobody_watches_does_not_receive_the_approval_capability(tmp_path):
@@ -410,7 +436,7 @@ async def test_runner_emits_eve22_synthetic_tool_complete_when_message_tool_fire
     message_tool = MessageTool()
     loop = _RunTurnLoop(tools={"message": message_tool})
 
-    async def _run_turn(req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None):
+    async def _run_turn(req, emit, drain, *, stream, usage_sink=None):
         # the message tool replied this turn (turn-local sent flag)
         message_tool._turn.set(replace(message_tool._cur(), sent=True))
         return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
@@ -450,6 +476,27 @@ async def test_runner_cron_captures_reply_non_streaming():
 
     assert loop.last_stream is False  # CRON runs non-streaming
     assert readback["cron:job1"] == "reminder fired"  # reply captured for fan-out
+
+
+async def test_runner_cron_clears_the_readback_a_failed_turn_would_hand_on():
+    # The submitter pops the read-back text by conversation after the handle
+    # resolves. A turn that fails stores nothing, so without the clear the next
+    # run on that conversation would read the previous run's reply as its own.
+    readback: dict[str, str] = {}
+    req = TurnRequest(origin=Origin.CRON, source=_src(chat_id="direct"), text="[cron]", conversation="cron:job1")
+    _events, emit = _collect()
+    await RpcTurnRunner(_RunTurnLoop(reply_text="reminder fired"), FakeEmitter(), {}, readback).run(
+        req, emit, lambda: []
+    )
+    assert readback["cron:job1"] == "reminder fired"
+
+    class _FailsLoop(_RunTurnLoop):
+        async def run_turn(self, req, emit, drain, **kwargs) -> TurnOutcome:
+            raise AnswerlessTurnError("Error calling LLM (server@openrouter): 503")
+
+    with pytest.raises(AnswerlessTurnError):
+        await RpcTurnRunner(_FailsLoop(), FakeEmitter(), {}, readback).run(req, emit, lambda: [])
+    assert "cron:job1" not in readback
 
 
 # --- RpcOutlet.deliver: maps each spine event to its wire event ---
@@ -653,6 +700,89 @@ async def test_outlet_deliver_tool_complete_forwards_the_file_change():
     assert "file_change" not in emitter.emitted[0][1]["payload"]
 
 
+async def test_outlet_deliver_tool_complete_forwards_the_files_that_went():
+    """The deletions, which no tool result carries and no argument records.
+
+    Absent rather than null when the call removed nothing, for the reason
+    ``file_change`` is: nearly every call removes nothing, and a payload that
+    grew a null key under every one of them would change the shape the wire
+    already had. An empty list is the same nothing as no list.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t1",
+            result_preview="ok",
+            truncated=False,
+            file_removed=[{"path": "/tmp/gone.txt", "before": "one\ntwo\n"}, {"path": "/tmp/also.txt"}],
+            conversation_id="tui:c1",
+        )
+    )
+    assert emitter.emitted[0][1]["payload"]["file_removed"] == [
+        {"path": "/tmp/gone.txt", "before": "one\ntwo\n"},
+        {"path": "/tmp/also.txt"},
+    ]
+
+    for nothing in (None, []):
+        emitter.emitted.clear()
+        await outlet.deliver(
+            ToolEvent(
+                phase=ToolPhase.COMPLETE,
+                tool_call_id="t2",
+                result_preview="ok",
+                truncated=False,
+                file_removed=nothing,
+                conversation_id="tui:c1",
+            )
+        )
+        assert "file_removed" not in emitter.emitted[0][1]["payload"], nothing
+
+
+async def test_outlet_deliver_tool_complete_forwards_the_files_a_command_wrote():
+    """The files a command left behind, which its own result never names.
+
+    Absent rather than null when there are none, for the reason ``file_change``
+    and ``file_removed`` are: every call that is not a command has none, and a
+    payload that grew a null key under all of them would change the shape the
+    wire already had.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t1",
+            result_preview="ok",
+            truncated=False,
+            file_written=[
+                {"path": "/tmp/made.txt", "created": True, "size": 8, "lines": 2},
+                {"path": "/tmp/kept.txt", "created": False, "size": 16, "lines": None},
+            ],
+            conversation_id="tui:c1",
+        )
+    )
+    assert emitter.emitted[0][1]["payload"]["file_written"] == [
+        {"path": "/tmp/made.txt", "created": True, "size": 8, "lines": 2},
+        {"path": "/tmp/kept.txt", "created": False, "size": 16, "lines": None},
+    ]
+
+    for nothing in (None, []):
+        emitter.emitted.clear()
+        await outlet.deliver(
+            ToolEvent(
+                phase=ToolPhase.COMPLETE,
+                tool_call_id="t2",
+                result_preview="ok",
+                truncated=False,
+                file_written=nothing,
+                conversation_id="tui:c1",
+            )
+        )
+        assert "file_written" not in emitter.emitted[0][1]["payload"], nothing
+
+
 async def test_a_blocked_action_rides_notice_and_never_the_token_stream():
     """The one notice that replaces the answer instead of accompanying it.
 
@@ -676,11 +806,68 @@ async def test_a_blocked_action_rides_notice_and_never_the_token_stream():
             "tui:c1",
             {
                 "type": "notice",
-                "payload": {"kind": "action_blocked", "detail": "Error: Command blocked by safety guard"},
+                "payload": {
+                    "kind": "action_blocked",
+                    "detail": "Error: Command blocked by safety guard",
+                    "transient": False,
+                },
             },
         )
     ]
     assert not any(ev["type"] == "token.delta" for _, ev in emitter.emitted)
+
+
+async def test_a_degraded_organ_reaches_the_page_as_a_closing_notice():
+    """The only surface that ever heard this was a channel; the page and the
+    terminal never did, so a memoryless answer was indistinguishable there from
+    a remembered one -- which is the whole point of the degrade-with-notice
+    ruling. It accompanies the answer, so it is a row and not a status."""
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        Notice(kind=NoticeKind.ORGAN_DEGRADED, detail="long-term memory was unavailable", conversation_id="tui:c1")
+    )
+    assert emitter.emitted == [
+        (
+            "tui:c1",
+            {
+                "type": "notice",
+                "payload": {
+                    "kind": "organ_degraded",
+                    "detail": "long-term memory was unavailable",
+                    "transient": False,
+                },
+            },
+        )
+    ]
+
+
+async def test_a_retry_wait_rides_notice_marked_transient_and_tagged_with_its_lane():
+    """The other notice the runtime raises about a turn, and the opposite of a
+    blocked action: the turn is still running, so a client must draw it where the
+    next output frame replaces it rather than as the turn's outcome.
+
+    Tagged, because a direct chat runs on its own lane and the client holds one
+    subscription per session: an untagged notice reads as the main agent's, and a
+    sub-agent's retry was drawn into the main conversation.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter, {"tui:c1#sub/h1": {"agent": "sub", "handle": "h1"}})
+    await outlet.deliver(Notice(kind=NoticeKind.LLM_RETRY, detail="server", conversation_id="tui:c1#sub/h1"))
+    assert emitter.emitted == [
+        (
+            "tui:c1",
+            {
+                "type": "notice",
+                "payload": {
+                    "kind": "llm_retry",
+                    "detail": "server",
+                    "transient": True,
+                    "target": {"agent": "sub", "handle": "h1"},
+                },
+            },
+        )
+    ]
 
 
 async def test_every_outlet_emission_validates_against_the_wire_contract():
@@ -712,6 +899,20 @@ async def test_every_outlet_emission_validates_against_the_wire_contract():
             diff="--- a\n+++ b",
             metadata={"k": "v"},
             file_change={"path": "/tmp/a.txt", "after": "new", "before": "old"},
+            conversation_id="tui:c1",
+        ),
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t2",
+            result_preview="ok",
+            file_removed=[{"path": "/tmp/gone.txt", "before": "one\ntwo\n"}],
+            conversation_id="tui:c1",
+        ),
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t3",
+            result_preview="ok",
+            file_written=[{"path": "/tmp/made.txt", "created": True, "size": 8, "lines": 2}],
             conversation_id="tui:c1",
         ),
         Text(content="hello", conversation_id="tui:c1"),
@@ -889,9 +1090,9 @@ async def test_a_runtime_turn_emits_the_boundary_and_no_message_start():
 
 
 async def test_a_subagent_turn_without_delegated_identity_emits_no_boundary():
-    """The reviewer's shape: deep research's deliver_text turn is Origin.
-    SUBAGENT but persists only an assistant entry -- no delegated user entry
-    opens it on reload. Emitting a live boundary for it would advance the
+    """The reviewer's shape: a deliver_text turn with no delegated identity is
+    Origin.SUBAGENT but persists only an assistant entry -- no delegated user
+    entry opens it on reload. Emitting a live boundary for it would advance the
     workspace counter in a way the stored history does not, so it must not."""
     emitter = FakeEmitter()
     loop = _RunTurnLoop(events=[StreamDelta(delta="answer")])
@@ -1055,7 +1256,7 @@ async def test_cron_turn_deliverables_key_to_dead_conversation_not_user_session(
 
 async def test_failed_turn_emits_error():
     class _BoomLoop:
-        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None) -> TurnOutcome:
+        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
             raise RuntimeError("boom")
 
     emitter = FakeEmitter()
@@ -1078,7 +1279,7 @@ async def test_cancelled_turn_does_not_emit_error():
     started = asyncio.Event()
 
     class _HangLoop:
-        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None) -> TurnOutcome:
+        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
             started.set()
             await asyncio.sleep(3600)
             return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
@@ -1103,11 +1304,11 @@ async def test_cancelled_turn_does_not_emit_error():
 
 async def test_an_internally_submitted_turns_completion_carries_its_own_id():
     """A lane is serial, so a turn the runtime submits itself (a sub-agent
-    announce, a deep-research delivery) can end while a client's turn is still
-    QUEUED behind it on the same lane. Stamping the completion from the lane's
-    slot names the queued turn instead, and the client reads its own turn as
-    ended -- losing that turn's whole content. The completion must name the turn
-    that actually ended.
+    announce) can end while a client's turn is still QUEUED behind it on the
+    same lane. Stamping the completion from the lane's slot names the queued
+    turn instead, and the client reads its own turn as ended -- losing that
+    turn's whole content. The completion must name the turn that actually
+    ended.
     """
     emitter = FakeEmitter()
     loop = _RunTurnLoop(events=[Text(content="announce")])

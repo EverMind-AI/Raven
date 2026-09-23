@@ -3,7 +3,8 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { setCurrent } from '../../shell/session'
+import { setCurrent } from '../../lib/session'
+import { resetSources, setSources } from '../../state/sources'
 import * as deliveries from './deliveries'
 import * as workspace from './store'
 
@@ -155,7 +156,7 @@ describe('delivery registry', () => {
 
   it('asks the source for the conversation, once, and takes what it answers', async () => {
     const asked: string[] = []
-    window.DS = {
+    setSources({
       workspace: {
         shortPath: (p: string) => p,
         hostPlatform: () => 'mac',
@@ -164,7 +165,7 @@ describe('delivery registry', () => {
           return [{ path: '/w/a.md', name: 'a.md', title: 'recovered' }]
         },
       } as WorkspaceSource,
-    }
+    })
 
     setCurrent('tui:s1')
     await workspace.loadDeliveries('tui:s1')
@@ -172,7 +173,7 @@ describe('delivery registry', () => {
     expect(asked).toEqual(['tui:s1'])
     expect(deliveries.list().map((row) => row.title)).toEqual(['recovered'])
     setCurrent(null)
-    window.DS = undefined
+    resetSources()
   })
 
   /* The reader can click another conversation while the answer is in flight,
@@ -180,13 +181,13 @@ describe('delivery registry', () => {
   it('drops an answer for a conversation the reader has already left', async () => {
     let release: (rows: unknown) => void = () => {}
     setCurrent('tui:a')
-    window.DS = {
+    setSources({
       workspace: {
         shortPath: (p: string) => p,
         hostPlatform: () => 'mac',
         deliverables: () => new Promise((resolve) => { release = resolve }),
       } as WorkspaceSource,
-    }
+    })
 
     const pending = workspace.loadDeliveries('tui:a')
     /* The switch: B's own desk, and B's own registry. */
@@ -196,27 +197,27 @@ describe('delivery registry', () => {
 
     expect(deliveries.list()).toEqual([])
     setCurrent(null)
-    window.DS = undefined
+    resetSources()
   })
 
   /* A source without the verb is an older gateway; a source that throws is one
      that is there and unhappy. Neither may cost the shelf what it already has. */
   it('keeps what the turns gave it when the registry cannot be read', async () => {
     deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'from the turn' }]))
-    window.DS = {
+    setSources({
       workspace: {
         shortPath: (p: string) => p,
         hostPlatform: () => 'mac',
         deliverables: async () => { throw new Error('nope') },
       } as WorkspaceSource,
-    }
+    })
 
     await workspace.loadDeliveries('tui:s1')
-    window.DS = { workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac' } as WorkspaceSource }
+    setSources({ workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac' } as WorkspaceSource })
     await workspace.loadDeliveries('tui:s1')
 
     expect(deliveries.list().map((row) => row.title)).toEqual(['from the turn'])
-    window.DS = undefined
+    resetSources()
   })
 
   it('is emptied by a workspace reset, which is what a session switch does', () => {

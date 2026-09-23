@@ -91,6 +91,13 @@ class RebindState(_Strict):
         ..., description="Seconds since the current code was issued; null when none is up."
     )
     detail: str = Field(..., description="Why it failed, when it did: expired | no_token | error.")
+    paused_until: float | None = Field(
+        None,
+        description=(
+            "Unix time a paused session resumes; null when it is not paused. "
+            "Why the channel reports itself unpaired without a code being up."
+        ),
+    )
 
 
 class ChannelLive(_Strict):
@@ -116,6 +123,10 @@ class ChannelsQrResult(_Strict):
 class ChannelsStartParams(_Strict):
     name: str | None = None
     enabled: bool | None = Field(None, description="False stops the adapter; anything else starts it.")
+    restart: bool = Field(
+        False,
+        description="Rebuild a running adapter instead of leaving it alone; ignored when enabled is false.",
+    )
 
 
 class ChannelsStartResult(_Strict):
@@ -274,6 +285,10 @@ def register_control_methods(
         exists here. So enabling a channel used to mean nothing until the next
         launch: no adapter, no QR to scan, no messages. ``outcome`` is a word
         from ChannelManager, every value of which is a state the caller draws.
+
+        ``restart`` is for the write that changed what the adapter was built
+        with: a live one holds its config slice and re-reads nothing, so a
+        corrected credential is a silent no-op until it is rebuilt.
         """
         args = _params(ChannelsStartParams, params)
         name = args.name or ""
@@ -282,6 +297,8 @@ def register_control_methods(
             return {"outcome": "no_manager"}
         if want_on is False:
             return {"outcome": await channel_manager.stop_one(name)}
+        if args.restart:
+            return {"outcome": await channel_manager.restart_one(name)}
         return {"outcome": await channel_manager.start_one(name)}
 
     async def _channels_live(params: dict) -> dict:

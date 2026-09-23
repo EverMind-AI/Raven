@@ -10,7 +10,12 @@ each such file carries a banner saying so.
 
 ## Index
 
+- `documentation-references.md` - public reference sources and implementation
+  evidence behind the protocol, orchestration, permissions, and extension guides.
 - `dev.md` - local development notes.
+- `browser-and-desktop.md` - the model's `browser_*` tools over the shared
+  Chromium, and desktop control through a desktop MCP server; enabling,
+  permissions, what was verified.
 - `TRACING_STANDARD_API.md` - the tracing span contract between raven and
   raven-tracing.
 - `research-report-quality.md` - how a deep-research report is graded against a

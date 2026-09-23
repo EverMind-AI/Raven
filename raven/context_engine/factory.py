@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from raven.agent.context import ContextBuilder
+from raven.config.live import LiveConfig, curator_pin, skill_gate_pin
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import (
@@ -45,6 +46,7 @@ from raven.context_engine.segments import (
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.contracts.context import ContextEngine
 from raven.contracts.llm_provider import LLMProvider
+from raven.providers.pool import live_pin_resolver
 
 if TYPE_CHECKING:
     from raven.agent.subagent.backends import AgentMeta
@@ -60,6 +62,7 @@ if TYPE_CHECKING:
         QueryRewriter,
         SkillForgeRouter,
     )
+    from raven.providers.binding import ModelBinding
     from raven.providers.pool import ProviderPool
     from raven.skill_hub import SkillHubClient
 
@@ -82,6 +85,7 @@ def build_context_engine(
     skill_forge_config: "SkillForgeConfig | None" = None,
     skill_hub_client: "SkillHubClient | None" = None,
     provider_pool: "ProviderPool | None" = None,
+    blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
 
@@ -113,6 +117,10 @@ def build_context_engine(
         skill_hub_client=skill_hub_client,
     )
 
+    # One reader for both pins: the file is re-parsed only when its bytes
+    # change, so two subsystems asking per call cost one read between them.
+    live = LiveConfig()
+
     discovery = str(getattr(skill_forge_config, "discovery", "pull") or "pull")
     if discovery == "push":
         rewriter, gate = _build_rewriter_and_gate(
@@ -120,6 +128,12 @@ def build_context_engine(
             provider_pool=provider_pool,
             skill_forge_config=skill_forge_config,
             skill_forge_router_config=skill_forge_router_config,
+            pin_resolver=live_pin_resolver(
+                provider_pool,
+                lambda: skill_gate_pin(live),
+                key="skill_forge.llm_gate_model",
+                follower="the gate",
+            ),
         )
     else:
         rewriter, gate = None, None
@@ -150,6 +164,7 @@ def build_context_engine(
                 list_subagents=list_subagents,
                 min_safety=skill_forge_router_config.hub.min_safety,
                 blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
+                blocklist_reader=blocklist_reader,
                 auto_install=str(getattr(skill_forge_config, "auto_install", "auto") or "auto"),
                 install_audit_path=(
                     workspace / "skills" / "hub" / "installs.jsonl" if skill_hub_client is not None else None
@@ -158,10 +173,11 @@ def build_context_engine(
         )
     builders.append(
         CuratorSegmentBuilder(
-            pin=(
-                provider_pool.bind_pin(config.curator_model, getattr(config, "curator_provider", None))
-                if provider_pool
-                else None
+            pin_resolver=live_pin_resolver(
+                provider_pool,
+                lambda: curator_pin(live),
+                key="context.curator_model",
+                follower="the curator",
             ),
             workspace=workspace,
             config=config,
@@ -184,6 +200,7 @@ def build_context_engine(
             policy=SkillPolicy.create(
                 min_safety=skill_forge_router_config.hub.min_safety,
                 blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
+                blocklist_reader=blocklist_reader,
             ),
         )
     dropped = frozenset(getattr(config, "drop_segments", None) or ())
@@ -274,6 +291,7 @@ def _build_rewriter_and_gate(
     skill_forge_config: "SkillForgeConfig | None",
     skill_forge_router_config: "SkillForgeRouterConfig",
     provider_pool: "ProviderPool | None" = None,
+    pin_resolver: "Callable[[], ModelBinding | None] | None" = None,
 ) -> "tuple[QueryRewriter | None, LLMGateFilter | None]":
     """Construct the optional rewriter + gate from the parent SkillForge
     config. Both fall to ``None`` when their respective flag is off or
@@ -304,15 +322,7 @@ def _build_rewriter_and_gate(
             provider,
             max_select=int(getattr(skill_forge_config, "llm_gate_max_select", 2) or 2),
             legacy_top_k=int(skill_forge_router_config.top_k or 5),
-            model=getattr(skill_forge_config, "llm_gate_model", None) or None,
-            pin=(
-                provider_pool.bind_pin(
-                    getattr(skill_forge_config, "llm_gate_model", None),
-                    getattr(skill_forge_config, "llm_gate_provider", None),
-                )
-                if provider_pool
-                else None
-            ),
+            pin_resolver=pin_resolver,
             temperature=float(getattr(skill_forge_config, "llm_gate_temperature", 0.0)),
             max_tokens=int(getattr(skill_forge_config, "llm_gate_max_tokens", 8192) or 8192),
         )

@@ -14,11 +14,13 @@ Two backing sources, and the split matters:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.rpc.errors import InternalError
+from raven.rpc.errors import ConfigValidationError, InternalError
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -84,14 +86,88 @@ async def _action_inspect(query: str, _page: int, factory: "AgentLoopFactory | N
         meta = next((m for m in registry.list_all() if m.name.lower() == lowered), None)
     if meta is None:
         return {"info": {}}
+    skill_dir = _skill_dir(meta)
+    hub, hub_id = _hub_marker(skill_dir)
+    body_path = skill_dir / "SKILL.md"
     return {
         "info": {
             "name": meta.name,
             "description": meta.description,
             "category": meta.source,
             "path": str(meta.path),
+            "body": body_path.read_text(encoding="utf-8") if body_path.is_file() else "",
+            "files": sorted(p.name for p in skill_dir.iterdir() if p.is_file() and not p.name.startswith("."))
+            if skill_dir.is_dir()
+            else [],
+            "always": bool(getattr(meta, "always", False)),
+            "hub": hub,
+            "hub_id": hub_id,
+            "install": _install_meta(skill_dir),
         }
     }
+
+
+def _skill_dir(meta: Any) -> Path:
+    """The directory a skill lives in; ``meta.path`` names its SKILL.md."""
+    p = Path(meta.path)
+    return p.parent if p.suffix == ".md" or p.is_file() else p
+
+
+def _hub_marker(skill_dir: Path) -> tuple[bool, str]:
+    """Whether the hub installed this skill, and the hub's id for it.
+
+    The market is an optional install; without it nothing is hub-installed.
+    """
+    try:
+        from raven.skill_hub.hub import MARKER
+    except ImportError:
+        return False, ""
+    marker = skill_dir / MARKER
+    if not marker.is_file():
+        return False, ""
+    try:
+        return True, str(json.loads(marker.read_text(encoding="utf-8")).get("id") or "")
+    except (OSError, ValueError):
+        return True, ""
+
+
+def _install_meta(skill_dir: Path) -> dict | None:
+    """The install stamp the hub leaves, or None for a skill nobody installed."""
+    path = skill_dir / ".install-meta.json"
+    if not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return {
+        "installed_at": record.get("installed_at"),
+        "version": str(record.get("version") or ""),
+        "trigger": str(record.get("trigger") or ""),
+        "source": str(record.get("source") or ""),
+        "score_safety": record.get("score_safety"),
+    }
+
+
+async def _action_open(query: str, factory: "AgentLoopFactory | None", file: str) -> dict:
+    """Open one file of a skill with the desktop's opener, on the gateway host.
+
+    Only files inside the skill's own directory: the skill name picks the
+    directory, ``file`` is relative to it, and a path that resolves outside is
+    refused before anything is launched.
+    """
+    registry = _registry(factory)
+    meta = registry.get(query)
+    if meta is None:
+        raise ConfigValidationError(f"unknown skill {query!r}")
+    root = _skill_dir(meta).resolve()
+    target = (root / (file or "SKILL.md")).resolve()
+    if not target.is_relative_to(root) or not target.is_file():
+        raise ConfigValidationError("file must be a file inside the skill directory")
+    from raven.rpc.methods import console
+
+    console._open_with_system(target)
+    return {"opened": True}
 
 
 async def _action_search(query: str, _page: int, factory: "AgentLoopFactory | None") -> dict:
@@ -187,6 +263,10 @@ async def skills_manage(
 ) -> dict:
     """``skills.manage`` -- dispatch on ``action``."""
     action = str(params.get("action") or "").strip().lower()
+    if action == "open":
+        return await _action_open(
+            str(params.get("query") or "").strip(), agent_loop_factory, str(params.get("file") or "")
+        )
     handler = _ACTIONS.get(action)
     if handler is None:
         raise InternalError(f"unknown skills action: {action or '(missing)'}")

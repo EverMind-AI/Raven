@@ -1,7 +1,6 @@
-/* One row per entry of the channel catalogue (ui-web/src/demo/030-fixtures.js).
-   Both sources answer with those same objects, mutated in place: the fixture
-   so demo edits stick across a redraw, the rpc source so the merged status
-   lands on the rows the list is already drawn from. */
+/* One row per entry of the channel catalogue (./catalogue.ts). The source
+   answers with those same objects, mutated in place, so a status that landed
+   between two reads is on the row the reader is looking at. */
 export interface ConnField {
   key: string
   label?: string
@@ -12,10 +11,8 @@ export interface ConnField {
 
 export interface ConnChannel {
   id: string
-  /* The catalogue's two spellings: `key` names a message-catalogue entry for
-     the generic channels, `name` is a brand name used verbatim. */
-  key?: string
-  name?: string
+  /* The message-catalogue entry that names the row, in both languages. */
+  key: string
   on: boolean
   who?: string
   fields?: ConnField[]
@@ -29,19 +26,22 @@ export interface ConnChannel {
   qrLogin?: boolean
 }
 
-/* One channels.qr answer. `connected: true` ends the island's polling. */
+/* One channels.qr answer. `connected: true` ends the island's polling, and
+   `running: false` says the adapter behind the code is gone -- a code it left
+   pending is expired, and the row the panel sits in does not know yet. */
 export interface ConnQr {
   qr?: string
   qr_text?: string
   connected: boolean
+  running?: boolean
 }
 
-/* The DS.conn contract both the fixture source (demo shell) and the rpc
+/* The DS.connections contract both the offline fixture library and the rpc
    source (live layer) implement. The island only ever talks to this.
    `rows(true)` is the page-open fetch: the rpc source reserves its
    gateway-not-running warning for that one call. `qr` resolving null means
    "nothing to show yet"; the island keeps polling while the dialog is up. */
-export interface ConnSource {
+export interface ConnectionsSource {
   rows(initial?: boolean): Promise<ConnChannel[]>
   /* Whether anything is running that could host a channel adapter at all --
      the gateway lock, read after the last `rows`. A page-level fact, not a
@@ -51,6 +51,8 @@ export interface ConnSource {
      source cannot say, and the page then claims nothing. */
   hostRunning?(): boolean | undefined
   toggle(c: ConnChannel, on: boolean): Promise<unknown>
-  apply(c: ConnChannel, patch: Record<string, string>, enable: boolean): Promise<unknown>
+  /* Resolves true once the write was applied, false when it was refused or never
+     reached the gateway (the source has already said why). */
+  apply(c: ConnChannel, patch: Record<string, string>, enable: boolean): Promise<boolean>
   qr(c: ConnChannel): Promise<ConnQr | null>
 }

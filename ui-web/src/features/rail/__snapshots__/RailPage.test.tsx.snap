@@ -1,0 +1,88 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`rail island > keeps its rendered shape 1`] = `
+"div.grp
+  span.lab
+  span.car
+    svg
+      path
+div.sess
+  div.t
+    span
+  div.quick
+    button.quick-pin[data-active=true]
+      svg
+        path
+        path
+    button
+      svg
+        g
+          path
+          path
+          path
+    button
+      svg
+        path
+div.grp
+  span.lab
+  span.car
+    svg
+      path
+  button.grp-go
+div.sess
+  div.t
+    span
+  div.quick
+    button.quick-pin
+      svg
+        path
+        path
+    button
+      svg
+        g
+          path
+          path
+          path
+    button
+      svg
+        path
+div.grp
+  span.lab
+  span.car
+    svg
+      path
+div.sess
+  div.t
+    span
+  div.quick
+    button.quick-pin
+      svg
+        path
+        path
+    button
+      svg
+        g
+          path
+          path
+          path
+    button
+      svg
+        path
+div.sess
+  div.t
+    span
+  div.quick
+    button.quick-pin
+      svg
+        path
+        path
+    button
+      svg
+        g
+          path
+          path
+          path
+    button
+      svg
+        path"
+`;

@@ -1,14 +1,12 @@
 """Tests for ``memory.*`` RPC handlers (the GUI's data & memory page).
 
-The read paths (``memory.stats`` / ``memory.list``) talk to EverOS over
-HTTP; tests replace :func:`memory._post` so no sockets open. The delete
-path uses EverOS's in-process repository layer; tests install a stub
-``everos.infra.persistence.lancedb`` module and assert the predicates it
-receives (including the episode family cascade).
+Both handlers (``memory.stats`` / ``memory.list``) talk to EverOS over
+HTTP; tests replace :func:`memory._post` so no sockets open.
 """
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -149,72 +147,6 @@ async def test_list_wraps_transport_errors(monkeypatch):
         await memory.memory_list({"kind": "episode"})
 
 
-# ── memory.delete ────────────────────────────────────────────────────────
-
-
-class _RecordingBackend:
-    """A backend that records the delete it was asked for and answers it.
-
-    The host has no business knowing how a memory is stored, so these tests
-    assert what crosses the seam -- the id and the backend's own kind string --
-    and nothing about storage. The tests they replace asserted LanceDB
-    predicates, which is how the host came to delete an index row while the
-    markdown behind it, EverOS's source of truth, kept the text: the memory
-    reappeared on the next rebuild of that file after the user was told it was
-    gone.
-    """
-
-    def __init__(self, answer: bool = True) -> None:
-        self.answer = answer
-        self.calls: list[tuple[str, str | None]] = []
-
-    async def delete(self, memory_id: str, *, kind: str | None = None) -> bool:
-        self.calls.append((memory_id, kind))
-        return self.answer
-
-
-def _loop_with(backend):
-    return lambda: SimpleNamespace(backend=backend)
-
-
-@pytest.mark.asyncio
-async def test_delete_goes_through_the_backend_that_owns_the_memory():
-    backend = _RecordingBackend()
-
-    out = await memory.memory_delete({"kind": "episode", "id": "ep-1"}, agent_loop_factory=_loop_with(backend))
-
-    assert out == {"ok": True, "removed": 1}
-    assert backend.calls == [("ep-1", "episode")]
-
-
-@pytest.mark.asyncio
-async def test_the_kind_reaches_the_backend_verbatim():
-    """It is the backend's own vocabulary, echoed back from its listing."""
-    backend = _RecordingBackend()
-
-    await memory.memory_delete({"kind": "agent_skill", "id": "sk1"}, agent_loop_factory=_loop_with(backend))
-
-    assert backend.calls == [("sk1", "agent_skill")]
-
-
-@pytest.mark.asyncio
-async def test_a_backend_that_will_not_delete_is_reported_not_claimed():
-    """``False`` is a real answer -- this kind cannot be removed here. Reporting
-    success would repeat the bug this path was rewritten for."""
-    backend = _RecordingBackend(answer=False)
-
-    with pytest.raises(InternalError):
-        await memory.memory_delete({"kind": "profile", "id": "p1"}, agent_loop_factory=_loop_with(backend))
-
-
-@pytest.mark.asyncio
-async def test_delete_validates_params():
-    with pytest.raises(ConfigValidationError):
-        await memory.memory_delete({"kind": "episode", "id": ""})
-    with pytest.raises(ConfigValidationError):
-        await memory.memory_delete({"kind": "bogus", "id": "x"})
-
-
 # ── the plugin that is not there ─────────────────────────────────────────
 
 
@@ -286,6 +218,58 @@ async def test_a_different_backend_says_this_page_is_not_where_they_are(monkeypa
     assert stats["ok"] is False
     assert "mem0" in stats["note"]
     assert listing["items"] == [] and "mem0" in listing["note"]
+
+
+def _everos_configured(monkeypatch, backend="everos"):
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda *a, **k: SimpleNamespace(
+            memory=SimpleNamespace(backend=backend, user_id="u", agent_id="a"), plugins=SimpleNamespace(config={})
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_windows_says_memory_is_not_here_yet(monkeypatch):
+    """Nothing to probe: the server cannot run on Windows, so the page says so
+    instead of a connection refused and a retry button that cannot help."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    _everos_configured(monkeypatch)
+
+    async def _post(*args, **kwargs):
+        raise AssertionError("no request may leave for a server that cannot run here")
+
+    monkeypatch.setattr(memory, "_post", _post)
+
+    stats = await memory.memory_stats({})
+    listing = await memory.memory_list({"kind": "episode"})
+
+    assert stats["ok"] is False and "Windows" in stats["note"]
+    assert listing["items"] == [] and "Windows" in listing["note"]
+
+
+@pytest.mark.asyncio
+async def test_windows_without_the_plugin_names_the_platform_not_the_install(monkeypatch):
+    """Telling a Windows install to install the plugin sends it to fetch
+    something that cannot run there."""
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    with everos_plugin_absent():
+        stats = await memory.memory_stats({})
+
+    assert "Windows" in stats["note"] and "everos-memory" not in stats["note"]
+
+
+@pytest.mark.asyncio
+async def test_windows_with_another_backend_still_names_that_backend(monkeypatch):
+    """The platform sentence is for an install pointed at EverOS. One whose
+    memory runs on mem0 has memory, and saying otherwise would be false."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    _everos_configured(monkeypatch, backend="mem0")
+
+    stats = await memory.memory_stats({})
+
+    assert "mem0" in stats["note"] and "Windows" not in stats["note"]
 
 
 @pytest.mark.asyncio

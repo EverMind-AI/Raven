@@ -197,7 +197,7 @@ async def test_list_groups_an_installed_but_untested_acp_preset_as_installed(
     config_path: Path, tmp_path: Path, monkeypatch
 ) -> None:
     # An acp row reaches "ready" only from a recorded capability snapshot, and a
-    # preset never gets one: `_test_acp` records only for `source == "config"`.
+    # preset never gets one: `_test_acp` records for every source but `preset`.
     # Grouping acp on "ready" therefore pinned every acp preset to NOT INSTALLED,
     # where the overlay makes an unconfigured row view-only -- so the one action
     # that could have freed it was the one action unavailable there.
@@ -370,6 +370,28 @@ async def test_add_preserves_empty_mcps_and_false_secret_policy(
     assert entry["allowMcpSecrets"] is False
 
 
+def _gate_answers(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Let the enable gate pass without reaching the agent, and say who it asked.
+
+    Every kind is pinged now, so a test about what a write *stores* has to stand
+    in for the agent or it reaches a real process or a real endpoint -- the
+    openai rows in this file point at a live base URL, and one of them answered
+    a unit test with HTTP 401 before this existed. A test about the gate itself
+    installs its own stub instead.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    asked: list = []
+
+    async def _ok(cfg):
+        asked.append(cfg)
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _ok)
+    return asked
+
+
 async def test_add_disables_an_openai_preset_that_has_no_key(config_path: Path) -> None:
     # mirothinker ships an empty apiKey. Added enabled, it would be advertised to
     # the model and fail on first dispatch.
@@ -378,7 +400,10 @@ async def test_add_disables_an_openai_preset_that_has_no_key(config_path: Path) 
     assert entry["enabled"] is False
 
 
-async def test_add_keeps_an_openai_preset_enabled_when_a_key_is_supplied(config_path: Path) -> None:
+async def test_add_keeps_an_openai_preset_enabled_when_a_key_is_supplied(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _gate_answers(monkeypatch)
     await subagents_add({"preset": "mirothinker", "name": "Deep", "api_key": "sk-live"})
     entry = next(e for e in _stored(config_path) if e["name"] == "Deep")
     assert entry["enabled"] is True
@@ -441,6 +466,68 @@ async def test_add_proves_a_preset_of_a_pinged_kind_and_lands_it_enabled(
     assert seen[0].command == entry["command"], "the gate must prove the entry this add assembled"
 
 
+async def test_add_records_the_capabilities_of_an_acp_row_that_answered(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row that answered the ping can be measured, so it is, on the spot.
+
+    Before this the connect proved the agent and recorded nothing: the row it
+    landed read "capabilities not recorded -- run a test", stateless (no
+    instance, no direct chat) and menuless (no model pill) until someone
+    pressed Test or the gateway restarted into the boot backfill.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+
+    recorded = []
+
+    async def _record(cfg):
+        recorded.append(cfg)
+        return None
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _pings_ok)
+    monkeypatch.setattr(subagents_mod, "capabilities_wanted", lambda cfg: True)
+    monkeypatch.setattr(subagents_mod, "record_capabilities", _record)
+
+    assert await subagents_add({"preset": "opencode"}) == {"added": True, "name": "OpenCode"}
+    assert [c.name for c in recorded] == ["OpenCode"]
+
+
+async def test_add_does_not_re_measure_a_row_whose_record_is_complete(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import raven.rpc.methods.subagents as subagents_mod
+
+    recorded = []
+
+    async def _record(cfg):
+        recorded.append(cfg)
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _pings_ok)
+    monkeypatch.setattr(subagents_mod, "capabilities_wanted", lambda cfg: False)
+    monkeypatch.setattr(subagents_mod, "record_capabilities", _record)
+
+    await subagents_add({"preset": "opencode"})
+    assert recorded == []
+
+
+async def test_add_stands_on_the_ping_when_the_capability_record_fails(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The agent already proved itself; a handshake that fails afterwards is
+    logged, not a reason to refuse the connect."""
+    import raven.rpc.methods.subagents as subagents_mod
+
+    async def _boom(cfg):
+        raise RuntimeError("handshake fell over")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _pings_ok)
+    monkeypatch.setattr(subagents_mod, "capabilities_wanted", lambda cfg: True)
+    monkeypatch.setattr(subagents_mod, "record_capabilities", _boom)
+
+    assert await subagents_add({"preset": "opencode"}) == {"added": True, "name": "OpenCode"}
+    assert next(e for e in _stored(config_path) if e["name"] == "OpenCode")["enabled"] is True
+
+
 async def test_add_proves_a_cli_preset_the_same_way(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     template = _as_a_cli_preset(monkeypatch)
 
@@ -490,6 +577,34 @@ async def test_a_refused_add_stores_nothing_at_all(config_path: Path, monkeypatc
     assert "sign in" in caught.value.data["detail"], "the UI reads data.detail, not just the message"
     assert [e for e in _stored(config_path) if e["name"] == "OpenCode"] == [], "a refused add must store no row"
     assert _stored(config_path) == before, "and must leave the rest of the list alone"
+
+
+async def test_a_refused_add_carries_the_fix_it_names(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The page draws the fix from `data.remedy`; `data.detail` stays the sentence.
+
+    Only when the ping named one: a refusal it could not classify must not grow
+    a fix the page would then draw in place of the agent's own words.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+    from raven.agent.subagent.probe_state import Remedy
+
+    async def _named(cfg):
+        return PingResult(False, "it is installed but has no usable credential", Remedy("sign_in", "claude auth login"))
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _named)
+    with pytest.raises(subagents_mod.SubagentNotReadyError) as caught:
+        await subagents_add({"preset": "opencode"})
+    assert caught.value.data["remedy"] == {"kind": "sign_in", "command": "claude auth login"}
+    assert "no usable credential" in caught.value.data["detail"]
+
+    async def _unnamed(cfg):
+        return PingResult(False, "connection ended (exit 127)")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _unnamed)
+    with pytest.raises(subagents_mod.SubagentNotReadyError) as caught:
+        await subagents_add({"preset": "opencode"})
+    assert "remedy" not in caught.value.data
 
 
 async def test_a_refused_add_of_a_cli_preset_stores_nothing_either(
@@ -558,11 +673,17 @@ async def test_a_truthy_non_boolean_force_does_not_skip_the_add_gate(
     assert [e for e in _stored(config_path) if e["name"] == "OpenCode"] == []
 
 
-async def test_add_never_pings_an_openai_preset(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An endpoint's credential is already settled by the free models probe, so
-    charging a completion for the add would buy nothing -- the gate must never
-    even ask, keyed or keyless. And the keyless rule is unchanged: that row is
-    the one kind of add that still lands disabled, waiting for its key."""
+async def test_add_pings_an_openai_preset_it_is_about_to_enable(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An endpoint answers the same question every other kind does, by answering.
+
+    The free models probe settles whether the endpoint knows the credential, and
+    it runs nowhere near this call -- the key being added here has never been
+    probed, because it did not exist when the listing last ran. So the gate asks
+    the endpoint, like every other kind. The keyless rule is unchanged and is
+    what keeps this affordable: that row lands disabled, and a row that is not
+    being enabled is never pinged."""
     import raven.rpc.methods.subagents as subagents_mod
     from raven.agent.subagent.probe import PingResult
 
@@ -580,7 +701,7 @@ async def test_add_never_pings_an_openai_preset(config_path: Path, monkeypatch: 
     stored = {e["name"]: e for e in _stored(config_path)}
     assert stored["Keyed"]["enabled"] is True
     assert stored["Keyless"]["enabled"] is False
-    assert seen == [], "an openai row is not a pinged kind, so the gate must not run"
+    assert [c.name for c in seen] == ["Keyed"], "the keyed add is gated; the keyless one lands disabled unasked"
 
 
 async def test_a_write_that_lands_during_an_adds_ping_is_not_reverted(
@@ -594,7 +715,6 @@ async def test_a_write_that_lands_during_an_adds_ping_is_not_reverted(
     import raven.rpc.methods.subagents as subagents_mod
     from raven.agent.subagent.probe import PingResult
 
-    await subagents_toggle({"name": "Researcher", "enabled": False})
     in_flight = asyncio.Event()
     release = asyncio.Event()
 
@@ -607,17 +727,24 @@ async def test_a_write_that_lands_during_an_adds_ping_is_not_reverted(
 
     adding = asyncio.ensure_future(subagents_add({"preset": "opencode"}))
     await in_flight.wait()
-    # Another client, on the ordinary path: Researcher is `openai`, so its own
-    # switch is exempt from the gate and this write does not wait on anything.
-    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
-    assert {e["name"]: e.get("enabled") for e in _stored(config_path)}["Researcher"] is True
+    # Another client, on the ordinary path. It has to be a write that cannot
+    # reach the gate itself, or it would block on the very stub this test is
+    # holding open: a description changes nothing the agent could answer, so it
+    # is never asked. A switch-on would be, now that every kind is.
+    assert await subagents_update({"name": "Researcher", "description": "mid-flight"}) == {
+        "updated": True,
+        "name": "Researcher",
+    }
+    assert {e["name"]: e.get("description") for e in _stored(config_path)}["Researcher"] == "mid-flight"
 
     release.set()
     assert await adding == {"added": True, "name": "OpenCode"}
 
-    after = {e["name"]: e.get("enabled") for e in _stored(config_path)}
-    assert after["OpenCode"] is True, "the added row must survive"
-    assert after["Researcher"] is True, "the write made during the ping must survive the add's write"
+    after = {e["name"]: e for e in _stored(config_path)}
+    assert after["OpenCode"].get("enabled") is True, "the added row must survive"
+    assert after["Researcher"].get("description") == "mid-flight", (
+        "the write made during the ping must survive the add's write"
+    )
 
 
 async def test_add_rejects_a_duplicate_name_without_writing_or_pinging(
@@ -844,7 +971,113 @@ async def test_update_whole_entry_validation_failure_does_not_leak_the_api_key(c
     assert "input_value" not in blob
 
 
-async def test_toggle_flips_enabled(config_path: Path) -> None:
+async def test_update_reproves_a_live_row_whose_credential_changed(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A key swapped under a row that is already on is a connect nobody gated.
+
+    The row goes on serving dispatches with a credential nothing has tried, so
+    the first real task is what discovers a typo. The update asks the same
+    question the switch asks, and a refusal leaves the stored key alone --
+    otherwise the refusal would still have taken the working key away.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    asked = _gate_answers(monkeypatch)
+    await subagents_toggle({"name": "Researcher", "enabled": True})
+    asked.clear()
+
+    async def _refuse(cfg):
+        asked.append(cfg)
+        return PingResult(False, 'HTTP 401: {"error":"invalid api key"}')
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _refuse)
+
+    with pytest.raises(subagents_mod.SubagentNotReadyError):
+        await subagents_update({"name": "Researcher", "api_key": "sk-wrong"})
+
+    assert [c.name for c in asked] == ["Researcher"]
+    entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
+    assert entry["apiKey"] == "sk-secret-value", "a refused update must leave the working key on disk"
+
+
+async def test_update_reproves_a_live_row_whose_model_changed(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the same question: an agent need not still serve the
+    model it is asked for, and the row would carry the new name until something
+    ran. Only an acp row reaches this -- an openai row's model is fixed, and a
+    built-in one is this process, which the gate never asks.
+    """
+    from raven.acp_client.capabilities import AcpModelChoice, CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
+    from raven.config.schema import SubagentsConfig
+
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"].append(
+        {"name": "Coded", "kind": "acp", "command": "coded acp", "description": "d", "enabled": True, "model": "v/m"}
+    )
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    store_path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: store_path)
+    cfg = next(c for c in SubagentsConfig(agents=raw["subagents"]["agents"]).agents if c.name == "Coded")
+    SnapshotStore(path=store_path).record(
+        CapabilitySnapshot(
+            agent="Coded",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=1,
+            agent_name="other-agent",
+            model_choices=(
+                AcpModelChoice(value="v/m", name="M", group="V"),
+                AcpModelChoice(value="v/m2", name="M2", group="V"),
+            ),
+        )
+    )
+
+    asked = _gate_answers(monkeypatch)
+    await subagents_update({"name": "Coded", "model": "v/m2"})
+
+    assert [c.name for c in asked] == ["Coded"]
+    entry = next(e for e in _stored(config_path) if e["name"] == "Coded")
+    assert entry["model"] == "v/m2"
+
+
+async def test_update_asks_nothing_when_neither_credential_nor_model_moved(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An edit that cannot change what the agent answers is not worth a call.
+
+    Re-sending the same key counts as not moving: the sheet posts what is in the
+    field, so an unchanged form would otherwise spend one on every save.
+    """
+    asked = _gate_answers(monkeypatch)
+    await subagents_toggle({"name": "Researcher", "enabled": True})
+    asked.clear()
+
+    await subagents_update({"name": "Researcher", "description": "new words"})
+    await subagents_update({"name": "Researcher", "api_key": "sk-secret-value"})
+
+    assert asked == [], "neither a description nor an unchanged key reaches the agent"
+
+
+async def test_update_asks_nothing_of_a_row_that_is_switched_off(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing is serving dispatches, and switching it on is already gated, so
+    asking here would spend a second call to learn the same thing."""
+    asked = _gate_answers(monkeypatch)
+
+    await subagents_update({"name": "Researcher", "api_key": "sk-new"})
+
+    assert asked == [], "an off row is proved by the switch that turns it on"
+    entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
+    assert entry["apiKey"] == "sk-new"
+
+
+async def test_toggle_flips_enabled(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _gate_answers(monkeypatch)
     assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
     entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
     assert entry["enabled"] is True
@@ -1418,13 +1651,15 @@ async def test_enabling_a_local_agent_succeeds_when_the_ping_answers(
     assert entry["enabled"] is True
 
 
-async def test_an_openai_agent_still_switches_on_without_a_prompt(
+async def test_an_openai_agent_is_asked_to_answer_before_it_switches_on(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An endpoint's credential is already settled by the free models probe, so
-    charging a completion for the switch would buy nothing -- the gate must
-    never even ask. The fixture's Researcher row is `kind: "openai"`, which is
-    what this exemption keys on."""
+    """An endpoint is asked the same question every other kind is, by answering.
+
+    It was exempt once, on the grounds that the free models probe had settled
+    its credential; that probe runs on the listing and on an explicit test, and
+    never on this path, so the key a switch is about to put to work may never
+    have been tried. The fixture's Researcher row is `kind: "openai"`."""
     import raven.rpc.methods.subagents as subagents_mod
     from raven.agent.subagent.probe import PingResult
 
@@ -1439,7 +1674,7 @@ async def test_an_openai_agent_still_switches_on_without_a_prompt(
     assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
     entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
     assert entry["enabled"] is True
-    assert seen == [], "an openai row is not a pinged kind, so the gate must not run"
+    assert [c.name for c in seen] == ["Researcher"], "switching an endpoint on asks it to answer, like every other kind"
 
 
 async def test_force_switches_a_local_agent_on_despite_no_test(
@@ -1536,18 +1771,154 @@ async def test_a_write_that_lands_during_the_ping_window_is_not_reverted(
 
     pinged = asyncio.ensure_future(subagents_toggle({"name": "Coder", "enabled": True}))
     await in_flight.wait()
-    # Another client, on the ordinary path: Researcher is `openai`, so its own
-    # switch is exempt from the gate and this write does not wait on anything.
-    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
-    mid = {e["name"]: e.get("enabled") for e in _stored(config_path)}
-    assert mid["Researcher"] is True, "the concurrent write must reach disk"
+    # Another client, on the ordinary path. It has to be a write that cannot
+    # reach the gate itself, or it would block on the very stub this test is
+    # holding open: a description changes nothing the agent could answer, so it
+    # is never asked. A switch-on would be, now that every kind is.
+    assert await subagents_update({"name": "Researcher", "description": "mid-flight"}) == {
+        "updated": True,
+        "name": "Researcher",
+    }
+    mid = {e["name"]: e.get("description") for e in _stored(config_path)}
+    assert mid["Researcher"] == "mid-flight", "the concurrent write must reach disk"
 
     release.set()
     assert await pinged == {"enabled": True}
 
-    after = {e["name"]: e.get("enabled") for e in _stored(config_path)}
-    assert after["Coder"] is True, "the pinged toggle's own write must survive"
-    assert after["Researcher"] is True, "the write made during the ping must survive the toggle's write"
+    after = {e["name"]: e for e in _stored(config_path)}
+    assert after["Coder"].get("enabled") is True, "the pinged toggle's own write must survive"
+    assert after["Researcher"].get("description") == "mid-flight", (
+        "the write made during the ping must survive the toggle's write"
+    )
+
+
+async def test_a_write_that_lands_during_an_updates_ping_is_not_reverted(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The re-key gate opens the window the switch and the add both close.
+
+    `subagents.update` reads the agent list, mutates one row inside it, and
+    writes the whole list back. A changed key on a live row now sends a prompt
+    in between, for up to a minute, which puts this handler in exactly the
+    position the other two re-read to escape: the list it writes is the list it
+    read, so every other `subagents.*` write that landed during the ping is
+    reverted, after that call already answered success to its own client.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    _gate_answers(monkeypatch)
+    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
+
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hangs_until_released(cfg):
+        in_flight.set()
+        await release.wait()
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _hangs_until_released)
+
+    pinged = asyncio.ensure_future(subagents_update({"name": "Researcher", "api_key": "sk-rotated"}))
+    await in_flight.wait()
+    # A description carries nothing the agent could answer, so this write is
+    # never gated -- which is what lets it run while the gate is held open.
+    assert await subagents_update({"name": "Coder", "description": "mid-flight"}) == {
+        "updated": True,
+        "name": "Coder",
+    }
+    mid = {e["name"]: e.get("description") for e in _stored(config_path)}
+    assert mid["Coder"] == "mid-flight", "the concurrent write must reach disk"
+
+    release.set()
+    assert await pinged == {"updated": True, "name": "Researcher"}
+
+    after = {e["name"]: e for e in _stored(config_path)}
+    assert after["Researcher"].get("apiKey") == "sk-rotated", "the pinged update's own write must survive"
+    assert after["Coder"].get("description") == "mid-flight", (
+        "the write made during the ping must survive the update's write"
+    )
+
+
+async def test_a_write_to_the_same_row_during_an_updates_ping_is_not_reverted(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-reading the list is not enough: the row itself has to be re-read too.
+
+    Carrying this call's own row across the ping is what keeps its change,
+    and carrying it *whole* is what loses everybody else's -- the copy was
+    taken before the await, so every field another call wrote to this row in
+    between is restored to what it was. The neighbouring test cannot see it:
+    it edits a different row, which is the half a fresh list read already
+    fixes.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    _gate_answers(monkeypatch)
+    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
+
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hangs_until_released(cfg):
+        in_flight.set()
+        await release.wait()
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _hangs_until_released)
+
+    pinged = asyncio.ensure_future(subagents_update({"name": "Researcher", "api_key": "sk-rotated"}))
+    await in_flight.wait()
+    assert await subagents_update({"name": "Researcher", "description": "mid-flight"}) == {
+        "updated": True,
+        "name": "Researcher",
+    }
+
+    release.set()
+    assert await pinged == {"updated": True, "name": "Researcher"}
+
+    after = next(e for e in _stored(config_path) if e["name"] == "Researcher")
+    assert after.get("apiKey") == "sk-rotated", "the pinged update's own field must survive"
+    assert after.get("description") == "mid-flight", "a field written to this same row during the ping must survive too"
+
+
+async def test_an_update_refuses_a_row_removed_while_it_was_being_proved(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row deleted during the ping has nothing left to merge onto.
+
+    Re-reading the list is what makes this reachable: the row this call read
+    is no longer in it. Appending the pre-await copy would resurrect an entry
+    somebody removed, and answering success would say a change landed on a row
+    that is gone -- so the call refuses instead, under the error its published
+    contract already declares.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    _gate_answers(monkeypatch)
+    assert await subagents_toggle({"name": "Researcher", "enabled": True}) == {"enabled": True}
+
+    in_flight = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hangs_until_released(cfg):
+        in_flight.set()
+        await release.wait()
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _hangs_until_released)
+
+    pinged = asyncio.ensure_future(subagents_update({"name": "Researcher", "api_key": "sk-rotated"}))
+    await in_flight.wait()
+    assert await subagents_remove({"name": "Researcher"}) == {"removed": True}
+
+    release.set()
+    with pytest.raises(SubagentNotFoundError, match="renamed or removed"):
+        await pinged
+    assert all(e["name"] != "Researcher" for e in _stored(config_path)), "the removal must stand"
 
 
 async def test_toggle_still_refuses_a_name_nothing_knows(config_path: Path) -> None:
@@ -1565,7 +1936,8 @@ async def test_remove_reports_false_for_an_unknown_name(config_path: Path) -> No
     assert await subagents_remove({"name": "nope"}) == {"removed": False}
 
 
-async def test_a_mutation_hot_applies_to_the_live_loop(config_path: Path) -> None:
+async def test_a_mutation_hot_applies_to_the_live_loop(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _gate_answers(monkeypatch)
     applied: list[list] = []
 
     class _Loop:
@@ -1577,7 +1949,8 @@ async def test_a_mutation_hot_applies_to_the_live_loop(config_path: Path) -> Non
     assert [c.name for c in applied[0]] == ["Coder", "Researcher"]
 
 
-async def test_a_mutation_without_a_live_loop_still_writes(config_path: Path) -> None:
+async def test_a_mutation_without_a_live_loop_still_writes(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _gate_answers(monkeypatch)
     # The demo runner has no loop; a missing loop is not an error.
     await subagents_toggle({"name": "Researcher", "enabled": True}, agent_loop_factory=lambda: None)
     entry = next(e for e in _stored(config_path) if e["name"] == "Researcher")
@@ -1614,6 +1987,34 @@ async def test_test_records_a_verdict_for_a_configured_agent(config_path: Path, 
     rows = (await subagents_list({}))["rows"]
     coder = next(r for r in rows if r["name"] == "Coder")
     assert coder["last_test_ok"] is True
+
+
+async def test_a_failed_test_s_fix_reaches_the_row(config_path: Path, monkeypatch) -> None:
+    """The row carries the fix the last failed test named, and nothing when it named none."""
+    from raven.agent.subagent.probe import TestResult
+    from raven.agent.subagent.probe_state import Remedy
+
+    verdicts = iter(
+        [
+            TestResult(
+                "Coder", "config", "acp", False, "no usable credential", None, 5, Remedy("setup", "hermes model")
+            ),
+            TestResult("Coder", "config", "acp", False, "exited 1", None, 5),
+        ]
+    )
+
+    async def fake_run_test(cfg, *, source):
+        return next(verdicts)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
+
+    await subagents_test({"name": "Coder", "source": "config"})
+    coder = next(r for r in (await subagents_list({}))["rows"] if r["name"] == "Coder")
+    assert coder["last_test_remedy"] == {"kind": "setup", "command": "hermes model"}
+
+    await subagents_test({"name": "Coder", "source": "config"})
+    coder = next(r for r in (await subagents_list({}))["rows"] if r["name"] == "Coder")
+    assert coder.get("last_test_remedy") is None, "a failure with no fix leaves none behind"
 
 
 async def test_test_rejects_an_unknown_name(config_path: Path) -> None:
@@ -1959,7 +2360,7 @@ async def test_a_builtin_name_cannot_be_added_as_another_transport(config_path: 
 # --------------------------------------------------------------- product readiness on the page
 
 
-def _product_tree(tmp_path: Path, *, launcher: bool = True, engine: dict | None = None) -> Path:
+def _product_tree(tmp_path: Path, *, launcher: bool = True, engine: dict | None = None, kind: str = "cli") -> Path:
     """An `agents/` tree with one product folder.
 
     The manifest command names the interpreter and the folder's `run.py`, the
@@ -1971,9 +2372,11 @@ def _product_tree(tmp_path: Path, *, launcher: bool = True, engine: dict | None 
     folder.mkdir(parents=True)
     manifest = {
         "name": "Raven-Probe",
-        "kind": "cli",
+        "kind": kind,
         "description": "d",
-        "command": "{PYTHON} {SUBAGENT_DIR}/run.py {prompt}",
+        # An acp folder is served, not spawned per task, so it takes no prompt
+        # placeholder -- the shape the five shipped products ship with.
+        "command": "{PYTHON} {SUBAGENT_DIR}/run.py" + (" {prompt}" if kind == "cli" else ""),
     }
     if engine is not None:
         manifest["engine"] = engine
@@ -2180,3 +2583,167 @@ async def test_a_row_carries_the_credential_verdict_its_snapshot_measured(
     assert rows["Coder"]["needs_auth"] is False
     assert rows["Researcher"]["needs_auth"] is False
     assert all("needs_auth" in row for row in rows.values())
+
+
+# ---- own / model_source -----------------------------------------------------
+
+
+async def test_list_marks_the_built_in_row_and_a_discovered_product_as_ravens_own(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+
+    assert rows["Raven"]["own"] is True and rows["Raven"]["model_source"] == "raven"
+    # Ownership and the model rule are two facts: a discovered product is
+    # raven's, and as a cli row it has no menu -- `update` refuses a model on it.
+    assert rows["Raven-Probe"]["own"] is True and rows["Raven-Probe"]["model_source"] == "fixed"
+    assert rows["Coder"]["own"] is False and rows["Coder"]["model_source"] == "fixed"
+    assert rows["Researcher"]["own"] is False and rows["Researcher"]["model_source"] == "fixed"
+
+
+async def test_list_takes_a_product_on_its_own_key_off_the_hosts_catalogue(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A folder carrying its own `<PREFIX>_API_KEY` is what each launcher
+    branches on: it takes that credential with the provider and model beside it
+    and never calls `inherit_llm`. So the row does not follow the main Raven,
+    its model is not one this host can name, and the page must not offer raven's
+    ids for it -- which is what the `fixed` rule says, the same answer an openai
+    row gets for the same reason.
+
+    The same folder either way, so the key is the only thing that moved: without
+    it the row reads its menu off raven's own catalogue, the way every shipped
+    product does today.
+    """
+    from raven.acp_client.capabilities import CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path, kind="acp")
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
+    monkeypatch.delenv("PROBE_API_KEY", raising=False)
+    cfg = next(c for c in va.discover_product_rows(root) if c.name == "Raven-Probe")
+    SnapshotStore(path=tmp_path / "caps.json").record(
+        CapabilitySnapshot(
+            agent="Raven-Probe",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=1,
+            agent_name="raven",
+        )
+    )
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["Raven-Probe"]["own"] is True and rows["Raven-Probe"]["model_source"] == "raven"
+
+    (root / "raven-probe" / ".env").write_text("PROBE_API_KEY=sk-its-own\n", encoding="utf-8")
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["Raven-Probe"]["own"] is True and rows["Raven-Probe"]["model_source"] == "fixed"
+
+
+async def test_update_refuses_a_model_on_a_product_that_runs_on_its_own_key(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal is the point: the pick would be pushed at a session whose own
+    config was rendered from the folder's credential and has never heard of this
+    host's ids."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path, kind="acp")
+    (root / "raven-probe" / ".env").write_text("PROBE_API_KEY=sk-its-own\n", encoding="utf-8")
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    monkeypatch.delenv("PROBE_API_KEY", raising=False)
+
+    with pytest.raises(ConfigFieldReadonlyError, match="no menu this call can pick from"):
+        await subagents_update({"name": "Raven-Probe", "model": "gpt-5"})
+
+
+async def test_list_marks_a_config_row_whose_handshake_named_raven_as_ravens_own(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shipped installer registers a product as a plain config row, with
+    neither flag; the handshake it recorded is what still says it is raven's."""
+    from raven.acp_client.capabilities import AcpModelChoice, CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
+    from raven.config.schema import SubagentsConfig
+
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"] += [
+        {"name": "Raven-Code", "kind": "acp", "command": "raven acp", "description": "d", "enabled": True},
+        {"name": "Raven-PPT", "kind": "acp", "command": "raven-ppt acp", "description": "d", "enabled": True},
+        {"name": "Other", "kind": "acp", "command": "other acp", "description": "d", "enabled": True},
+        {"name": "Other-Quiet", "kind": "acp", "command": "quiet acp", "description": "d", "enabled": True},
+    ]
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    store_path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: store_path)
+    cfgs = {c.name: c for c in SubagentsConfig(agents=raw["subagents"]["agents"]).agents}
+    menu = (AcpModelChoice(value="v/m", name="M", group="V"),)
+    for name, agent_name, choices in (
+        ("Raven-Code", "raven", menu),
+        ("Raven-PPT", "raven", ()),
+        ("Other", "other-agent", menu),
+        ("Other-Quiet", "other-agent", ()),
+    ):
+        SnapshotStore(path=store_path).record(
+            CapabilitySnapshot(
+                agent=name,
+                fingerprint=snapshot_fingerprint(cfgs[name]),
+                status="ready",
+                detail="",
+                measured_at_ms=1,
+                agent_name=agent_name,
+                model_choices=choices,
+            )
+        )
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+
+    # Raven's own, and still an acp row: it picks from raven's live catalogue,
+    # not from the launch-time capture its handshake advertised -- the menu the
+    # composer draws, so the two never disagree. The capture still travels, for
+    # a reader that wants to know what the probe saw.
+    assert rows["Raven-Code"]["own"] is True and rows["Raven-Code"]["model_source"] == "raven"
+    assert rows["Raven-Code"]["model_choices"] == [{"value": "v/m", "name": "M", "group": "V"}]
+    assert rows["Other"]["own"] is False and rows["Other"]["model_source"] == "agent"
+    assert rows["Other"]["model_choices"] == [{"value": "v/m", "name": "M", "group": "V"}]
+    # The same agent with nothing to advertise: raven's own is on the same
+    # catalogue either way, a third party is taken at its word.
+    assert rows["Raven-PPT"]["own"] is True and rows["Raven-PPT"]["model_source"] == "raven"
+    assert rows["Raven-PPT"]["model_choices"] == []
+    assert rows["Other-Quiet"]["own"] is False and rows["Other-Quiet"]["model_source"] == "agent"
+
+
+async def test_test_can_target_a_discovered_product(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A product row has no config entry and is not a preset either: its folder
+    is the pool it is found in, and the verdict is recorded under that source so
+    the roster reads it back on the same row."""
+    from raven.agent.subagent import vendored_agents as va
+    from raven.agent.subagent.probe import TestResult
+    from raven.rpc.errors import SubagentNotFoundError
+
+    root = _product_tree(tmp_path)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    seen: list[tuple[str, str]] = []
+
+    async def fake_run_test(cfg, *, source):
+        seen.append((cfg.name, source))
+        return TestResult(cfg.name, source, "cli", True, "ok", "PONG", 1)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
+
+    out = await subagents_test({"name": "Raven-Probe", "source": "vendored"})
+
+    assert out["ok"] is True
+    assert seen == [("Raven-Probe", "vendored")]
+    row = next(r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven-Probe")
+    assert row["last_test_ok"] is True
+    with pytest.raises(SubagentNotFoundError):
+        await subagents_test({"name": "Coder", "source": "vendored"})

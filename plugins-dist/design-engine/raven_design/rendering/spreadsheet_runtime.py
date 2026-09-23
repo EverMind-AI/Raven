@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from raven_design.rendering.models import RenderConfig, RenderError
-from raven_design.rendering.util import json_write
+from raven_design.rendering.util import json_write, link_han_faces
 
 _DISPLAY_NUMBERS = range(90, 200)
 _DISPLAY_WAIT_ATTEMPTS = 40
@@ -81,6 +81,7 @@ def run_spreadsheet_worker(
     profile_dir = worker_root / "profile"
     input_dir.mkdir(parents=True)
     profile_dir.mkdir(parents=True)
+    link_han_faces(profile_dir)
     staged_source = input_dir / source.name
     shutil.copy2(source, staged_source)
     sheets_dir = bundle_root / "sheets"

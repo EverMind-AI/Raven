@@ -1278,6 +1278,103 @@ def test_the_retired_gateway_web_table_is_dropped_once_with_a_notice():
     assert loader.drain_migration_notices() == []
 
 
+def test_the_retired_deep_research_section_goes_and_its_disabled_entry_stays():
+    """Behind the floor a config loses the tool's section and hears about it
+    once; its disabled-tools entry stays, because that list is the general name
+    denylist and a plugin tool may carry the name; a second pass over the same
+    dict has nothing left to say; a config at the floor keeps the lot.
+
+    The floors are literals, not ``CURRENT_CONFIG_VERSION``: written from the
+    constant they would move with every bump and only ever test the generation
+    they were run under (the lesson of
+    test_context_window_pin_survives_once_stamped).
+    """
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    data = {
+        "tools": {
+            "deepResearch": {"apiKey": "sk-test"},
+            "disabledTools": ["deep_research", "exec"],
+            "webSearch": {"provider": "serper"},
+        },
+        "providers": {"anthropic": {"apiKey": "sk-a"}},
+    }
+    loader._migrate_config(data, from_version=9)
+
+    assert "deepResearch" not in data["tools"]
+    assert data["tools"]["disabledTools"] == ["deep_research", "exec"]
+    assert data["tools"]["webSearch"] == {"provider": "serper"}
+    assert data["providers"] == {"anthropic": {"apiKey": "sk-a"}}
+    notices = loader.drain_migration_notices()
+    assert len(notices) == 1 and "tools.deepResearch" in notices[0], notices
+
+    loader._migrate_config(data, from_version=9)
+    assert data["tools"] == {"disabledTools": ["deep_research", "exec"], "webSearch": {"provider": "serper"}}
+    assert loader.drain_migration_notices() == []
+
+    untouched = {"tools": {"deepResearch": {"apiKey": "sk-test"}, "disabledTools": ["deep_research"]}}
+    loader._migrate_config(untouched, from_version=10)
+    assert untouched["tools"] == {"deepResearch": {"apiKey": "sk-test"}, "disabledTools": ["deep_research"]}
+    assert loader.drain_migration_notices() == []
+
+
+def test_the_deep_research_migration_reads_the_snake_case_spellings():
+    """Configs in the wild spell the section either way; the list, whichever
+    way it is spelled, is left as written."""
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    data = {"tools": {"deep_research": {"apiKey": "sk-test"}, "disabled_tools": ["web_search", "deep_research"]}}
+    loader._migrate_config(data, from_version=9)
+
+    assert data["tools"] == {"disabled_tools": ["web_search", "deep_research"]}
+    notices = loader.drain_migration_notices()
+    assert len(notices) == 1 and "tools.deep_research" in notices[0], notices
+
+
+def test_a_deep_research_config_that_only_switched_it_off_is_left_alone(tmp_path: Path) -> None:
+    """Most configs never keyed the tool -- they only turned it off. That entry
+    is a name on the general denylist, and a plugin tool may carry the name
+    (plugin tools register last so one can shadow a built-in), so taking it out
+    would put such a tool back on offer: the migration changes nothing, says
+    nothing, and the persist pass leaves the file byte for byte alone."""
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    data = {"tools": {"disabledTools": ["deep_research"]}}
+    assert loader._migrate_retired_deep_research(data, notify=True) is False
+    assert data == {"tools": {"disabledTools": ["deep_research"]}}
+    assert loader.drain_migration_notices() == []
+
+    p = tmp_path / "config.json"
+    _write(p, {"tools": {"disabledTools": ["deep_research"]}})
+    before = p.read_text(encoding="utf-8")
+    _stamp_path(p).write_text(json.dumps({"version": 9}), encoding="utf-8")
+    load_config(p)
+    assert p.read_text(encoding="utf-8") == before
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert [n for n in drain_migration_notices() if "deep_research" in n] == []
+
+
+def test_the_deep_research_section_also_leaves_the_file_on_disk(tmp_path: Path) -> None:
+    """A config stamped 9 still holds the tool's API key in the file itself; the
+    persist pass takes the section out of it, leaves the disabled entry, and
+    stamps the current mark. The 9 is the literal a shipped build wrote."""
+    p = tmp_path / "config.json"
+    _write(p, {"tools": {"deepResearch": {"apiKey": "sk-test"}, "disabledTools": ["deep_research", "exec"]}})
+    _stamp_path(p).write_text(json.dumps({"version": 9}), encoding="utf-8")
+
+    drain_migration_notices()
+    load_config(p)
+
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert "deepResearch" not in on_disk["tools"]
+    assert on_disk["tools"]["disabledTools"] == ["deep_research", "exec"]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert len([n for n in drain_migration_notices() if "deep_research" in n]) == 1
+
+
 def test_channels_section_settings_are_not_mistaken_for_channels(tmp_path: Path, caplog) -> None:
     """``channels.sendProgress`` is a setting of the section, not a channel whose
     table failed to parse; only an unknown scalar under ``channels`` warns."""

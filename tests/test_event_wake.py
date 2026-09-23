@@ -304,6 +304,101 @@ async def test_interval_tick_skips_when_no_file_and_no_events(tmp_path: Path):
     assert provider.calls == []
 
 
+def _shipped_template() -> str:
+    from importlib.resources import files
+
+    return (files("raven") / "templates" / "HEARTBEAT.md").read_text(encoding="utf-8")
+
+
+async def test_an_untouched_template_costs_no_llm_call(tmp_path: Path):
+    """The template says a file of only headers and comments skips the
+    heartbeat; the tick used to skip only an empty file, so every workspace
+    that never edited it paid one decision call per interval."""
+    (tmp_path / "HEARTBEAT.md").write_text(_shipped_template(), encoding="utf-8")
+    provider = FakeProvider()
+    service = _make_service(tmp_path, provider, interval_s=0)
+
+    await _run_briefly(service, 0.1)
+
+    assert provider.calls == []
+
+
+async def test_a_task_added_to_the_template_is_still_decided(tmp_path: Path):
+    """The control for the skip: the same template with one task under Active
+    Tasks reaches the model, and so does a task written as a heading of the
+    user's own -- the skip reads only the template's own lines as scaffolding."""
+    template = _shipped_template()
+    marker = "<!-- Add your periodic tasks below this line -->"
+    for body in (
+        template.replace(marker, marker + "\n- check the deploy every morning"),
+        template + "\n### Water the plants\n",
+    ):
+        (tmp_path / "HEARTBEAT.md").write_text(body, encoding="utf-8")
+        provider = FakeProvider(action="skip")
+        service = _make_service(tmp_path, provider, interval_s=0)
+
+        await _run_briefly(service, 0.1)
+
+        assert len(provider.calls) >= 1, body[-60:]
+
+
+async def test_an_event_is_decided_even_when_the_file_holds_no_tasks(tmp_path: Path):
+    (tmp_path / "HEARTBEAT.md").write_text(_shipped_template(), encoding="utf-8")
+    provider = FakeProvider(action="skip")
+    queue = SystemEventQueue()
+    service = _make_service(tmp_path, provider, queue=queue)
+    queue.enqueue(SystemEvent(text="cron job done", source="cron"))
+
+    await service.trigger_now()
+
+    assert len(provider.calls) == 1
+    assert len(queue) == 0
+
+
+async def test_trigger_now_on_an_untouched_template_asks_nothing(tmp_path: Path):
+    (tmp_path / "HEARTBEAT.md").write_text(_shipped_template(), encoding="utf-8")
+    provider = FakeProvider(action="run", tasks="x")
+    executed = AsyncMock(return_value="done")
+    service = _make_service(tmp_path, provider, on_execute=executed)
+
+    assert await service.trigger_now() is None
+    assert provider.calls == []
+    executed.assert_not_awaited()
+
+
+async def test_the_heartbeat_decision_is_billed_to_the_heartbeat_session(tmp_path: Path):
+    """The decision call runs outside any turn. It used to reach no usage row at
+    all; through the provider seam it is billed, under the heartbeat's own
+    session rather than whichever conversation happened to run last."""
+    from raven.contracts.llm_provider import ToolCallRequest
+    from raven.providers import usage_record
+    from raven.providers.base import LLMProvider, LLMResponse
+    from raven.token_wise.registry import StrategyRegistry
+    from raven.token_wise.usage_tracker import UsageTracker
+
+    class _Provider(LLMProvider):
+        async def chat(self, messages, tools=None, model=None, **_kwargs):
+            return LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest(id="h1", name="heartbeat", arguments={"action": "skip"})],
+                usage={"prompt_tokens": 210, "completion_tokens": 12},
+            )
+
+        def get_default_model(self) -> str:
+            return "hb/model"
+
+    tracker = UsageTracker(persist=False)
+    usage_record.install(StrategyRegistry([tracker]).after_llm_call)
+    (tmp_path / "HEARTBEAT.md").write_text("- check the deploy", encoding="utf-8")
+    service = HeartbeatService(agent_home=tmp_path, provider=_Provider(api_key="k"), model="hb/model")
+
+    await service._tick()
+
+    row = tracker.snapshot("heartbeat")
+    assert (row.calls, row.input_tokens, row.output_tokens) == (1, 210, 12)
+    assert tracker.total.calls == 1
+
+
 async def test_trigger_now_consumes_events(tmp_path: Path):
     provider = FakeProvider(action="skip")
     queue = SystemEventQueue()

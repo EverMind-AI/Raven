@@ -128,6 +128,10 @@ async def test_channels_start_switches_the_adapter_and_reports_the_outcome() -> 
             self.calls.append(("stop", name))
             return "stopped"
 
+        async def restart_one(self, name: str) -> str:
+            self.calls.append(("restart", name))
+            return "started"
+
     mgr = _Mgr()
     d = Dispatcher()
     register_control_methods(d, channel_manager=mgr)
@@ -136,7 +140,21 @@ async def test_channels_start_switches_the_adapter_and_reports_the_outcome() -> 
     assert (await _dispatch(d, "gateway.channels.start", {"name": "telegram", "enabled": False}))["result"] == {
         "outcome": "stopped"
     }
-    assert mgr.calls == [("start", "telegram"), ("stop", "telegram")]
+    # A write that changed what the adapter was built with: a running one holds
+    # its config slice, so "start" would answer "already" and change nothing.
+    assert (await _dispatch(d, "gateway.channels.start", {"name": "telegram", "restart": True}))["result"] == {
+        "outcome": "started"
+    }
+    # And a stop stays a stop: there is nothing to rebuild on the way down.
+    assert (await _dispatch(d, "gateway.channels.start", {"name": "telegram", "enabled": False, "restart": True}))[
+        "result"
+    ] == {"outcome": "stopped"}
+    assert mgr.calls == [
+        ("start", "telegram"),
+        ("stop", "telegram"),
+        ("restart", "telegram"),
+        ("stop", "telegram"),
+    ]
 
     d2 = Dispatcher()
     register_control_methods(d2, channel_manager=None)
@@ -278,6 +296,12 @@ async def test_channels_qr_reads_a_real_whatsapp_adapter(tmp_path: Path, monkeyp
     # pairs by QR but has no rebind of its own yet.
     assert r == {"qr": None, "qr_text": None, "connected": False, "running": True, "rebind": None}
 
+    # Reaching the bridge is not being paired either -- the page has to keep
+    # asking for a scan until the bridge says a phone answered.
+    ch._bridge_up = True
+    r = (await _dispatch(d, "gateway.channels.qr", {"name": "whatsapp"}))["result"]
+    assert r["connected"] is False
+
     await ch._handle_bridge_message(_json.dumps({"type": "qr", "qr": "2@abc"}))
     r = (await _dispatch(d, "gateway.channels.qr", {"name": "whatsapp"}))["result"]
     assert r["qr"].startswith("data:image/png;base64,")
@@ -376,6 +400,32 @@ async def test_the_qr_poll_carries_the_rebind_phase() -> None:
     r = (await _dispatch(d, "gateway.channels.qr", {"name": "weixin"}))["result"]
     assert r["rebind"]["phase"] == "waiting"
     assert r["rebind"]["code_age_s"] == 4.0
+
+
+async def test_the_qr_poll_reports_a_paused_session_as_unpaired() -> None:
+    """An errcode -14 pause is an hour in which nothing is received and every
+    send raises, so the answer the row is drawn from must not go on calling the
+    account paired -- and it says when the pause lifts, so a client can tell
+    this apart from a code that was never scanned."""
+    import time
+
+    from raven.channels.adapters.weixin.channel import WeixinChannel
+
+    ch = WeixinChannel(make_channel_config("weixin"))
+    ch._running = True
+    ch._token = "tok"
+    d = Dispatcher()
+    register_control_methods(d, channel_manager=_OnlyChannel(ch))
+
+    r = (await _dispatch(d, "gateway.channels.qr", {"name": "weixin"}))["result"]
+    assert r["connected"] is True
+    assert r["rebind"]["paused_until"] is None
+
+    ch._session_pause_until = time.time() + 600
+    r = (await _dispatch(d, "gateway.channels.qr", {"name": "weixin"}))["result"]
+    assert r["running"] is True
+    assert r["connected"] is False
+    assert r["rebind"]["paused_until"] == ch._session_pause_until
 
 
 def test_the_control_app_serves_only_the_socket() -> None:

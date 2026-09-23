@@ -12,7 +12,6 @@
 
 import type { SnapshotRow } from '../dag/nodes'
 import type { DagNode } from '../dag/types'
-import type { WsChange } from '../workspace/types'
 
 export interface Hunk {
   add: number
@@ -44,11 +43,6 @@ export interface SpawnListRow {
   kind?: string
   label?: string
   status?: string
-}
-
-export interface SpawnRecordLike {
-  messages?: HistoryMessage[]
-  status?: string | null
 }
 
 /* One `subagent.status` frame, as the live layer forwards it. The fields this
@@ -112,18 +106,10 @@ export interface CallData {
   spawnAsked: boolean
   /* The RUN's own clock, in ms since the epoch, from whichever source named it.
      Not the tool call's: a spawn returns when the work is dispatched, so `ms` is
-     near zero on every spawn card and reading it printed `耗时 0.0s` over a run
-     that had taken eight seconds. Zero means unknown. */
+     near zero on every spawn card and reading it printed an elapsed 0.0s over a
+     run that had taken eight seconds. Zero means unknown. */
   spawnT0: number
   spawnT1: number
-  /* The run's own messages, newest last, as `subagent.context` answers them.
-     Live while it runs: the acp backend republishes its transcript into the
-     activity index on every update, and the method serves that when the record's
-     file does not exist yet. */
-  stream: HistoryMessage[]
-  /* Whether a read is in flight, so a slow answer cannot stack up behind the
-     heartbeat. */
-  reading: boolean
   runId: string | null
   /* What the graph was dispatched for. On the arguments for a model-composed
      graph, and only from `dag.get` for a playbook load, whose arguments name
@@ -142,16 +128,15 @@ export interface CallData {
      fresh run instead. Only that event sets it: a reload's `dag.get` carries
      no such field, so a card restored from history never has one. */
   replannedInto?: string
-  /* The node whose detail is open inside the card. View state, like `open`, and
-     the only thing that decides what the panel shows -- deriving a fallback from
-     it gave `null` two meanings, "nobody picked one" and "the reader closed it",
-     and the unasked open on a failure then could not be closed at all. */
-  sel: string | null
-  /* Whether the unasked open on a failure has already happened. Once, like the
-     step's own fold: a second failure does not reopen a panel the reader shut. */
-  selAuto: boolean
-  /* Whether that detail shows the whole prompt template or a clamp of it. */
-  selFull: boolean
+  /* Set once `dag.run_completed` has been seen for this card's run: the graph is
+     over, whatever the nodes this side heard about happen to say. The event
+     carries per-node file rows and legitimately carries none -- a run closed by
+     a backend error or a cancel has no manifest (raven/rpc/spine.py) -- so the
+     nodes it leaves behind can still read `pending`. Recorded rather than
+     inferred from them, because "the run ended" is exactly what they cannot
+     say. A card restored from history has no such event; `dag.get` gives it the
+     real statuses instead. */
+  graphClosed?: boolean
   /* Set once a `dag.get` has been asked for, so a card whose arguments carried no
      graph asks once rather than on every re-render. */
   asked: boolean
@@ -190,9 +175,22 @@ export interface AskData {
   v: number
   id: number
   kind: 'ask'
+  /* What opened this turn, when the runtime opened it rather than a person.
+     `origin` is the wire's (`cron`, `sentinel`, `heartbeat`, `subagent`) and
+     `note` is what that origin says about itself where it says anything -- a
+     schedule's own description of when it was set. Absent on a turn somebody
+     typed, which is every other one. */
+  auto?: { origin: string; note: string }
+  /* A message merged into the turn that was already running, so this bubble
+     sits INSIDE a turn instead of opening one. Every scan that walks back to
+     find where a turn began reads it -- see collapse() and foldRuns(). */
+  midTurn?: boolean
   body: string
   atts: string[]
   when: string
+  /* When it was said, in epoch ms: what the date line between two questions
+     far apart is measured from. 0 when the entry carried no usable stamp. */
+  at: number
   expanded: boolean
   clipped: boolean
   clipOpen: boolean
@@ -252,22 +250,6 @@ export interface DeliveredData {
   shown: boolean
 }
 
-/* One file this turn produced, as the bar shows it. `head` is the file's own
-   first lines when the page already has them -- a write tool's hunk carries
-   what it wrote, so a text artifact needs no fetch to draw a miniature of
-   itself. Absent means the page has no content for it (a binary, or a replay
-   that kept no diff) and the tile shows its kind instead. */
-export interface ArtifactRow {
-  path: string
-  dir: string
-  name: string
-  ext: string
-  head: string | null
-  lines: number
-  deleted: number
-  change: 'new' | 'edit'
-}
-
 export interface ArtsData {
   v: number
   id: number
@@ -278,7 +260,6 @@ export interface ArtsData {
      then disagree with it. */
   turn: number
   deliveriesOpen: boolean
-  changesOpen: boolean
 }
 
 export interface FoldData {
@@ -308,7 +289,7 @@ export interface Lane {
   main: boolean
   epoch: number
   listV: number
-  /* bumps when legacy would have tail-followed; the view scrolls on it */
+  /* bumps on every append that asks the view to scroll down */
   scrollReq: number
   segs: Seg[]
   listeners: Set<() => void>
@@ -336,8 +317,8 @@ export interface Lane {
   empty: string
 }
 
-/* What a legacy caller gets back from newStep()/tool(): the same handle
-   surface the old widgets returned, driving the store instead of the DOM. */
+/* What a caller gets back from newStep()/tool(): a handle that drives the
+   store, so the session pipeline never touches the DOM. */
 export interface CallHandle {
   done(ok: boolean, res: unknown, ms: number, diff?: string | string[] | null, truncated?: boolean): void
   /* The run a restored spawn call started, from the `spawn_task_id` the server
@@ -393,21 +374,14 @@ export interface HistoryMessage {
   /* Present on a USER entry the runtime wrote: a delegated run's result coming
      back. The model reads `text`, a reader must not -- see the note on the
      delivery branch in history(). */
-  delegated?: { kind?: string; label?: string; status?: string; run_id?: string }
+  delegated?: { kind?: string; label?: string; status?: string; run_id?: string; node_id?: string }
+  /* Set on a user entry the runtime merged into a turn already running. It is
+     drawn inside that turn -- see the mid-turn branch in history(). */
+  mid_turn?: boolean
 }
 
-/* What the artifact bar reads, and all it reads: the workspace record's rows
-   for one turn, exactly as that record holds them.
-   Deliberately NOT the finished list. Which of those rows counts as a product,
-   and what a tile can draw of it, are presentation decisions -- they belong to
-   the island that draws them, where they can be tested, rather than to the
-   legacy layer that happens to own the record. */
-export interface ArtifactsSource {
-  changes(turn: number): WsChange[]
-}
-
-/* The pull half of the seam. Event pushes arrive through the island API the
-   live layer forwards into (window.RavenIslands.transcript). */
+/* The pull half of the seam. Event pushes arrive through this island's own
+   verbs, which the session pipeline calls directly (features/transcript/mount). */
 export interface TranscriptSource {
   clean(text: unknown): string
   okOf(name: string, preview: string): boolean
@@ -420,25 +394,21 @@ export interface TranscriptSource {
      which is why the card could name every node and never the graph: a field
      this seam did not return was a field no card could draw. */
   dagRun?: (runId: string) => Promise<DagRunLike>
-  /* One spawned run's messages so far, by the record id `subagent.status`
-     reported. Answers a moving stream while the run is live, not a finished
-     transcript: see MsgLike. */
-  spawnRecord?: (callId: string) => Promise<SpawnRecordLike>
   /* Every delegated call this conversation made, as `subagent.list` answers it.
-     Read to turn a restored card's task id into the record id its stream is
-     read by -- once per conversation, not once per card. */
+     Read to find the record a restored card's run wrote -- once per
+     conversation, not once per card. */
   spawnList?: () => Promise<SpawnListRow[]>
-  /* The node's own summary rides with its id: the pane that opens is headed by
-     it, and the id is a slug from the plan. Optional, so a caller that has only
-     an id still opens the node. */
-  openDagNode?: (runId: string, nodeId: string, summary?: string | null) => void
-  openSpawn?: (agent: string, label: string) => void
-  /* Open the delegated GRAPH a delivery came from. One verb rather than the
-     live event handler doing it inline, because the replayed row has to open
-     the same thing the live row does. */
+  /* `nodeId` is the tasks store's own id for the spawn (present on the wire's
+     `delegated` payload once the run is live). When it names a row there,
+     the caller opens that task directly rather than guessing by label. */
+  openSpawn?: (agent: string, label: string, nodeId?: string) => void
+  /* Open the run's task pane on the desk. Both the delivered row and the
+     card's own task cell go through this one verb, so the replayed row opens
+     the same place the live one does. */
   openDagRun?: (runId: string) => void
-  /* Whether a detached lane host is parked rather than discarded: leaving a
-     session mid-turn keeps the transcript as detached DOM and puts it back on
-     return, so off the page does not mean finished with. */
-  parked?: (node: HTMLElement) => boolean
+  /* One-line label for a tool call, derived from its arguments -- the same
+     table a call's own row in this island reads, so a sibling that draws its
+     own tool rows (features/tasks) shows the same words for the same tool
+     rather than a second guess at them. */
+  actLabel?: (name: string, args: Record<string, unknown>, display?: string | null) => string
 }

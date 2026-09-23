@@ -69,17 +69,18 @@ class CuratorSegmentBuilder:
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         now_fn: Callable[[], datetime] | None = None,
         max_steps: int = 12,
-        pin: "ModelBinding | None" = None,
+        pin_resolver: "Callable[[], ModelBinding | None] | None" = None,
     ) -> None:
         self.workspace = workspace
         self.config = config
         self._fallback = ModelBinding(provider, model)
-        # ``context.curator_model`` paired with its own credential, or None
-        # when it names a vendor Raven has no credentials for. None means the
-        # curator runs on the conversation's model, which is the configured
-        # rule for an unconfigured subsystem.
-        self._pin = pin
-        self._pin_warned = False
+        # ``context.curator_model`` paired with its own credential, asked for
+        # per curation so that repointing it applies to the next turn rather
+        # than the next restart. None -- unset, or a vendor Raven has no
+        # credentials for -- means the curator runs on the conversation's
+        # model, which is the configured rule for an unconfigured subsystem
+        # (see providers.pool.live_pin_resolver).
+        self._pin_resolver = pin_resolver
         self._fallback_window = int(context_window_tokens)
         self.get_tool_definitions = get_tool_definitions
         self.max_steps = max_steps
@@ -142,19 +143,13 @@ class CuratorSegmentBuilder:
         A pin becomes a pair only when the factory was given a
         :class:`~raven.providers.pool.ProviderPool` and that pool could build
         the pin's vendor from configured credentials. Either half missing
-        leaves ``_pin`` None and the curator follows the conversation, which is
+        resolves to None and the curator follows the conversation, which is
         reported once. Worth configuring properly: the slow path is a bounded
         loop of up to ``max_steps`` tool-calling requests, which is per-turn
         housekeeping, not an answer.
         """
-        if self.config.curator_model and self._pin is None and not self._pin_warned:
-            self._pin_warned = True
-            logger.warning(
-                "context.curator_model={!r} has no usable credentials of its own; "
-                "the curator follows the conversation's model instead",
-                self.config.curator_model,
-            )
-        return resolve(self._pin, self._fallback)
+        pin = self._pin_resolver() if self._pin_resolver is not None else None
+        return resolve(pin, self._fallback)
 
     async def build(self, ctx: AssemblyContext) -> Segment | None:
         if ctx.prefix is None:

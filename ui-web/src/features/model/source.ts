@@ -1,0 +1,301 @@
+/* -- the model and the tier: the rpc source ---------------------------
+   Which model a conversation runs, which providers this install can reach,
+   and which effort rung the next turn takes. The picker itself is the model
+   island (ui-web/src/features/model/) and the provider pane is the settings
+   island; what is here is the provider list this transport fetched, the two
+   writes that can be refused, and the generation ticket that keeps a slow
+   answer from repainting a page the reader has left. */
+
+import { t } from '../../i18n/t'
+import { current as sessionCurrent } from '../../lib/session'
+import { gateway } from '../../rpc/gateway'
+import { generation } from '../../state/session/generation'
+import { staging } from '../../state/session/staging'
+import { openModels, openProviderModels } from '../settings/store'
+import { open as openPickerAt, setCurrent, statedTags } from './store'
+
+import type { ParamsOf, ResultOf } from '../../rpc/generated'
+import type { TierReply, TierSource } from '../../state/tier'
+import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
+
+type ProviderWire = ResultOf<'model.options'>['providers'][number]
+
+let providersLive: Provider[] = []
+let defaultProvidersLive: Provider[] = []
+let defaultModelLive = ''
+let defaultProviderLive = ''
+
+/* Whether first-run setup reported a configured provider. On an object because
+   the boot in src/app/boot.ts is what learns the answer. */
+export const setupState: { providerConfigured: boolean | null } = { providerConfigured: null }
+
+/* The rows the settings page reads: the default-scoped answer. Apart from the
+   session-scoped one below because `is_current` is the difference between them
+   -- the backend marks the conversation's provider when the read names a
+   session and `agents.defaults`' when it does not. One array held both, so
+   opening the settings dialog (or any provider write) put the default's answer
+   under the composer's picker: it then opened on the default's column with the
+   conversation's model prepended and ticked there, under a vendor whose key
+   does not serve it. The same split as `defaultModelLive` above, one layer out. */
+export const defaultProviders = (): Provider[] => defaultProvidersLive
+export const defaultModel = (): string => defaultModelLive
+export const defaultProvider = (): string => defaultProviderLive
+
+/* The configured default, kept apart from the visible session's model: the
+   settings default-model control shows and edits THIS pair (model AND
+   provider), while the composer chip shows whatever the open conversation
+   runs. Sharing one value made the settings control display the session's
+   model -- and badge the session's provider -- as the default. Written by the
+   settings load as well as by the write below, which is why it has a setter. */
+export function setDefaultPair(model: string, provider: string): void {
+  defaultModelLive = model
+  defaultProviderLive = provider
+}
+
+/* The composer's model chip is written by id rather than rendered (#modelName /
+   #modelChip, features/model/chip.ts), so its painter is published here
+   (features/settings/wire.ts) rather than this module reaching into the DOM. */
+let paintChip: () => void = () => {}
+export function setChipPainter(fn: () => void): void {
+  paintChip = fn
+}
+
+/* The chip the composer shows and the settings default both write. */
+export const showModel = (model: string, provider = ''): void => {
+  setCurrent(model, provider)
+  paintChip()
+}
+
+/* The one door another domain opens the picker through, so nothing outside
+   this feature touches its store (`features/settings` is the caller: a role
+   slot passes its kind, the providers that role may use, its name and its own
+   write). The offer's `current` doubles as the marked model. */
+export function openPicker(anchor: HTMLElement, offer: Offer, after?: () => void): void {
+  openPickerAt(anchor, after, offer.current?.model, offer)
+}
+
+export function openModelsForMissingProvider(): boolean {
+  const connected = providersLive.some((p) => p.on)
+  const knownMissing = setupState.providerConfigured === false || providersLive.length > 0
+  if (connected || !knownMissing) return false
+  void openModels()
+  return true
+}
+
+/* One `model.options` answer as the rows the page reads. Shared by the two
+   loads below: the per-conversation one, which may drop its answer, and the
+   default-scoped one, which never does. */
+const rowsOf = (list: ProviderWire[]): Provider[] =>
+  list.map((p) => ({
+    id: p.slug, name: p.name, homepage: p.homepage || '', models: p.models || [], on: p.authenticated,
+    docs: p.docs || '',
+    keyUrl: p.key_url || '', headers: p.extra_headers || {},
+    // What the section actually lists, as against `models` above -- the picker's
+    // offer, which folds in a curated shortlist nobody added. The settings page
+    // manages the first and the composer chooses from the second.
+    configured: p.configured_models || [],
+    // What each model is called and what it can do, drawn as the picker's icon
+    // row. Keyed by the same id as `models`, so a miss is a model the registry
+    // knows nothing about rather than a model with nothing to show.
+    labels: p.model_labels || {},
+    protocols: p.protocols || {}, protocolOverrides: p.protocol_overrides || {},
+    kind: p.auth_type || 'api_key', needsBase: !!p.needs_api_base,
+    // The catalogue page's filter, and the picker's answer to "whose column
+    // does the running model belong in": both are facts only the registry has.
+    gateway: !!p.gateway, current: !!p.is_current, routes: p.route_names || [],
+    // Addresses to choose between. A provider that has them is asked which
+    // storefront the key came from instead of being handed a host field --
+    // the key does not say, and the three are separate accounts.
+    platforms: p.platforms || [],
+    // Whether this one has a key field: false for an address-only local
+    // deployment, true for the local servers that can sit behind a token.
+    // Answered by the backend so the pane and the wizard cannot disagree.
+    acceptsKey: p.accepts_api_key !== false,
+    apiBase: p.api_base || '', defaultApiBase: p.default_api_base || '',
+    env: p.key_env || '', warn: p.warning || '',
+    key: p.authenticated ? t('gui.set.tls.key_set') : '',
+  })) as Provider[]
+
+/* The settings snapshot's provider list: default-scoped, and kept whatever
+   the session did meanwhile. The per-conversation load below drops an answer
+   whose generation ticket expired, which is right for the chip it stars --
+   but the boot's settings refresh runs while the boot is still switching
+   sessions, so its answer always expired, the snapshot froze on an empty
+   list, and a dialog (or the first-run wizard) that opened inside that window
+   coalesced onto the dropped load and showed no provider to connect. */
+export async function loadDefaultProviders(): Promise<void> {
+  const mo = await readOptions({})
+  defaultProvidersLive = rowsOf(mo.providers || [])
+}
+
+/* One catalogue read per distinct question at a time. The boot asks the
+   default-scoped question from three places inside the same second -- the
+   draft's own switch, the settings refresh, and the settings dialog's first
+   draw -- and each answer is a full catalogue build on the gateway: 0.4s on a
+   home with many providers, and three at once slow every other call on the
+   socket eightfold while they run. Callers asking the same question while one
+   is in flight share its answer; a different question is its own call. */
+const inFlight = new Map<string, Promise<ResultOf<'model.options'>>>()
+
+function readOptions(params: ParamsOf<'model.options'>): Promise<ResultOf<'model.options'>> {
+  const key = JSON.stringify(params)
+  let read = inFlight.get(key)
+  if (!read) {
+    read = gateway().call('model.options', params).finally(() => { inFlight.delete(key) })
+    inFlight.set(key, read)
+  }
+  return read
+}
+
+export async function loadProviders(sid?: string | null, gen?: number): Promise<void> {
+  // The model is per conversation, so ask for the visible one's -- model.options
+  // stars the row that conversation actually runs, not agents.defaults. Omit the
+  // field when there is no session (boot, a draft): the Wire Schema types it as
+  // an optional string, and a serialized null is outside that contract.
+  const target = sid !== undefined ? sid : sessionCurrent()
+  // Captured here when the caller did not bring one, so every refresh carries a
+  // ticket by construction rather than by each call site remembering. A caller
+  // whose session was resolved BEFORE its own await must still pass the
+  // generation it captured then -- the answer is about that older view, and a
+  // ticket taken here would read as current.
+  const ticket = gen !== undefined ? gen : generation()
+  const mo = await readOptions(target ? { session_id: target } : {})
+  // model.options does its catalogue work off-thread, so responses can land out
+  // of click order. A refresh keyed to a superseded view must not repaint the
+  // page the reader has since moved to.
+  if (ticket !== generation()) return
+  providersLive = rowsOf(mo.providers || [])
+  if (mo.model) showModel(mo.model, mo.provider || '')
+}
+
+/* provider is required -- a bare model id does not name whose credential serves
+   it. scope comes from the opener, matching the TUI's `/model` with or without
+   --default:
+   - 'default' changes agents.defaults (the settings control). The visible
+     session rides along so the server can say whether that conversation follows
+     the default; when it does (`applies_to_session`), its chip is re-read, or
+     the conversation would run the new default under a chip showing the old.
+   - 'session' changes the open conversation; while it is still a draft there is
+     no session to scope to, so the pick is staged (writing it would move the
+     global default) and applied to the session the first message mints. Staging
+     is said back to the caller: it is not an applied switch yet. */
+export async function persistModel(
+  m: string, provider: string, scope: 'session' | 'default',
+): Promise<void | 'staged' | 'needs_restart'> {
+  const sid = sessionCurrent()
+  // Captured with sid, before the write: the repaint below must prove the page
+  // it would paint is still the page the reader is on. config.set and the
+  // catalogue read behind model.options are both slow enough for the reader to
+  // have left; the generation ticket is what lets loadProviders drop the late
+  // answer instead of overwriting the conversation they moved to.
+  const gen = generation()
+  if (scope === 'default') {
+    /* The session rides along only when there is one: the contract types it as
+       an optional string, and a serialized null is outside that. */
+    const p: ParamsOf<'config.set'> = { key: 'model', value: m, provider, scope: 'default' }
+    if (sid) p.session_id = sid
+    const r = await gateway().call('config.set', p)
+    // Reflect the new default only once it lands, so a refusal leaves the
+    // settings row on the pair the config still holds.
+    setDefaultPair(m, provider)
+    if (r && r.applies_to_session && sid) void loadProviders(sid, gen)
+    // A visible draft follows the default the way an unswitched session does:
+    // its first message creates the session on the new default, so the chip
+    // must move with it -- unless the draft staged a pick of its own, which
+    // outranks the default exactly as an own binding does.
+    //
+    // Under the same generation ticket as the session repaint above, and for
+    // the same reason: the picker has closed, nothing locks the write, and
+    // leaving the draft for a conversation of its own advances the generation
+    // (every view switch does) -- so without this the resolved draft write
+    // repaints a chip that has since been loaded correctly for someone else.
+    if (!sid && !staging().model && gen === generation()) showModel(m, provider)
+    /* The write landed in a process with no agent loop -- a first run, where
+       the gateway started before there was a model to build one from. Said
+       back so the onboarding wizard can tell the reader, instead of the next
+       send answering with the startup error. */
+    return r && r.needs_restart ? 'needs_restart' : undefined
+  }
+  if (sid) {
+    const r = await gateway().call('config.set', { key: 'model', value: m, provider, session_id: sid })
+    /* A refusal RESOLVES, and `choose` rolls the chip back only in its catch --
+       so dropping this reply left the chip on the new model and the page saying
+       it switched, after a write the session never took. The server states the
+       rule it expects of a caller (rpc/methods/config.py): the refusal is what
+       the caller gets, and saying it is the caller's job. Thrown rather than
+       reported, because the rollback this needs is the one the catch already
+       does, and `data.detail` is the shape it renders. */
+    if (r && r.applied === false) throw { data: { detail: t('gui.model.refused') } }
+    return
+  }
+  staging().model = { model: m, provider }
+  return 'staged'
+}
+
+export const modelSource: ModelSource = {
+  providers: () => providersLive,
+  persist: persistModel,
+  addModel: async (m: string, provider: string, kind?: Kind) => {
+    await gateway().call('model.add_model', { slug: provider, model: m, ...statedTags(kind ?? 'text') })
+    await loadProviders()
+  },
+  setProtocol: async (model: string, provider: string, protocol: ApiProtocol) => {
+    await gateway().call('model.set_protocol', { model, slug: provider, protocol })
+    await loadProviders()
+  },
+  openSettings: () => openModels(),
+  openProviderModels: (provider: string) => openProviderModels(provider),
+}
+
+/* The tier over the wire. One method serves all three calls, and every reply
+   carries the whole catalogue, so `read` and `set` differ only in whether they
+   name a mode -- there is no separate menu fetch to keep in step.
+
+   `session_key` is required by the handler and is the conversation the chip sits
+   under; a page with no conversation yet has no tier to report, and the caller
+   leaves the chip hidden on the refusal rather than inventing one. */
+let tierMenu: TierReply['availableModes'] = []
+
+export const tierSource: TierSource = {
+  read: async () => {
+    /* A draft asks too, and the handler answers the catalogue and its default
+       for a key it has never seen -- which is exactly what the first turn of a
+       new conversation will run at. */
+    const r = await gateway().call('session.set_mode', { session_key: sessionCurrent() || '' })
+    tierMenu = (r && r.availableModes) || tierMenu
+    return r
+  },
+  set: async (mode: string) => {
+    const sid = sessionCurrent()
+    if (!sid) {
+      /* Staged, and echoed back as though written: there is no server state to
+         contradict it yet, and the chip has to show the reader what their next
+         turn will run at. */
+      staging().tier = mode
+      return { mode, availableModes: tierMenu }
+    }
+    const r = await gateway().call('session.set_mode', { session_key: sid, mode })
+    tierMenu = (r && r.availableModes) || tierMenu
+    return r
+  },
+}
+
+/* Read by the send path, which applies it next to the staged model. The object
+   is reset on both paths that abandon a draft. */
+export function stagedTier(): string | null {
+  const s = staging()
+  const mode = s.tier
+  s.tier = null
+  return mode
+}
+
+/* Test seam only: what the gateway last said, and the chip painter the page
+   registered, are both the module's. */
+export function _resetForTests(): void {
+  providersLive = []
+  defaultProvidersLive = []
+  defaultModelLive = ''
+  defaultProviderLive = ''
+  paintChip = () => {}
+  tierMenu = []
+}

@@ -368,19 +368,59 @@ def test_generated_playbook_lands_in_the_user_layer(tmp_path):
     assert store.origin_of("competitor-scan") == "user"
 
 
-def test_the_packaged_library_ships_no_playbooks(tmp_path):
-    """The builtin layer is a mechanism, not a shipped catalogue.
+def test_the_packaged_library_ships_only_what_cannot_be_generated(tmp_path):
+    """The builtin layer is a mechanism, and it carries exactly one file.
 
-    A playbook is user-layer product: written on the machine that runs it, by
-    ``raven playbook create`` or the ``create_playbook`` tool. Packaging
-    examples put demo content into every install and into the public release,
-    so the layer stays wired up and empty. The layer's own behaviour is
-    covered against a temporary root, so nothing here needs a shipped file.
+    A ``dag`` or ``prompt`` playbook is user-layer product: written on the
+    machine that runs it, by ``raven playbook create`` or the
+    ``create_playbook`` tool. Packaging those puts demo content into every
+    install and into the public release, so none are shipped.
+
+    ``rounds`` is the exception the rule needs, and the reason is the
+    generator's own refusal: a ``mode: stint`` playbook is the one kind it may
+    never write (``test_the_generator_cannot_write_a_rounds_playbook``), because
+    ``verify`` is shell and one approval covers every round. Withheld from the
+    generator and not shipped either, the mode would be reachable only by
+    hand-writing YAML from the prose. One worked example is what makes it
+    reachable, and it is pinned by name here so a second one is a decision
+    somebody makes on purpose.
     """
     from raven.playbook.store import BUILTIN_ROOT
 
     store = PlaybookStore(tmp_path / "empty-user", builtin_root=BUILTIN_ROOT)
-    assert store.list_ids() == []
+    assert store.list_ids() == ["long-horizon-dev-stint"]
+    assert store.load("long-horizon-dev-stint").mode == "stint"
+
+
+def test_every_packaged_playbook_names_an_agent_raven_ships(tmp_path):
+    """A shipped playbook's roles name roster rows that exist.
+
+    The one packaged playbook is the only worked example of its mode, so a role
+    naming an agent nobody has makes that mode unreachable by the route that
+    exists to make it reachable -- and it fails at dispatch, after the person
+    approved a run, not at load. It shipped naming ``research-raven`` and
+    ``code-raven`` while the manifests read ``Raven-Research`` and
+    ``Raven-Code``; nothing read the two together.
+
+    The manifests rather than a live roster: what a machine has depends on what
+    is installed and configured there, and a builder's own config is the one
+    place this mistake is invisible.
+    """
+    import json
+
+    from raven.agent.subagent.builtin_agents import BUILTIN_AGENT_NAMES
+    from raven.playbook.store import BUILTIN_ROOT
+    from raven.playbook.validate import validate_structure
+
+    manifests = sorted((Path(__file__).resolve().parent.parent / "agents").glob("*/subagent.json"))
+    assert manifests, "the agent products ship as manifests; with none this proves nothing"
+    shipped = set(BUILTIN_AGENT_NAMES) | {
+        json.loads(manifest.read_text(encoding="utf-8"))["name"] for manifest in manifests
+    }
+
+    store = PlaybookStore(tmp_path / "empty-user", builtin_root=BUILTIN_ROOT)
+    for name in store.list_ids():
+        assert validate_structure(store.load(name), known_agents=shipped) == []
 
 
 @pytest.mark.parametrize("name", ["../escape", "/tmp/absolute", "UPPER", "a b", ""])

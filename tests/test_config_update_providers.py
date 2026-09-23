@@ -1851,6 +1851,65 @@ def test_borrow_hands_back_an_empty_address_for_a_vendor_no_table_knows(monkeypa
     assert lend_provider_credentials("gpustack") == {"api_key": "gs-lend", "base_url": ""}
 
 
+class TestTheShapesTheKeyCanBeStoredIn:
+    """The precedence exists because a provider serving traffic every day can
+    have an empty flat ``api_key``. These three shapes used to be covered
+    through the settings RPC, which no longer borrows; the wizard still does,
+    so the coverage moved down to the function rather than going away."""
+
+    @staticmethod
+    def _cfg(name: str, section: dict) -> object:
+        """Built from raw rather than by attribute, so a vendor raven carries no
+        spec for parses the same way it does on disk."""
+        from raven.config.schema import Config
+
+        return Config.model_validate({"providers": {name: section}})
+
+    def test_an_endpoints_section_is_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``endpoints`` replaces the flat pair outright, so a section written
+        that way has an empty ``api_key`` while the provider works. Reading the
+        flat field offered it as a lender and then refused to lend."""
+        import raven.config
+
+        monkeypatch.setattr(
+            raven.config,
+            "load_config",
+            lambda: self._cfg(
+                "openrouter",
+                {"endpoints": [{"label": "one", "apiKey": "sk-from-endpoint", "apiBase": "https://ep.example/v1"}]},
+            ),
+        )
+        assert lend_provider_credentials("openrouter") == {
+            "api_key": "sk-from-endpoint",
+            "base_url": "https://ep.example/v1",
+        }
+
+    def test_an_api_key_list_section_is_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The other shape the precedence exists for: a rotation list never
+        populates the flat field either."""
+        import raven.config
+
+        monkeypatch.setattr(
+            raven.config,
+            "load_config",
+            lambda: self._cfg("gemini", {"apiKeyList": ["k-gem-1", "k-gem-2"], "apiBase": "https://gem.example/v1"}),
+        )
+        assert lend_provider_credentials("gemini")["api_key"] == "k-gem-1"
+
+    def test_a_provider_stored_under_another_spelling_is_found(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``ProvidersConfig.get`` is spelling-insensitive and attribute access
+        is not. A provider raven carries no spec for is stored under whatever
+        key its writer used."""
+        import raven.config
+
+        monkeypatch.setattr(
+            raven.config,
+            "load_config",
+            lambda: self._cfg("some-vendor", {"apiKey": "sk-hyphen", "apiBase": "https://hyph.example/v1"}),
+        )
+        assert lend_provider_credentials("some-vendor")["api_key"] == "sk-hyphen"
+
+
 class TestWhatABorrowedCredentialMustCarry:
     """A url/key/header group is reachable only whole, and an everos section
     holds a model, an api_key and a base_url. Anything the section cannot hold
@@ -1908,3 +1967,79 @@ class TestWhatABorrowedCredentialMustCarry:
             "api_key": "relay-key",
             "base_url": "https://relay.internal/v1",
         }
+
+
+class TestNamingTheProviderThatServesAnAddress:
+    """`provider_serving_at` is how every migration turns a stored address back
+    into a vendor. One comparison was not enough for the shapes real configs
+    hold, so it has three -- and each level needs a case it alone answers.
+    """
+
+    @staticmethod
+    def _cfg(tmp_path, providers: dict):
+        import json
+
+        from raven import home as raven_home
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"providers": providers}), encoding="utf-8")
+        raven_home.set_config_path(path)
+        return path
+
+    def test_the_full_address_wins_over_a_shared_host(self, tmp_path, monkeypatch) -> None:
+        """Two vendors behind one gateway host: the exact address is the only
+        thing that tells them apart, so it must be asked first."""
+        from raven import home as raven_home
+        from raven.config.update_providers import provider_serving_at
+
+        path = self._cfg(
+            tmp_path,
+            {
+                "openrouter": {"apiKey": "sk-a", "apiBase": "https://proxy.test/openrouter/v1"},
+                "deepseek": {"apiKey": "sk-b", "apiBase": "https://proxy.test/deepseek/v1"},
+            },
+        )
+        try:
+            assert provider_serving_at("https://proxy.test/deepseek/v1", config_path=path) == "deepseek"
+        finally:
+            raven_home.set_config_path(None)
+
+    def test_the_host_answers_when_the_path_does_not(self, tmp_path) -> None:
+        """DeepInfra's own shape: reranking is served from /v1/inference while
+        the configured row says /v1/openai. Same vendor, two paths -- and a
+        whole-address comparison calls that nobody."""
+        from raven import home as raven_home
+        from raven.config.update_providers import provider_serving_at
+
+        path = self._cfg(tmp_path, {"deepinfra": {"apiKey": "sk-di", "apiBase": "https://api.deepinfra.com/v1/openai"}})
+        try:
+            assert provider_serving_at("https://api.deepinfra.com/v1/inference", config_path=path) == "deepinfra"
+        finally:
+            raven_home.set_config_path(None)
+
+    def test_the_key_answers_when_the_address_was_moved(self, tmp_path) -> None:
+        """An address hand-edited to a proxy still carries the credential the
+        vendor issued, and that names the vendor more surely than the host."""
+        from raven import home as raven_home
+        from raven.config.update_providers import provider_serving_at
+
+        path = self._cfg(
+            tmp_path, {"deepseek": {"apiKey": "sk-only-deepseek-has", "apiBase": "https://api.deepseek.com/v1"}}
+        )
+        try:
+            assert (
+                provider_serving_at("https://our-gateway.internal/v1", api_key="sk-only-deepseek-has", config_path=path)
+                == "deepseek"
+            )
+        finally:
+            raven_home.set_config_path(None)
+
+    def test_an_address_nobody_serves_is_nobody(self, tmp_path) -> None:
+        from raven import home as raven_home
+        from raven.config.update_providers import provider_serving_at
+
+        path = self._cfg(tmp_path, {"deepseek": {"apiKey": "sk-b", "apiBase": "https://api.deepseek.com/v1"}})
+        try:
+            assert provider_serving_at("https://nobody.example/v1", config_path=path) is None
+        finally:
+            raven_home.set_config_path(None)

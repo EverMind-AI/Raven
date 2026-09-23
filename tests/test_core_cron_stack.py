@@ -13,6 +13,7 @@ failure path.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -25,7 +26,7 @@ from raven.proactive_engine.schedulers.cron.types import (
     CronPayload,
     CronSchedule,
 )
-from raven.spine import Origin
+from raven.spine import Origin, TurnFailed
 
 
 def _make_job(
@@ -211,7 +212,49 @@ async def test_turn_failure_emits_failed_event_and_reraises():
     system_events.enqueue.assert_called_once()
     event = system_events.enqueue.call_args.args[0]
     assert "failed" in event.text
+    assert "RuntimeError: provider down" in event.text
     assert event.context_key.endswith(":fail")
+
+
+async def test_a_failed_turns_own_wording_is_what_the_job_records():
+    """The lane hands its ``TurnFailed`` back, so the job's error reads as the
+    turn worded it -- a rate limit, an auth failure -- instead of the one
+    sentence this handler used to invent for every non-delivery."""
+    system_events = MagicMock()
+    wake = MagicMock()
+
+    class _Handle:
+        async def result(self):
+            return TurnFailed(error="RateLimitError: 429 slow down", cancelled=False, turn_id="t1")
+
+    handler = make_on_cron_job(
+        submit=lambda req: _Handle(),
+        readback_texts={},
+        system_events=system_events,
+        wake=wake,
+    )
+
+    with pytest.raises(RuntimeError, match="^RateLimitError: 429 slow down$"):
+        await handler(_make_job(name="f2"))
+
+    event = system_events.enqueue.call_args.args[0]
+    assert "RateLimitError: 429 slow down" in event.text
+    assert "RuntimeError:" not in event.text, "the handler's own wrapper is not part of the report"
+    assert event.context_key.endswith(":fail")
+
+
+async def test_a_cancelled_turn_says_it_was_cut_rather_than_that_it_failed():
+    """None is now only ever a cancel -- a reload cutting an in-flight turn --
+    so the record says that instead of offering both readings."""
+
+    class _Handle:
+        async def result(self):
+            return None
+
+    handler = make_on_cron_job(submit=lambda req: _Handle(), readback_texts={})
+
+    with pytest.raises(RuntimeError, match="cancelled before it completed"):
+        await handler(_make_job(name="f3"))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -378,7 +421,7 @@ async def test_interactive_assembly_cron_renders_once_via_outlet():
     from raven.spine import Text, TurnOutcome, Usage
 
     class _CronEchoLoop:
-        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False) -> TurnOutcome:
+        async def run_turn(self, req, emit, drain, *, stream) -> TurnOutcome:
             await emit(Text(content=f"cron-reply<{req.conversation}>", source=req.source))
             return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
@@ -529,5 +572,48 @@ async def test_a_session_wake_whose_turn_died_raises_so_the_job_records_a_failur
     from raven.core.cron_stack import make_on_session_wake
 
     submit, _ = _capturing_submit(outcome=None)
-    with pytest.raises(RuntimeError, match="cancelled or failed"):
+    with pytest.raises(RuntimeError, match="cancelled before it completed"):
         await make_on_session_wake(submit=submit, channel="acp")(_make_job(channel="acp", to="s1"))
+
+
+@pytest.mark.asyncio
+async def test_a_session_wake_that_failed_raises_the_turns_own_words():
+    """This path files no system event, so the raised sentence is the whole of
+    what reaches the job record."""
+    from raven.core.cron_stack import make_on_session_wake
+
+    submit, _ = _capturing_submit(outcome=TurnFailed(error="AuthenticationError: 401", cancelled=False))
+    with pytest.raises(RuntimeError, match="^AuthenticationError: 401$"):
+        await make_on_session_wake(submit=submit, channel="acp")(_make_job(channel="acp", to="s1"))
+
+
+@pytest.mark.asyncio
+async def test_a_failed_turn_reaches_the_job_record_through_the_real_scheduler(tmp_path):
+    """End to end over the seam this PR opens: a runner that raises, a real
+    Scheduler and a real CronService, and the job file holding the turn's own
+    wording rather than a handler-invented sentence."""
+    from raven.proactive_engine.schedulers.cron.service import CronService
+    from raven.spine import OriginPools, Scheduler
+
+    class _FailingRunner:
+        async def run(self, req, emit, drain):
+            raise ValueError("the provider refused the call")
+
+    async def _sink(event) -> None:
+        pass
+
+    sched = Scheduler(_FailingRunner(), OriginPools(user=1, system=1), _sink)
+    svc = CronService(tmp_path / "jobs.json", on_job=make_on_cron_job(submit=sched.submit, readback_texts={}))
+    job = svc.add_job(
+        name="failing",
+        schedule=CronSchedule(kind="every", every_ms=3_600_000),
+        message="do the thing",
+        channel="tui",
+        to="direct",
+    )
+
+    assert await svc.run_job(job.id, force=True) is True
+
+    stored = json.loads((tmp_path / "jobs.json").read_text(encoding="utf-8"))["jobs"][0]["state"]
+    assert stored["lastStatus"] == "error"
+    assert stored["lastError"] == "ValueError: the provider refused the call"

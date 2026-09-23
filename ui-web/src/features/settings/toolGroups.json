@@ -1,0 +1,57 @@
+{
+  "file": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_dir",
+    "grep",
+    "find",
+    "deliver_files"
+  ],
+  "run": [
+    "exec"
+  ],
+  "net": [
+    "web_search",
+    "web_fetch",
+    "image_search",
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_click",
+    "browser_type",
+    "browser_press",
+    "browser_scroll",
+    "browser_tabs",
+    "browser_screenshot"
+  ],
+  "generate": [
+    "image_generate",
+    "text_to_speech",
+    "video_generate"
+  ],
+  "collab": [
+    "message",
+    "spawn",
+    "run_subagent_dag",
+    "cancel_dag",
+    "dag_status",
+    "resolve_dag_node",
+    "ask_user",
+    "cron",
+    "plugin"
+  ],
+  "skills": [
+    "read_skill",
+    "find_skill",
+    "use_skill",
+    "load_playbook",
+    "create_playbook"
+  ],
+  "memory": [
+    "understand_media"
+  ],
+  "search": [
+    "tool_search",
+    "tool_call"
+  ]
+}

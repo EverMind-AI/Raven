@@ -59,10 +59,9 @@ there is no flag for it: session/new, session/load and session/resume
 each require one and answer -32602 without it. Models switch through
 session/set_config_option with category "model", which binds the
 calling session alone and takes effect on its next turn --
-session/set_model is not in the stable schema. deep-research and
-playbook are announced to the client as available commands. A frame
-over 8 MiB is answered with an error and skipped, leaving the stream
-in sync.
+session/set_model is not in the stable schema. playbook is announced
+to the client as an available command. A frame over 8 MiB is answered
+with an error and skipped, leaving the stream in sync.
 
 Because stdout carries the protocol, logs go to a file:
 <config dir>/logs/acp.log, rotating at 10 MB, 3 kept. stderr is left

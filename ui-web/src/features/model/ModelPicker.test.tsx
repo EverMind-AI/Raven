@@ -2,16 +2,21 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ModelPickerApp } from './ModelPicker'
-import * as store from './store'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import * as tier from '../../state/tier'
+import { domSnapshot } from '../../test/domSnapshot'
+import { FOLD, ModelApp } from './ModelPicker'
+import * as store from './store';
 
-import type { Shell } from '../../shell/bridge'
 import type { ModelSource, Provider } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
-vi.mock('../../shell/toast', () => ({
+vi.mock('../../state/toast', () => ({
   show: (text: string) => { toastWriter.items.push(text) },
 }))
 
@@ -32,6 +37,9 @@ interface Harness {
   local: string[]
   settings: number
   providerSettings: string[]
+  /* [model, provider, kind] per call: what the typed-id row asked the source to
+     add, and what kind it stated for it. */
+  added: Array<[string, string, string | undefined]>
   after: number
   model: () => string
 }
@@ -39,7 +47,7 @@ interface Harness {
 function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harness {
   const h: Harness = {
     toasts: [], persisted: [], persistedProviders: [], persistedScopes: [],
-    local: [], settings: 0, providerSettings: [], after: 0, model: store.current,
+    local: [], settings: 0, providerSettings: [], added: [], after: 0, model: store.current,
   }
   toastWriter.items = h.toasts
   let last = store.current()
@@ -54,6 +62,9 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
       h.persistedProviders.push(provider)
       h.persistedScopes.push(scope)
     },
+    addModel: async (m, provider, kind) => {
+      h.added.push([m, provider, kind])
+    },
     openSettings: () => {
       h.settings += 1
     },
@@ -62,24 +73,31 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
     },
     ...over,
   }
-  const shell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  window.RavenShell = shell
-  window.DS = { model: source }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
+  setSources({ model: source })
   document.body.innerHTML = '<button id="modelChip">chip</button>'
   return h
 }
 
-const mount = () => render(<ModelPickerApp />, { container: document.body.appendChild(document.createElement('div')) })
+const mount = () => render(<ModelApp />, { container: document.body.appendChild(document.createElement('div')) })
 
 const pick = (): HTMLElement | null => document.querySelector('.mpick')
-const rows = (col: string): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(`.mpick .${col} .row`)]
+/* The rows of a column, which since 2026-09-20 means the models in it: the
+   typed-id row lives in the same list and is reached by `typedRow` instead, so
+   every case that counts models keeps counting models. */
+const rows = (col: string): HTMLElement[] =>
+  [...document.querySelectorAll<HTMLElement>(`.mpick .${col} .model-group:not(.model-recent) .row:not(.model-typed):not(.model-more)`)]
+const recents = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.mpick .model-recent .row')]
+const more = (): HTMLElement | null => document.querySelector<HTMLElement>('.mpick .model-more')
+const typedRow = (): HTMLElement | null => document.querySelector<HTMLElement>('.mpick .model-typed')
 const field = (): HTMLInputElement => document.querySelector('.mpick .find input')!
-const providerSelected = (index: number): string | null | undefined =>
-  rows('provs')[index]?.querySelector('.provider-choice-action')?.getAttribute('aria-selected')
+/* One group per provider, each headed by the provider's name and count. */
+const groups = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.mpick .model-group:not(.model-recent)')]
+const heads = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.mpick .model-group:not(.model-recent) .model-group-hd')]
+const headNames = (): string[] => heads().map((h) => h.querySelector('.nm')!.textContent!)
+const headCounts = (): string[] => heads().map((h) => h.querySelector('.ct')!.textContent!)
 
 const openIt = (anchor?: HTMLElement | null, after?: () => void) =>
   act(() => {
@@ -97,9 +115,10 @@ const type = (text: string) =>
 afterEach(() => {
   act(() => store._resetForTests())
   cleanup()
-  delete window.RavenShell
-  delete window.DS
+  resetTranslator()
+  resetSources()
   document.body.innerHTML = ''
+  localStorage.clear()
 })
 describe('the model picker', () => {
   it('renders nothing until it is asked for', () => {
@@ -108,17 +127,19 @@ describe('the model picker', () => {
     expect(pick()).toBeNull()
   })
 
-  it('offers only providers with an account and something to offer', () => {
+  it('offers every provider with an account, including one with nothing added', () => {
+    /* Reversed 2026-09-20: a provider with a working key and an empty list used
+       to be dropped here, which told a reader it was not connected and left a
+       model set by onboarding with no group to be marked in. */
     install()
     mount()
     openIt()
-    expect(rows('provs').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['MiniMax (Global)', 'Anthropic'])
-    expect(rows('provs')[0]!.querySelector('.nm')?.firstElementChild?.getAttribute('src')).toBe('assets/providers/minimax.svg')
-    /* A name, not a link: the row's whole job is to change the column beside
-       it, and an anchor in the middle of it sent the reader out to a marketing
-       page instead of selecting the provider they clicked. */
-    expect(rows('provs')[0]!.querySelector('a')).toBeNull()
-    expect(rows('provs')[0]!.lastElementChild?.className).toBe('provider-status on')
+    expect(headNames()).toEqual(['MiniMax (Global)', 'Anthropic', 'Nothing'])
+    expect(headCounts()).toEqual(['2', '2', '0'])
+    /* The account's mark, its name and a count: no link out to a marketing
+       page, no connection dot -- every account listed here is connected. */
+    expect(heads()[0]!.firstElementChild?.getAttribute('src')).toBe('assets/providers/minimax.svg')
+    expect(heads()[0]!.querySelector('a, .provider-status')).toBeNull()
   })
 
   it('refuses to open with nothing authenticated, and says why', () => {
@@ -129,15 +150,17 @@ describe('the model picker', () => {
     expect(h.toasts).toEqual(['gui.picker.no_account'])
   })
 
-  it('opens on the provider holding the current model, and marks it', () => {
+  it('lists every provider\'s models under its own head, and marks the current one', () => {
     store.setCurrent('claude-sonnet-5')
     install()
     mount()
     openIt()
-    expect(providerSelected(1)).toBe('true')
-    expect(rows('provs')[1]!.querySelector('.tick')!.textContent).toBe('•')
-    const ticked = rows('models').find((b) => b.querySelector('.tick'))!
-    expect(ticked.querySelector('.nm')!.textContent).toBe('claude-sonnet-5')
+    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual([
+      'minimax-m3', 'minimax-m2', 'claude-opus-5', 'claude-sonnet-5',
+    ])
+    const ticked = rows('models').filter((b) => b.querySelector('.tick'))
+    expect(ticked.map((b) => b.querySelector('.nm')!.textContent)).toEqual(['claude-sonnet-5'])
+    expect(ticked[0]!.closest('.model-group')!.querySelector('.model-group-hd .nm')!.textContent).toBe('Anthropic')
   })
 
   it('shows a provider-qualified name without its vendor half', () => {
@@ -145,89 +168,128 @@ describe('the model picker', () => {
     install()
     mount()
     openIt()
-    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual([
-      'claude-opus-5',
-      'claude-sonnet-5',
-    ])
+    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toContain('claude-opus-5')
+    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).not.toContain('vendor/claude-opus-5')
   })
 
-  it('narrows each provider in place, keeping the column and counting hits', () => {
+  it('narrows to the groups with a hit, counting the hits', () => {
     install()
     mount()
     openIt()
     type('m2')
-    const provs = rows('provs')
-    expect(provs.map((b) => b.querySelector('.ct')!.textContent)).toEqual(['1', '0'])
-    /* The provider with no hits dims rather than disappearing: what is installed
-       must not move around while the reader types. */
-    expect(provs[1]!.className).toContain('dim')
+    /* A group the search left nothing in is dropped: the term is the way to a
+       model, and a head with nothing under it is not on the way. */
+    expect(headNames()).toEqual(['MiniMax (Global)'])
+    expect(headCounts()).toEqual(['1'])
     expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['minimax-m2'])
-  })
-
-  it('moves the selection off a provider a search emptied', () => {
-    install()
-    mount()
-    openIt()
-    type('sonnet')
-    expect(providerSelected(1)).toBe('true')
-    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['claude-sonnet-5'])
-  })
-
-  it('keeps the moved selection after the term is cleared', () => {
-    install()
-    mount()
-    openIt()
-    type('sonnet')
+    /* Clearing the term shows the whole list again, groups where they were. */
     type('')
-    /* The move is the reader's now, not the term's. Clearing the field is how
-       you browse the rest of the provider a search just found for you, so the
-       column has to stay where the search put it -- and show that provider's
-       full list, not its one hit. */
-    expect(providerSelected(1)).toBe('true')
-    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual([
-      'claude-opus-5',
-      'claude-sonnet-5',
-    ])
+    expect(headCounts()).toEqual(['2', '2', '0'])
+    expect(rows('models')).toHaveLength(4)
   })
 
-  it('moves nothing when the term matches nothing at all', () => {
-    /* Opened on the second provider on purpose. Starting on the first one makes
-       this case unfalsifiable: there is no column below it to be wrongly moved
-       to, so a version that moved the selection anywhere it liked would land
-       back on it and the assertion would hold either way. */
-    store.setCurrent('claude-sonnet-5')
+  it('matches the label as well as the id', () => {
+    install({}, TAGGED)
+    mount()
+    openIt()
+    type('opus 5')
+    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['Claude Opus 5'])
+  })
+
+  it('says no match when nothing anywhere matches, and still offers the typed id', () => {
     install()
     mount()
     openIt()
     type('nothing-like-this')
-    type('')
-    /* There is no better column to move to, so the selection must not wander --
-       a typo on the way to a search must not relocate the reader. */
-    expect(providerSelected(1)).toBe('true')
-    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual([
-      'claude-opus-5',
-      'claude-sonnet-5',
-    ])
+    expect(document.querySelector('.mpick .models > .empty')!.textContent).toBe('gui.picker.no_match')
+    expect(typedRow()).not.toBeNull()
   })
 
-  it('says no match rather than showing an empty column', () => {
-    install()
-    mount()
-    openIt()
-    type('nothing-like-this')
-    expect(document.querySelector('.mpick .models .empty')!.textContent).toBe('gui.picker.no_match')
-  })
-
-  it('distinguishes an empty search result from an empty provider', () => {
+  it('distinguishes an empty search result from a group with nothing of the kind', () => {
     install({}, [
       { id: 'a', name: 'A', models: ['one'], on: true },
       { id: 'b', name: 'B', models: [], on: true },
     ])
     mount()
     openIt()
-    /* The second provider is filtered out of the columns entirely, so the only
-       empty message reachable here is the search one. */
-    expect(rows('provs').length).toBe(1)
+    expect(groups().length).toBe(2)
+    /* Two different empties, and the words are the whole difference: one is a
+       list to go and build, said in its group, the other a term to delete. */
+    expect(groups()[1]!.querySelector('.empty')!.textContent).toBe('gui.picker.empty_kind {"kind":"gui.model.type.text"}')
+    type('nothing-like-this')
+    expect(document.querySelector('.mpick .models > .empty')!.textContent).toBe('gui.picker.no_match')
+    expect(groups()).toHaveLength(0)
+  })
+
+  it('offers a typed id beside the matches, and adds it to the provider before picking it', async () => {
+    const h = install()
+    mount()
+    openIt()
+    type('m2')
+    /* The term matches a model AND is not one: both rows are right, because
+       the reader may mean either. */
+    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['minimax-m2'])
+    expect(typedRow()!.querySelector('.nm')!.textContent).toBe('gui.model.pick_use {"id":"m2"}')
+    /* Added to the account the reader is already on, and the row says so. */
+    expect(typedRow()!.querySelector('.ct')!.textContent).toBe('gui.model.pick_add_to {"name":"MiniMax (Global)"}')
+    await act(async () => { fireEvent.click(typedRow()!) })
+    expect(h.added).toEqual([['m2', 'minimax', 'text']])
+    expect(h.persisted).toEqual(['m2'])
+  })
+
+  it('adds a typed id to the account on, when it spells the current model the other way', async () => {
+    /* "The account the reader is already on" is found by looking the current
+       model up in each column. By string it finds nobody, and the id silently
+       joins whichever account happens to be listed first. */
+    const h = install({}, [
+      { id: 'minimax', name: 'MiniMax', on: true, models: ['minimax-m3'], configured: ['minimax-m3'] },
+      { id: 'openrouter', name: 'OpenRouter', on: true, models: ['openrouter/my-model'], configured: ['openrouter/my-model'] },
+    ])
+    store.setCurrent('my-model')
+    mount()
+    openIt()
+    type('brand-new')
+    expect(typedRow()!.querySelector('.ct')!.textContent).toBe('gui.model.pick_add_to {"name":"OpenRouter"}')
+    await act(async () => { fireEvent.click(typedRow()!) })
+    expect(h.added).toEqual([['brand-new', 'openrouter', 'text']])
+  })
+
+  it('leaves the typed row out once the term is a model exactly', () => {
+    install()
+    mount()
+    openIt()
+    type('minimax-m2')
+    expect(typedRow()).toBeNull()
+  })
+
+  it('adds a typed id as the kind its name says', async () => {
+    const h = install()
+    mount()
+    openIt()
+    type('my-team/bge-reranker-x')
+    /* The name's own guess, the way registry_data.inferred_tags would read it. */
+    await act(async () => { fireEvent.click(typedRow()!) })
+    expect(h.added).toEqual([['my-team/bge-reranker-x', 'minimax', 'reranker']])
+  })
+
+  it('a slot opening adds a typed id as the slot kind, not what the name says', async () => {
+    const picked: Array<[string, string, boolean, string]> = []
+    install({}, [{ id: 'p', name: 'P', on: true, models: ['emb-1'], labels: { 'emb-1': { kind: 'embedding' } } }])
+    mount()
+    act(() => {
+      store.open(document.getElementById('modelChip'), undefined, undefined,
+        { kind: 'embedding', title: 'Embedding', pick: async (m, p, typed, kind) => { picked.push([m, p, typed, kind]) } })
+    })
+    type('plain-name')
+    await act(async () => { fireEvent.click(typedRow()!) })
+    expect(picked).toEqual([['plain-name', 'p', true, 'embedding']])
+  })
+
+  it('keeps its rendered shape', () => {
+    install()
+    const view = mount()
+    openIt()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
   })
 })
 
@@ -260,30 +322,32 @@ describe('the model picker, where it lands', () => {
     return document.getElementById('modelChip')!
   }
 
-  it('opens above the composer card, not above the chip on it', () => {
+  it('hangs off the chip by its lower edge, 6px above the chip', () => {
     install()
     const chip = onTheCard()
+    Object.defineProperty(document.documentElement, 'clientHeight', { value: 600, configurable: true })
     measure(new Map([['.mpick', [0, 300]], ['.dock-in', [436, 126]], ['#modelChip', [518, 21]]]))
     mount()
-    openIt(chip)
-    /* 436 - 300 - 8. Off the chip it was 210, which put three quarters of the
-       popover over the field the reader types in. */
-    expect(pick()!.style.top).toBe('128px')
+    /* The composer's opening names no anchor and measures the chip by id. */
+    openIt()
+    /* Pinned by the bottom, 600 - 518 + 6, so a search that shortens the list
+       shrinks the panel upward and leaves no gap over the chip; the top is the
+       panel's own to find. */
+    expect(pick()!.style.bottom).toBe('88px')
+    expect(pick()!.style.top).toBe('auto')
+    expect(chip.id).toBe('modelChip')
   })
 
-  it('drops below the whole card when there is no room above it', () => {
+  it('drops below the chip when there is no room above it', () => {
     install()
-    const chip = onTheCard()
-    /* A card near the top of a tall window: nothing fits above it, so the
-       popover goes under -- under the CARD, or it would cover the bar the chip
-       itself sits on. */
+    onTheCard()
     Object.defineProperty(document.documentElement, 'clientHeight', { value: 900, configurable: true })
-    measure(new Map([['.mpick', [0, 300]], ['.dock-in', [60, 126]], ['#modelChip', [142, 21]]]))
+    measure(new Map([['.mpick', [0, 300]], ['.dock-in', [60, 126]], ['#modelChip', [70, 21]]]))
     mount()
-    openIt(chip)
-    /* 60 + 126 + 8, clear of the card's lower edge. Off the chip it was 171 --
-       eight pixels under the chip and straight over the bar beside it. */
-    expect(pick()!.style.top).toBe('194px')
+    openIt()
+    /* 70 + 21 + 6, under the chip, and by the top this time. */
+    expect(pick()!.style.top).toBe('97px')
+    expect(pick()!.style.bottom).toBe('auto')
   })
 })
 
@@ -444,7 +508,7 @@ describe('the model picker, closing', () => {
 
   it('does nothing at all on a page with no source installed', () => {
     install()
-    delete window.DS
+    resetSources()
     mount()
     expect(() => openIt()).not.toThrow()
     expect(pick()).toBeNull()
@@ -472,44 +536,222 @@ const TAGGED: Provider[] = [
   },
 ]
 
-describe('the capability icons', () => {
-  it('draws one icon per published capability, and a window badge beside them', () => {
-    install({}, TAGGED)
+/* The sub-agent tier rides the picker as one row, for the composer's opening
+   only: a settings row edits the default model, which has no conversation to
+   carry a tier (state/tier.ts). */
+describe('the tier row', () => {
+  const MENU = [
+    { id: 'medium', name: 'Medium', description: 'Faster and cheaper, for small, well-defined tasks.' },
+    { id: 'high', name: 'High', description: 'A balance of speed and quality.' },
+    { id: 'max', name: 'Max', description: 'Deepest reasoning and full sub-agent effort, for complex or open-ended work.' },
+  ]
+  const seg = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.mpick .model-seg button')]
+
+  afterEach(() => { tier._resetForTests() })
+
+  it('offers every rung as one segmented control, the one in force pressed, and asks for the one clicked', async () => {
+    install()
+    const asked: Array<string | null> = []
+    setSources({
+      model: (await import('./store')).source(),
+      tier: {
+        read: async () => { asked.push(null); return { mode: 'high', availableModes: MENU } },
+        set: async (mode) => { asked.push(mode); return { mode, availableModes: MENU } },
+      },
+    })
+    await act(async () => { await tier.load() })
     mount()
     openIt()
-    const row = rows('models')[0]!
-    const drawn = [...row.querySelectorAll('.model-tag use')].map((u) => u.getAttribute('href'))
-    expect(drawn).toEqual(['#mtag-reasoning', '#mtag-function-call', '#mtag-image-recognition'])
-    expect(row.querySelector('.model-window')!.textContent).toBe('1M')
+    expect(seg().map((b) => b.textContent)).toEqual(['gui.tier.medium', 'gui.tier.high', 'gui.tier.max'])
+    expect(seg().map((b) => b.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false'])
+    /* One explanation, behind the question mark, through the page's tooltip;
+       the rungs and the row itself carry none. */
+    expect(seg().map((b) => b.title)).toEqual(['', '', ''])
+    expect(document.querySelector('.mpick .model-tier')!.getAttribute('title')).toBeNull()
+    const help = document.querySelector('.mpick .model-tier-help')!
+    expect(help.getAttribute('data-tip')).toBe('gui.tier.scope')
+    /* A sentence, so the pill wraps it rather than running one line across the window. */
+    expect(help.hasAttribute('data-tip-wrap')).toBe(true)
+    await act(async () => { fireEvent.click(seg()[2]!) })
+    expect(asked).toEqual([null, 'max'])
+    expect(seg().map((b) => b.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true'])
+    /* The picker stays up: a tier is not a pick of a model. */
+    expect(pick()).not.toBeNull()
   })
 
-  it('draws nothing for a model the registry knows nothing about', () => {
-    install({}, TAGGED)
+  it('draws no row before the catalogue answers, and none for a settings slot', async () => {
+    install()
     mount()
     openIt()
-    /* Absence is "unknown", not "cannot": the second Anthropic row has no
-       label entry at all and must come back with no icons rather than with a
-       row of crossed-out ones. */
-    expect(rows('models')[1]!.querySelector('.model-tags')).toBeNull()
+    expect(document.querySelector('.mpick .model-tier')).toBeNull()
+    act(() => store.close())
+    setSources({
+      model: (await import('./store')).source(),
+      tier: {
+        read: async () => ({ mode: 'high', availableModes: MENU }),
+        set: async (mode) => ({ mode, availableModes: MENU }),
+      },
+    })
+    await act(async () => { await tier.load() })
+    act(() => {
+      store.open(document.getElementById('modelChip'), undefined, undefined,
+        { kind: 'text', title: 'Chat', pick: async () => {} })
+    })
+    expect(document.querySelector('.mpick .model-tier')).toBeNull()
   })
+})
 
+describe('the names', () => {
   it('shows the label where there is one and keeps the id on the title', () => {
     install({}, TAGGED)
     mount()
     openIt()
     const [named, bare] = rows('models')
     expect(named!.querySelector('.nm')!.textContent).toBe('Claude Opus 5')
-    expect(named!.getAttribute('title')).toContain('claude-opus-5')
+    expect(named!.getAttribute('title')).toBe('claude-opus-5')
     expect(bare!.querySelector('.nm')!.textContent).toBe('claude-sonnet-5')
   })
 
-  it('defines each symbol once for the whole popover', () => {
+  it('draws the capabilities and the window beside the name', () => {
     install({}, TAGGED)
     mount()
     openIt()
-    /* `use` resolves the first definition of an id, so a second copy would be
-       dead markup repeated on every open. */
-    expect(document.querySelectorAll('.mpick .model-tag-defs').length).toBe(1)
+    /* The registry publishes three capabilities and a 1M window for the first
+       row, and the row is where a reader compares them before picking. The
+       row a catalogue says nothing about carries no badge at all. */
+    const [tagged, bare] = rows('models')
+    expect(tagged!.querySelectorAll('.model-tag')).toHaveLength(3)
+    expect(tagged!.querySelector('.model-window')!.textContent).toBe('1M')
+    expect(bare!.querySelector('.model-tags')).toBeNull()
+  })
+
+  it('carries the sprite the icons resolve against', () => {
+    install({}, TAGGED)
+    mount()
+    openIt()
+    /* Every icon above is a `use` of a symbol defined once per surface. The
+       picker drew them against a sprite nothing rendered after the composer
+       rework, which is a row of blank 13px boxes. */
+    expect(document.querySelector('.mpick .model-tag-defs #mtag-reasoning')).not.toBeNull()
+  })
+
+  it('keeps its rendered shape', () => {
+    install({}, TAGGED)
+    const view = mount()
+    openIt()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
+  })
+})
+
+/* A gateway account brings a few hundred models under one head. The list
+   folds each long group to FOLD rows plus a row saying how many more, and the
+   search is the way to anything the fold hides. */
+describe('the fold', () => {
+  const MANY = Array.from({ length: 20 }, (_, i) => `router/model-${String(i).padStart(2, '0')}`)
+  const ROUTER: Provider[] = [
+    { id: 'router', name: 'Router', on: true, models: MANY, configured: MANY },
+    { id: 'small', name: 'Small', on: true, models: ['tiny'], configured: ['tiny'] },
+  ]
+
+  it('shows six of a long group and a row for the rest, and unfolds on a click', () => {
+    install({}, ROUTER)
+    mount()
+    openIt()
+    expect(headCounts()).toEqual(['20', '1'])
+    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual([
+      'model-00', 'model-01', 'model-02', 'model-03', 'model-04', 'model-05', 'tiny',
+    ])
+    expect(more()!.textContent).toBe('gui.picker.show_all {"n":"20"}')
+    act(() => { fireEvent.click(more()!) })
+    expect(rows('models')).toHaveLength(21)
+    expect(more()).toBeNull()
+  })
+
+  it('keeps the current model visible under the fold', () => {
+    store.setCurrent('router/model-17')
+    install({}, ROUTER)
+    mount()
+    openIt()
+    const names = rows('models').map((b) => b.querySelector('.nm')!.textContent)
+    expect(names.slice(0, 7)).toEqual(['model-00', 'model-01', 'model-02', 'model-03', 'model-04', 'model-05', 'model-17'])
+    expect(rows('models')[6]!.querySelector('.tick')).not.toBeNull()
+    /* Six shown plus the current one: thirteen more behind the row. */
+    expect(more()!.textContent).toBe('gui.picker.show_all {"n":"20"}')
+  })
+
+  it('keeps it visible when the conversation spells it without the vendor half', () => {
+    /* The same mixed spellings the column de-dups by `sameModel`. Pinning by
+       string leaves the running model behind the fold, where the reader has no
+       way to know it is the one in force. */
+    store.setCurrent('model-17')
+    install({}, ROUTER)
+    mount()
+    openIt()
+    const names = rows('models').map((b) => b.querySelector('.nm')!.textContent)
+    expect(names.slice(0, 7)).toEqual(['model-00', 'model-01', 'model-02', 'model-03', 'model-04', 'model-05', 'model-17'])
+    expect(rows('models')[6]!.querySelector('.tick')).not.toBeNull()
+  })
+
+  it('does not fold while searching: the term is the way to a hidden model', () => {
+    install({}, ROUTER)
+    mount()
+    openIt()
+    type('model-1')
+    expect(rows('models')).toHaveLength(10)
+    expect(more()).toBeNull()
+  })
+})
+
+/* The last picks made from the composer head the list: the way back to the
+   three or four a reader actually moves between (./recent.ts). */
+describe('the recent picks', () => {
+  it('heads the list with the last picks, latest first and each once, each naming its account', async () => {
+    const h = install()
+    mount()
+    openIt()
+    expect(recents()).toHaveLength(0)
+    await act(async () => { rows('models')[1]!.click() })
+    openIt()
+    await act(async () => { rows('models')[3]!.click() })
+    openIt()
+    await act(async () => { rows('models')[1]!.click() })
+    expect(h.persisted).toEqual(['minimax-m2', 'claude-sonnet-5', 'minimax-m2'])
+    openIt()
+    expect(recents().map((b) => b.querySelector('.nm')!.textContent)).toEqual(['minimax-m2', 'claude-sonnet-5'])
+    /* The account's name on the row, not its mark: the marks live on the group
+       heads, once per account, and a row with one where its neighbours have
+       none read as a different kind of row. */
+    expect(recents().map((b) => b.querySelector('.ct')!.textContent)).toEqual(['MiniMax (Global)', 'Anthropic'])
+    expect(recents()[0]!.querySelector('.provider-icon')).toBeNull()
+    expect(document.querySelector('.mpick .model-recent .model-group-hd .nm')!.textContent).toBe('gui.picker.recent')
+    /* The recent row is a pick like any other. */
+    await act(async () => { recents()[1]!.click() })
+    expect(h.persisted.at(-1)).toBe('claude-sonnet-5')
+    expect(h.persistedProviders.at(-1)).toBe('anthropic')
+  })
+
+  it('shows a recent pick only while its account still lists it, and not while searching', async () => {
+    install()
+    mount()
+    openIt()
+    await act(async () => { rows('models')[1]!.click() })
+    openIt()
+    expect(recents()).toHaveLength(1)
+    type('m')
+    expect(recents()).toHaveLength(0)
+    act(() => store.close())
+    install({}, [{ id: 'anthropic', name: 'Anthropic', models: ['claude-sonnet-5'], on: true }])
+    openIt()
+    expect(recents()).toHaveLength(0)
+  })
+
+  it('remembers picks from the composer only, not from a settings slot', async () => {
+    install()
+    mount()
+    openIt(document.getElementById('modelChip')!)
+    await act(async () => { rows('models')[1]!.click() })
+    openIt()
+    expect(recents()).toHaveLength(0)
   })
 })
 
@@ -527,15 +769,162 @@ describe('what the picker offers', () => {
     expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['opus'])
   })
 
-  it('leaves out a provider that has an account but nothing added yet', () => {
-    /* It would otherwise sit in the rail as a column that opens empty. */
+  it('lists a provider that has an account but nothing added yet', () => {
+    /* Counted 1 and 1: the first has nothing added, so a text opening offers
+       the registry's shortlist (see the wizard case above); the second offers
+       what was added. Zero is for a provider with neither. */
     install({}, [
       { id: 'anthropic', name: 'Anthropic', on: true, models: ['opus'], configured: [] },
       { id: 'openai', name: 'OpenAI', on: true, models: ['gpt'], configured: ['gpt'] },
+      { id: 'empty', name: 'Nothing', on: true, models: [], configured: [] },
     ])
     mount()
     openIt()
-    expect(rows('provs').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['OpenAI'])
+    expect(headNames()).toEqual(['Anthropic', 'OpenAI', 'Nothing'])
+    expect(headCounts()).toEqual(['1', '1', '0'])
+  })
+
+  it('lists the current model in its provider column even when the list does not carry it', () => {
+    /* onboarding and the CLI set agents.defaults.model without adding it to
+       the provider, so the model the chip names has to be somewhere it can be
+       seen marked. */
+    install({}, [{ id: 'p1', name: 'P1', on: true, models: ['a'], configured: ['a'], current: true }])
+    store.setCurrent('b')
+    mount()
+    openIt()
+    expect(rows('models').map((x) => x.querySelector('.nm')!.textContent)).toEqual(['b', 'a'])
+    expect(rows('models')[0]!.querySelector('.tick')).not.toBeNull()
+  })
+
+  it('stops pinning the current model under the account the session started on once another lists it', () => {
+    /* The wire's is_current flag names the provider the session STARTED on and
+       goes stale on a switch: the model picked from MiniMax was drawn again,
+       ticked, under Anthropic. Pinning only when no connected account lists
+       the model is what keeps one model in one place. */
+    install({}, [
+      { id: 'anthropic', name: 'Anthropic', on: true, models: ['claude'], configured: ['claude'], current: true },
+      { id: 'minimax', name: 'MiniMax', on: true, models: ['minimax-m2'], configured: ['minimax-m2'] },
+    ])
+    store.setCurrent('minimax-m2')
+    mount()
+    openIt()
+    expect(rows('models').map((x) => x.querySelector('.nm')!.textContent)).toEqual(['claude', 'minimax-m2'])
+    expect(rows('models').filter((x) => x.querySelector('.tick'))).toHaveLength(1)
+  })
+
+  it('does not list the current model twice when its two spellings differ', () => {
+    /* A role stores the spelling it was handed; `model.add_model` stores the
+       one it derived. Comparing the strings drew one model as two rows, both
+       reading the same because the provider half is not shown. */
+    install({}, [{
+      id: 'openrouter', name: 'OpenRouter', on: true,
+      models: ['openrouter/my-embedder'], configured: ['openrouter/my-embedder'],
+      labels: { 'openrouter/my-embedder': { kind: 'embedding' } },
+    }])
+    mount()
+    act(() => {
+      store.open(document.getElementById('modelChip'), undefined, undefined, {
+        kind: 'embedding', title: 'Embedding', pick: async () => {},
+        current: { model: 'my-embedder', provider: 'openrouter' },
+      })
+    })
+    expect(rows('models').map((x) => x.querySelector('.nm')!.textContent)).toEqual(['my-embedder'])
+  })
+
+  it('pins the running model under the account it is on, even where another lists it too', () => {
+    /* Onboarding and the CLI can set a model without adding it to the account's
+       list, so the pin is what puts it somewhere it can be seen marked. The
+       rule that drops the pin once another account lists the model exists
+       because the wire's flag went stale on a switch; where the page has been
+       told which account outright, that guess is not needed and marking the
+       account that merely lists the model names the wrong one. */
+    install({}, [
+      { id: 'anthropic', name: 'Anthropic', on: true, models: ['claude-opus-5'], configured: ['claude-opus-5'], current: true },
+      { id: 'openrouter', name: 'OpenRouter', on: true, models: ['fable-5'], configured: ['fable-5'] },
+    ])
+    store.setCurrent('fable-5', 'anthropic')
+    mount()
+    openIt()
+    const ticked = rows('models').filter((x) => x.querySelector('.tick'))
+    expect(ticked).toHaveLength(1)
+    expect(ticked[0]!.closest('.model-group')!.querySelector('.model-group-hd .nm')!.textContent).toBe('Anthropic')
+  })
+
+  it('marks the account the pick was made from, not another that lists the same id', async () => {
+    /* A gateway and a direct vendor can both list one id. The pick names an
+       account; what the page kept was the id alone, so reopening marked both
+       rows and the reader could not tell which account the conversation is on. */
+    install({}, [
+      { id: 'anthropic', name: 'Anthropic', on: true, models: ['claude-opus-5'], configured: ['claude-opus-5'] },
+      { id: 'openrouter', name: 'OpenRouter', on: true, models: ['claude-opus-5'], configured: ['claude-opus-5'] },
+    ])
+    mount()
+    openIt()
+    await act(async () => { fireEvent.click(rows('models')[1]!) })
+    openIt()
+    const ticked = rows('models').filter((x) => x.querySelector('.tick'))
+    expect(ticked).toHaveLength(1)
+    expect(ticked[0]!.closest('.model-group')!.querySelector('.model-group-hd .nm')!.textContent).toBe('OpenRouter')
+  })
+
+  it('marks it when the account spells it with a name it used to answer to', () => {
+    /* The same mixed spellings, one rename apart: `merge_key` strips any prefix
+       the provider answers to, and the row carries that set so this page can
+       ask the identity question the backend answers. */
+    install({}, [{
+      id: 'zai', name: 'Z.ai', on: true, routes: ['zai', 'zhipu'],
+      models: ['zhipu/glm-4.6'], configured: ['zhipu/glm-4.6'],
+    }])
+    store.setCurrent('zai/glm-4.6')
+    mount()
+    openIt()
+    expect(rows('models')).toHaveLength(1)
+    expect(rows('models')[0]!.querySelector('.tick')).not.toBeNull()
+  })
+
+  it('marks the current model when the account spells it the other way', () => {
+    /* The de-dup above is by `sameModel`, so the one row that survives carries
+       the provider's spelling while the conversation carries the bare one. A
+       tick compared by string then marks nothing, and the reader is left with
+       no sign of which model is running. */
+    install({}, [{
+      id: 'openrouter', name: 'OpenRouter', on: true,
+      models: ['openrouter/my-model'], configured: ['openrouter/my-model'],
+    }])
+    store.setCurrent('my-model')
+    mount()
+    openIt()
+    expect(rows('models').map((x) => x.querySelector('.nm')!.textContent)).toEqual(['my-model'])
+    expect(rows('models')[0]!.querySelector('.tick')).not.toBeNull()
+  })
+
+  it('offers the registry shortlist for a text opening on a provider with nothing added', () => {
+    /* The first-run wizard's whole model step: a vendor is connected and a
+       chat model picked before anyone has built a list. An empty column there
+       is the step. */
+    install({}, [{ id: 'anthropic', name: 'Anthropic', on: true, models: ['opus', 'sonnet'], configured: [] }])
+    mount()
+    openIt()
+    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['opus', 'sonnet'])
+  })
+
+  it('does not fall back for a kind the wizard never asks for', () => {
+    /* An embedding slot on a provider with nothing added should say so, not
+       offer the vendor's whole catalogue filtered to whatever happens to be
+       tagged -- "nothing here yet, type an id" is the honest answer. */
+    install({}, [{
+      id: 'anthropic', name: 'Anthropic', on: true, configured: [],
+      models: ['emb-1'], labels: { 'emb-1': { kind: 'embedding' } },
+    }])
+    mount()
+    act(() => {
+      store.open(document.getElementById('modelChip'), undefined, undefined,
+        { kind: 'embedding', title: 'Embedding', pick: async () => {} })
+    })
+    expect(rows('models')).toHaveLength(0)
+    expect(document.querySelector('.mpick .models .empty')!.textContent).toBe(
+      'gui.picker.empty_kind {"kind":"gui.model.type.embedding"}',
+    )
   })
 
   it('falls back to the offer for a source that never learned the difference', () => {
@@ -549,15 +938,30 @@ describe('what the picker offers', () => {
 })
 
 describe('the picker with nothing to offer', () => {
-  it('tells a connected account with no models added where to go', () => {
-    /* Two different dead ends. Saying "no account" to somebody whose keys all
-       work sends them to fix what is not broken. */
-    const h = install({}, [{ id: 'anthropic', name: 'Anthropic', on: true, models: ['opus'], configured: [] }])
+  it('opens for a connected account with no models added, rather than refusing', () => {
+    /* Reversed 2026-09-20 with the rule above: "go and build a list" is now
+       answered inside the picker -- an empty column that says so, and a row to
+       type an id into -- so it is no longer a dead end. */
+    const h = install({}, [{ id: 'anthropic', name: 'Anthropic', on: true, models: [], configured: [] }])
     mount()
     openIt()
+    expect(pick()).not.toBeNull()
+    expect(h.providerSettings).toEqual([])
+    expect(h.toasts).toEqual([])
+    expect(document.querySelector('.mpick .models .empty')!.textContent).toBe(
+      'gui.picker.empty_kind {"kind":"gui.model.type.text"}',
+    )
+  })
+
+  it('says "no models for" when the one vendor a slot allows is not connected', () => {
+    /* The remaining shape of that message: a media role may only run on
+       OpenRouter, so "no account" would send the reader to add any key at all. */
+    const h = install({}, [{ id: 'openrouter', name: 'OpenRouter', on: false, models: ['x'], configured: ['x'] }])
+    mount()
+    act(() => { store.open(undefined, undefined, undefined, { kind: 'image', providers: ['openrouter'] }) })
     expect(pick()).toBeNull()
-    expect(h.providerSettings).toEqual(['anthropic'])
-    expect(h.toasts).toEqual(['gui.picker.no_models_for {"name":"Anthropic"}'])
+    expect(h.providerSettings).toEqual(['openrouter'])
+    expect(h.toasts).toEqual(['gui.picker.no_models_for {"name":"OpenRouter"}'])
   })
 
   it('still says "no account" when nothing is connected at all', () => {
@@ -566,5 +970,83 @@ describe('the picker with nothing to offer', () => {
     openIt()
     expect(pick()).toBeNull()
     expect(h.toasts).toEqual(['gui.picker.no_account'])
+  })
+})
+
+/* What a reader who cannot see the list is told. The tick is a glyph and the
+   grouping is a heading, so both are shape alone until the markup states them. */
+describe('the model picker, to a screen reader', () => {
+  it('names the popover after what is being chosen', () => {
+    install()
+    mount()
+    openIt()
+    expect(pick()!.getAttribute('aria-label')).toBe('gui.picker.title')
+  })
+
+  it('names it after the slot instead, when a slot opened it', () => {
+    install()
+    mount()
+    act(() => { store.open(undefined, undefined, undefined, { kind: 'text', title: 'Planner model' }) })
+    expect(pick()!.getAttribute('aria-label')).toBe('Planner model')
+  })
+
+  it('states the current model as the checked one of a set', () => {
+    store.setCurrent('claude-sonnet-5')
+    install()
+    mount()
+    openIt()
+    expect(rows('models').map((b) => b.getAttribute('role'))).toEqual(['radio', 'radio', 'radio', 'radio'])
+    expect(rows('models').map((b) => b.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false', 'true'])
+  })
+
+  it('gives each account its own set, named after the account', () => {
+    install()
+    mount()
+    openIt()
+    /* Per account rather than one set for the picker: the same model can be
+       listed under Recent and under its account, and one set may hold one
+       checked member. An account with nothing to list owns no set. */
+    expect(groups().map((g) => g.getAttribute('role'))).toEqual(['radiogroup', 'radiogroup', null])
+    expect(groups().map((g) => g.getAttribute('aria-label'))).toEqual(['MiniMax (Global)', 'Anthropic', null])
+  })
+
+  it('leaves the tick out of the row\'s spoken name, now that the state is said', () => {
+    /* Chrome builds a radio's name from its contents, so a glyph left visible
+       to it is read out beside the checked state it duplicates. */
+    store.setCurrent('claude-sonnet-5')
+    install()
+    mount()
+    openIt()
+    const ticked = rows('models').find((b) => b.querySelector('.tick'))!
+    expect(ticked.querySelector('.tick')!.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('leaves the show-all row out of the set it sits in', () => {
+    /* It reveals more of the account's radios rather than being one: a row that
+       answers to the set's state would be offered as a model to pick. Asserted
+       against its siblings rather than on its own, because it carries their
+       `row` class: on a picker that marked no row at all, "the show-all row is
+       not a radio" is true for the wrong reason. */
+    const many = Array.from({ length: FOLD + 2 }, (_, i) => `router/model-${String(i)}`)
+    install({}, [{ id: 'router', name: 'Router', on: true, models: many, configured: many }])
+    mount()
+    openIt()
+    const siblings = [...document.querySelectorAll<HTMLElement>('.mpick .models .model-group .row')]
+    expect(siblings.map((b) => b.getAttribute('role')))
+      .toEqual([...Array<string | null>(FOLD).fill('radio'), null])
+    expect(siblings.at(-1)).toBe(more())
+    expect(more()!.getAttribute('aria-checked')).toBeNull()
+  })
+
+  it('gives the recent group a set of its own', async () => {
+    install()
+    mount()
+    openIt()
+    await act(async () => { rows('models')[3]!.click() })
+    openIt()
+    const recent = document.querySelector<HTMLElement>('.mpick .model-recent')!
+    expect(recent.getAttribute('role')).toBe('radiogroup')
+    expect(recent.getAttribute('aria-label')).toBe('gui.picker.recent')
+    expect(recents().map((b) => b.getAttribute('aria-checked'))).toEqual(['true'])
   })
 })

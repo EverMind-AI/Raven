@@ -48,6 +48,19 @@ class Verdict:
     what_is_missing: str | None = None
     evidence: str | None = None
     evidence_complete: bool = True
+    follow_up: str = ""
+    """What to tell the node so it can try again, when the judge already knows.
+
+    Empty for the model judge, and that is the ordinary case: it reads output
+    and cannot know what the node should do differently, so a node it fails is
+    a node somebody has to be asked about.
+
+    A judge that ran a *command* is in a different position. It has the build
+    log, and "the build fails, here is the error" is a complete instruction --
+    asking a person to relay it would be asking them to read it out. So a
+    follow-up here means retry directly, without an adjudication, while the
+    continuation budget lasts.
+    """
 
 
 def tail(text: str, budget: int) -> str:

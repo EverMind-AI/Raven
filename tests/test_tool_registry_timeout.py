@@ -102,9 +102,8 @@ def test_every_subagent_invoking_tool_is_blocking():
     """
     from raven.agent.subagent.dag_tool import SubAgentDagTool
     from raven.agent.subagent.spawn_tool import SpawnTool
-    from raven.agent.tools.deep_research import DeepResearchOfferTool, DeepResearchTool
 
-    for cls in (SpawnTool, SubAgentDagTool, DeepResearchTool, DeepResearchOfferTool):
+    for cls in (SpawnTool, SubAgentDagTool):
         assert cls.blocking_interaction is True, cls.__name__
 
 

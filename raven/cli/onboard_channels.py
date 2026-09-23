@@ -192,9 +192,9 @@ def _channel_uses_interactive_login(channel: str) -> bool:
 
 # Scancode channels whose QR login is served by a Node.js bridge — these need
 # Node/npm present before login can even start. The whatsapp adapter's
-# ``login`` checks ``shutil.which("npm")`` and merely logs+returns False when
-# it's absent, so we detect the missing-runtime case up front to show a
-# meaningful "install Node / skip" menu rather than a pointless "re-show QR".
+# ``login`` merely logs+returns False when the runtime is absent, so we detect
+# the missing-runtime case up front to show a meaningful "install Node / skip"
+# menu rather than a pointless "re-show QR".
 _NODE_BRIDGE_CHANNELS = {"whatsapp"}
 
 

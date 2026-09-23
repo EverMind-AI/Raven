@@ -311,8 +311,12 @@ async def test_concurrent_sessions_keep_files_state_and_completion_separate(tmp_
             ctx.response = _text_response("delivered")
             assert (await hook.after_iteration(ctx)).rollback is not complete
             ctx.outbound_content = "delivered"
-            notice = (await hook.after_send(ctx)).modified_content
-            assert (notice is None) is complete
+            tail = (await hook.after_send(ctx)).modified_content
+            # The session-directory line rides on every turn in a minted
+            # directory; what the completion gate decides is whether the
+            # unfinished-items notice follows it.
+            assert tail is not None and tail.startswith("delivered")
+            assert ("[Task State]" in tail) is not complete
 
     await asyncio.wait_for(
         asyncio.gather(turn("acp:a", "Poster A", True), turn("acp:b", "Website B", False)), timeout=10
@@ -620,6 +624,68 @@ async def test_loop_uses_the_session_directory_for_tools_and_prompt(tmp_path, or
     assert "Goal: Ship a poster" in str(provider.calls[1]["messages"])
     assert hook.factory()._manager.get(str(own))["items"][0]["status"] == "completed"
     assert workdir.current() is None
+
+
+@pytest.mark.asyncio
+async def test_the_reply_names_the_session_directory_the_run_wrote_into(tmp_path):
+    """The caller's handoff, on the one reply the caller reads.
+
+    This engine keeps a session's files in a directory of its own, one level
+    below the directory the caller dispatched into, and the reply names them as
+    relative paths. The dispatch receipt names the directory it dispatched into,
+    so a caller that resolved those paths against the receipt delivered nothing
+    and had to search the disk for files its run had written all along (measured
+    on a real dispatch, 2026-09-16). The reply therefore names the directory the
+    files are in, and says which way to resolve against it.
+    """
+    config = {"enabled": True, "visualDomainSelector": {"enabled": False}, "taskState": {"enabled": False}}
+    provider = _ScriptedProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="write", name="write_file", arguments={"path": "poster.txt", "content": "Session poster"}
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            _text_response("The poster is in poster.txt."),
+        ]
+    )
+    hook = _seated(DesignParticipant(EngineConfig.from_slice(config), None, None))
+    loop = _loop(tmp_path / "home", provider, [hook])
+    root = tmp_path / "work"
+    root.mkdir()
+    with workdir.bind(root):
+        out = await loop._process_message(_req("make a poster"), origin=Origin.USER)
+        own = workdir.current()
+    assert out is not None and out[0] is not None
+    reply = out[0]
+    assert (own / "poster.txt").is_file()
+    assert own.parent == root / "designs", "the run wrote into a directory of its own"
+    assert f"Design session directory: {own}" in reply
+    assert "Paths in this reply resolve against it." in reply
+    # What the contract buys: a caller holding nothing but this reply reaches the
+    # file the reply names, without searching the disk for it.
+    named = Path(reply.split("Design session directory: ", 1)[1].split("\n", 1)[0])
+    assert named.is_absolute() and (named / "poster.txt").is_file()
+
+
+@pytest.mark.asyncio
+async def test_no_session_directory_line_for_a_binding_the_engine_did_not_mint(tmp_path):
+    """Only a directory this engine minted is named.
+
+    With the per-session mode off the turn runs in the caller's own directory,
+    and with no directory phase fired the binding is the caller's either way --
+    a line naming it would restate the receipt's own claim, and the caller of a
+    run that never moved has nothing to resolve differently.
+    """
+    for slice_config in ({"enabled": True}, {"enabled": True, "workdirPerSession": False}):
+        hook = _seated(DesignParticipant(EngineConfig.from_slice(slice_config), None, None))
+        with workdir.bind(tmp_path):
+            decision = await hook.after_send(SimpleNamespace(outbound_content="done"))
+        assert decision.modified_content is None
 
 
 @pytest.mark.asyncio

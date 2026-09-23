@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from raven.agent.tools.registry import ToolRegistry
@@ -212,6 +214,11 @@ async def test_direct_delete_executes_once_after_approval(tmp_path) -> None:
             "command": "rm file.txt",
             "description": "Approve this action: rm file.txt",
             "suggested_pattern": "",
+            "kind": "shell.exec",
+            "family": "",
+            "origin": "",
+            "origin_name": "",
+            "evidence": {"command": "rm file.txt", "cwd": str(tmp_path)},
         }
     ]
 
@@ -532,6 +539,20 @@ class TestExternalEffectFamilies:
         [
             ("git push origin main", "publish_command"),
             ("gh pr create --fill", "publish_command"),
+            ("gh pr merge 3 --squash", "publish_command"),
+            ("glab mr merge 5", "publish_command"),
+            # Naming an organisation's secrets is itself worth asking about, so
+            # the read-verb relief does not reach this group.
+            ("gh secret list", "publish_command"),
+            # And the word after a publishing verb is usually an operand, not a
+            # verb: these push an image called status, a branch to a remote
+            # called view, a package, a deletion. The relief is scoped to the
+            # forge groups so it cannot reach any of them.
+            ("git push status", "publish_command"),
+            ("git push view", "publish_command"),
+            ("docker push status", "publish_command"),
+            ("npm publish status", "publish_command"),
+            ("kubectl delete status", "publish_command"),
             ("npm publish", "publish_command"),
             ("kubectl apply -f k8s/", "publish_command"),
             ("twine upload dist/*", "publish_command"),
@@ -586,6 +607,16 @@ class TestExternalEffectFamilies:
             "tsc --noEmit",
             "docker ps",
             "kubectl get pods",
+            # A forge CLI's publishing group, asked for with a verb that only
+            # reads. The group is matched whole because enumerating its writing
+            # verbs means missing the next one, and the cost used to be that
+            # these were asked about in the words of a push.
+            "gh pr list",
+            "gh pr view 3",
+            "glab mr list --state opened",
+            "glab mr view 617",
+            "gh repo view",
+            "gh workflow list",
         ],
     )
     def test_ordinary_work_runs_unannounced(self, asking: ShellCommandPolicy, command: str) -> None:
@@ -923,3 +954,23 @@ class TestSandboxingDoesNotRelaxClassification:
     @pytest.mark.parametrize("command", ["rm -rf /", "shutdown now", "mkfs.ext4 /dev/sda1"])
     def test_the_deny_list_holds(self, command: str) -> None:
         assert self._asking().evaluate(command) is CommandDecision.HARD_DENY
+
+
+def test_the_exec_prompt_shows_the_command_where_it_would_run(tmp_path) -> None:
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    assert tool.approval_kind == "shell.exec"
+    assert tool.approval_evidence({"command": "rm a"}) == {"command": "rm a", "cwd": str(tmp_path)}
+    assert tool.approval_evidence({"command": "rm a", "working_dir": "/srv"}) == {"command": "rm a", "cwd": "/srv"}
+    assert tool.approval_evidence({"command": "rm a", "machine": "prod"}) == {"command": "rm a", "machine": "prod"}
+
+
+def test_the_listing_root_is_where_the_command_would_run(tmp_path) -> None:
+    """The directory listed around a command has to be the one the command ran
+    in, or the listing describes a tree the command never touched: a per-call
+    ``working_dir`` moves it, and a registered machine takes it off this disk."""
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    assert tool.listing_root({"command": "make"}) == tmp_path
+    assert tool.listing_root({"command": "make", "working_dir": "/srv"}) == Path("/srv")
+    assert tool.listing_root({"command": "make", "machine": "prod"}) is None

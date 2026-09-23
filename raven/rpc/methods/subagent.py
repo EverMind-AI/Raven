@@ -47,7 +47,7 @@ from loguru import logger
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.dag_live import live_run_ids
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME
-from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
+from raven.agent.subagent.history import dag_root, nodes_root, session_history_root, spawn_live_key
 from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.config.loader import load_config
@@ -137,13 +137,19 @@ def _outcome(files: _NodeFiles) -> tuple[str | None, bool]:
     """The answer this call produced, and whether it produced one at all.
 
     ``error.md`` and ``out.md`` are written by the same ``finish``, never both,
-    so whichever exists is the outcome.
+    so whichever exists is the outcome. ``closing.md``, when the lane left one
+    beside ``out.md``, is what the run said after its last step and stands in
+    for the whole reply as the answer row: the whole reply repeats the
+    narration already drawn on the steps (CONTEXT.md, Closing Message).
     """
-    for name in ("out.md", "error.md"):
+    for name in ("closing.md", "out.md", "error.md"):
         path = files.path(name)
         try:
             if path.is_file():
-                return path.read_text(encoding="utf-8", errors="replace"), True
+                text = path.read_text(encoding="utf-8", errors="replace")
+                if name == "closing.md" and not text.strip():
+                    continue
+                return text, True
         except OSError:
             logger.warning("subagent.context: could not read {}", path)
     return None, False
@@ -311,7 +317,7 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
                         "ended_at": entry.get("ended_at")
                         or (reg.get("updatedAtMs") if status not in ("pending", "running") else None),
                     }
-                if status in ("pending", "running") and not live:
+                if status in ("pending", "running", "exception") and not live:
                     status = "interrupted"
             # A skipped node never ran: it has no transcript, no cost and no
             # clock -- a row for it pads the list with entries that open onto
@@ -464,7 +470,8 @@ async def subagent_context(
     # collected in this very process, so a watching panel reads that. Copied
     # entry-by-entry because the collector republishes on every update from the
     # agent, and a list mutated mid-iteration is a crash in a read-only path.
-    if not transcribed and (live := run_activity.live(files.node_id)) is not None:
+    live_key = spawn_live_key(files.root, files.node_id)
+    if not transcribed and (live := run_activity.live(live_key)) is not None:
         stored.extend(
             normalize_row(entry) for entry in list(live.transcript) if isinstance(entry, dict) and entry.get("role")
         )
@@ -472,7 +479,7 @@ async def subagent_context(
     # output (a cli agent streams no transcript). Gone once the run finishes:
     # the live index empties with the collecting block, and the record's answer
     # takes over.
-    if (live_run := run_activity.live(files.node_id)) is not None and live_run.console:
+    if (live_run := run_activity.live(live_key)) is not None and live_run.console:
         stored.append({"role": "console", "content": live_run.console})
     if answer is not None:
         answer_msg: dict[str, Any] = {"role": "assistant", "content": answer}

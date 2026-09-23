@@ -70,6 +70,11 @@ RAVEN_API_KEY=
 RAVEN_API_BASE=http://host.docker.internal:11434
 ```
 
+Docker Desktop provides `host.docker.internal`. On Linux Docker Engine, add
+a host-gateway mapping for that name or use a host address reachable from the
+container. The model server must listen on that address, with access restricted
+to the intended clients.
+
 The entrypoint applies these provider values to Raven's configuration on each
 startup. Values set here take precedence when the container restarts.
 

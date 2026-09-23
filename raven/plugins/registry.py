@@ -12,11 +12,13 @@ Two responsibilities, split deliberately:
 2. **Lookup** (:meth:`get_memory_backend_factory` etc.) — the synchronous
    lookups the assembly root builds a backend through.
 
-Across-manifest name conflicts (two activated plugins both contributing
-a memory_backend named ``"everos"``) raise :class:`PluginConflictError` —
-which the host treats as a startup failure. The discovery layer already
-deduplicated *plugins* by id; the registry adds the second layer of
-deduplication on *contribution names*.
+Activation is per plugin. A plugin whose factory will not import, or that
+contributes a name another activated plugin already holds (two plugins both
+contributing a memory_backend named ``"everos"``), is rolled back as a whole
+and recorded in :meth:`PluginRegistry.activation_failures`; every other
+plugin still activates. The discovery layer already deduplicated *plugins*
+by id; the registry adds the second layer of deduplication on *contribution
+names*, and in a conflict the plugin activated first keeps the name.
 """
 
 from __future__ import annotations
@@ -72,12 +74,26 @@ class PluginNotFoundError(PluginError):
 
 
 @dataclass(frozen=True)
+class PluginActivationFailure:
+    """One admitted plugin that did not activate, and why."""
+
+    plugin_id: str
+    reason: str
+    manifest: PluginManifest
+
+
+@dataclass(frozen=True)
 class _ActivatedFactory:
     """Resolved factory + provenance for diagnostics."""
 
     plugin_id: str
     name: str
     factory: MemoryBackendFactory
+
+
+def _location_dir(location: Path | None) -> str | None:
+    """The directory a file-based plugin's manifest sits in, as ``sys.path`` spells it."""
+    return None if location is None else str(location.parent)
 
 
 class PluginRegistry:
@@ -92,6 +108,7 @@ class PluginRegistry:
         self._tool_gates: dict[str, _ActivatedFactory] = {}
         self._session_observers: dict[str, _ActivatedFactory] = {}
         self._onboard: dict[str, _ActivatedFactory] = {}
+        self._failures: dict[str, PluginActivationFailure] = {}
 
     # ── Activation ───────────────────────────────────────────────
 
@@ -103,14 +120,43 @@ class PluginRegistry:
     ) -> None:
         """Resolve and register every contribution from every admitted plugin.
 
-        A plugin is admitted iff its id is not in ``disabled``.
+        A plugin is admitted iff its id is not in ``disabled``. An admitted
+        plugin that fails leaves no contribution and no ``sys.path`` entry
+        behind, is recorded in :meth:`activation_failures`, and does not stop
+        the plugins after it.
         """
         for d in discovered:
             mf = d.manifest
             if mf.id in disabled:
                 logger.info("plugin %s disabled by user config", mf.id)
                 continue
-            self._activate_one(mf, source=d.source, location=d.location)
+            tables = self._tables()
+            snapshot = [dict(t) for t in tables]
+            path_len = len(sys.path)
+            try:
+                self._activate_one(mf, source=d.source, location=d.location)
+            except PluginError as e:
+                for table, before in zip(tables, snapshot):
+                    table.clear()
+                    table.update(before)
+                # Only the entry _ensure_importable appended; a plugin's import
+                # may itself have grown sys.path, and that is not ours to undo.
+                if len(sys.path) > path_len and _location_dir(d.location) == sys.path[path_len]:
+                    del sys.path[path_len]
+                self._failures[mf.id] = PluginActivationFailure(plugin_id=mf.id, reason=str(e), manifest=mf)
+                logger.warning("plugin %s was not activated: %s", mf.id, e)
+
+    def _tables(self) -> list[dict[str, Any]]:
+        return [
+            self._manifests,
+            self._memory_backends,
+            self._tools,
+            self._hooks,
+            self._services,
+            self._tool_gates,
+            self._session_observers,
+            self._onboard,
+        ]
 
     def _activate_one(
         self,
@@ -247,7 +293,7 @@ class PluginRegistry:
         """
         if source not in (ManifestOrigin.USER, ManifestOrigin.PROJECT) or location is None:
             return
-        plugin_dir = str(location.parent)
+        plugin_dir = _location_dir(location)
         if plugin_dir not in sys.path:
             sys.path.append(plugin_dir)
 
@@ -271,6 +317,10 @@ class PluginRegistry:
             raise PluginFactoryImportError(
                 f"plugin {plugin_id!r}: {module_path!r} has no attribute {attr!r}",
             ) from e
+        except Exception as e:
+            raise PluginFactoryImportError(
+                f"plugin {plugin_id!r}: reading {attr!r} from {module_path!r} failed: {e}",
+            ) from e
         if not callable(obj):
             raise PluginFactoryImportError(
                 f"plugin {plugin_id!r}: {ref} resolved to a non-callable {type(obj).__name__}",
@@ -282,6 +332,10 @@ class PluginRegistry:
     def activated_ids(self) -> list[str]:
         """Stable-ordered list of activated plugin ids."""
         return sorted(self._manifests)
+
+    def activation_failures(self) -> list[PluginActivationFailure]:
+        """Admitted plugins that did not activate, ordered by plugin id."""
+        return [self._failures[pid] for pid in sorted(self._failures)]
 
     def memory_backend_names(self) -> list[str]:
         """Stable-ordered list of registered memory-backend names."""

@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from raven.plugins import (
-    PluginConflictError,
     PluginNotFoundError,
     PluginRegistry,
     ServiceLocator,
@@ -220,7 +219,7 @@ class TestCrossSource:
 
 
 class TestConflict:
-    def test_two_plugins_same_backend_name_fails(self, tmp_path: Path) -> None:
+    def test_two_plugins_same_backend_name_keeps_the_first(self, tmp_path: Path) -> None:
         def fa(ctx):
             return "a"
 
@@ -243,11 +242,15 @@ class TestConflict:
             factory_ref="_pb:mk",
             backend_name="everos",
         )
-        with pytest.raises(PluginConflictError, match="everos"):
-            assemble_plugin_registry(
-                bundled_dir=bundled,
-                entry_points_group=None,
-            )
+        registry = assemble_plugin_registry(
+            bundled_dir=bundled,
+            entry_points_group=None,
+        )
+        assert registry.activated_ids() == ["plug-a"]
+        assert registry.get_memory_backend_factory("everos") is fa
+        [failure] = registry.activation_failures()
+        assert failure.plugin_id == "plug-b"
+        assert "everos" in failure.reason
 
 
 # ---------------------------------------------------------------------------

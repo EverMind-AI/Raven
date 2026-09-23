@@ -1,0 +1,22 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`workspace island > keeps its rendered shape 1`] = `
+"div.wsgrp
+div.chg
+  div.chghd
+    i.chgc.edit
+    span.chgp
+      span.dir
+    span.chgs
+      span.a
+      span.d
+    button.chgm
+div.wsgrp
+div.chg
+  div.chghd
+    i.chgc.write
+    span.chgp
+    span.chgs
+      span.a
+    button.chgm"
+`;

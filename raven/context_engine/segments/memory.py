@@ -47,6 +47,18 @@ class MemorySegmentBuilder:
         self._user_id = user_id
         self._memory_top_k = memory_top_k
 
+    def _top_k(self) -> int:
+        """How deep to recall, as the file has it now.
+
+        Read here rather than copied at construction: the depth is a preference
+        about the next recall, and this builder outlives any number of turns.
+        What it was built with answers when the file has no opinion.
+        """
+        from raven.config.live import default_live, held, memory_top_k
+
+        configured = held("memory.memoryTopK", lambda: memory_top_k(default_live()))
+        return configured or self._memory_top_k
+
     async def build(self, ctx: AssemblyContext) -> Segment | None:
         # Host direct-read (sync) and EverOS recall (async I/O). The recall is
         # bounded and degrades to no hits: memory enhances an answer, it does
@@ -71,7 +83,7 @@ class MemorySegmentBuilder:
                 self._backend.recall(
                     query=query,
                     user_id=self._user_id,
-                    top_k=self._memory_top_k,
+                    top_k=self._top_k(),
                 ),
                 timeout=_RECALL_BUDGET_S,
             )

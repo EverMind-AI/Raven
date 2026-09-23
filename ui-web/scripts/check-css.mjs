@@ -24,8 +24,8 @@
 // already covers every definition wherever it appears, so there is nothing
 // for a region to add.
 import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const path = join(fileURLToPath(new URL('..', import.meta.url)), 'src', 'styles', 'page.css')
 const css = readFileSync(path, 'utf8')
@@ -44,7 +44,6 @@ const RAMP_PROPS = /^(box-shadow|text-shadow|filter|backdrop-filter|-webkit-back
 // ramp rule, since a couple of them are opaque by design. Additions here are
 // review-visible.
 const ALLOW = [
-  /\.pmtile\b/,               // permission-mode theme tiles: palette as data
   /\.thpick\b/,               // theme picker light/dark preview miniatures
   /color-mix\(in oklab, #fff/, // structural rim derivation
   /mask(-image)?\s*:/,        // alpha ramps addressed by luminance, not color

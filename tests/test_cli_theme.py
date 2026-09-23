@@ -321,7 +321,7 @@ def test_bold_accent_renders_styled_not_bare():
 
 def test_themed_console_self_themes_on_first_print():
     """Regression: onboard's console themes itself on first print, so any render
-    path (any wizard helper, deep-research, etc.) resolves theme tokens without a
+    path (any wizard helper, any panel, etc.) resolves theme tokens without a
     prior push — no order-coupling, no MissingStyle. A plain Console would raise.
     """
     from rich.panel import Panel

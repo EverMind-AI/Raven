@@ -406,6 +406,38 @@ async def test_iteration_phases_read_the_filed_record_which_still_ends_with_the_
 
 
 @pytest.mark.asyncio
+async def test_the_filed_record_a_phase_reads_stops_before_this_turns_question(tmp_path):
+    """``session_history`` is the record as it stood BEFORE this turn, and the
+    question now reaches disk before the first model call -- so the slice the
+    phases are handed has to end where the previous turn ended, or a hook that
+    counts turns sees the one it is inside of."""
+    at_iteration: list[list] = []
+    at_send: list[list] = []
+
+    class Reader(AgentHook):
+        async def before_iteration(self, ctx):
+            if ctx.iteration == 1:
+                at_iteration.append(list(ctx.session_history or []))
+            return HookDecision()
+
+        async def after_send(self, ctx):
+            at_send.append(list(ctx.session_history or []))
+            return HookDecision()
+
+    provider = _ScriptedProvider([_text("first answer"), _text("second answer")])
+    loop = _loop(tmp_path, provider, [Reader()])
+
+    await loop._process_message(_req("first"))
+    await loop._process_message(_req("second"))
+
+    assert at_iteration[0] == [] and at_send[0] == [], "a fresh session has no filed record yet"
+    for history in (at_iteration[1], at_send[1]):
+        contents = [str(m.get("content")) for m in history]
+        assert "first" in contents, "the previous turn's question is part of the record"
+        assert "second" not in contents, f"the running turn's question leaked into the history: {contents}"
+
+
+@pytest.mark.asyncio
 async def test_iteration_phases_carry_the_cap_the_loop_enforces_and_the_bindings_window(tmp_path):
     seen: dict[str, object] = {}
 

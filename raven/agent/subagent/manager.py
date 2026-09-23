@@ -21,7 +21,7 @@ from raven.agent.subagent.backends import (
     SubagentActionAbortedError,
     SubagentBackend,
 )
-from raven.agent.subagent.backends.base import optional_keyword
+from raven.agent.subagent.backends.base import llm_error_reply, optional_keyword
 from raven.agent.subagent.backends.routing import TargetReady
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.dag_store import ensure_node_claimed, index_guard, record_node_outcome
@@ -32,7 +32,7 @@ from raven.agent.subagent.direct_chat import (
     DirectTurnMeta,
     NotAddressableError,
 )
-from raven.agent.subagent.history import SpawnRecord, session_history_root
+from raven.agent.subagent.history import SpawnRecord, session_history_root, spawn_live_key
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
 from raven.agent.subagent.mode_tiers import resolve_tier, turn_tier_in_force
@@ -51,8 +51,10 @@ from raven.config.paths import get_sandbox_dir
 from raven.config.schema import TIER_LADDER, ExecToolConfig
 from raven.context_engine.segments.render import dispatch_language_line
 from raven.contracts.llm_provider import LLMProvider
+from raven.contracts.subagent_backend import SubagentNoAnswerError
 from raven.observability import semconv
 from raven.providers.binding import ModelBinding, resolve
+from raven.providers.pool import ProviderPool, live_pin_resolver
 from raven.sandbox import SandboxConfig, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.spine.message import Media
@@ -72,6 +74,10 @@ _STEER_HOOK_GRACE_S = 3.0
 # schedules the cancellation: a run parked in an in-flight provider call reaches
 # its `finally` when that call returns, so waiting unbounded made a Ctrl-C last
 # as long as whatever the sub-agent happened to be waiting on.
+# What a run's parent is told when the cancellation came from a caller that
+# recorded no reason -- a bare task.cancel(), or a cancellation that reached
+# the run through its parent task rather than through a cancel method here.
+UNEXPLAINED_CANCEL = "the run was cancelled without a stated reason"
 _CANCEL_DRAIN_TIMEOUT_S = 5.0
 # ``spawn`` reports a refusal by returning its reason rather than raising, so a
 # caller that has to tell "dispatched" from "declined" has only the string. Both
@@ -84,6 +90,33 @@ _SHUTDOWN_REFUSAL = (
 # The DAG's refusals carry the quota refusal's shape rather than the spawn prefix;
 # said once here for both of its doors, `charge_dag_run` and `adopt_background_run`.
 _DAG_SHUTDOWN_REFUSAL = "Error: the host is shutting down and is starting no more sub-agents. No sub-agent was run."
+
+
+def _row_pin(config: Any, pool: Any = None) -> tuple[str | None, str | None]:
+    """A built-in row's own ``model``, with the provider its stored id names.
+
+    The pair, not the id alone: ``subagents.update`` stores the id naming the
+    provider it was picked under, and the pool handed only the id would let a
+    configured gateway take the pin instead (``ProviderPool.bind_pin``) -- the
+    reader's credential choice, silently swapped for another bill. Read with
+    ``stored_provider_name``, the function the write checked the pair with, so
+    a section raven has no spec for resolves here to that section rather than
+    to nothing, which the pool would have read as "derive one".
+
+    ``pool`` lends its provider table for the other direction of that mistake:
+    a hand-written ``deepseek-ai/DeepSeek-V3`` names no section, so its head is
+    part of the id and the provider is left to the pool to derive -- the gateway
+    branch such an id ran through before rows carried their provider.
+    """
+    from raven.providers.wire import stored_provider_name
+
+    model = getattr(config, "model", None)
+    if not model:
+        return None, None
+    providers = getattr(getattr(pool, "config", None), "providers", None)
+    return model, stored_provider_name(model, providers=providers)
+
+
 # Tier mismatches already reported, so a busy session logs one line per agent
 # rather than one per dispatch. Same shape and reason as `_STALE_SNAPSHOT_SEEN`
 # in raven/agent/subagent/backends/__init__.py.
@@ -199,6 +232,11 @@ def _tool_failure_line(activity: Any) -> str:
     )
 
 
+#: Both vendors under one key: they are read from one section and a turn
+#: that spawns twice must not straddle an edit between the two spawns.
+_WEB_VENDORS_KEY = "tools.web.providers"
+
+
 class SubagentManager:
     """Manages background subagent execution."""
 
@@ -226,6 +264,7 @@ class SubagentManager:
         target_ready: "TargetReady | None" = None,
         retry_delays: "Sequence[float] | None" = None,
         retry_after_output: bool = False,
+        provider_pool: ProviderPool | None = None,
     ):
         from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 
@@ -275,6 +314,10 @@ class SubagentManager:
         self._unprompted_held: dict[tuple[str, str, str], str] = {}
         self._unprompted_trailing: dict[tuple[str, str, str], asyncio.Task] = {}
         self._fallback = ModelBinding(provider, model or provider.get_default_model())
+        # What pairs a built-in row's own model with a credential
+        # (`build_builtin_backend`). Without one a row's model is unusable and
+        # the row follows the conversation's binding, said once in the log.
+        self.provider_pool = provider_pool
         self.search_api_key = search_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -288,6 +331,19 @@ class SubagentManager:
         self._owned_ids = owned_ids
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
+        # Why a run is being cancelled, by task id: written by the cancel
+        # methods just before they cancel and read by the run on its way out.
+        # asyncio's CancelledError carries no reason of its own, and the
+        # announcement the parent conversation gets has to name one.
+        self._cancel_reasons: dict[str, str] = {}
+        # What ``spawn`` put aside for a task that may be cancelled before its
+        # first step: the task text, the display summary and the origin. A
+        # task cancelled before it ever runs never enters ``_run_subagent``, so
+        # neither CancelledError handler in it can report the stop; the cancel
+        # methods report it from this record instead. The run pops its own
+        # entry as its first act, so an entry still here when the task is done
+        # means the body never ran.
+        self._unstarted: dict[str, tuple[str, str, dict[str, Any]]] = {}
         # (session_key, agent, handle) -> {task_id, ...}, for one-instance
         # cancellation (a stop button) without touching the rest of the
         # session's spawns. A set, not a single id: the main agent can spawn
@@ -361,6 +417,37 @@ class SubagentManager:
         """
         self.apply_agents(self._configs)
 
+    def _web_search_provider_now(self) -> str:
+        """The search vendor a spawn should use, as the file has it now.
+
+        The keys beside it are already read live (``web_provider_key``), so a
+        vendor copied at construction was the half of the pair that still owed
+        a restart. What this was built with answers when the file does not.
+        """
+        from raven.config.live import default_live, held, web_providers
+
+        configured = held(_WEB_VENDORS_KEY, lambda: web_providers(default_live()))
+        return configured[0] or self.web_search_provider
+
+    def _web_provider_keys_now(self) -> dict[str, str]:
+        """The per-vendor keys a spawn should hand down, as the file has them.
+
+        The vendor a sub-agent runs on is read live; handing it the keys this
+        manager was built with leaves a key added in the same settings flow
+        behind, which is the half of the pair this exists to close.
+        """
+        from raven.config.live import default_live, held, web_provider_keys
+
+        configured = held("tools.web.providers.keys", lambda: web_provider_keys(default_live()))
+        return {**(self.web_provider_keys or {}), **configured}
+
+    def _web_fetch_provider_now(self) -> str:
+        """The fetch vendor a spawn should use. See ``_web_search_provider_now``."""
+        from raven.config.live import default_live, held, web_providers
+
+        configured = held(_WEB_VENDORS_KEY, lambda: web_providers(default_live()))
+        return configured[1] or self.web_fetch_provider
+
     def build_builtin_backend(self, row: "AgentRow", build: Any = None) -> "RavenLoopBackend":
         """An in-process raven loop for one ``builtin`` row, narrowed for one dispatch.
 
@@ -371,23 +458,38 @@ class SubagentManager:
 
         ``build`` is the already-narrowed pair the registry computed (the row's
         allow-lists intersected with this dispatch's), duck-typed on
-        ``tools_allow`` / ``skills_allow``. The row's own ``model`` and
-        ``restrict_to_workspace`` are per-agent overrides: unset, they inherit this
-        manager's, so a row that says nothing about confinement cannot loosen it.
+        ``tools_allow`` / ``skills_allow``. ``restrict_to_workspace`` is a
+        per-agent override: unset, it inherits this manager's, so a row that says
+        nothing about confinement cannot loosen it.
+
+        The row's own ``model`` is a pin the backend resolves per dispatch and
+        pairs with its own credential through the pool (``live_pin_resolver``),
+        never a value baked in here: this backend is cached across bindings, so
+        a model fixed at construction would be whichever one the manager
+        happened to be on when the row was first dispatched, and a bare id has
+        no key of its own to be sent with. Unusable, the row follows the
+        conversation's binding.
         """
         confine = getattr(row.config, "restrict_to_workspace", None)
+        pin = live_pin_resolver(
+            self.provider_pool,
+            lambda: _row_pin(row.config, self.provider_pool),
+            key=f"subagents.{row.name}.model",
+            follower=f"built-in agent {row.name!r}",
+        )
         return RavenLoopBackend(
             provider=self.provider,
-            model=getattr(row.config, "model", None) or self.model,
+            model=self.model,
+            pin=pin,
             agent_home=self.workspace,
             restrict_to_workspace=self.restrict_to_workspace if confine is None else confine,
             exec_config=self.exec_config,
             search_api_key=self.search_api_key,
             jina_api_key=self.jina_api_key,
             web_proxy=self.web_proxy,
-            web_search_provider=self.web_search_provider,
-            web_fetch_provider=self.web_fetch_provider,
-            web_provider_keys=self.web_provider_keys,
+            web_search_provider=self._web_search_provider_now(),
+            web_fetch_provider=self._web_fetch_provider_now(),
+            web_provider_keys=self._web_provider_keys_now(),
             image_search=self.image_search,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
@@ -413,9 +515,9 @@ class SubagentManager:
             search_api_key=self.search_api_key,
             jina_api_key=self.jina_api_key,
             web_proxy=self.web_proxy,
-            web_search_provider=self.web_search_provider,
-            web_fetch_provider=self.web_fetch_provider,
-            web_provider_keys=self.web_provider_keys,
+            web_search_provider=self._web_search_provider_now(),
+            web_fetch_provider=self._web_fetch_provider_now(),
+            web_provider_keys=self._web_provider_keys_now(),
             image_search=self.image_search,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
@@ -961,6 +1063,7 @@ class SubagentManager:
                 **extra,
             )
         )
+        self._unstarted[task_id] = (task, display_summary, origin)
         self._track(task_id, bg_task, session_key, instance_key)
 
         logger.info("Spawned subagent [{}]: {}", task_id, display_summary)
@@ -1138,7 +1241,7 @@ class SubagentManager:
                             model=self.model,
                             mode=self.resolve_mode(session_key, agent, handle),
                             **optional_keyword(
-                                backend, "session_model", self.instance_model(session_key, agent, handle)
+                                backend, "session_model", self.session_model_for(session_key, agent, handle)
                             ),
                             **optional_keyword(backend, "authored_task", text),
                             **kwargs,
@@ -1328,7 +1431,43 @@ class SubagentManager:
         """Which model this instance's turns run on, or ``None`` for the agent's own."""
         return self._instance_models.get((session_key or "", agent, handle))
 
-    def set_instance_model(self, session_key: str | None, agent: str, handle: str, model: str | None) -> str | None:
+    def row_default_model(self, agent: str) -> str | None:
+        """A third-party acp row's own configured ``model``, absent an instance override.
+
+        ``None`` for every other kind: a builtin row's model is a pin its own
+        backend pairs with a credential (:meth:`build_builtin_backend`), and an
+        openai row's model is not a menu choice this session picks between.
+        """
+        row = self.registry.get(agent)
+        return getattr(row.config, "model", None) if row is not None and row.kind == "acp" else None
+
+    def session_model_for(self, session_key: str | None, agent: str | None, instance: str | None) -> str | None:
+        """The model one acp dispatch runs on: the instance's override, else the row's own.
+
+        The one resolver every lane dispatches through -- a spawn, a direct
+        chat and a DAG node -- so a graph reaching an acp row through a
+        different lane cannot read a different model than a spawn to that same
+        row would.
+
+        ``instance``, not the dispatch's handle, for the reason ``resolve_mode``
+        takes it that way: a call naming no instance has no override to find.
+        """
+        agent = agent or ""
+        if instance:
+            override = self.instance_model(session_key, agent, instance)
+            if override:
+                return override
+        return self.row_default_model(agent)
+
+    def set_instance_model(
+        self,
+        session_key: str | None,
+        agent: str,
+        handle: str,
+        model: str | None,
+        *,
+        offered: "list[str] | None" = None,
+    ) -> str | None:
         """Put one instance on ``model`` from its next turn on.
 
         Everything ``set_instance_mode`` says below about where this is held and
@@ -1338,19 +1477,27 @@ class SubagentManager:
         repairs it. A raven restart returns every instance to its agent's own
         model.
 
-        ``None`` clears the override. Raises ``ValueError`` naming what the agent
-        does offer, so a caller is never left guessing at the vocabulary -- the
-        values are opaque provider-qualified ids and guessing at one is how a
-        reader asks for a model the agent will refuse.
+        ``None`` clears the override.
+
+        ``offered`` is the vocabulary to check against, and the caller supplies
+        it because the caller is what knows which one applies: an agent of
+        raven's own runs on this host's providers and takes their ids, which the
+        RPC layer checks the way it checks a row's (``_host_pair``), while a
+        third party takes only what its own handshake advertised. Defaulted to
+        that handshake, which is the answer for every caller that has no better
+        one. Raises ``ValueError`` naming what is on offer, so a caller is never
+        left guessing at the vocabulary -- the values are opaque
+        provider-qualified ids and guessing at one is how a reader asks for a
+        model the agent will refuse.
         """
         key = (session_key or "", agent, handle)
         if model is None:
             self._instance_models.pop(key, None)
             return None
-        offered = [c.value for c in self.agent_model_choices(agent)]
-        if model not in offered:
+        allowed = [c.value for c in self.agent_model_choices(agent)] if offered is None else offered
+        if model not in allowed:
             raise ValueError(
-                f"{agent!r} has no model {model!r}" + (f"; it offers {len(offered)}" if offered else "; it offers none")
+                f"{agent!r} has no model {model!r}" + (f"; it offers {len(allowed)}" if allowed else "; it offers none")
             )
         self._instance_models[key] = model
         logger.info("Instance {}/{} set to model {}", agent, handle, model)
@@ -1482,6 +1629,9 @@ class SubagentManager:
         mcp_grant: Any = None,
     ) -> None:
         """Execute the subagent task and announce the result."""
+        # First, before any await: from here on this frame reports the run's
+        # end, including a cancellation, and the cancel methods must not.
+        self._unstarted.pop(task_id, None)
         logger.info("Subagent [{}] starting task: {}", task_id, task_summary)
 
         effective_workspace = origin.get("workspace") or self.workspace
@@ -1508,7 +1658,8 @@ class SubagentManager:
                     )
         except asyncio.CancelledError:
             if not dispatched:
-                self._emit_status(origin, task_id, task_summary, "cancelled", ended_at=int(time.time() * 1000))
+                reason = self._cancel_reasons.pop(task_id, UNEXPLAINED_CANCEL)
+                await self._report_undispatched_cancel(task_id, task_summary, task, origin, reason)
             raise
         except Exception as e:
             error_msg = f"Error: {str(e)}"
@@ -1625,10 +1776,11 @@ class SubagentManager:
         # publishing into nothing is a no-op. Every exit below therefore has the
         # tool calls and token cost the run got as far as producing -- a failed
         # run's are the ones worth keeping. Keyed into the live index by the
-        # record's own directory name, so `subagent.context` can serve the run
-        # while it is still in flight, and by instance so the conversation view
-        # can: a spawned call is a turn of the same instance a direct chat talks
-        # to, and watching it there is the same question.
+        # record's own address (`spawn_live_key`), so `subagent.context` and
+        # `tasks.list` can serve the run while it is still in flight, and by
+        # instance so the conversation view can: a spawned call is a turn of
+        # the same instance a direct chat talks to, and watching it there is
+        # the same question.
         cancelled = False
         # The record's own id, not its directory's name: the artifacts are a
         # filename prefix in the shared node root now, so the directory names
@@ -1638,7 +1790,7 @@ class SubagentManager:
         # queued behind a direct chat to the same instance is not that
         # instance's turn yet, and registering it here took the slot from the
         # turn that was (see ``activity.collecting``).
-        with activity.collecting(live_key=call_id, prompt=task) as did:
+        with activity.collecting(live_key=spawn_live_key(record.dir, call_id), prompt=task) as did:
             try:
                 backend = self._resolve_backend(agent)
                 # The same message list a direct chat to this handle would carry.
@@ -1690,12 +1842,18 @@ class SubagentManager:
                             **optional_keyword(
                                 backend,
                                 "session_model",
-                                self.instance_model(session_key, agent, origin.get("instance") or ""),
+                                self.session_model_for(session_key, agent, origin.get("instance")),
                             ),
                             **optional_keyword(backend, "authored_task", origin.get("authored_task")),
                             **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),
                             **state_kwargs,
                         )
+                if (failure := llm_error_reply(final_result)) is not None:
+                    # A child engine ends its turn normally on a failed model
+                    # call and hands the error text back as its reply. Written
+                    # as the answer it would read completed, wear a green dot
+                    # and be summarised for the parent as the work.
+                    raise SubagentNoAnswerError(failure)
                 await _write_spawn_status(session_key, agent, handle, "completed")
                 self._emit_status(
                     origin, task_id, task_summary, "completed", call_id=call_id, ended_at=int(time.time() * 1000)
@@ -1713,11 +1871,21 @@ class SubagentManager:
                 )
             except asyncio.CancelledError:
                 cancelled = True
+                reason = self._cancel_reasons.pop(task_id, UNEXPLAINED_CANCEL)
                 await _write_spawn_status(session_key, agent, handle, "cancelled")
                 self._emit_status(
                     origin, task_id, task_summary, "cancelled", call_id=call_id, ended_at=int(time.time() * 1000)
                 )
-                record.finish(status="cancelled", activity=did)
+                record.finish(status="cancelled", error=f"Cancelled: {reason}", activity=did)
+                await self._announce_cancelled(
+                    task_id,
+                    task_summary,
+                    task,
+                    origin,
+                    reason,
+                    record_path=str(record.file("out.md")) if record.file("out.md").is_file() else None,
+                    activity=did,
+                )
                 raise
             except SubagentActionAbortedError:
                 await _write_spawn_status(session_key, agent, handle, "failed")
@@ -1897,7 +2065,7 @@ class SubagentManager:
         # reads the result text. Calling that success framed a run that had said
         # it could not do the task as a completed one.
         self.remember_origin(origin)
-        status_text = "returned" if status == "ok" else "failed"
+        status_text = {"ok": "returned", "cancelled": "was cancelled"}.get(status, "failed")
 
         # The subagent's result is attacker-influenceable (it may have fetched
         # web pages / read files), so fence it as untrusted before it re-enters
@@ -1912,6 +2080,9 @@ class SubagentManager:
             if origin.get("instance")
             else ""
         )
+        # Where the run was dispatched to work, so the parent can find what it
+        # left there without searching the disk for it.
+        workdir_line = f"Working directory: {origin['workspace']}\n" if origin.get("workspace") else ""
         record_line = f"\n\nRecord: {record_path}" if record_path else ""
         # How the run's calls went, which nothing on this path carried. Measured
         # on a real dispatch: two of three calls timed out, the run produced no
@@ -1936,14 +2107,19 @@ class SubagentManager:
         announce_content = f"""[Subagent '{task_summary}' {status_text}]
 
 Task: {asked}
-{handle_line}
+{handle_line}{workdir_line}
 Result:
 {fenced_result}{record_line}{trouble}
 
 Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not report the task as done merely because this message arrived. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full, outside that length budget. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls.{hoard_note}"""
 
         assert self._submit is not None
-        mark = {"kind": "spawn", "label": task_summary, "status": status}
+        mark: dict[str, Any] = {"kind": "spawn", "label": task_summary, "status": status}
+        # Only when present -- the dag mark's `run_id` is unconditional because a
+        # dag run always has one, but an origin built outside `spawn()` may carry
+        # none, and the field is a bare optional string on the wire (no null).
+        if origin.get("node_id"):
+            mark["node_id"] = origin["node_id"]
         # The delivered marker draws the seam where a result re-entered its
         # conversation; a refused inject re-entered nothing, so there is none.
         if not self._inject(announce_content, origin, mark):
@@ -1955,6 +2131,73 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         # disagree about what was delivered.
         self._emit_delivered(origin, {**mark, "content": announce_content})
         logger.debug("Subagent [{}] announced result to {}", task_id, origin["session_key"])
+
+    async def _report_undispatched_cancel(
+        self, task_id: str, task_summary: str, task: str, origin: dict[str, Any], reason: str
+    ) -> None:
+        """Report a run cancelled before it was dispatched: registry row, status event, announcement.
+
+        Before dispatch there is no record to finish and no inner frame to
+        report, only the ``pending`` row and status ``spawn`` wrote; this is
+        what turns both into ``cancelled`` and tells the parent.
+        """
+        await _write_spawn_status(
+            origin.get("session_key"),
+            origin.get("agent") or GENERIC_AGENT,
+            origin.get("handle") or task_id,
+            "cancelled",
+        )
+        self._emit_status(origin, task_id, task_summary, "cancelled", ended_at=int(time.time() * 1000))
+        await self._announce_cancelled(task_id, task_summary, task, origin, reason)
+
+    async def _finish_unstarted(self, task_id: str, reason: str) -> None:
+        """Report a run cancelled before its first step, which nothing inside it could.
+
+        ``task.cancel()`` on a task that has not run yet closes the coroutine
+        without entering it -- no ``except CancelledError`` and no ``finally``
+        in ``_run_subagent`` executes -- so the cancel methods owe what the
+        body's handler would have done. A no-op for a task whose body ran:
+        the run popped its entry as its first act.
+        """
+        pending = self._unstarted.pop(task_id, None)
+        if pending is None:
+            return
+        task, task_summary, origin = pending
+        await self._report_undispatched_cancel(task_id, task_summary, task, origin, reason)
+
+    async def _announce_cancelled(
+        self,
+        task_id: str,
+        task_summary: str,
+        task: str,
+        origin: dict[str, Any],
+        reason: str,
+        *,
+        record_path: str | None = None,
+        activity: Any = None,
+    ) -> None:
+        """Tell the parent conversation that a run it started was stopped, and why.
+
+        Runs inside the CancelledError handler of a run being torn down, so
+        nothing here may replace that exception: a manager with no submit
+        wired logs instead of asserting, and an announce that fails is logged.
+        Without this the parent never hears of the stop -- the status event
+        is live-only and not replayed, so a session whose run was cancelled
+        under it kept a "started" receipt with nothing after it.
+        """
+        if self._submit is None:
+            logger.warning("Subagent [{}] cancelled ({}) with no submit wired; not announced", task_id, reason)
+            return
+        result = (
+            f"Cancelled: {reason}. The run did not finish and returned no result, so nothing it was "
+            "asked for is delivered. Its record holds whatever it wrote before it stopped."
+        )
+        try:
+            await self._announce_result(
+                task_id, task_summary, task, result, origin, "cancelled", record_path=record_path, activity=activity
+            )
+        except Exception:  # noqa: BLE001 - the cancellation must still propagate
+            logger.opt(exception=True).warning("Subagent [{}] cancellation could not be announced", task_id)
 
     async def announce_dag_result(self, run_id: str, summary: str, origin: dict[str, str]) -> None:
         """Announce a background DAG run's outcome, the way a spawn's is announced.
@@ -2219,17 +2462,31 @@ Read it against the plan this instance serves. If it reports finished work, resu
             return False
         return True
 
-    async def cancel_by_session(self, session_key: str) -> int:
-        """Cancel all subagents for the given session. Returns count cancelled."""
-        tasks = [
-            self._running_tasks[tid]
+    async def _cancel(self, live: dict[str, asyncio.Task], reason: str) -> list[asyncio.Task]:
+        """Cancel ``live`` with ``reason`` on record for each run, and wait them out."""
+        for tid, task in live.items():
+            self._cancel_reasons[tid] = reason
+            task.cancel()
+        if live:
+            await asyncio.gather(*live.values(), return_exceptions=True)
+        for tid, task in live.items():
+            if task.cancelled():
+                await self._finish_unstarted(tid, reason)
+            # A run that finished before its cancellation landed never read this.
+            self._cancel_reasons.pop(tid, None)
+        return list(live.values())
+
+    async def cancel_by_session(self, session_key: str, *, reason: str = "its session was stopped") -> int:
+        """Cancel all subagents for the given session. Returns count cancelled.
+
+        ``reason`` is what each run's parent conversation is told.
+        """
+        live = {
+            tid: self._running_tasks[tid]
             for tid in self._session_tasks.get(session_key, [])
             if tid in self._running_tasks and not self._running_tasks[tid].done()
-        ]
-        for t in tasks:
-            t.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        }
+        tasks = await self._cancel(live, reason)
         # The memory pollers this session left running. Reaped here so a closing
         # session is not held open by one, and counted separately because they
         # are bookkeeping, not the sub-agents the caller asked to stop.
@@ -2244,7 +2501,9 @@ Read it against the plan this instance serves. If it reports finished work, resu
         self._session_spawn_times.pop(session_key, None)
         return len(tasks)
 
-    async def cancel_by_instance(self, session_key: str, agent: str, handle: str) -> bool:
+    async def cancel_by_instance(
+        self, session_key: str, agent: str, handle: str, *, reason: str = "a user stopped this instance"
+    ) -> bool:
         """Cancel every spawn on one (session_key, agent, handle).
 
         This is the granularity a stop button needs: cancelling unwinds each
@@ -2257,12 +2516,10 @@ Read it against the plan this instance serves. If it reports finished work, resu
         """
         quota_key = session_key or "default"
         task_ids = self._instance_tasks.get((quota_key, agent, handle), set())
-        tasks = [t for tid in task_ids if (t := self._running_tasks.get(tid)) is not None and not t.done()]
-        if not tasks:
+        live = {tid: t for tid in task_ids if (t := self._running_tasks.get(tid)) is not None and not t.done()}
+        if not live:
             return False
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await self._cancel(live, reason)
         return True
 
     @property
@@ -2275,7 +2532,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
         self._paused = bool(paused)
         return self._paused
 
-    async def cancel_by_id(self, task_id: str) -> bool:
+    async def cancel_by_id(self, task_id: str, *, reason: str = "a user stopped this run") -> bool:
         """Cancel one spawn by the id ``spawn`` handed back. Returns whether it was live.
 
         The instance-keyed variant cannot serve the overlay's kill button: rows
@@ -2285,8 +2542,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
         task = self._running_tasks.get(task_id)
         if task is None or task.done():
             return False
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        await self._cancel({task_id: task}, reason)
         return True
 
     def has_active(self, session_key: str) -> bool:
@@ -2313,7 +2569,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
         """Return the number of currently running subagents."""
         return len(self._running_tasks)
 
-    async def cancel_all(self) -> int:
+    async def cancel_all(self, *, reason: str = "the gateway stopped or reloaded") -> int:
         """Cancel every subagent still running, across every session.
 
         Used at gateway shutdown: `CliAgentBackend` runs its child with
@@ -2338,9 +2594,11 @@ Read it against the plan this instance serves. If it reports finished work, resu
         # builds a new one. Left open, a turn still running could dispatch into
         # that window and this snapshot would not hold it.
         self._dispatch_closed = True
-        tasks = [t for t in self._running_tasks.values() if not t.done()]
-        for t in tasks:
+        live = {tid: t for tid, t in self._running_tasks.items() if not t.done()}
+        for tid, t in live.items():
+            self._cancel_reasons[tid] = reason
             t.cancel()
+        tasks = list(live.values())
         # A report held for the trailing wake belongs to this generation: after
         # disposal its task would submit to a drained scheduler. It is cancelled
         # with the rest; the words are not lost, the instance's log has them, and
@@ -2355,6 +2613,13 @@ Read it against the plan this instance serves. If it reports finished work, resu
         self._unprompted_held.clear()
         if tasks:
             await _drain_cancelled(tasks, "sub-agent runs")
+        for tid, t in live.items():
+            # Only for a run that is done: one still ignoring its cancellation
+            # has yet to read its reason.
+            if t.done():
+                if t.cancelled():
+                    await self._finish_unstarted(tid, reason)
+                self._cancel_reasons.pop(tid, None)
         # Same for the memory pollers: at shutdown an unreaped one dies pending,
         # with its httpx client never closed and its record never written.
         records = [t for t in self._record_tasks if not t.done()]

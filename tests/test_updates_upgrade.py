@@ -76,6 +76,23 @@ def isolated_raven_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     return home
 
 
+@pytest.fixture(autouse=True)
+def release_install_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep release tests independent of the developer's editable installation."""
+    distribution_lookup = upgrade_commands.metadata.distribution
+    installed = distribution_lookup("raven")
+    release_install = Mock(wraps=installed)
+    release_install.version = installed.version
+    release_install.read_text.side_effect = lambda name: (
+        None if name == "direct_url.json" else installed.read_text(name)
+    )
+    monkeypatch.setattr(
+        upgrade_commands.metadata,
+        "distribution",
+        lambda name: release_install if name == "raven" else distribution_lookup(name),
+    )
+
+
 def _release_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "tag_name": "v0.1.4",

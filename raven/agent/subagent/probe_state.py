@@ -20,7 +20,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
 
@@ -57,6 +57,40 @@ def default_state_path() -> Path:
     return get_config_path().parent / _FILENAME
 
 
+RemedyKind = Literal["sign_in", "setup", "api_key"]
+_REMEDY_KINDS: frozenset[str] = frozenset(("sign_in", "setup", "api_key"))
+
+
+@dataclass(frozen=True)
+class Remedy:
+    """What the reader has to do before an agent can answer, as data a page can draw.
+
+    The verdict `probe._refusal_detail` spells out in English for the log, the
+    CLI and the TUI, in a form a page can put in its reader's language: which
+    kind of fix, and the command that makes it on this machine when one is
+    known. The English sentence stays the record; this is the same decision,
+    not a second one -- both are made from the one classification, so a page
+    and a terminal cannot disagree about what a refusal needs.
+
+    ``sign_in`` and ``setup`` are fixed outside the page, in a terminal;
+    ``api_key`` is fixed in the page, since the row is an endpoint and a key.
+    """
+
+    kind: RemedyKind
+    command: str | None = None
+
+    def to_wire(self) -> dict[str, str]:
+        return {"kind": self.kind, **({"command": self.command} if self.command else {})}
+
+    @classmethod
+    def from_wire(cls, raw: Any) -> "Remedy | None":
+        """A remembered remedy, or ``None`` for anything that is not one."""
+        if not isinstance(raw, dict) or raw.get("kind") not in _REMEDY_KINDS:
+            return None
+        command = raw.get("command")
+        return cls(raw["kind"], command if isinstance(command, str) and command else None)
+
+
 @dataclass(frozen=True)
 class LastTest:
     """One remembered verdict, already validated against the current config."""
@@ -64,6 +98,7 @@ class LastTest:
     ok: bool
     detail: str
     tested_at_ms: int
+    remedy: Remedy | None = None
 
 
 def fingerprint(cfg: Any) -> str:
@@ -124,7 +159,9 @@ class TestStateStore:
         tmp.write_text(json.dumps({"version": 1, "verdicts": rows}, indent=2, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, self._path)
 
-    def record(self, cfg: Any, source: str, *, ok: bool, detail: str, tested_at_ms: int) -> None:
+    def record(
+        self, cfg: Any, source: str, *, ok: bool, detail: str, tested_at_ms: int, remedy: Remedy | None = None
+    ) -> None:
         """Remember one verdict, replacing any previous one for the same agent.
 
         Takes the config object rather than a precomputed digest so ``record`` and
@@ -142,6 +179,7 @@ class TestStateStore:
                 "detail": detail,
                 "fingerprint": fingerprint(cfg),
                 "testedAtMs": int(tested_at_ms),
+                **({"remedy": remedy.to_wire()} if remedy is not None else {}),
             }
         )
         try:
@@ -166,8 +204,9 @@ class TestStateStore:
                 ok=bool(row.get("ok")),
                 detail=str(row.get("detail") or ""),
                 tested_at_ms=int(row.get("testedAtMs") or 0),
+                remedy=Remedy.from_wire(row.get("remedy")),
             )
         return found
 
 
-__all__ = ["LastTest", "TestStateStore", "default_state_path", "fingerprint"]
+__all__ = ["LastTest", "Remedy", "RemedyKind", "TestStateStore", "default_state_path", "fingerprint"]

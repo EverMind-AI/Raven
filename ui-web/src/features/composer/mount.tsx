@@ -2,26 +2,31 @@ import { createRoot } from 'react-dom/client'
 
 import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
+import './styles.css'
+import { open as openTemplates } from './templates'
 export * as turn from './turn'
 
 import type { Root } from 'react-dom/client'
 
 /* The composer island's face: the roots over the dock's containers, the
- * dock's own event wiring, and the verbs the legacy shims call.
+ * dock's own event wiring, and the verbs the page's own machinery calls --
+ * the session pipeline and its runtime, the boot, the language repaint, the
+ * update watch and the rail's leave.
  *
  * The roots are created on the first paint rather than at bundle time: this
- * script is assembled AHEAD of the page script (ui-web/build.py), so neither
- * window.RavenShell nor DS.composer exists yet when it evaluates. install()
- * therefore only registers listeners -- every handler reads the seams lazily,
- * by which time the page has published them.
+ * script is assembled AHEAD of the page script (ui-web/build.py), so the
+ * composer source does not exist yet when it evaluates. install() therefore
+ * only registers listeners -- every handler reads the seams lazily, by which
+ * time the page has published them.
  */
 
 let roots: Root[] = []
 let liveHost: HTMLElement | null = null
 
 /* The live turn row rides the tail of #stage, which the transcript island owns
- * a lane host in and the legacy layers still wipe and park wholesale. So it
- * gets a host of its own, one `display: contents` element appended after the
+ * a lane host in and the session modules still wipe and park wholesale
+ * (state/session/registry.ts, state/session/runtime.ts). So it gets a host of
+ * its own, one `display: contents` element appended after the
  * transcript's, and the host is only attached while a turn is alive -- the row
  * used to be appended and removed the same way.
  *
@@ -32,7 +37,7 @@ let liveHost: HTMLElement | null = null
 function syncLiveHost(): void {
   const host = liveHost
   if (!host) return
-  if (!store.getState().live) {
+  if (!store.get().live) {
     host.remove()
     return
   }
@@ -73,7 +78,7 @@ function ensure(): void {
   store.subscribe(syncLiveHost)
 }
 
-/* ── the verbs the legacy shims call ──────────────────────────────────── */
+/* ── the verbs the page's own machinery calls ─────────────────────────── */
 
 export function goPaint(): void {
   ensure()
@@ -86,6 +91,7 @@ export function drawQueue(): void {
 }
 
 export const queuePush = (text: string): void => store.queuePush(text)
+export const say = (text: string): void => store.say(text)
 export const queueShift = (): string | undefined => store.queueShift()
 export const queueClear = (): void => store.queueClear()
 export const queueSnapshot = (): string[] => store.queueSnapshot()
@@ -100,9 +106,18 @@ export function drawMeter(): void {
   store.drawMeter()
 }
 
+/* The field's height cap is a share of the window, so it is recomputed on a
+   resize -- registered with the page's other window listeners
+   (state/globalListeners.ts), which is also the one caller that passes it an
+   event it ignores. */
 export function fitField(): void {
   ensure()
   store.fitField()
+}
+
+/* The draft debounce can still be in flight when the tab goes away. */
+export function parkDraftNow(): void {
+  store.parkDraftNow()
 }
 
 export function dockLift(): void {
@@ -115,29 +130,22 @@ export function setLiveAnchor(ms: number): void {
   store.setLiveAnchor(ms)
 }
 
-/* Its svg twin, for a node drawn inside a graph (the dag sheet still draws
-   itself). Same three dots, same shared keyframes; only the element type
-   differs. `y` is the baseline the bars used to stand on, so the dots are
-   centred a glyph-height above it and the call sites keep the coordinates they
-   already pass. */
-export function workGlyphSvg(x: number, y: number): SVGGElement {
-  const ns = 'http://www.w3.org/2000/svg'
-  const g = document.createElementNS(ns, 'g')
-  g.setAttribute('class', 'workv')
-  g.setAttribute('aria-hidden', 'true')
-  for (const dx of [0, 4, 8]) {
-    const c = document.createElementNS(ns, 'circle')
-    c.setAttribute('cx', String(x + dx + 1))
-    c.setAttribute('cy', String(y - 4.5))
-    c.setAttribute('r', '1.5')
-    g.appendChild(c)
-  }
-  return g
-}
-
 /* ── the dock's wiring ────────────────────────────────────────────────── */
 
 let picker: HTMLInputElement | null = null
+
+/* The two verbs the "+" menu runs (src/chrome/PlusMenu.tsx): the file input
+   and the template sheet are this island's, so the menu asks rather than
+   reaching for either. */
+export function pickFiles(): void {
+  ensure()
+  store.pickFiles(openPicker)
+}
+
+export function pickTemplate(): void {
+  ensure()
+  openTemplates()
+}
 
 function openPicker(): void {
   if (!picker) {
@@ -180,8 +188,6 @@ export function install(): void {
     ensure()
     store.addFiles(files)
   })
-  /* The debounce above can still be in flight when the tab goes away. */
-  window.addEventListener('beforeunload', () => store.parkDraftNow())
 
   const go = document.getElementById('go')
   if (go) {
@@ -190,14 +196,6 @@ export function install(): void {
       store.goClick()
     }
   }
-  const attBtn = document.getElementById('attBtn')
-  if (attBtn) {
-    attBtn.onclick = () => {
-      ensure()
-      store.pickFiles(openPicker)
-    }
-  }
-
   /* The drop target exists only where a dropped file has somewhere to go: the
      demo canvas offers no upload, so it must not light up the field either. */
   const fieldBox = ta.closest('.field')
@@ -235,12 +233,6 @@ export function install(): void {
     sc.addEventListener('scroll', () => store.scrolled())
   }
 
-  /* A vh-based cap changes with the window, so the height has to be
-     recomputed. */
-  window.addEventListener('resize', () => {
-    ensure()
-    store.fitField()
-  })
   const dock = document.querySelector('.dock')
   if (!dock) return
   /* Catches every reason the dock changes height -- typing, a pasted blob,

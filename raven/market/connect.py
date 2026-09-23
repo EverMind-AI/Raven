@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.utils.atomic_io import atomic_update
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -429,6 +431,77 @@ async def authorize(name: Any, loop: "McpHost | None", *, interactive: bool = Tr
     return {"name": name, "mcp": snap}
 
 
+async def retry(name: Any, loop: "McpHost | None") -> dict:
+    """Connect one configured server again, without a browser.
+
+    A re-sync skips a server parked in ``error`` by design; ``authorize`` is the
+    manager's explicit retry, and this is that call for a page whose person may
+    not be on this host -- so no browser is opened here, and an OAuth server
+    that needs one answers with its link instead.
+    """
+    return await authorize(name, loop, interactive=False)
+
+
+async def revoke(name: Any, loop: "McpHost | None") -> dict:
+    """Forget one server's OAuth credential and disconnect it."""
+    from raven.mcp.oauth import delete_credentials
+
+    server = server_name(name)
+    delete_credentials(server)
+    manager = getattr(loop, "mcp_manager", None) if loop is not None else None
+    if manager is not None:
+        await manager.disconnect(server)
+    snap = _state_of(manager, server)[0] if manager is not None else None
+    return {"name": server, "mcp": snap}
+
+
+async def configure(name: Any, form: Any, loop: "McpHost | None") -> dict:
+    """Rewrite the credential fields a catalog template put into one server.
+
+    Only the templated headers and env entries move; the connection block the
+    person may have edited by hand stays. An empty form value clears its
+    field, which is how a key is retired without uninstalling. Refused for a
+    server no ledger names: nothing knows which of its fields are credentials.
+    """
+    from raven.market import catalog_detail, read_ledger
+    from raven.market.install import _config_path, _dump_config, _parse_config, _servers
+
+    server = server_name(name)
+    if read_ledger(server) is None:
+        raise PlugConnectError(
+            "not installed from the catalog; edit the config file instead", data={"field": "name", "name": server}
+        )
+    entry = await catalog_detail(server)
+    if entry is None:
+        raise PlugConnectError("catalog entry is gone", data={"field": "name", "name": server})
+    contrib = next((c for c in entry.get("contributes") or [] if c.get("kind") == "mcp"), None)
+    fields = ((contrib or {}).get("auth") or {}).get("fields") or []
+    if not fields:
+        raise PlugConnectError("this plugin takes no credential", data={"field": "name", "name": server})
+    values = dict(form or {})
+
+    def _patch(current: str | None) -> tuple[str | None, None]:
+        payload = _parse_config(current)
+        servers = _servers(payload)
+        cfg = servers.get(server)
+        if not isinstance(cfg, dict):
+            raise PlugConnectError("no such MCP server", data={"field": "name", "name": server})
+        for field in fields:
+            key = str(field.get("key") or "")
+            into = str(field.get("into") or "")
+            bucket, _, leaf = into.partition(".")
+            if bucket not in ("headers", "env") or not leaf:
+                raise PlugConnectError(f"catalog field '{key}' has unsupported target '{into}'")
+            value = str(values.get(key) or "").strip()
+            rendered = str(field.get("template") or "{value}").replace("{value}", value) if value else ""
+            cfg.setdefault(bucket, {})[leaf] = rendered
+        return _dump_config(payload), None
+
+    atomic_update(_config_path(), _patch)
+    snap = await kick_sync(loop, focus=server)
+    return {"name": server, "mcp": snap}
+
+
 def installed_overview(loop: "McpHost | None") -> list[dict]:
     """Every installed plugin with its live connection state, stable by name.
 
@@ -485,6 +558,7 @@ __all__ = [
     "PlugConnectError",
     "PlugRuntimeUnavailableError",
     "authorize",
+    "configure",
     "entry_auth_mode",
     "entry_required_fields",
     "install_and_connect",
@@ -492,6 +566,8 @@ __all__ = [
     "installed_overview",
     "kick_sync",
     "remove",
+    "retry",
+    "revoke",
     "server_name",
     "validated_catalog_id",
 ]

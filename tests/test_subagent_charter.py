@@ -9,6 +9,8 @@ a name outside a named handful.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from raven.agent.subagent.charter import (
@@ -23,7 +25,9 @@ from raven.agent.subagent.charter import (
 )
 from raven.agent.subagent.charter_code import (
     CharterCodeError,
+    compile_function,
     compile_judge,
+    run_function,
     run_judge,
 )
 
@@ -236,6 +240,12 @@ def test_an_over_long_source_is_refused_before_parsing() -> None:
         compile_judge("def judge(n, p, q):\n    return []\n" + "# padding\n" * 5000)
 
 
+def test_generic_function_compilation_rejects_unknown_verbs_and_runtime_errors_are_silence() -> None:
+    with pytest.raises(CharterCodeError, match="unsupported charter function"):
+        compile_function("def archive(step):\n    return None", "archive")
+    assert run_function(lambda value: 1 / 0, {"detached": True}) is None
+
+
 def test_a_judge_cannot_reach_a_name_it_was_not_given() -> None:
     """The namespace is an allow-list, not a denylist: a denylist is only as
     complete as the day it was written."""
@@ -427,6 +437,21 @@ def test_a_dispatch_brings_its_judgements_as_a_participant() -> None:
         ]
 
 
+def test_a_refused_generated_function_is_cached_as_silence(monkeypatch) -> None:
+    from raven.agent.subagent import charter as charter_mod
+
+    source = "def advise(step):\n    import os\n    return 'never'"
+    charter_mod._COMPILED.clear()
+    monkeypatch.setattr(charter_mod, "MAX_COMPILED", 0)
+    try:
+        with charter_scope(Charter(functions=(("advise", source),))):
+            assert charter_mod._generated_answer("advise", {}) is None
+            assert charter_mod._generated_answer("advise", {}) is None
+        assert charter_mod._COMPILED[("advise", source)] is False
+    finally:
+        charter_mod._COMPILED.clear()
+
+
 def test_a_plugins_own_rules_speak_before_the_dispatchs() -> None:
     """Participant order is product first: a veto needs one voice, and the
     wording the model reads should be the product's own where both would
@@ -484,3 +509,66 @@ def test_a_participant_that_says_nothing_lets_the_next_one_speak() -> None:
             "write under ./out/",
             "read it first",
         ]
+
+
+# --------------------------------------------------------------------------- #
+# The seat a DAG node's charter travels in                                     #
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_chartered_node_dispatches_inside_its_charter() -> None:
+    """The layer that refuses a stray write before it lands, rather than after.
+
+    The three other layers all act on a write that already happened; this one
+    is the only one that can stop one, and it reaches the worker by being in
+    scope for the call -- which is what the transport asks for on the way out --
+    rather than by changing any signature.
+    """
+    from raven.agent.subagent.dag_tool import _CharteredBackend
+    from raven.agent.subagent.delegate import outbound_charter
+
+    payload = {"capability": {"tools": ["read_file"]}}
+    seen: list[Any] = []
+
+    class _Backend:
+        name = "echo"
+
+        async def run(self, *_args: Any, **_kwargs: Any) -> str:
+            seen.append(outbound_charter())
+            return "done"
+
+    wrapped = _CharteredBackend(_Backend(), payload)
+
+    assert await wrapped.run("a prompt") == "done"
+    assert seen == [payload], "the call went out without its charter"
+    assert outbound_charter() is None, "the charter outlived the call"
+
+
+def test_a_wrapped_backend_is_the_backend_in_every_other_respect() -> None:
+    """The runner reads attributes off a backend that is not `run`, and a proxy
+    that answered only its own would change what the node is."""
+    from raven.agent.subagent.dag_tool import _CharteredBackend
+
+    class _Backend:
+        name = "echo"
+        supports_instances = True
+
+    wrapped = _CharteredBackend(_Backend(), {})
+
+    assert wrapped.name == "echo"
+    assert wrapped.supports_instances is True
+
+
+def test_only_the_nodes_a_charter_names_are_wrapped() -> None:
+    """Matched on the node id exactly, which is what a round taken up again has
+    to get right: its nodes carry an attempt suffix, and a charter keyed without
+    one reaches nothing at all -- silently, because an unwrapped node runs."""
+    from raven.agent.subagent.dag_tool import _chartered, _CharteredBackend
+
+    backends = {"pb-r01x1-planner": object(), "pb-r01x1-developer": object()}
+
+    bound = _chartered(backends, {"pb-r01x1-planner": {"capability": {"tools": []}}})
+
+    assert isinstance(bound["pb-r01x1-planner"], _CharteredBackend)
+    assert bound["pb-r01x1-developer"] is backends["pb-r01x1-developer"]
+    assert _chartered(backends, {}) is backends, "an ordinary run rebinds nothing"

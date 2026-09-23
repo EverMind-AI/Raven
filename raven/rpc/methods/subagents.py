@@ -9,8 +9,9 @@ means or which fields a write is allowed to touch.
 The install group is computed here rather than in the client because a client
 that computes it is how the rule drifts: a second copy in the TUI, or in the
 page, would be one more place for it to go stale. For `kind == "acp"` the rule
-is whether the executable is on the login shell's PATH, which is the same
-question `ui-web/`'s agent rows gate on (`probe_status === "missing"`).
+is whether the executable -- and, for a shim-launched preset, the agent the shim
+drives -- is on the login shell's PATH, which is the same question `ui-web/`'s
+agent rows gate on (`probe_status === "missing"`).
 """
 
 from __future__ import annotations
@@ -29,7 +30,14 @@ from raven.agent.subagent.presets import (
     third_party_subagent_preset,
     third_party_subagent_presets,
 )
-from raven.agent.subagent.probe import ProbeResult, ping_agent, probe_all, run_test
+from raven.agent.subagent.probe import (
+    ProbeResult,
+    capabilities_wanted,
+    ping_agent,
+    probe_all,
+    record_capabilities,
+    run_test,
+)
 from raven.agent.subagent.probe_state import TestStateStore
 from raven.config.loader import get_config_path
 from raven.config.schema import SubagentsConfig
@@ -300,11 +308,16 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 result = replace(result, status="attention")
         last = result.last_test
         task = _RUNNING.get(cfg.name)
-        # One store read per acp row, beside the one ``agent_meta`` already
-        # makes. Not hoisted into a cache: the store is deliberately uncached,
-        # because a cache is what keeps serving a stale verdict after a verify
-        # has already fixed it.
-        caps = acp_snapshot_for(cfg) if getattr(cfg, "kind", None) == "acp" else None
+        # One store read per acp row, handed to `agent_meta` so it is not read
+        # twice. Not cached across rows or listings: a cache is what keeps
+        # serving a stale verdict after a verify has already fixed it.
+        snapshot = acp_snapshot_for(cfg) if cfg.kind == "acp" else None
+        meta = agent_meta(cfg, snapshot=snapshot)
+        # One of raven's own, whichever way this install registered it: the
+        # built-in row, a product discovered under `agents/`, or a config row
+        # whose acp handshake named raven -- the shipped installer writes a
+        # product as a plain config row, and that row is still raven's.
+        own = source in ("builtin", "vendored") or getattr(snapshot, "agent_name", "") == "raven"
         rows.append(
             {
                 "name": cfg.name,
@@ -326,8 +339,9 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 # Read from the same derivation the roster and the DAG pre-check
                 # use, never from `kind`: an acp row's statefulness comes from its
                 # own capability snapshot and an openai row's from a declaration.
-                "stateful": agent_meta(cfg).stateful,
+                "stateful": meta.stateful,
                 "builtin": source == "builtin",
+                "own": own,
                 "group": _group(cfg, result.status),
                 "upgrade_to": _upgrade_transport(cfg, source),
                 "probe_status": result.status,
@@ -339,13 +353,19 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 # things. Always present, never omitted -- a client cannot tell
                 # a missing key from a false one, and one day it will mean
                 # "this server predates the field".
-                "needs_auth": bool(getattr(caps, "needs_auth", False)),
+                "needs_auth": bool(getattr(snapshot, "needs_auth", False)),
                 "mcps": list(getattr(cfg, "mcps", None) or []),
                 "allow_mcp_secrets": bool(getattr(cfg, "allow_mcp_secrets", False)),
                 "last_test_ok": None if last is None else last.ok,
                 "last_test_detail": None if last is None else last.detail,
+                "last_test_remedy": None if last is None or last.remedy is None else last.remedy.to_wire(),
                 "last_test_at_ms": None if last is None else last.tested_at_ms,
                 "test_running": task is not None and not task.done(),
+                "model": getattr(cfg, "model", None),
+                "model_choices": [{"value": c.value, "name": c.name, "group": c.group} for c in meta.model_choices],
+                # The row's editing rule, not ownership: what `subagents.update`
+                # accepts for `model` on this row. `own` is the ownership mark.
+                "model_source": _model_rule(cfg, snapshot, meta),
             }
         )
     return rows
@@ -462,45 +482,192 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     return {"added": True, "name": entry["name"]}
 
 
-def _default_description(preset_name: str | None) -> str:
-    """The preset's shipped description, or "" when there is no preset to fall
-    back to (a hand-written entry with no ``preset`` provenance)."""
+def _factory_description(name: str, preset_name: str | None) -> str:
+    """The shipped text a cleared description reverts to.
+
+    Tried in the order a row could actually own one: its own preset (the
+    add-time provenance field), or a discovered product's manifest (a vendored
+    row, which carries no preset). A hand-written entry matching neither has
+    nothing to fall back to, and blanking it is the honest answer -- the same
+    fallback ``add`` already uses.
+
+    A built-in row is deliberately not looked up: its factory text is the
+    package seed, and ``""`` is the schema's own way of saying "the seed's" --
+    the merge drops a field at its default and lets the seed govern. Copying
+    today's seed text in would pin it, and the row would stop following the
+    package from then on.
+    """
     if preset_name and preset_name in THIRD_PARTY_SUBAGENT_PRESETS:
         return third_party_subagent_preset(preset_name)["description"]
-    return ""
+    from raven.agent.subagent.vendored_agents import discover_product_rows
+
+    discovered = next((cfg for cfg in discover_product_rows() if getattr(cfg, "name", None) == name), None)
+    return (getattr(discovered, "description", "") or "") if discovered is not None else ""
+
+
+def _model_rule(cfg: Any, snapshot: Any, meta: Any) -> str:
+    """What ``subagents.update`` accepts for ``model`` on this row.
+
+    Defined once and read by both the listing and the write, so the menu the
+    page draws is the menu the write offers -- two expressions of it are two
+    places for the pair to drift apart. It is the menu, not the whole
+    vocabulary: one of raven's own also takes a host-qualified id under either
+    rule, since it runs on raven's providers whatever it advertised.
+
+    The rule is the row's, not its kind's: a third-party acp row picks from the
+    choices its handshake advertised, and one of raven's own picks from raven's
+    own provider catalogue whatever it advertised. An own row runs on this
+    host's providers -- a product installed beside this raven inherits them --
+    so the catalogue is the live list of what it can serve, while its handshake
+    is a launch-time capture of the same list: measured once on a probe
+    session, capped per provider, and stale from the first credential edit
+    after it. Drawing that capture beside the composer's live picker put two
+    different menus on one catalogue. A third party that advertised none is
+    taken at its word: its own credentials decide what it can run, and raven's
+    ids would be refused by the agent itself.
+    """
+    if cfg.kind == "builtin":
+        return "raven"
+    # A product whose folder carries its own chat credential is not on this
+    # host's catalogue at all: its launcher takes that key with the provider and
+    # model beside it and never reads what the host would have lent. Nothing
+    # here can name what it answers with, and a pick made from raven's ids would
+    # be pushed at a session whose own config has never heard of them -- so the
+    # model is the folder's, the way an openai row's is its section's.
+    from raven.agent.subagent.vendored_agents import product_llm_key
+
+    if product_llm_key(getattr(cfg, "name", "") or ""):
+        return "fixed"
+    if cfg.kind != "acp":
+        return "fixed"
+    return "raven" if getattr(snapshot, "agent_name", "") == "raven" else "agent"
+
+
+def _host_pair(model: str) -> str | None:
+    """The id a built-in row stores for ``model``, or ``None`` when no provider
+    of raven's can serve it.
+
+    The built-in row runs in this process, on raven's providers, so its model is
+    checked against the pairing the dispatch will make -- ``ProviderPool.bind_pin``
+    with the provider the stored id names, read by ``stored_provider_name``, the
+    same function the pin reads it with -- rather than against any agent's menu,
+    and decided here so a write that lands is a write that runs: the id names a
+    provider raven knows, by its prefix or by appearing in a configured section's
+    own model list (a passthrough vendor no spec matches, stored naming that
+    section, which then serves only the ids it lists), and that provider's
+    section holds a usable credential. Answered from config alone. The picker's
+    own listing (``model.options``) also asks the codex account and a local
+    runtime what they hold, which is seconds of network a write has no reason to
+    wait on.
+
+    A config that cannot be read raises out of here: that is the server's
+    failure, not a fact about the reader's model or key, and the refusal this
+    answer feeds would have blamed both.
+    """
+    from raven.config.loader import load_config
+    from raven.config.schema import section_has_credentials
+    from raven.providers.registry import find_by_name, split_model_id
+    from raven.providers.wire import stored_model_id, stored_provider_name
+
+    providers = load_config().providers
+
+    def usable(provider: str) -> bool:
+        section = providers.get(provider)
+        return section is not None and bool(section_has_credentials(section, find_by_name(provider)))
+
+    def listed(provider: str, model_id: str) -> bool:
+        return model_id in (getattr(providers.get(provider), "models", None) or [])
+
+    provider = stored_provider_name(model, providers=providers)
+    if provider is not None:
+        if find_by_name(provider) is None and not listed(provider, split_model_id(model)[1]):
+            return None
+        return stored_model_id(provider, model) if usable(provider) else None
+    names = [*type(providers).model_fields, *(providers.model_extra or {})]
+    listing = next((n for n in names if listed(n, model)), None)
+    if listing is None or not usable(listing):
+        return None
+    return stored_model_id(listing, model)
 
 
 async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
-    """Change editable presentation, credential and MCP policy fields."""
+    """Change editable presentation, credential, MCP policy and model fields."""
     name = params.get("name")
     try:
         entries = get_agents(config_path=get_config_path())
     except ValidationError as exc:
         _raise_config_error(exc)
-    target = next((e for e in entries if e.get("name") == name), None)
+    from raven.agent.subagent.builtin_agents import canonical_agent_name, is_builtin_agent_name
+
+    if is_builtin_agent_name(name or ""):
+        # Resolved the way the table resolves it: a seed's override is merged
+        # under the canonical name whatever spelling config stored it in, and an
+        # acp row of that name is the supported transport switch -- either is
+        # the row the reader is editing, and the edit lands on it in place. A
+        # cli or openai row of the name is one the table ignores
+        # (`merge_builtin_seeds` refuses to displace the seed), so an edit there
+        # would change nothing anyone sees, and a second row of the name would
+        # not be written beside it either.
+        canonical = canonical_agent_name(name or "")
+        of_name = [e for e in entries if canonical_agent_name(e.get("name") or "") == canonical]
+        target = next((e for e in of_name if e.get("kind") in ("builtin", "acp")), None)
+        if target is None and of_name:
+            raise ConfigFieldReadonlyError(
+                f"{name!r} is a built-in agent, and config holds a {of_name[0].get('kind')!r} row of that name "
+                "the table ignores; remove that row before editing the built-in one",
+                data={"field": "name", "name": name},
+            )
+    else:
+        target = next((e for e in entries if e.get("name") == name), None)
     materialized_discovered = target is None
     if target is None:
         from raven.agent.subagent.vendored_agents import discover_product_rows
 
         discovered = next((cfg for cfg in discover_product_rows() if getattr(cfg, "name", None) == name), None)
-        if discovered is None:
+        if discovered is not None:
+            target = discovered.model_dump(by_alias=True)
+            entries.append(target)
+        elif is_builtin_agent_name(name or ""):
+            # A built-in row has no config entry until its first edit -- writing
+            # one here is how "retune this agent" is spelled, on the same terms
+            # a `skills` override already is (see `builtin_agents.merge_builtin_seeds`).
+            from raven.config.schema import BuiltinAgentConfig
+
+            target = BuiltinAgentConfig(name=canonical_agent_name(name)).model_dump(by_alias=True)
+            entries.append(target)
+        else:
             raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
-        target = discovered.model_dump(by_alias=True)
-        entries.append(target)
+    # Read before anything below moves them: the two fields whose new value the
+    # agent has never been asked about. Everything else this call can change is
+    # presentation or policy, which cannot alter what the agent answers. The
+    # name goes with them because a rename moves it too, and the re-read below
+    # has to find the row this call started from under whichever spelling it
+    # was stored as.
+    key_before = target.get("apiKey")
+    model_before = target.get("model")
+    name_before = target.get("name")
+    row_before = dict(target)
     new_name = _clean_name(params.get("new_name"), field="new_name")
     if new_name:
         if materialized_discovered and new_name != name:
+            # A row written here from a shipped launcher or a package seed is
+            # bound to it by name; renamed, it would become a second agent.
             raise ConfigFieldReadonlyError(
-                "a discovered sub-agent override cannot be renamed; its name binds it to the shipped launcher",
+                "a discovered or built-in sub-agent override cannot be renamed; its name binds it to what it overrides",
                 data={"field": "new_name", "name": name},
             )
         target["name"] = new_name
-    if params.get("description") is not None:
+    if "description" in params:
         description = params["description"]
-        # Blank/whitespace-only reverts to the preset default, same as add: a
-        # cleared description would otherwise strip the agent's only description
-        # from the `spawn` roster the dispatching model reads.
-        target["description"] = description if description.strip() else _default_description(target.get("preset"))
+        # Blank, whitespace-only or explicit ``null`` all revert to the factory
+        # text, same as add: a cleared description would otherwise strip the
+        # agent's only description from the `spawn` roster the dispatching
+        # model reads.
+        target["description"] = (
+            description
+            if description is not None and description.strip()
+            else _factory_description(name, target.get("preset"))
+        )
     # Blank/absent means keep the stored key: the caller is never shown it, so
     # an empty field is "unchanged", never "clear it".
     if (params.get("api_key") or "").strip():
@@ -509,6 +676,80 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
         target["mcps"] = list(params["mcps"])
     if params.get("allow_mcp_secrets") is not None:
         target["allowMcpSecrets"] = params["allow_mcp_secrets"]
+    if params.get("clear_model") or params.get("model") is not None:
+        cfg_for_meta = _as_configs([target])[0]
+        snapshot = acp_snapshot_for(cfg_for_meta) if cfg_for_meta.kind == "acp" else None
+        meta = agent_meta(cfg_for_meta, snapshot=snapshot)
+        rule = _model_rule(cfg_for_meta, snapshot, meta)
+        if rule == "fixed":
+            raise ConfigFieldReadonlyError(
+                f"model is not editable for kind {cfg_for_meta.kind!r}: it has no menu this call can pick from",
+                data={"field": "model", "name": name},
+            )
+        if params.get("clear_model"):
+            target["model"] = None
+        else:
+            proposed = str(params["model"])
+            choices = [c.value for c in meta.model_choices]
+            own_acp = cfg_for_meta.kind == "acp" and getattr(snapshot, "agent_name", "") == "raven"
+            # An id the agent advertised is one it serves, whichever menu the
+            # page drew. Not keyed on the rule: that names the menu, and keying
+            # the write to it meant an own row stopped taking its own
+            # handshake's ids the moment its menu became raven's catalogue.
+            if proposed in choices:
+                target["model"] = proposed
+            elif rule == "agent" and not own_acp:
+                # Mirrors ``SubagentManager.set_instance_model``'s own message: the
+                # values are opaque provider-qualified ids, so a refusal names how
+                # many the agent offers rather than leaving a reader to guess at
+                # the vocabulary.
+                raise ConfigValidationError(
+                    f"{name!r} has no model {proposed!r}"
+                    + (f"; it offers {len(choices)}" if choices else "; it offers none"),
+                    data={"field": "model", "name": name},
+                )
+            else:
+                # One of raven's own reaches here under either rule, and so takes
+                # either vocabulary: it runs on this host's providers, so a host id
+                # is a model it can serve whatever its handshake advertised. The
+                # rule the listing showed is a menu, not a gate -- a re-measure
+                # that gave the row its menu between the read and the write would
+                # otherwise refuse the pick the reader was offered.
+                #
+                # Stored naming its provider, the way `config.set model` stores the
+                # host's: a bare id is claimed by keyword matching at dispatch, and
+                # that sends it wherever those rules land rather than to the
+                # section the reader picked it under.
+                provider = str(params.get("provider") or "").strip()
+                if provider:
+                    from raven.providers.wire import stored_model_id
+
+                    proposed = stored_model_id(provider, proposed)
+                stored = _host_pair(proposed)
+                if stored is None and own_acp:
+                    raise ConfigValidationError(
+                        f"{name!r} has no model {proposed!r}: it is none of the {len(choices)} its handshake "
+                        "advertised, and it runs on raven's own providers, none of which can serve it either",
+                        data={"field": "model", "name": name},
+                    )
+                if stored is None:
+                    raise ConfigValidationError(
+                        f"{name!r} runs on raven's own providers, and none of them can serve {proposed!r}: "
+                        "it names no provider raven knows, or that provider has no usable credentials",
+                        data={"field": "model", "name": name},
+                    )
+                target["model"] = stored
+    # A credential or a model swapped under a row that is already on is a
+    # connect nobody gated: the row goes on serving dispatches with something
+    # nothing has tried, and the first real task is what discovers the typo. So
+    # it is asked here, the same question the switch asks, and only when one of
+    # the two actually moved -- the sheet posts whatever is in its field, so an
+    # unchanged form would otherwise spend a call on every save. A row that is
+    # off is left alone: nothing is serving, and the switch that turns it on is
+    # already gated, so asking here would buy the same answer twice.
+    if bool(target.get("enabled")) and (target.get("apiKey") != key_before or target.get("model") != model_before):
+        await _refuse_unless_it_answers(entries, str(target["name"]), refusal="so it was not changed")
+        entries, target = _merged_over_the_ping(target, row_before, name_before, materialized=materialized_discovered)
     try:
         reject_unsupported_openai_fields([target])
         set_agents(entries, config_path=get_config_path())
@@ -516,6 +757,48 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
         _raise_config_error(exc)
     _hot_apply(agent_loop_factory)
     return {"updated": True, "name": target["name"]}
+
+
+def _merged_over_the_ping(
+    target: dict, before: dict, stored_name: str | None, *, materialized: bool
+) -> tuple[list[dict], dict]:
+    """Re-read the agent list across the gate's await, keeping both authors.
+
+    The list read before a ping of up to a minute is stale in two ways, and
+    they want different answers.
+
+    Rows this call never touched are simply whatever disk says now, so the list
+    is read again -- writing back the one read before the ping would revert
+    every other `subagents.*` write that landed during it.
+
+    The row this call *is* editing has two authors by then: this call, whose
+    fields are the point of the write, and whoever else wrote to the same row
+    while the agent was being asked. Carrying the pre-await copy across keeps
+    the first and silently restores the second over the top of a call that has
+    already answered success. So only the fields this call actually changed are
+    replayed onto the freshly read row. `subagents.update` only ever sets
+    fields, never removes one, which is what makes a comparison against the
+    pre-mutation copy a complete account of what it did; a removal added later
+    would have to be replayed here too.
+
+    A row that is gone under the name this call read it as was renamed or
+    removed meanwhile, and there is nothing left to merge onto: the change is
+    refused rather than resurrecting a row somebody deleted. The exception is a
+    row this call materialized itself -- a discovered folder or a built-in
+    getting its first stored entry -- which was never on disk to be found.
+    """
+    entries = _read_agents()
+    current = next((e for e in entries if e.get("name") == stored_name), None)
+    if current is None:
+        if materialized:
+            entries.append(target)
+            return entries, target
+        raise SubagentNotFoundError(
+            f"sub-agent {stored_name!r} was renamed or removed while it was being proved, so it was not changed",
+            data={"name": stored_name, "field": "name"},
+        )
+    current.update({key: value for key, value in target.items() if before.get(key) != value})
+    return entries, current
 
 
 def _is_switch_row(stored: dict, discovered: dict) -> bool:
@@ -564,12 +847,23 @@ def _discovered_entry(name: str) -> dict | None:
     return None
 
 
-_PINGED_KINDS = ("cli", "acp")
-"""Kinds whose readiness can only be settled by running them.
+_PINGED_KINDS = ("cli", "acp", "openai")
+"""Kinds whose readiness is settled by running them, which is every kind but one.
 
-`openai` is an endpoint, and the free `/models` probe already answers whether its
-credential works, so charging a completion for the switch would buy nothing.
-`builtin` is this process. Neither can fail the way these two do.
+`builtin` is the only name absent, because it is this process: no command to
+launch, no endpoint to reach, and no connect to gate. Every other kind is asked
+the same question in the same way -- one prompt, and an answer required -- since
+nothing short of that separates an agent that is configured from one that works.
+
+`openai` was exempt on the grounds that the free `/models` probe had already
+settled its credential. That probe runs on the listing and on an explicit test,
+never on this path, so the key an add carries has not been probed: it did not
+exist when the listing last ran. The exemption was reasoning about a check that
+happens somewhere else.
+
+The cost is bounded by who reaches the gate: only a write that leaves the row
+enabled, which for an endpoint means one that came with a key. A keyless openai
+add lands disabled and is never asked.
 """
 
 
@@ -610,15 +904,27 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
         return
     result = await ping_agent(cfg)
     if result.ok:
+        if getattr(cfg, "kind", None) == "acp" and capabilities_wanted(cfg):
+            # It answered, so it can be measured: the record its statefulness,
+            # menu and modes are read from is written now rather than left to
+            # the Test button or the next restart. Best effort -- the agent has
+            # already proved itself, and a handshake that fails afterwards is
+            # not a reason to refuse the connect.
+            try:
+                await record_capabilities(cfg)
+            except Exception as exc:  # noqa: BLE001 - the connect stands on the ping
+                logger.warning("subagents: {!r} answered but its capabilities could not be recorded: {}", name, exc)
         return
     # `detail` is repeated inside `data` deliberately: the dispatcher fills
     # `data` from `detail` only when a handler passed no `data` of its own, so a
     # call site passing both drops the human-readable half.
     detail = f"sub-agent {name!r} did not answer a test message, {refusal}: {result.detail}"
-    raise SubagentNotReadyError(
-        detail,
-        data={"name": name, "field": "enabled", "detail": detail},
-    )
+    # `remedy` beside the sentence: the same verdict as data, for a page that
+    # draws the fix in its reader's language instead of printing the English.
+    data: dict[str, Any] = {"name": name, "field": "enabled", "detail": detail}
+    if result.remedy is not None:
+        data["remedy"] = result.remedy.to_wire()
+    raise SubagentNotReadyError(detail, data=data)
 
 
 def _read_agents() -> list[dict]:
@@ -711,13 +1017,12 @@ def _resolve_toggle(entries: list[dict], name: Any, enabled: bool) -> tuple[list
 async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """Set `enabled` on one entry - the flag the roster filter reads.
 
-    Switching a `cli` or `acp` row *on* first sends one real prompt through that
-    row's own backend and refuses the enable, in the agent's own words, when
-    nothing answers: for those kinds the roster's entry criterion is that the
-    agent works now, not that it is installed. So this spends one call on that
-    agent's own quota and can hold the switch for up to
-    `_ENABLE_PING_TIMEOUT_SECONDS`. Exempt: switching off, an `openai` row
-    (whose credential the free `/models` probe already settles), and
+    Switching a row *on* first sends one real prompt through that row's own
+    backend and refuses the enable, in the agent's own words, when nothing
+    answers: the roster's entry criterion is that the agent works now, not that
+    it is installed. So this spends one call on that agent's own quota and can
+    hold the switch for up to `_ENABLE_PING_TIMEOUT_SECONDS`. Exempt: switching
+    off, a `builtin` row (this process, with no backend to reach), and
     `force: true`, the operator's override for an agent whose provider is
     briefly down. A refusal writes nothing.
     """
@@ -798,7 +1103,17 @@ def _find(name: str, source: str) -> Any:
     malformed entry anywhere in it (written by any client sharing this config,
     not necessarily this feature) would otherwise raise a bare ``ValidationError``
     out of a request to test one unrelated, perfectly healthy row.
+
+    A discovered row lives in neither pool: its folder is the only place it
+    exists, and it is already a config object.
     """
+    if source == "vendored":
+        from raven.agent.subagent.vendored_agents import discover_product_rows
+
+        cfg = next((c for c in discover_product_rows() if getattr(c, "name", None) == name), None)
+        if cfg is None:
+            raise SubagentNotFoundError(f"no {source} sub-agent named {name!r}", data={"name": name})
+        return cfg
     try:
         pool = third_party_subagent_presets() if source == "preset" else get_agents(config_path=get_config_path())
     except ValidationError as exc:
@@ -859,6 +1174,7 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
         ok=result.ok,
         detail=result.detail,
         tested_at_ms=int(time.time() * 1000),
+        remedy=result.remedy,
     )
     # Exactly the case where `_test_acp` wrote a capability snapshot. What an acp
     # test changes is measured capability, which lives in that store -- and the
@@ -868,7 +1184,7 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
     # `create_instance` reads the table and refuses the very agent the picker just
     # offered. Same door a build takes after a filesystem change, for the same
     # reason -- a write to durable truth the table has not been re-derived from.
-    if result.kind == "acp" and source == "config":
+    if result.kind == "acp" and source != "preset":
         try:
             _hot_apply(agent_loop_factory)
         except Exception as exc:  # noqa: BLE001 - the measurement is already recorded
@@ -887,7 +1203,13 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
 
 
 async def subagents_test_cancel(params: dict) -> dict:
-    """Cancel an in-flight test, killing the agent's process group."""
+    """Cancel an in-flight test. Only the asyncio task is cancelled here.
+
+    What that reaps belongs to the measurement it interrupts: a cli test unwinds
+    into the backend, which kills the agent's process group; an acp test unwinds
+    into the closes its handshake and its ping each hold, and each of those ends
+    the child it launched. Neither leaves a process behind.
+    """
     task = _RUNNING.get(params.get("name", ""))
     if task is None or task.done():
         return {"cancelled": False}

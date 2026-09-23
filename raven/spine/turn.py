@@ -16,6 +16,17 @@ class Origin(StrEnum):
     SUBAGENT = "subagent"
 
 
+class AnswerlessTurnError(Exception):
+    """A runner's own report that the turn it ran ended with no answer.
+
+    Raised where an ordinary exception would misreport the failure: the runner
+    has already put it into words a reader can act on (the model call it gave
+    up on, and why), so ``describe_failure`` passes the text through unchanged
+    instead of prefixing it with this class name, and the ``turn_ended`` marker
+    that says so is filed before the failure leaves the loop.
+    """
+
+
 class BusyPolicy(StrEnum):
     """What to do when the conversation's lane is already busy."""
 
@@ -55,6 +66,13 @@ class TurnRequest:
     # it to the client); left unset, the lane mints one, so every turn is
     # identified whether or not its submitter cared.
     turn_id: str | None = None
+    # When this request reached the server, ISO-8601. Set by a submitter whose
+    # request does not run at once: an inject waits in the lane's mailbox until
+    # the running turn's next gap, so the drain's own clock would file a
+    # correction typed a minute in under the time that gap happened to come.
+    # Unset everywhere else -- a turn that runs when it is submitted is stamped
+    # as it starts (``turn_path``'s ``turn_received_at``).
+    received_at: str | None = None
     conversation: str | None = None
     busy: BusyPolicy = BusyPolicy.APPEND
     sentinel: SentinelExtras | None = None

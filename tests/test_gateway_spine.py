@@ -17,6 +17,7 @@ from raven.agent.tools.ask_user import AskUserTool
 from raven.config.raven import SubagentQuestionsConfig
 from raven.gateway.spine import _DELIVERY_GRACE, build_gateway
 from raven.spine import (
+    AnswerlessTurnError,
     ChatType,
     MediaOut,
     Origin,
@@ -273,6 +274,109 @@ async def test_gateway_sink_sends_error_reply_on_failure():
     assert len(ch.sent) == 1 and ch.sent[0][1] == "Sorry, I encountered an error."
     assert ch.sent[0][0] == "c9"  # chat_id (channel routing is by source.channel)
     assert agent.notify_count >= 1
+
+
+async def _reply_to_a_failed_turn(exc: BaseException) -> list[str]:
+    """What a channel reader is sent when ``run_turn`` ends with ``exc``."""
+
+    class _GaveUpAgent(_ReplyAgent):
+        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None):
+            raise exc
+
+    ch = _FakeChannel("telegram")
+    scheduler, hub, _readback, _sources, teardown = build_gateway(_GaveUpAgent(), {"telegram": ch})
+    try:
+        try:
+            await scheduler.submit(_req(channel="telegram", chat_id="c9")).result()
+        except Exception:
+            pass
+        await hub.wait_idle("telegram")
+    finally:
+        await teardown()
+    return [sent[1] for sent in ch.sent]
+
+
+async def test_gateway_sink_tells_the_channel_the_category_not_the_vendors_body():
+    """A model call's failure reaches a chat as its category and endpoint. The
+    vendor's own account is the operator's diagnostic: an auth body carries a
+    masked key and the account URL it was rejected for, and a group chat is not
+    where either belongs."""
+    vendor_body = (
+        "AuthenticationError: OpenrouterException - No auth credentials found for key sk-or-v1-a1b2...ef90; "
+        "see https://openrouter.ai/settings/keys"
+    )
+    sent = await _reply_to_a_failed_turn(AnswerlessTurnError(f"Error calling LLM (auth@openrouter): {vendor_body}"))
+
+    assert sent == [
+        "The provider rejected the credentials (openrouter). The runtime log has the provider's own account."
+    ]
+    assert "sk-or-v1" not in sent[0]
+    assert "openrouter.ai/settings" not in sent[0]
+
+
+async def test_gateway_sink_quotes_a_failure_the_runner_worded_itself():
+    """Not every answerless turn is a model call's. A report the runner wrote
+    for a reader is quoted as it stands -- bounded, because nothing upstream
+    promises it is short -- rather than flattened to the canned sentence."""
+    sent = await _reply_to_a_failed_turn(AnswerlessTurnError("The model returned no content on 4 attempts."))
+    assert sent == ["The model returned no content on 4 attempts."]
+
+    long_sent = await _reply_to_a_failed_turn(AnswerlessTurnError("y" * 5000))
+    from raven.providers.base import LLM_ERROR_DETAIL_MAX
+
+    assert len(long_sent[0]) == LLM_ERROR_DETAIL_MAX and long_sent[0].endswith("...")
+
+
+async def test_gateway_sink_keeps_the_canned_reply_for_a_crash():
+    """A crash's message names hosts, paths and whatever an SDK put in it, and
+    nobody wrote it for a chat reader; it stays the one sentence channels have
+    always got."""
+    sent = await _reply_to_a_failed_turn(RuntimeError("connect /Users/ops/.raven/run/agent.sock: no such file"))
+    assert sent == ["Sorry, I encountered an error."]
+    assert "/Users/ops" not in sent[0]
+
+
+def test_a_failed_turn_reply_reads_by_what_the_failure_was():
+    """A canonical model-call failure is told as its category; a runner's own
+    report is quoted, bounded; a crash, or a report with no words in it, gets
+    the one sentence channels have always got."""
+    from raven.gateway.spine import _TURN_FAILED_REPLY, _failed_turn_reply
+
+    told = _failed_turn_reply(
+        "Error calling LLM (auth@openrouter): Incorrect API key sk-proj-AbCd****xyz9", reported=True
+    )
+    assert "sk-proj" not in told and "openrouter" in told
+    assert _failed_turn_reply("The model returned no content on 4 attempts.", reported=True) == (
+        "The model returned no content on 4 attempts."
+    )
+    assert len(_failed_turn_reply("x" * 5000, reported=True)) <= 205
+    assert _failed_turn_reply("ValueError: boom", reported=False) == _TURN_FAILED_REPLY
+    assert _failed_turn_reply("", reported=True) == _TURN_FAILED_REPLY
+    assert _failed_turn_reply("   ", reported=True) == _TURN_FAILED_REPLY
+
+
+async def test_a_failed_turn_clears_the_readback_its_last_run_left():
+    """A read-back conversation stores its reply on success only. Without a
+    clear on the way out, the next turn on that conversation failing would let
+    its submitter pop the previous run's text and record it as this run's."""
+    ch = _FakeChannel("telegram")
+    agent = _ReplyAgent([Text(content="done at 17:05")])
+    scheduler, hub, readback_texts, _sources, teardown = build_gateway(agent, {"telegram": ch})
+    try:
+        await scheduler.submit(_req(channel="telegram", conversation="cron:42")).result()
+        assert readback_texts["cron:42"] == "done at 17:05"
+
+        async def _fail(req, emit, drain, *, stream, usage_sink=None, text_sink=None):
+            raise AnswerlessTurnError("Error calling LLM (server@openrouter): 503")
+
+        agent.run_turn = _fail
+        try:
+            await scheduler.submit(_req(channel="telegram", conversation="cron:42")).result()
+        except Exception:
+            pass
+        assert "cron:42" not in readback_texts
+    finally:
+        await teardown()
 
 
 async def test_gateway_sink_tells_the_channel_when_a_reload_cut_the_turn():

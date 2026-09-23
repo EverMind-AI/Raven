@@ -1,0 +1,5 @@
+div#noJs
+  p
+    b
+  p
+    b

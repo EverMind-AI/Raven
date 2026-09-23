@@ -78,13 +78,14 @@ class DagNodeSpec(BaseModel):
             first; one an earlier run of this session completed already
             has, so naming it only records the dependency.
         skills (`list[str] | None`):
-            Skills to narrow this node's session to. ``None`` means the agent's
-            own menu, an empty list means no skills at all. Three-valued because
-            "this step gets no skills" is a real instruction and folding it into
-            ``None`` advertises its opposite. Only an agent whose row is
-            ``injectable.skills`` can take these; elsewhere the graph is accepted
-            with a downgrade notice rather than rejected, capability gaps being
-            reported and safety gates being refused.
+            Skills for this node's session, by name on this machine's catalog.
+            ``None`` means the agent's own menu, an empty list means no skills
+            at all. Three-valued because "this step gets no skills" is a real
+            instruction and folding it into ``None`` advertises its opposite.
+            An agent whose row is ``injectable.skills`` has its menu narrowed to
+            these; every other agent has them quoted into its prompt before
+            dispatch (``dag_skills``), so the list reaches whichever kind runs
+            the step. A name the catalog lacks is a notice, not a rejection.
         mcps (`list[str] | None`):
             MCP servers to attach to this node's session, on the same three-valued
             terms: omitted leaves the agent row's own default, a list replaces it,

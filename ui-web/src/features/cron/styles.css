@@ -1,0 +1,135 @@
+/* Schedules: the rules this section owns, under its own `cron` prefix.
+   The frame, the mono caption, the fold and the grey footnote are page
+   vocabulary in src/styles/page.css -- every section of the settings panel
+   reads with the same ones. */
+
+/* The frequency row: a run of dropdowns that wraps rather than one of them
+   shrinking, because a half-width "every Wednesday" is not readable. */
+.cronwhen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The job's name and its instruction. Both are sentences a person writes, so
+   both are set in the reading face rather than the mono one the boxes around
+   the page take -- and the instruction is the one box on this page that grows
+   with what is in it. */
+.cronname {
+  width: 300px;
+  max-width: 100%;
+  font-family: var(--sans);
+  font-size: 14px;
+}
+.cronsay {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.7;
+  padding: 10px 12px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--ctl-r);
+  color: var(--text);
+  outline: 0;
+  height: auto;
+}
+.cronsay:focus {
+  border-color: var(--amber);
+  box-shadow: var(--ctl-focus);
+}
+
+/* What it has done: one line per run, a dot for the verdict, the stamp and the
+   duration in the mono face so a column of them lines up. */
+.cronruns {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cronrun {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  font-size: 13px;
+  text-align: left;
+  width: 100%;
+  min-width: 0;
+  cursor: pointer;
+  color: var(--text);
+}
+.cronrun:hover { background: var(--surface); }
+.cronrun > i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--moss);
+  flex: none;
+}
+.cronrun.cronbad > i { background: var(--clay); }
+.cronrun .cronat {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.cronrun .cronnote {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.cronrun.cronbad .cronnote { color: var(--clay); }
+
+/* The expression read back in words as the reader types it, which is the only
+   way five cron fields are checkable without running them. */
+.cronecho {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+/* A refused field says so under itself; nothing else ever stands there. */
+.cronerr {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--clay);
+}
+/* Both shapes the mark takes: on the frequency row, where the complaint is
+   about the row as a whole, and on the control itself for a per-field one. */
+.cronwhen[data-bad] input,
+.cronwhen[data-bad] select,
+input.cronname[data-bad],
+textarea.cronsay[data-bad] { border-color: var(--amber); }
+
+/* The history's own wait: the rows it becomes, with a bar where each line of
+   text will be (CronPage.tsx's RunsWait). A translucent wash rather than
+   --raised, which is what a hovered run paints -- a bar in it would vanish
+   under the pointer and reappear as the shimmer swept past. */
+.cronwait { display: flex; flex-direction: column; gap: 1px; }
+.cronwait .cronrun { cursor: default; }
+.cronwait .cronrun:hover { background: none; }
+.cronwait .cronrun > i { background: var(--line); }
+.cronwbar {
+  display: block;
+  height: 11px;
+  border-radius: 5px;
+  flex: none;
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--text) 7%, transparent) 30%,
+    color-mix(in oklab, var(--text) 15%, transparent) 50%,
+    color-mix(in oklab, var(--text) 7%, transparent) 70%);
+  background-size: 300% 100%;
+  animation: cron-wshine 1.3s linear infinite;
+}
+@keyframes cron-wshine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .cronwbar { animation: none; } }

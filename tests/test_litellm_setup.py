@@ -6,9 +6,21 @@ import os
 import sys
 import threading
 
+import pytest
+
+from raven.providers import litellm_setup
 from raven.providers.litellm_setup import import_litellm
 
 _LITELLM_LOGGERS = ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy")
+
+
+@pytest.fixture(autouse=True)
+def _first_import_again(monkeypatch):
+    """Every case here is about what the first import in a process does, and
+    litellm is long imported by the time the suite reaches this file. Forgetting
+    the finished pass makes the body run for the case, as it did before the
+    pass was remembered."""
+    monkeypatch.setattr(litellm_setup, "_READY", None)
 
 
 def _tty_handlers(name: str) -> list[logging.Handler]:
@@ -39,6 +51,20 @@ def test_import_litellm_is_idempotent() -> None:
     second = import_litellm()
 
     assert first is second
+
+
+def test_a_call_after_a_finished_import_runs_none_of_the_setup(monkeypatch) -> None:
+    """The window resolver reaches here once per model, so the pass is paid once
+    per process, not once per call: re-running it per model put a third of a
+    1095-model catalogue's time into this function."""
+    import_litellm()
+    entered: list[str] = []
+    monkeypatch.setattr(litellm_setup, "_point_oauth_tokens_at_raven", lambda: entered.append("setup"))
+
+    for _ in range(3):
+        import_litellm()
+
+    assert entered == []
 
 
 def test_import_litellm_points_copilot_tokens_at_raven(

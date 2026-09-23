@@ -64,6 +64,7 @@ __all__ = [
     "merge_product_seeds",
     "product_folder",
     "product_image_key",
+    "product_llm_key",
     "product_secret",
     "product_state",
     "Readiness",
@@ -81,6 +82,11 @@ the list for the acp manifests: an acp entry with no ``cwd`` falls back to
 the calling task's workspace, which is part of the pool's launch key -- so
 every new workspace would relaunch the server and kill the sessions the old
 one was serving."""
+
+_VERSION_STAMP = ".raven-version"
+"""The file :func:`_install_packaged_tree` leaves beside the folders it copied
+out. Its presence is what makes a home tree count as installed even after every
+product folder in it has been removed -- see :func:`_holds_products`."""
 
 _ENGINE_FIELD = "engine"
 """The manifest key declaring the product's engine wheel, as
@@ -106,6 +112,13 @@ def agents_root() -> Path | None:
     - **inside the package** -- a wheel carries the tree at ``raven/agents``,
       the same way ``bridge`` is packaged.
 
+    The home copy counts only once raven or a person has put something in it:
+    the version stamp the copy-out leaves, or a product manifest. A bare,
+    unstamped directory -- an aborted scaffold, a stray ``mkdir`` -- is not a
+    tree, and taking it for one shadows the checkout beside the package with a
+    place that discovers nothing: every product silently gone from the roster,
+    with no error anywhere to say why.
+
     An install with none of the three has nothing to discover, and that is the
     whole gate: no flag, no setting, and a table byte-identical to what it was
     before discovery existed.
@@ -117,10 +130,40 @@ def agents_root() -> Path | None:
     installed, packaged = raven_home() / "agents", package / "agents"
     if packaged.is_dir():
         _install_packaged_tree(packaged, installed)
-    for candidate in (installed, package.parent / "agents", packaged):
+    if installed.is_dir() and _holds_products(installed):
+        return installed
+    for candidate in (package.parent / "agents", packaged):
         if candidate.is_dir():
             return candidate
     return None
+
+
+def _holds_products(tree: Path) -> bool:
+    """Whether ``tree`` is a populated installed tree rather than a bare directory.
+
+    The stamp is checked as well as the manifests so that a user who removed
+    every product under one raven version keeps that decision: the stamp is
+    what :func:`_install_packaged_tree` keys its "stays deleted" rule on, and a
+    fall-through here would bring the products back through the checkout.
+
+    The manifests are the ones the scanner will read, through the same
+    enumerator, so a tree this calls populated is one discovery finds products
+    in -- a hidden staging directory counts for neither.
+    """
+    return (tree / _VERSION_STAMP).is_file() or bool(_product_manifests(tree))
+
+
+def _product_manifests(root: Path) -> list[Path]:
+    """Every ``<folder>/subagent.json`` under ``root`` that names a product, sorted.
+
+    pathlib's glob matches dot-directories, and a hidden folder here is never
+    a legitimate agent (every real folder name starts with a letter) -- it is
+    crash residue, most likely a scaffold staging directory
+    (``.<name>.partial-*``) a SIGKILL orphaned mid-write. Advertising one puts
+    an invisible-to-ls row on the roster, and counting one as a product makes
+    :func:`agents_root` choose a tree the scanner then finds empty.
+    """
+    return [manifest for manifest in sorted(root.glob("*/subagent.json")) if not manifest.parent.name.startswith(".")]
 
 
 def _install_packaged_tree(packaged: Path, installed: Path) -> None:
@@ -149,7 +192,7 @@ def _install_packaged_tree(packaged: Path, installed: Path) -> None:
 
     from raven import __version__
 
-    stamp = installed / ".raven-version"
+    stamp = installed / _VERSION_STAMP
     try:
         if stamp.is_file() and stamp.read_text(encoding="utf-8").strip() == __version__:
             return
@@ -219,6 +262,32 @@ def _folder_setting(folder: Path, suffix: str) -> str:
     from raven.config.product_render import env_value
 
     return (env_value(f"{env_prefix(folder.name)}_{suffix}", env_file=folder / ".env") or "").strip()
+
+
+def product_llm_key(row_name: str, root: Path | None = None) -> str:
+    """The chat credential one product's folder supplies on its own, or ``""``.
+
+    ``<PREFIX>_API_KEY``, read the way the launcher reads it -- the process
+    environment first, then the folder's ``.env`` -- because this answers a
+    question about what the launcher will do: each product branches on exactly
+    this value, taking its own provider and model when it is set and inheriting
+    the host's whole LLM block when it is not (``raven.config.product_render``'s
+    ``inherit_llm``). ``api_key_var`` is the mirror of the ``REQUIRED_SECRETS``
+    name they read it under.
+
+    ``""`` means the product follows the host, which is the common case and the
+    one every shipped folder ships in.
+
+    This reads a convention rather than the branch itself, so the two are held
+    equal by a contract test over the shipped tree
+    (``tests/test_subagent_vendored_agents.py``): a folder offering
+    ``<PREFIX>_API_KEY`` in its ``.env.example`` must be one whose launcher
+    branches on it, and a launcher that branches must offer it. A product that
+    starts taking its own key, or stops, therefore fails that test in its own
+    folder rather than quietly disagreeing with this.
+    """
+    folder = product_folder(row_name, root)
+    return "" if folder is None else _folder_setting(folder, "API_KEY")
 
 
 def product_image_key(row_name: str, root: Path | None = None) -> str:
@@ -537,15 +606,8 @@ def _scan_folders(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
         return
 
     python = _resolved_python()
-    for manifest in sorted(root.glob("*/subagent.json")):
+    for manifest in _product_manifests(root):
         folder = manifest.parent
-        # pathlib's glob matches dot-directories, and a hidden folder here is
-        # never a legitimate agent (every real folder name starts with a
-        # letter) -- it is crash residue, most likely a scaffold staging
-        # directory a SIGKILL orphaned mid-write. Advertising one puts an
-        # invisible-to-ls row on the roster.
-        if folder.name.startswith("."):
-            continue
         try:
             entry = json.loads(manifest.read_text(encoding="utf-8"))
             if not isinstance(entry, dict):

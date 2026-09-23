@@ -36,7 +36,14 @@ import type { Msg, TurnArtifacts } from '../types.js'
 import type { DirectTargetRef } from './directChatStore.js'
 
 import { TOOL_PREVIEW_TRUNCATED_SUFFIX } from '../domain/episodeFold.js'
-import { deliveredMessageKey, noticeLine } from '../domain/messages.js'
+import {
+  deliveredMessageKey,
+  failedTurnLine,
+  haltedLine,
+  keptOutput,
+  noticeLine,
+  turnErrorLine
+} from '../domain/messages.js'
 import { addUnique, artifactMessage, changedFile, deliveryFiles } from '../domain/turnArtifacts.js'
 import { t } from '../i18n/index.js'
 import { argPreview, dagPromptTemplates } from '../lib/toolArgs.js'
@@ -48,6 +55,7 @@ import {
   directKey,
   disarmEscape,
   getDirectChat,
+  getDirectTranscript,
   MAIN_VIEW_KEY,
   markRunning,
   viewKeyOf
@@ -101,7 +109,7 @@ export interface ChatStreamOptions {
 /** Default server-ack watchdog window — see {@link ChatStreamOptions.watchdogMs}. */
 export const DEFAULT_WATCHDOG_MS = 10_000
 
-/** How long an interrupt's `interrupted` hint stands before the prompt settles back to `ready`. */
+/** How long a stop hint stands on the status bar before the prompt settles back to `ready`. */
 const STATUS_COOLDOWN_MS = 800
 
 export interface ChatStreamHandle {
@@ -141,8 +149,9 @@ interface InternalState {
  *
  * Read off the event, never off `$directChat.active`: Esc returns to the main
  * agent while a direct turn is still streaming, so "what is on screen" and
- * "what this text belongs to" routinely disagree. Only four variants can carry
- * a tag -- a direct turn emits one reply and no tool or reasoning output.
+ * "what this text belongs to" routinely disagree. Only five variants can carry
+ * a tag -- a direct turn emits one reply, the runtime's own notices about it,
+ * and no tool or reasoning output.
  */
 const targetOf = (event: TurnEvent): null | { agent: string; handle: string } => {
   switch (event.type) {
@@ -150,9 +159,54 @@ const targetOf = (event: TurnEvent): null | { agent: string; handle: string } =>
     case 'token.delta':
     case 'message.complete':
     case 'error':
+    case 'notice':
       return event.payload.target ?? null
     default:
       return null
+  }
+}
+
+/**
+ * What the status line said before a transient notice borrowed it, or null when
+ * none has. Module state rather than per-turn: the line itself is global, and
+ * what it should go back to is whatever the lane that owns it last wrote -- the
+ * instance label for a direct turn, `running…` for the main agent.
+ */
+let statusBeforeNotice: null | string = null
+
+/** The status line a runtime notice claims while the turn it reports on runs on. */
+const showTransientNotice = (kind: string): void => {
+  if (statusBeforeNotice === null) {
+    statusBeforeNotice = getUiState().status
+  }
+  patchUiState({ status: t(`gui.notice.${kind}`, kind).slice(0, 80) })
+}
+
+/**
+ * Give the status line back on the first frame of real output, and forget what
+ * it said once a turn starts or ends.
+ *
+ * Nothing else resets the line before the turn ends, so a call that failed once
+ * and then answered would run to completion still saying it was trying again --
+ * and a turn that died during the wait would hand its stale line to the next
+ * turn's first retry.
+ */
+const settleTransientNotice = (type: TurnEvent['type']): void => {
+  if (statusBeforeNotice === null) {
+    return
+  }
+  if (type === 'token.delta' || type === 'thinking.delta' || type === 'tool.start') {
+    patchUiState({ status: statusBeforeNotice })
+    statusBeforeNotice = null
+
+    return
+  }
+  // A turn boundary: whoever writes the line next owns it, so there is nothing
+  // to give back. Every other frame is left alone -- `episode.start` opens the
+  // retried call, and forgetting the line there would leave the wait on screen
+  // for the rest of the turn.
+  if (type === 'message.start' || type === 'message.complete' || type === 'error') {
+    statusBeforeNotice = null
   }
 }
 
@@ -185,6 +239,16 @@ const dispatchDirect = (
     case 'token.delta':
       appendDirectDelta(key, 'assistant', event.payload.text)
       return
+    case 'notice':
+      // The instance's own transcript, never the main one: the whole point of a
+      // direct chat is that its exchanges stay out of the main agent's view, and
+      // a notice reports on the turn it arrived with.
+      if (event.payload.transient) {
+        showTransientNotice(event.payload.kind)
+        return
+      }
+      appendDirectMessage(key, { role: 'system', text: noticeLine(event.payload) })
+      return
     case 'message.complete':
       // No recordMessageComplete: that commits turnController's buffer into the
       // main transcript, and this turn never filled it.
@@ -210,14 +274,20 @@ const dispatchDirect = (
     case 'error': {
       state.turns.delete(viewKeyOf(target))
       clearRunning(target)
-      const { code, message, reason } = event.payload
+      // The same reading the main lane's `onError` gets, so one frame cannot
+      // be worded two ways depending on which view it belongs to.
       appendDirectMessage(key, {
         role: 'system',
-        text: reason === 'cancelled_by_client' ? 'interrupted' : `error: ${message} (code=${code})`
+        text: turnErrorLine(event.payload, keptOutput(getDirectTranscript(key)))
       })
       disarmEscape(target)
       patchUiState({ status: 'ready' })
-      sys?.(`${target.agent}/${target.handle}: ${message}`)
+      // Kept, and now in the same words: the main view is where the user is
+      // looking when a direct turn they left dies, and the settled read that
+      // follows a turn's end replaces the instance's own rows, not this one.
+      // The main transcript never holds the instance's output, so the echo of
+      // a stop makes no promise about what is kept above it.
+      sys?.(`${target.agent}/${target.handle}: ${turnErrorLine(event.payload)}`)
       // As `message.complete` does: this end of a turn moves the instance's
       // registry row too -- the manager writes `cancelled` or `failed` where a
       // clean turn writes `completed`. Without the re-read the strip keeps the
@@ -261,6 +331,12 @@ const dispatch = (
   sys?: (msg: string) => void,
   appendMessage?: (msg: Msg) => void
 ): void => {
+  // Before the lane split, because a retry notice and the output that answers it
+  // can belong to either lane and there is only one status line between them.
+  if (event.type !== 'notice') {
+    settleTransientNotice(event.type)
+  }
+
   const target = targetOf(event)
 
   if (target !== null) {
@@ -330,6 +406,14 @@ const dispatch = (
       return
     }
     case 'notice': {
+      // A transient one reports on a turn still running -- the runtime waiting
+      // out a failed model call -- so it belongs on the status line, which the
+      // next frame of real output takes back. Committed as a row it would read
+      // as the turn's outcome.
+      if (event.payload.transient) {
+        showTransientNotice(event.payload.kind)
+        return
+      }
       // Runtime prose, not the model's: never merged into the streamed answer.
       // Handed to the turn rather than appended here, because it arrives mid-turn
       // and this turn's steps reach the transcript only at `message.complete` --
@@ -431,6 +515,13 @@ const dispatch = (
       // "every variant was considered", not "every variant the union happened
       // to list when this was written".
       return
+    case 'message.injected':
+      // A message another window sent into the turn that is running. This
+      // surface queues its own follow-ups rather than injecting them, and it
+      // draws no user row for a message it did not send: putting one on screen
+      // here is a product call for the terminal, not a consequence of the wire
+      // event. Named for the same reason `turn.started` is.
+      return
     default: {
       // Exhaustiveness — if a new TurnEvent variant lands the type-checker
       // will complain here, forcing this file to be updated.
@@ -526,7 +617,7 @@ const onError = (
   sys?: (msg: string) => void,
   appendMessage?: (msg: Msg) => void
 ): void => {
-  const { reason, message, code, detail } = ev.payload
+  const { reason, message } = ev.payload
   state.turns.delete(MAIN_VIEW_KEY)
   clearRunning(null)
   if (reason === 'cancelled_by_client') {
@@ -538,15 +629,15 @@ const onError = (
   appendArtifacts(state, appendMessage)
   state.artifacts = { changes: [], deliveries: [] }
   // Non-cancellation error: surface a sys note, idle the turn, and reset
-  // the live anchor so the user can submit again. Append the real failure
-  // detail (e.g. the underlying exception) when present, so a generic
-  // `turn_failed` code is not the only thing the user sees.
+  // the live anchor so the user can submit again. A turn that died reads by
+  // the line a resumed transcript gives it, with the real failure detail (e.g.
+  // the underlying exception); any other code keeps its own name and detail.
+  const died = message === 'turn_failed'
   if (sys) {
-    const extra = detail ? `: ${detail.split('\n')[0].slice(0, 200)}` : ''
-    sys(`error: ${message} (code=${code})${extra}`)
+    sys(turnErrorLine(ev.payload))
   }
   turnController.recordError({ appendMessage })
-  patchUiState({ status: `error: ${message.slice(0, 80)}` })
+  patchUiState({ status: (died ? failedTurnLine('') : `error: ${message}`).slice(0, 80) })
   patchTurnState({ activity: [], outcome: '' })
 }
 
@@ -568,12 +659,12 @@ const restoreInputPrompt = (appendMessage?: (msg: Msg) => void, sys?: (msg: stri
   // Mirror the visible end-state of turnController.interruptTurn without
   // routing through the legacy `session.interrupt` RPC: preserve the streamed
   // content into the transcript (shared finalize), drop streaming state,
-  // release `busy`, and settle status. The 'interrupted' status hint is
-  // consistent with the legacy interrupt path so users see the same
+  // release `busy`, and settle status. The stop wording is the catalogue's, and
+  // the same one the legacy interrupt path patches, so users see the same
   // affordance regardless of which chat path is live.
   turnController.finalizeInterruptedTurn({ appendMessage, sys })
   turnController.clearStatusTimer()
-  patchUiState({ status: 'interrupted' })
+  patchUiState({ status: haltedLine(false) })
   // Reset to 'ready' after the brief cooldown window so the prompt looks
   // settled if the user is just watching -- but only if the session is still
   // idle when it fires.
@@ -634,7 +725,9 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
       // The instance's own transcript, where dispatchDirect writes a cancelled
       // turn's marker. Not restoreInputPrompt: that commits turnController's
       // buffer into the main transcript, and a direct turn never filled it.
-      appendDirectMessage(directKey(active.agent, active.handle), { role: 'system', text: 'interrupted' })
+      const key = directKey(active.agent, active.handle)
+
+      appendDirectMessage(key, { role: 'system', text: haltedLine(keptOutput(getDirectTranscript(key))) })
       disarmEscape(active)
       patchUiState({ status: 'ready' })
 

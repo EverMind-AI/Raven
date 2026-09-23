@@ -134,7 +134,7 @@ def install_from_config(
 
     if cfg is None or not _setting(cfg, "enabled", True, bool):
         prompt_cache.set_ttl(None)
-        return StrategyRegistry([])
+        return _installed(StrategyRegistry([]))
 
     ttl = _setting(cfg, "cache_ttl", "5m", str, allowed=("5m", "1h"))
     prompt_cache.set_ttl(None if ttl == "5m" else ttl)
@@ -168,4 +168,21 @@ def install_from_config(
     if _setting(cfg, "usage_tracking", True, bool):
         strategies.append(UsageTracker(telemetry_dir=telemetry_dir))
 
-    return StrategyRegistry(strategies)
+    return _installed(StrategyRegistry(strategies))
+
+
+def _installed(registry: StrategyRegistry) -> StrategyRegistry:
+    """Make ``registry`` the default sink for callers that are not a generation.
+
+    The loop binds its own registry per turn; every other caller of a provider
+    -- the heartbeat, the sentinel, the curator, a sub-agent's loop -- is heard
+    at the provider seam (``raven.providers.usage_record``), and this is where
+    that seam learns which registry to report to when no turn is running. The
+    whole registry rather than its tracker, so a tracker registered on it later
+    (the one-shot CLI's turn summary) hears those calls too. Last call wins,
+    like the TTL.
+    """
+    from raven.providers import usage_record
+
+    usage_record.install(registry.after_llm_call)
+    return registry

@@ -77,6 +77,7 @@ async def import_user_md_sections(
     provider: "LLMProvider | None" = None,
     model: str = "",
     on_progress: Callable[[int, int], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> ImportedSections:
     """Land each entry as its own H2 section, or append it into that section's
     body if the heading already exists. ``written`` holds one heading per
@@ -113,11 +114,15 @@ async def import_user_md_sections(
     # after the loop is what still reaches N/N.
     headings: list[str] = []
     for index, (entry, _) in enumerate(kept):
+        # A stop asked for between two entries: what is classified lands below,
+        # the rest waits for the next run, which finds it absent and picks it up.
+        if cancelled is not None and cancelled():
+            break
         if on_progress is not None:
             on_progress(index, len(kept))
         headings.append(await _pick_heading(entry, provider=provider, model=model))
     if on_progress is not None and kept:
-        on_progress(len(kept), len(kept))
+        on_progress(len(headings), len(kept))
 
     written: list[str] = []
     skipped = 0

@@ -22,8 +22,6 @@ Not covered, and each for a reason rather than for convenience:
 
 * ``system.upgrade`` -- its only reachable branch outside a live ``raven serve``
   is the refusal, so there is no result to check. Its params are empty.
-* ``memory.delete`` -- the delete goes through EverOS's own repository layer,
-  imported inside the call. Faking that is faking the thing under test.
 * the ``plug.* / plughub.* / skillhub.*`` group and the rest of ``subagents.*``
   -- validated against ``METHOD_MODELS`` in their own modules, where the
   fixtures that drive those handlers already live. This file used to claim that
@@ -188,16 +186,19 @@ async def test_settings_everos(workspace: Path, tmp_path: Path, monkeypatch: pyt
     # one raven created, so declare it owned for the test.
     monkeypatch.setattr(ue, "everos_owned", lambda: True)
     _check("settings.everos", await console.settings_everos({}))
-    _check(
-        "settings.everosSet",
-        await console.settings_everos_set({"section": "llm", "fields": {"model": "gpt-4o"}}),
-    )
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("openrouter", {"api_key": "sk-x"})
+    pin = {"section": "llm", "model": "gpt-4o", "provider": "openrouter"}
+    _check("settings.everosSet", await console.settings_everos_set(dict(pin)))
     _check("settings.everosSet", await console.settings_everos_set({"section": "rerank", "clear": True}))
-    _check("settings.everos_set", await console.settings_everos_set({"section": "llm", "fields": {"model": "gpt-4o"}}))
-    # The set has to survive the round trip: a section written and read back is
-    # what the page shows, and it is the branch where `api_key_set` is true.
-    await console.settings_everos_set({"section": "llm", "fields": {"api_key": "sk-x"}})
+    _check("settings.everos_set", await console.settings_everos_set(dict(pin)))
+    # The pin has to survive the round trip: what the page shows is read back
+    # through the same describe. `api_key_set` is the named provider's key now,
+    # never one stored on the role -- no credential reaches this method at all.
     out = _check("settings.everos", await console.settings_everos({}))
+    assert out.sections["llm"].model == "gpt-4o"
+    assert out.sections["llm"].provider == "openrouter"
     assert out.sections["llm"].api_key_set is True
 
 
@@ -420,6 +421,38 @@ async def test_session_compress_after_compacting(workspace: Path) -> None:
     assert out.info is not None and out.messages is not None and out.usage is not None
 
 
+async def test_session_usage(workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import date
+
+    from raven.rpc.methods import session as session_mod
+
+    # The telemetry dir hangs off HOME, not off the config path, so the fixture
+    # alone leaves this scanning the developer's real usage files.
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    # Nothing recorded: the unpriced shape, which a `cost_usd: float` that
+    # forgot its None would fail on.
+    unpriced = _check("session.usage", await session_mod.session_usage({"session_id": "tui:none"}))
+    assert unpriced.calls == 0 and unpriced.cost_usd is None
+
+    telemetry = home / ".raven" / "telemetry"
+    telemetry.mkdir(parents=True)
+    row = {
+        "schema_version": 2,
+        "session_key": "tui:20260922_101500_aabbcc",
+        "root_session_key": "tui:20260922_101500_aabbcc",
+        "input_tokens": 5,
+        "output_tokens": 2,
+        "cache_read_tokens": 1,
+        "cache_write_tokens": 1,
+        "cost_usd": 0.25,
+    }
+    (telemetry / f"usage-{date.today().isoformat()}.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    paid = _check("session.usage", await session_mod.session_usage({"session_id": row["session_key"]}))
+    assert paid.calls == 1 and paid.total == 9 and paid.cost_usd == 0.25
+
+
 async def test_session_status(workspace: Path) -> None:
     from raven.rpc.methods.slash_routing import session_status
 
@@ -445,7 +478,7 @@ async def test_approval_respond() -> None:
 async def test_clarify_respond() -> None:
     from raven.rpc.methods.question import question_respond
 
-    broker = type("B", (), {"reply": lambda self, *a: False})()
+    broker = type("B", (), {"reply": lambda self, *a, **k: False})()
     _check("clarify.respond", await question_respond({"request_id": "r", "answer": "y"}, question_broker=broker))
 
 
@@ -485,7 +518,8 @@ STUBS = [
     "voice.record",
     "session.save",
     "session.steer",
-    "session.usage",
+    # session.usage was promoted to a real handler in methods/session.py; its
+    # result is checked by test_session_usage above.
     "skills.reload",
     "reload.env",
     "sudo.respond",

@@ -37,7 +37,7 @@ class MochatChannel(ChannelBase):
     """Mochat channel: Socket.IO primary, HTTP polling fallback."""
 
     name = "mochat"
-    display_name = "Mochat"
+    display_name = "MoChat"
 
     config: Any
 

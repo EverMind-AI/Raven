@@ -1,0 +1,1175 @@
+// @vitest-environment happy-dom
+import { act, cleanup, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import { setCurrent } from '../../lib/session'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { resetSources, setSources, sources } from '../../state/sources'
+import { installDeskHandoff } from '../../test/deskHandoff'
+import { installWsPane } from '../../test/wsPaneHarness'
+import * as agents from '../subagents/store'
+import * as tasksStore from '../tasks/store'
+import * as deliveries from '../workspace/deliveries'
+import * as workspace from '../workspace/store'
+import { DeskPalette } from './DeskPalette'
+import {
+  DESK_COLUMN_FLOOR, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_DRAG_THRESHOLD,
+  DESK_GEOMETRY_KEY, DESK_LAUNCHER_EDGE, DESK_TEXT_GAP,
+} from './geometry'
+import * as seen from './seen'
+import * as desk from './store'
+
+import type { InstanceRow } from '../subagents/types'
+import type { TaskFile, TaskRow } from '../tasks/types'
+import type { WorkspaceSource, WsChange } from '../workspace/types'
+
+/* The wiring src/main.tsx does: the desk's file opener is handed to the
+   workspace store there, and `openDelivery` reaches the desk through it. */
+installDeskHandoff()
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const opens: string[] = []
+const asked: string[] = []
+let agentRows: InstanceRow[] = []
+let taskRows: TaskRow[] = []
+
+const task = (id: string): TaskRow => ({
+  id, kind: 'spawn', task_summary: id, status: 'running', agent: 'raven', handle: id,
+  counts: {
+    total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0,
+    interrupted: 0, exception: 0,
+  },
+  nodes: [],
+})
+
+/* Which tab's bubble, by the tab's own label -- the strip is three buttons and
+   an index would silently follow a reordering. */
+const tabButton = (tab: 'diff' | 'deliverables' | 'tasks'): HTMLElement | undefined => {
+  const label = tab === 'diff' ? 'diff' : tab === 'deliverables' ? 'gui.ws.deliverables' : 'gui.ws.tasks'
+  return [...document.querySelectorAll<HTMLElement>('.desk-tabs button')]
+    .find((b) => (b.querySelector('.lb')?.textContent || '') === label)
+}
+
+const bubble = (tab: 'diff' | 'deliverables' | 'tasks'): string | null =>
+  tabButton(tab)?.querySelector('.desk-count')?.textContent ?? null
+
+/* What a screen reader is handed for that tab. */
+const spoken = (tab: 'diff' | 'deliverables' | 'tasks'): string | null =>
+  tabButton(tab)?.getAttribute('aria-label') ?? null
+
+const change = (key: string): WsChange => ({
+  key, dir: '', name: key.split('/').pop() || key, kind: 'edit', add: 1, del: 0, hunks: [], turn: 1, open: false,
+})
+
+function wire(): void {
+  opens.length = 0
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  installWsPane()
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  const source: WorkspaceSource = {
+    shortPath: (p) => p,
+    hostPlatform: () => 'mac',
+    canBrowse: true,
+    openPath: (p) => opens.push(p),
+  }
+  agentRows = []
+  taskRows = []
+  asked.length = 0
+  /* The agents store files its lists under the open conversation and drops an
+     answer for any other, so the harness has to be in one. */
+  setCurrent('s1')
+  setSources({
+    workspace: source,
+    /* Instances are still asked for -- the launcher's running glyph and the
+       panes a delegated run opens both read them -- they are just not what a
+       tab counts any more. */
+    subagents: {
+      list: async () => [],
+      instances: async (key: string) => { asked.push(key); return agentRows },
+    },
+    /* What the tasks tab counts. */
+    tasks: {
+      list: async () => taskRows, one: async () => null, stop: async () => false,
+      node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+      roster: async () => [],
+    },
+  })
+  localStorage.clear()
+  document.body.innerHTML = '<div id="split" data-open="true"></div>'
+  desk._resetForTests()
+  deliveries.restore([])
+}
+
+const manifest = (files: Array<Record<string, unknown>>): unknown => ({ raven_delivery: { files } })
+
+async function shelf() {
+  const view = render(<DeskPalette />)
+  await act(async () => {
+    desk.set({ paletteOpen: true, tab: 'deliverables' })
+  })
+  return view
+}
+
+const rowNames = (): string[] =>
+  [...document.querySelectorAll('.desk-dlv-row .desk-name b')].map((n) => n.textContent || '')
+
+beforeEach(wire)
+
+afterEach(() => {
+  cleanup()
+  act(() => {
+    desk._resetForTests()
+    deliveries.restore([])
+    workspace.restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
+  })
+  resetTranslator()
+  resetSources()
+  setCurrent(null)
+  agents.reset()
+  localStorage.clear()
+})
+
+/* The palette outlives the flag by one animation, so "on screen" and "open" are
+   not the same question in these tests. */
+const palette = (): HTMLElement | null => document.querySelector('.desk-palette')
+const phase = (): string | null => palette()?.getAttribute('data-phase') ?? null
+
+const emptyOf = (): { title: string; hint: string; icon: boolean } | null => {
+  const box = document.querySelector('.desk-empty')
+  if (!box) return null
+  return {
+    title: box.querySelector('b')?.textContent || '',
+    hint: box.querySelector('span')?.textContent || '',
+    icon: !!box.querySelector('svg'),
+  }
+}
+
+describe('opening and shutting the desk', () => {
+  it('leaves for one animation and then stops existing', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<DeskPalette />)
+      await act(async () => { desk.set({ paletteOpen: true }) })
+      expect(phase()).toBe('in')
+
+      await act(async () => { desk.set({ paletteOpen: false }) })
+      /* Still there, because a leaving element has to be on screen to leave --
+         and inert, because a tab clicked on the way out would act on a desk the
+         reader has already dismissed. */
+      expect(phase()).toBe('out')
+      expect(palette()?.hasAttribute('inert')).toBe(true)
+
+      await act(async () => { vi.advanceTimersByTime(200) })
+      expect(palette()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /* A double-click on the handle used to land on a palette that vanished a
+     moment later. */
+  it('cancels the exit when the reader opens it again mid-flight', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<DeskPalette />)
+      await act(async () => { desk.set({ paletteOpen: true }) })
+      await act(async () => { desk.set({ paletteOpen: false }) })
+      await act(async () => { desk.set({ paletteOpen: true }) })
+
+      await act(async () => { vi.advanceTimersByTime(200) })
+
+      expect(phase()).toBe('in')
+      expect(palette()?.hasAttribute('inert')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /* Nothing of the desk over a fullscreen pane: the pane IS the window. */
+  it('is not on screen while a pane is fullscreen', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<DeskPalette />)
+      await act(async () => {
+        /* The file first: opening a window stands the desk down, so the
+           palette this test is about has to be put back up after it. */
+        desk.openDeskFile('/w/a.md')
+        desk.set({ paletteOpen: true })
+      })
+      await act(async () => { desk.toggleSolo('file:/w/a.md') })
+      await act(async () => { vi.advanceTimersByTime(200) })
+      expect(palette()).toBeNull()
+
+      await act(async () => { desk.toggleSolo('file:/w/a.md') })
+      expect(phase()).toBe('in')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /* A bubble is cleared by the reader LOOKING at the tab, and behind a
+     fullscreen pane they are not looking at any of them. Read off the mark
+     itself: `unseen` answers zero for the tab that is selected whatever the
+     mark says, so the tab the palette is parked on is exactly where a mark
+     moving unseen would leave no trace. */
+  it('does not mark a tab seen behind a fullscreen pane', async () => {
+    render(<DeskPalette />)
+    await act(async () => {
+      desk.openDeskFile('/w/a.md')
+      desk.set({ paletteOpen: true, tab: 'deliverables' })
+    })
+    await act(async () => { desk.toggleSolo('file:/w/a.md') })
+
+    await act(async () => {
+      deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/b.md', name: 'b.md' }]))
+    })
+
+    expect([...seen.of_('deliverables')]).toEqual([])
+
+    /* And the moment the pane gives the screen back, it counts as seen. */
+    await act(async () => { desk.toggleSolo('file:/w/a.md') })
+    expect([...seen.of_('deliverables')]).toEqual(['/w/b.md'])
+  })
+})
+
+describe('what the panel says to assistive tech', () => {
+  it('announces itself as a dialog named for the workspace', async () => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+
+    expect(palette()?.getAttribute('role')).toBe('dialog')
+    expect(palette()?.getAttribute('aria-label')).toBe('gui.workspace')
+  })
+
+  it('hides the resize grab, which carries no name of its own', async () => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+
+    expect(document.querySelector('.desk-resize')?.getAttribute('aria-hidden')).toBe('true')
+  })
+})
+
+describe('a tab with nothing in it', () => {
+  /* One design for all three, which is what was asked for: an icon, what is
+     not here, and where it would come from. Diff was a line of grey text and
+     the shelf an illustrated block, and the two read as two different kinds of
+     nothing. */
+  it('says the same kind of nothing whichever tab it is', async () => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
+    expect(emptyOf()).toEqual({ title: 'gui.ws.no_changes', hint: '', icon: true })
+
+    await act(async () => { desk.set({ tab: 'deliverables' }) })
+    expect(emptyOf()).toEqual({ title: 'gui.ws.dlv_none', hint: '', icon: true })
+
+    await act(async () => { desk.set({ tab: 'tasks' }) })
+    /* Icon and one bold line on all three, the prototype's own rule for an
+       empty state: state the fact, don't sell the reader on where to go. */
+    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: '', icon: true })
+    /* And one class, so there is one stylesheet rule to keep them aligned. */
+    expect(document.querySelector('.desk-dlv-empty')).toBeNull()
+  })
+
+  /* A tasks source that is absent and one that answers empty are the same
+     state while there is no `tasks.*` method to install one, so the panel says
+     the one thing either way -- unlike the agents tab it replaces, which could
+     tell "this server does not report it" from "there is none yet". */
+  it('says the same nothing whether the source is empty or absent', async () => {
+    delete sources.tasks
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'tasks' }) })
+
+
+    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: '', icon: true })
+  })
+})
+
+describe('the desk shelf', () => {
+  it('says the session has delivered nothing rather than showing an empty list', async () => {
+    await shelf()
+    expect(screen.getByText('gui.ws.dlv_none')).toBeTruthy()
+    expect(document.querySelector('.desk-dlv-row')).toBeNull()
+    /* Nothing on the shelf is not worth a number on the tab. */
+    expect(document.querySelector('.desk-count')).toBeNull()
+  })
+
+  const at = (when: number, path: string, title: string): unknown => ({
+    raven_delivery: { delivered_at: when, files: [{ path, name: path.split('/').pop(), title }] },
+  })
+
+  it('lists the whole session newest turn first, under a group per turn', async () => {
+    workspace.restore({ changes: [], urls: [], file: null, turn: 2, unseen: 0, deliveries: [] })
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/old.md', name: 'old.md', title: 'Older brief' }]))
+    deliveries.record(deliveries.SESSION, 2, manifest([
+      { path: '/w/a.md', name: 'a.md', title: 'Comparison', size: 1824 },
+      { path: '/w/b.csv', name: 'b.csv', title: 'Pricing' },
+    ]))
+    await shelf()
+
+    expect(rowNames()).toEqual(['Comparison', 'Pricing', 'Older brief'])
+    expect([...document.querySelectorAll('.desk-grp')].map((n) => n.textContent))
+      .toEqual(['gui.ws.turn_now', 'gui.ws.turn_earlier'])
+    /* No bubble on the tab the reader is looking at: whatever is in it has
+       been seen by definition. */
+    expect(document.querySelector('.desk-tabs button[aria-selected="true"] .desk-count')).toBeNull()
+    /* This turn's row names the file and its size; an older one says which turn
+       it came from, because "this turn" is the only turn the reader is in. */
+    const meta = [...document.querySelectorAll('.desk-dlv-row .desk-name s')].map((n) => n.textContent)
+    expect(meta[0]).toBe('a.md · 1.8 KB')
+    expect(meta[2]).toBe('old.md · gui.ws.dlv_turn {"n":"1"}')
+  })
+
+  it('does not read a delegated stream\'s turn as one of this conversation\'s', async () => {
+    /* Each stream counts its turns from one. A sub-agent row filed under its own
+       turn 2 was labelled "turn 2" on a conversation that has had five, and one
+       filed under 5 was grouped as "this turn" for no better reason than the
+       number matching. The shelf is session-wide, and the reader's position in it
+       is the conversation's turn -- a delegated row has no place in that count,
+       so it says what the file is and leaves the position out, exactly as a row
+       recovered from the registry does. */
+    workspace.restore({ changes: [], urls: [], file: null, turn: 5, unseen: 0, deliveries: [] })
+    deliveries.record('agent:one', 5, manifest([{ path: '/w/sub.md', name: 'sub.md', title: 'From a sub-agent' }]))
+    deliveries.record('agent:one', 2, manifest([{ path: '/w/sub2.md', name: 'sub2.md', title: 'Also delegated' }]))
+    await shelf()
+
+    /* Both unstamped, so they rank by arrival -- the later-recorded one on top. */
+    const meta = [...document.querySelectorAll('.desk-dlv-row .desk-name s')].map((n) => n.textContent)
+    expect(meta).toEqual(['sub2.md', 'sub.md'])
+    expect([...document.querySelectorAll('.desk-grp')].map((n) => n.textContent))
+      .toEqual(['gui.ws.turn_earlier'])
+  })
+
+  it('gives each group one heading, however the streams interleave', async () => {
+    /* The rows are ranked by when each delivery happened, so two streams on one
+       shelf are not contiguous by group. Emitting a heading whenever the key
+       changed from the row before rendered "This turn" / "Earlier" / "This turn"
+       -- three headings for two groups, and the reader cannot tell which of the
+       two "This turn" blocks is the one they are in. */
+    workspace.restore({ changes: [], urls: [], file: null, turn: 2, unseen: 0, deliveries: [] })
+    deliveries.record(deliveries.SESSION, 2, at(1_000, '/w/first.md', 'First'))
+    deliveries.record('agent:one', 1, at(2_000, '/w/mid.md', 'Delegated'))
+    deliveries.record(deliveries.SESSION, 2, at(3_000, '/w/last.md', 'Last'))
+    await shelf()
+
+    expect([...document.querySelectorAll('.desk-grp')].map((n) => n.textContent))
+      .toEqual(['gui.ws.turn_now', 'gui.ws.turn_earlier'])
+    expect(rowNames()).toEqual(['Last', 'First', 'Delegated'])
+  })
+
+  it('opens the clicked row as a pane, carrying its download path', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([
+      { path: '/w/a.md', name: 'a.md', title: 'Comparison', download_path: '/files/download?token=t1' },
+    ]))
+    await shelf()
+    await act(async () => {
+      (document.querySelector('.desk-dlv-row') as HTMLElement).click()
+    })
+
+    const panes = desk.get().panes
+    expect(panes.map((pane) => pane.id)).toEqual(['file:/w/a.md'])
+  })
+
+  /* The demo shell's source cannot read a file, and a viewer with nothing to
+     show is worse than the note it answers with. */
+  it('hands the path to a source that cannot read files, opening no pane', async () => {
+    ;(sources.workspace as WorkspaceSource).canBrowse = false
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Comparison' }]))
+    await shelf()
+    await act(async () => {
+      (document.querySelector('.desk-dlv-row') as HTMLElement).click()
+    })
+
+    expect(opens).toEqual(['/w/a.md'])
+    expect(desk.get().panes).toEqual([])
+  })
+
+  it('marks a file that is gone, and still lets it be opened to say so', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/gone.md', name: 'gone.md', missing: true }]))
+    await shelf()
+
+    const row = document.querySelector('.desk-dlv-row') as HTMLButtonElement
+    expect(row.classList.contains('gone')).toBe(true)
+    expect(row.querySelector('.dlv-gone')?.textContent).toBe('gui.arts.missing')
+    expect(row.disabled).toBe(false)
+  })
+
+  it('keeps one row for a re-delivered file, at its newest turn', async () => {
+    workspace.restore({ changes: [], urls: [], file: null, turn: 3, unseen: 0, deliveries: [] })
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'First cut' }]))
+    deliveries.record(deliveries.SESSION, 3, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Second cut' }]))
+    await shelf()
+
+    expect(rowNames()).toEqual(['Second cut'])
+    expect([...document.querySelectorAll('.desk-grp')].map((n) => n.textContent))
+      .toEqual(['gui.ws.turn_now'])
+  })
+
+  /* The case the bubble exists for: the reader is somewhere else when the file
+     lands. Nothing else repaints the palette on a turn that delivered a file
+     and changed none. */
+  it('shows what is new while another tab is the one on screen', async () => {
+    render(<DeskPalette />)
+    await act(async () => {
+      desk.set({ paletteOpen: true, tab: 'diff' })
+    })
+    expect(document.querySelector('.desk-count')).toBeNull()
+
+    await act(async () => {
+      deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md' }]))
+    })
+
+    expect(bubble('deliverables')).toBe('1')
+    /* The tab's own label is its whole accessible name, the way the
+       prototype's plain button is -- no composed count phrase, and nothing
+       hidden from the tree to make room for one. */
+    expect(spoken('deliverables')).toBe('gui.ws.deliverables')
+    expect(document.querySelector('.desk-count')?.getAttribute('aria-hidden')).toBeNull()
+    expect(spoken('tasks')).toBe('gui.ws.tasks')
+    expect(document.querySelector('.desk-dlv-row')).toBeNull()
+  })
+
+  /* One rule for all three tabs, which is the point of it: the reader on any
+     one of them has the same question about the other two. */
+  it('counts what is new in the tabs the reader is not on, and drops it when they look', async () => {
+    render(<DeskPalette />)
+    await act(async () => {
+      desk.set({ paletteOpen: true, tab: 'diff' })
+    })
+
+    await act(async () => {
+      deliveries.record(deliveries.SESSION, 1, manifest([
+        { path: '/w/a.md', name: 'a.md' },
+        { path: '/w/b.md', name: 'b.md' },
+      ]))
+      taskRows = [task('t1'), task('t2'), task('t3')]
+      await tasksStore.refresh()
+    })
+
+    expect(bubble('deliverables')).toBe('2')
+    expect(bubble('tasks')).toBe('3')
+    /* The label is what the stylesheet hides on a collapsed tab, and it hides
+       it by this class -- the bubble being a sibling is what broke the
+       positional rule it used to use. */
+    expect([...document.querySelectorAll('.desk-tabs button .lb')].map((n) => n.textContent))
+      .toEqual(['gui.ws.deliverables', 'gui.ws.tasks', 'diff'])
+
+    await act(async () => {
+      desk.set({ tab: 'deliverables' })
+    })
+    expect(bubble('deliverables')).toBeNull()
+    /* Only the tab that was looked at. */
+    expect(bubble('tasks')).toBe('3')
+  })
+
+  it('counts a change written while the reader is on another tab', async () => {
+    render(<DeskPalette />)
+    await act(async () => {
+      desk.set({ paletteOpen: true, tab: 'deliverables' })
+    })
+
+    await act(async () => {
+      workspace.shared().changes.push(change('/w/one.py'), change('/w/two.py'))
+      desk.notifyDesk()
+    })
+
+    expect(bubble('diff')).toBe('2')
+  })
+
+  /* The mark catches up in an effect, so between something landing and that
+     effect running the open tab would otherwise paint a bubble for what is
+     already on screen. */
+  it('reports nothing new for the tab that is open, before any mark moves', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([
+      { path: '/w/a.md', name: 'a.md' },
+      { path: '/w/b.md', name: 'b.md' },
+    ]))
+    /* Straight at the store, with the marks still at zero: this is the state
+       the first render of a freshly opened palette sees. */
+    desk.set({ paletteOpen: true, tab: 'deliverables' })
+
+    expect(desk.unseen('deliverables')).toBe(0)
+    expect(desk.unseen('diff')).toBe(0)
+
+    desk.set({ tab: 'diff' })
+    expect(desk.unseen('deliverables')).toBe(2)
+  })
+
+  /* Nothing tells the desk that a turn spawned a sub-agent: the instance list
+     is asked for, and while the reader is on another tab nobody was asking. */
+  /* The window a resume opens: the desk is reset, the replay repopulates the
+     change list, and the palette's effect marks the shown tab seen -- all
+     before the note is read back to restore the panes. A mark that wrote the
+     whole note there would publish the empty desk it happens to be looking at,
+     over the panes the replay was about to bring back. */
+  it('leaves the desk note alone when a mark moves during a replay', async () => {
+    render(<DeskPalette />)
+    await act(async () => {
+      desk.set({ paletteOpen: true, tab: 'diff' })
+      desk.openDeskFile('/w/open-before.ts')
+    })
+    expect(desk.saved('s1')?.open).toEqual([{ k: 'file', path: '/w/open-before.ts' }])
+
+    /* Exactly the order `openLiveSession` runs in -- including the palette
+       still being open, which is what `desk.reset()` leaves it as for a reader
+       who had it open (the flag is stored). */
+    await act(async () => {
+      workspace.reset()
+      desk.reset()
+    })
+    await act(async () => {
+      desk.set({ paletteOpen: true, tab: 'diff' })
+    })
+    await act(async () => {
+      workspace.shared().changes.push(change('/w/one.py'), change('/w/two.py'))
+      desk.notifyDesk()
+    })
+
+    /* What the resume is about to read. */
+    expect(desk.saved('s1')?.open).toEqual([{ k: 'file', path: '/w/open-before.ts' }])
+    expect(desk.saved('s1')?.tab).toBe('diff')
+  })
+
+  /* The other half of the same round trip, and the commoner one: a conversation
+     with no turn in flight is not parked at all -- it is rebuilt from disk on
+     the way back, so the marks have to come from the note the desk keeps per
+     conversation. Found by doing it in the browser after the parked case was
+     already green. */
+  it('does not re-report a conversation rebuilt from disk rather than parked', async () => {
+    render(<DeskPalette />)
+    await act(async () => {
+      desk.set({ paletteOpen: true, tab: 'diff' })
+      deliveries.record(deliveries.SESSION, 1, manifest([
+        { path: '/w/a.md', name: 'a.md' },
+        { path: '/w/b.md', name: 'b.md' },
+      ]))
+    })
+    await act(async () => { desk.set({ tab: 'deliverables' }) })
+    await act(async () => { desk.set({ tab: 'diff' }) })
+    /* Away, and back the long way: everything cleared, the pointer moved and
+       moved back, the transcript replayed and the registry seeded again.
+       Nothing carries the marks across -- they are filed under the key. */
+    await act(async () => {
+      workspace.reset()
+      desk.reset()
+      setCurrent('s2')
+    })
+    await act(async () => {
+      setCurrent('s1')
+      deliveries.record(deliveries.SESSION, 1, manifest([
+        { path: '/w/a.md', name: 'a.md' },
+        { path: '/w/b.md', name: 'b.md' },
+      ]))
+      desk.set({ paletteOpen: true, tab: 'diff' })
+    })
+
+    expect(bubble('deliverables')).toBeNull()
+  })
+
+  /* Switching away and back is a park and a restore: the changes and the
+     deliveries come back with the conversation, so what the reader had already
+     looked at must come back with them, or every round-trip re-reports it. */
+  it('does not re-report a conversation as new after a round trip through another', async () => {
+    render(<DeskPalette />)
+    await act(async () => {
+      desk.set({ paletteOpen: true, tab: 'diff' })
+      deliveries.record(deliveries.SESSION, 1, manifest([
+        { path: '/w/a.md', name: 'a.md' },
+        { path: '/w/b.md', name: 'b.md' },
+      ]))
+    })
+    /* Looked at, so nothing in it is new any more. */
+    await act(async () => { desk.set({ tab: 'deliverables' }) })
+    await act(async () => { desk.set({ tab: 'diff' }) })
+    expect(bubble('deliverables')).toBeNull()
+
+    /* Away to another conversation... */
+    const parked = workspace.snapshot()
+    await act(async () => {
+      workspace.reset()
+      desk.reset()
+    })
+    /* ...and back. */
+    await act(async () => {
+      workspace.restore(parked)
+      desk.set({ paletteOpen: true, tab: 'diff' })
+    })
+
+    expect(bubble('deliverables')).toBeNull()
+  })
+
+  /* A tab that shrank has nothing new to say -- and a session switch empties
+     every source at once. */
+  it('says nothing is new after the sources empty under it', async () => {
+    render(<DeskPalette />)
+    await act(async () => {
+      desk.set({ paletteOpen: true, tab: 'diff' })
+      deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md' }]))
+    })
+    expect(bubble('deliverables')).toBe('1')
+
+    await act(async () => {
+      deliveries.restore([])
+      desk.notifyDesk()
+    })
+
+    expect(bubble('deliverables')).toBeNull()
+  })
+
+  it('shows a delivery that lands while the shelf is already open', async () => {
+    await shelf()
+    expect(rowNames()).toEqual([])
+    await act(async () => {
+      deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/late.md', name: 'late.md', title: 'Landed late' }]))
+    })
+    expect(rowNames()).toEqual(['Landed late'])
+  })
+
+  /* The pane forwards whatever view name it was handed, cast rather than
+     validated (state/ws.ts), and it has names this palette has no tab for. */
+  it('ignores a tab name it does not know instead of drawing another tab', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Comparison' }]))
+    await shelf()
+    await act(async () => {
+      desk.openDeskTab('file' as 'diff')
+    })
+
+    expect(desk.get().tab).toBe('deliverables')
+    expect(rowNames()).toEqual(['Comparison'])
+  })
+})
+
+describe('a task\'s own files, in the diff tab and not on the shelf', () => {
+  const taskWithFile = (id: string, file: TaskFile): TaskRow => ({
+    ...task(id),
+    nodes: [{ node_id: 'n1', agent: 'raven', status: 'completed', depends_on: [], files: [file] }],
+  })
+
+  const diffTab = async (): Promise<void> => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => { await tasksStore.refresh() })
+  }
+
+  /* What a node wrote is a change to the working directory, not something the
+     conversation handed over: only `deliver_files` decides the second, and a
+     sub-agent has no such tool. */
+  it('lists a file a node wrote in the diff tab, under the task heading', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/out.md', op: 'add', add: 5, del: 0, size: 120 })]
+    await diffTab()
+
+    const row = document.querySelector('.desk-diff-row') as HTMLElement
+    expect(row.querySelector('.chgc')?.textContent).toBe('A')
+    expect(row.querySelector('.desk-name')?.textContent).toBe('/w/out.md')
+    expect([...document.querySelectorAll('.desk-grp')].map((n) => n.textContent))
+      .toEqual(['gui.ws.task_changes'])
+  })
+
+  it('leaves the shelf saying nothing was handed over when only a task wrote', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/out.md', op: 'write', add: 5, del: 0 })]
+    await shelf()
+    await act(async () => { await tasksStore.refresh() })
+
+    expect(document.querySelector('.desk-dlv-row')).toBeNull()
+    expect(document.querySelector('.desk-empty b')?.textContent).toBe('gui.ws.dlv_none')
+  })
+
+  it('leads a task diff row with the M chip and names the full path, not the basename', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/deep/mod.py', op: 'edit', add: 2, del: 1 })]
+    await diffTab()
+
+    const row = document.querySelector('.desk-diff-row') as HTMLElement
+    expect(row.querySelector('.chgc')?.textContent).toBe('M')
+    expect(row.querySelector('.desk-name')?.textContent).toBe('/w/deep/mod.py')
+  })
+
+  /* `edit_file` can only touch a file that is already there, so a pure
+     insertion is still a modification -- the prototype's own
+     `d.diff.del ? "M" : "+"` drew a creation for every edit that happened to
+     delete nothing. */
+  it('chips a deletion-free edit with M, not A', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/new.py', op: 'edit', add: 4, del: 0 })]
+    await diffTab()
+
+    expect(document.querySelector('.desk-diff-row .chgc')?.textContent).toBe('M')
+  })
+
+  /* And a whole-file write is a rewrite whatever it deleted -- appending to a
+     file that was already there deletes nothing and is still not a creation.
+     Only the lane's own `add` says a file arrived. */
+  it('chips a write with M, not A, however few lines it deleted', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/old.py', op: 'write', add: 4, del: 0 })]
+    await diffTab()
+
+    expect(document.querySelector('.desk-diff-row .chgc')?.textContent).toBe('M')
+  })
+
+  /* Git's third letter. The neutral colour `.desk-diff-row .chgc` paints every
+     row in this list is overridden for this one alone, so a deletion reads as
+     one before the path is read. */
+  it('chips a file a node removed with D, in the delete colour', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/dead.py', op: 'delete', add: 0, del: 46, size: null })]
+    await diffTab()
+
+    const chip = document.querySelector('.desk-diff-row .chgc') as HTMLElement
+    expect(chip.textContent).toBe('D')
+    expect(chip.className).toContain('delete')
+    /* And only the count it took out: a "+0" beside the D reads as a file the
+       node added something to on its way out. */
+    expect(document.querySelector('.desk-diff-row .chgs')?.textContent).not.toContain('+')
+  })
+
+  /* The session's own half of the list reads its glyph off the same kind, so
+     one call from the conversation and one from a sub-agent draw the same
+     letter for the same thing. */
+  it('chips a file the conversation itself removed with D too', async () => {
+    taskRows = []
+    workspace.shared().changes.push({ ...change('/w/gone.py'), kind: 'delete', add: 0, del: 12 })
+    await diffTab()
+
+    const chip = document.querySelector('.desk-diff-row .chgc') as HTMLElement
+    expect(chip.textContent).toBe('D')
+    expect(chip.className).toContain('delete')
+  })
+
+  /* A file a command left behind is known only from listing the directory
+     around it: there is no patch, so the row carries the A and the count the
+     listing took and nothing else. */
+  it('chips a file a command created with A and its line count, patch or no patch', async () => {
+    taskRows = []
+    workspace.shared().changes.push({ ...change('/w/tally.txt'), kind: 'add', add: 4, del: 0, hunks: [] })
+    await diffTab()
+
+    const row = document.querySelector('.desk-diff-row') as HTMLElement
+    expect(row.querySelector('.chgc')?.textContent).toBe('A')
+    expect(row.querySelector('.chgs')?.textContent).toBe('+4')
+  })
+
+  /* And clicking it opens the file, because an empty patch pane says nothing
+     the row had not already said. */
+  it('opens the file for a row a listing made, not a blank patch', async () => {
+    taskRows = []
+    workspace.shared().changes.push({ ...change('/w/tally.txt'), kind: 'add', add: 4, del: 0, hunks: [] })
+    await diffTab()
+
+    await act(async () => {
+      (document.querySelector('.desk-diff-row') as HTMLElement).click()
+    })
+
+    const panes = desk.get().panes
+    expect(panes).toHaveLength(1)
+    expect(panes[0]?.kind).toBe('file')
+    expect(panes[0]?.id).toBe('file:/w/tally.txt')
+  })
+
+  it('opens a task diff through the tasks source, the way the pane\'s own chip does', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/deep/mod.py', op: 'edit', add: 2, del: 1 })]
+    await diffTab()
+
+    await act(async () => {
+      (document.querySelector('.desk-diff-row') as HTMLElement).click()
+    })
+
+    const panes = desk.get().panes
+    expect(panes).toHaveLength(1)
+    expect(panes[0]?.kind).toBe('diff')
+    expect(panes[0]?.id).toBe('diff:task:spawn:t1:n1:/w/deep/mod.py:0')
+  })
+
+  /* The badge reads the same list the tab draws: a task file the reader has
+     not opened is news on the diff tab, and opening it is what retires it. */
+  it('counts a task file in the diff tab\'s bubble, and drops it once opened', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/deep/mod.py', op: 'edit', add: 2, del: 1 })]
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
+    await act(async () => { await tasksStore.refresh() })
+
+    expect(bubble('diff')).toBe('1')
+
+    await act(async () => { desk.set({ tab: 'diff' }) })
+    await act(async () => {
+      (document.querySelector('.desk-diff-row') as HTMLElement).click()
+    })
+    await act(async () => { desk.set({ tab: 'deliverables' }) })
+
+    expect(bubble('diff')).toBeNull()
+  })
+})
+
+describe('the size the desk comes up at', () => {
+  it('opens at the default rather than the minimum', async () => {
+    await shelf()
+    expect(palette()?.style.width).toBe(`${DESK_DEFAULT_WIDTH}px`)
+    expect(palette()?.style.height).toBe(`${DESK_DEFAULT_HEIGHT}px`)
+  })
+
+  /* The geometry is written back on the first render, so every reader who has
+     ever opened the desk holds the old size under the old key. Reading that key
+     would hand the new default to nobody but a fresh browser. */
+  it('does not inherit a size stored under the previous key', async () => {
+    localStorage.setItem(
+      'raven.gui.desk.geometry.v5',
+      JSON.stringify({ x: 8, y: 8, w: 250, h: 250, detached: true }),
+    )
+    await shelf()
+    expect(palette()?.style.width).toBe(`${DESK_DEFAULT_WIDTH}px`)
+    expect(palette()?.dataset.anchored).toBe('true')
+  })
+
+  /* And a size the reader chose under the CURRENT key is still theirs. */
+  it('keeps a size stored under the current key', async () => {
+    localStorage.setItem(
+      DESK_GEOMETRY_KEY,
+      JSON.stringify({ x: 40, y: 40, w: 420, h: 400, detached: true }),
+    )
+    await shelf()
+    expect(palette()?.style.width).toBe('420px')
+    expect(palette()?.style.height).toBe('400px')
+  })
+})
+
+/* That the reserve reaches the stylesheet at all.
+ *
+ * `geometry.test.ts` pins what the number is and
+ * `scripts/gates/desk-reserve-css.test.mjs` pins where the stylesheet spends
+ * it. This is the join: the panel is `position: fixed`, so the only thing
+ * connecting it to the layout is this property landing on the root, and
+ * neither of those two tests would notice if it stopped being set.
+ */
+describe('the reserve the palette publishes', () => {
+  /* happy-dom measures everything as zero, and the reserve turns on the chat's
+     width, so the harness has to say how wide the chat is. */
+  const chatIs = (width: number): HTMLElement => {
+    const chat = document.createElement('div')
+    chat.className = 'chat'
+    chat.getBoundingClientRect = (() => ({ width, height: 600, left: 0, top: 0, right: width, bottom: 600 })) as never
+    document.body.append(chat)
+    return chat
+  }
+  const reserve = (): string => document.documentElement.style.getPropertyValue('--desk-reserve')
+  const want = DESK_DEFAULT_WIDTH + DESK_LAUNCHER_EDGE + DESK_TEXT_GAP
+
+  it('sets it on the root while the desk is anchored over the chat', async () => {
+    chatIs(want + DESK_COLUMN_FLOOR + 40)
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+
+    expect(reserve()).toBe(`${want}px`)
+  })
+
+  it('takes it back when the desk goes down', async () => {
+    /* Removed rather than set to 0: the stylesheet's own `, 0px` fallback is
+       what applies, which is the one path a detached or floor-blocked panel
+       also takes. */
+    chatIs(want + DESK_COLUMN_FLOOR + 40)
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+    await act(async () => { desk.set({ paletteOpen: false }) })
+
+    expect(reserve()).toBe('')
+  })
+
+  it('takes it back when the palette stops being rendered', async () => {
+    /* Nothing unmounts the palette today -- `DeskApp` renders it once and a
+       module page hides `#deskHost` rather than dropping it. This pins the
+       cleanup anyway, because the property lives outside React and the failure
+       is silent: a transcript left 324px narrow with nothing on screen to
+       explain it. */
+    chatIs(want + DESK_COLUMN_FLOOR + 40)
+    const view = render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+    expect(reserve()).toBe(`${want}px`)
+
+    await act(async () => { view.unmount() })
+
+    expect(reserve()).toBe('')
+  })
+
+  it('publishes nothing when the chat cannot spare the width', async () => {
+    /* The all-or-nothing floor, through the component rather than the pure
+       function: this is the case where the panel keeps overlapping and the
+       column keeps its width, which is today's behaviour. */
+    chatIs(want + DESK_COLUMN_FLOOR - 1)
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+
+    expect(reserve()).toBe('')
+  })
+
+  it('re-answers when the chat changes width under it', async () => {
+    /* The chat resizes without this component rendering -- the window, the
+       rail, the workspace column opening beside it -- so the observer is what
+       keeps the answer true rather than merely true at mount. */
+    const chat = chatIs(want + DESK_COLUMN_FLOOR + 40)
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+    expect(reserve()).toBe(`${want}px`)
+
+    chat.getBoundingClientRect = (() => ({
+      width: want + DESK_COLUMN_FLOOR - 1, height: 600, left: 0, top: 0,
+      right: want + DESK_COLUMN_FLOOR - 1, bottom: 600,
+    })) as never
+    await act(async () => { window.dispatchEvent(new Event('resize')) })
+
+    expect(reserve()).toBe('')
+  })
+})
+
+/* One nothing, three tabs. `changed` and `delivered` are two facts and only
+   the selected tab carries a label, so an empty tab used to name what the
+   other one was holding and offer to go there. Three tabs then had three
+   shapes of nothing -- two sentences and a link on two of them, one line on
+   the third -- which is a worse answer than the plain fact on all three. */
+describe('an empty tab states the fact and nothing else', () => {
+  const withChanges = async (...keys: string[]): Promise<void> => {
+    await act(async () => {
+      workspace.shared().changes.push(...keys.map(change))
+      desk.notifyDesk()
+    })
+  }
+
+  it('says nothing about the other tab, however much it holds', async () => {
+    await shelf()
+    await withChanges('/w/one.py', '/w/two.py')
+
+    expect(emptyOf()).toEqual({ title: 'gui.ws.dlv_none', hint: '', icon: true })
+    expect(document.querySelector('.desk-empty-to')).toBeNull()
+  })
+
+  it('answers the same way round from an empty Diff', async () => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => {
+      deliveries.record('', 1, manifest([{ path: 'out/report.md', bytes: 12 }]))
+    })
+
+    expect(emptyOf()).toEqual({ title: 'gui.ws.no_changes', hint: '', icon: true })
+    expect(document.querySelector('.desk-empty-to')).toBeNull()
+  })
+})
+
+/* Dragging the panel by its handle.
+ *
+ * The handle carries the tab strip, so most of what looks like a title bar is
+ * buttons: measured on the running page, 182 of its 298px, the rest broken into
+ * 3px slivers between the tabs. A press there used to return before doing
+ * anything, which left the panel draggable from 39% of its own handle and let
+ * the browser take the gesture instead. So a press has to be able to become
+ * either a drag or a click, and these cases are where the two part.
+ *
+ * Only what the DOM can answer without a layout: which element the press
+ * reaches, whether the panel detached, and whether the tab's click survived.
+ * The two geometry claims -- that the panel follows the hand through the anchor
+ * instead of freezing in it, and that it goes home when released nearby -- are
+ * measured in a browser and recorded in the commit, because happy-dom lays
+ * nothing out and would pass them either way.
+ */
+describe('the panel drags by its handle', () => {
+  const handle = (): HTMLElement => document.querySelector('.desk-drag') as HTMLElement
+  const panel = (): HTMLElement => document.querySelector('.desk-palette') as HTMLElement
+  const tab = (label: string): HTMLElement =>
+    [...document.querySelectorAll<HTMLElement>('.desk-tabs button')]
+      .find((b) => (b.querySelector('.lb')?.textContent || '') === label)!
+
+  /* Whether the handle took the pointer. Recorded rather than silently stubbed,
+     because WHEN capture is taken is the thing one of these cases is about. */
+  let captured = false
+  const press = async (on: HTMLElement, x: number, y: number): Promise<void> => {
+    captured = false
+    const handle = document.querySelector('.desk-drag') as HTMLElement
+    handle.setPointerCapture = () => { captured = true }
+    handle.hasPointerCapture = () => captured
+    handle.releasePointerCapture = () => { captured = false }
+    await act(async () => {
+      on.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: y }))
+    })
+  }
+  const to = async (x: number, y: number): Promise<void> => {
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: x, clientY: y }))
+    })
+  }
+  const release = async (x: number, y: number): Promise<void> => {
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: x, clientY: y }))
+    })
+  }
+  const at = (): { left: string; top: string } => ({ left: panel().style.left, top: panel().style.top })
+
+  it('starts a drag from a tab, which is most of the handle', async () => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+
+    await press(tab('diff'), 500, 500)
+    await to(500 + DESK_DRAG_THRESHOLD + 20, 520)
+    await release(520 + DESK_DRAG_THRESHOLD, 520)
+
+    expect(panel().dataset.anchored).toBe('false')
+    expect(at().left).not.toBe('')
+  })
+
+  it('leaves a tab its click when the press did not move', async () => {
+    /* The other half of the same rule: a press that goes nowhere is a click,
+       and swallowing it would make the tabs unusable to fix the handle.
+
+       The capture is what this really guards. Taken on `pointerdown`, pointer
+       events retarget the browser's own click to the capture target, so the
+       click never reaches the tab -- measured in a real browser, a press on
+       `Diff` produced a click on `desk-drag` and the tab did not switch. So the
+       case asserts the handle did NOT capture, which is the condition that
+       lets a real click land, and then lets the click run its own course. */
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
+
+    await press(tab('diff'), 500, 500)
+    await release(500, 501)
+
+    expect(captured).toBe(false)
+    await act(async () => {
+      tab('diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(desk.get().tab).toBe('diff')
+  })
+
+  it('leaves a tab its click when the hand only shook', async () => {
+    /* The threshold's own case, and it needs a MOVE below it: a press with no
+       pointermove at all never reaches the comparison, so it passes whether the
+       threshold is there or not. */
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
+
+    await press(tab('diff'), 500, 500)
+    await to(501, 501)
+    await release(501, 501)
+
+    expect(captured).toBe(false)
+    await act(async () => {
+      tab('diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(desk.get().tab).toBe('diff')
+    expect(panel().dataset.anchored).toBe('true')
+  })
+
+  it('does not also switch tab on the drag that ended on one', async () => {
+    /* The gesture ends on a button whose click is about to fire. A panel that
+       moved and changed what it shows did two things for one gesture. */
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
+
+    await press(tab('diff'), 500, 500)
+    /* A drag DOES capture, which is what keeps the pointer with the handle
+       while the hand moves -- checked here, because the release gives it
+       straight back. */
+    expect(captured).toBe(false)
+    await to(600, 600)
+    expect(captured).toBe(true)
+    await release(600, 600)
+
+    await act(async () => {
+      tab('diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(desk.get().tab).toBe('deliverables')
+  })
+
+  it('keeps the press from an ancestor that would act on it too', async () => {
+    /* An ancestor acting on the same gesture is the other half of what reads as
+       a conflict with the page behind -- the desk's own panes carry
+       `onPointerDown` to raise themselves, and the pane header is a drag handle
+       of its own.
+
+       A REACT ancestor, which is what this reaches and what `resize` beside it
+       has always guarded against. React dispatches from the root, so a native
+       listener further up has already had the event by then and
+       `stopPropagation` cannot take it back; a document-level capture listener
+       runs before the target and could not be stopped by anything here either.
+       This pins the half that is actually in reach. */
+    const seen: string[] = []
+    render(<div onPointerDown={() => seen.push('ancestor')}><DeskPalette /></div>)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+
+    await press(handle(), 500, 500)
+
+    expect(seen).toEqual([])
+  })
+})
+
+/* The corner grab, which resizes rather than moves -- and, anchored, resizes
+ * against a pinned edge (styles/page.css's `right: calc(...)` on
+ * `[data-anchored="true"]`), the way the prototype's own comment puts it,
+ * translated: "anchored, the right edge is pinned, so it can only grow
+ * leftward" (proto.js:4433). Detached has no such edge, so the hand's own
+ * direction is the width's there.
+ */
+describe('resizing by the corner grab', () => {
+  const grab = (): HTMLElement => document.querySelector('.desk-resize') as HTMLElement
+
+  it('shrinks on a rightward drag while anchored, since the right edge is pinned', async () => {
+    await shelf()
+    grab().setPointerCapture = () => {}
+
+    await act(async () => {
+      grab().dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+      }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, pointerId: 1, clientX: 520, clientY: 500,
+      }))
+    })
+
+    expect(palette()?.style.width).toBe(`${DESK_DEFAULT_WIDTH - 20}px`)
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 520, clientY: 500 }))
+    })
+  })
+
+  it('grows on a rightward drag once detached, since no edge is pinned', async () => {
+    localStorage.setItem(
+      DESK_GEOMETRY_KEY,
+      JSON.stringify({ x: 40, y: 40, w: DESK_DEFAULT_WIDTH, h: DESK_DEFAULT_HEIGHT, detached: true }),
+    )
+    await shelf()
+    grab().setPointerCapture = () => {}
+
+    await act(async () => {
+      grab().dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+      }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, pointerId: 1, clientX: 520, clientY: 500,
+      }))
+    })
+
+    expect(palette()?.style.width).toBe(`${DESK_DEFAULT_WIDTH + 20}px`)
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 520, clientY: 500 }))
+    })
+  })
+
+  it('always grows straight down, since only the top is ever pinned', async () => {
+    await shelf()
+    grab().setPointerCapture = () => {}
+
+    await act(async () => {
+      grab().dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+      }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, pointerId: 1, clientX: 500, clientY: 520,
+      }))
+    })
+
+    expect(palette()?.style.height).toBe(`${DESK_DEFAULT_HEIGHT + 20}px`)
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 500, clientY: 520 }))
+    })
+  })
+})

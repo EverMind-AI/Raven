@@ -22,12 +22,37 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- Progressive tool disclosure ships on (`tools.toolSearch.enabled`). Below
+  `compactionThreshold` (50) nothing changes: the strategy drops `tool_search`
+  from every request while the catalog fits. Above it, most tool schemas are
+  withheld and reached through `tool_search` / `tool_call`, so context stops
+  scaling with tool count and an MCP connect no longer moves the cached prompt
+  prefix. Set `enabled: false` to keep the old shape.
+
+- `tools.disabledTools` can no longer take `tool_search` or `tool_call` away.
+  Their absence from a request is how the fold reads "no search route", so an
+  entry there did not slim a folded request, it unfolded it. An entry naming
+  either is reported once at startup and ignored; `tools.toolSearch.enabled` is
+  the switch that speaks for the pair.
+
 - `ppt_generate_image` no longer answers a repeat ask from the file the last
   ask wrote. The tool exists for "that picture is not what I wanted, do it
   again", and that ask carries the same words as the first one, so the cache
   handed back the picture the author had just rejected. A call generates; the
   file name is unchanged so the new picture arrives without the page being
   edited.
+
+### Removed
+
+- The built-in `deep_research` tool is gone, along with the stand-in that
+  took its name when no key was configured and the `raven deep-research`
+  command that configured it. The settings page no longer carries its row,
+  and `tools.deepResearch` is no longer read: a load-time migration drops
+  that section. A `deep_research` entry in `tools.disabledTools` is left as
+  written, since that denylist also governs a plugin tool of the same name.
+  Reports written under `<workspace>/deep_research/` stay on disk; nothing
+  writes there any more. The capability moved to the agent surface -- the
+  first-party Raven-Research agent, and MiroThinker as a sub-agent preset.
 
 ### Changed
 
@@ -92,6 +117,92 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A heartbeat on an untouched `HEARTBEAT.md` no longer costs a model call every
+  interval. The shipped template promises that a file of only headers and
+  comments is skipped, and the service skipped only a file with no bytes at all,
+  so a workspace that never edited the template paid a decision call every 30
+  minutes -- 14 to 35 a day on one machine. What counts as a task is now read
+  from the template itself: its headings, prose and comments are scaffolding,
+  anything else is a task, and one is still decided (including a task written as
+  a heading, or a section the template does not have).
+
+- Every model call is accounted for, not only the turn loop's. About forty
+  callers reached a provider directly -- the heartbeat's decision, the sentinel
+  planner and its predictors, memory consolidation, session titles, the
+  permission judge, the playbook planner, the curator, the in-process
+  sub-agent's own loop -- and none of them reached `UsageTracker`, so
+  `~/.raven/telemetry/usage-*.jsonl` recorded none of it: 20-odd heartbeats in
+  one day left no row. The recording now happens at the provider seam
+  (`raven/providers/usage_record.py`, installed by the runtime assembly), which
+  bills each call once: nested providers and the retry ladder record at the
+  outermost entry, a stream is one row from its terminal usage, the turn loop
+  keeps its own richer row and tells the seam so, and a call that never reached
+  a model is not a row. The heartbeat's own call is billed to a `heartbeat`
+  session rather than to whichever conversation ran last.
+
+- `web_fetch`, `web_search` and `image_search` stop asking a vendor that has
+  refused the key. A 401 or 402 from a reader, or a 401, 402 or 403 from a
+  search vendor, is about the key or the account, not the page or the query,
+  and every later call met the same answer: on 2026-09-20 Jina answered 402
+  on every fetch of a session and the tool returned one identical error
+  envelope per call. The refusal is now remembered per tool: later calls are
+  answered without a request, with the same `error` (so the loop's failure
+  streak reads them as one cause), what the status means, and what the user
+  has to do (`tools.web.providers.<vendor>.apiKey`, the env var, the sign-up
+  page, or another vendor under `tools.web.<search|fetch>.provider`; the
+  slot and the vendor are read from the file without a restart, the env
+  var on restart). All three tools read their vendor and key live, in
+  both the main loop and the sub-agent lane, and resolve the pair once
+  per call, so the vendor and key a request carried are what its refusal
+  is recorded against and a refusal by one vendor pauses no other; a key
+  set at that slot reaches the next call and lifts the pause without a
+  restart, and otherwise one real request is sent again after ten minutes
+  and re-arms it if refused.
+  A request that carried no key is
+  never paused, and a reader's 403 pauses nothing: the default reader, Jina
+  without a key, answers a domain it has blocked with 403, and Firecrawl
+  answers 403 for a site its policy does not scrape, so through a reader
+  that status is about the page and is reported per URL as before.
+
+- The `find`, `list_dir` (recursive) and pure-Python `grep` tools can no
+  longer freeze the gateway on a large tree. One `find` over a home
+  directory held the event loop for 2h21m: the walk ran synchronously on
+  the loop, filtered the noise directories only after entering them, and had
+  no deadline, so the registry's 300s ceiling could not preempt it and every
+  session stopped with it. The three tools now share one walk that prunes
+  `node_modules`, `.git` and the other noise directories before entering
+  them, checks a 20s wall-clock budget before every entry it yields (so one
+  large or slow directory cannot run past it either) and ends with a
+  `PARTIAL result` trailer that says absence of a match is not conclusive,
+  and runs in a worker thread. `find` starts at a pattern's literal prefix
+  (`src/**/*.py` never enters a sibling of `src`), answers what `Path.glob`
+  answered for the same pattern, keeps a trailing slash's directory-only
+  meaning, refuses a pattern with `..` or a leading `/`, and lists files as
+  well as directories under a trailing `**`. A symbolic link to a directory
+  is entered where a single pattern component names or matches it
+  (`*/util/helper.py` reaches through a linked `vendor`) and never under
+  `**`, which is how `Path.glob` read it and what keeps a link cycle
+  finite. A noise directory inside a pattern's literal prefix
+  (`node_modules/*.js`, `src/node_modules/*.js`) is walked, since the
+  pattern asked for it, where `Path.glob` filtered it out; one met below
+  the prefix is pruned as before, and `list_dir` on such a path lists it.
+  Both tool descriptions say so. Recursive `list_dir` also used to filter on the components of the
+  absolute path, so a workspace beneath a directory named `build`, `dist`,
+  `venv` or another noise name listed as empty; it prunes below the listed
+  path only now.
+
+- A sub-agent run that is stopped now tells the conversation that started
+  it, and says why: `[Subagent '...' was cancelled]` with the reason (`the
+  gateway stopped`, `the user sent /stop`, `a user stopped this run`, ...),
+  the instance handle to resume from, and the directory the run was
+  dispatched to work in. The parent used to hear nothing: the cancel branch
+  wrote the record and a live-only status event, so a session whose run was
+  cancelled under it kept a "started" receipt with nothing after it, and
+  the artifacts that run had produced were never mentioned again. The
+  record's `error.md` carries the same reason, every announcement now names
+  its working directory, and the delivered marker both UIs draw gained a
+  `cancelled` status so a stop is not drawn as a result or a failure.
+
 - A sub-agent that finishes while the host is shutting down no longer loses its
   result. Its announce submits a turn to a scheduler that is already draining;
   the refusal escaped the announcing task, and the only trace was asyncio's
@@ -133,6 +244,15 @@ All notable changes to Raven are documented here.
   ledger (plus what it submitted itself), and `ops_declare` refuses a
   `remote_dir` a live sibling campaign is still writing rounds into.
 
+- A command run by `exec` no longer reads this process's stdin. It inherited
+  it, and when raven serves as an ACP sub-agent that stdin is the pipe the
+  client answers permission requests on: a command that reads its input
+  (`ssh` without `-n`, `cat`, `python3 -`) consumed the frames arriving while
+  it ran, and every other session sharing the process waited out the 300 s
+  approval deadline on an answer the client had written within a millisecond.
+  Measured with four sessions in one process: 18 of 183 approvals lost, each
+  inside another session's `ssh`. The command's stdin now reads EOF at once, as the
+  background executor's already did.
 - The web file viewer opens a sub-agent's report again. `/file` anchored the
   state-directory fence on the session's working directory whenever the page
   named a session, so the fence exempted `~/.raven/tmp/<channel>` and refused
@@ -279,6 +399,43 @@ All notable changes to Raven are documented here.
   image model (Nano Banana and its kind) is asked for the requested frame through
   OpenRouter's `image_config.aspect_ratio`; before, it answered in its own default
   frame whatever ratio the caller asked for.
+- `mode: stint`: a playbook that takes many rounds instead of one. It declares
+  roles rather than nodes, and one round is one sub-agent graph, so a thirty-round
+  run is thirty graphs on the shared dispatch path -- each validated and charged
+  to the same hourly dispatch budget an ordinary graph is, approved once at the
+  start, and resumable by any process because the stint is a file. Roles hand over
+  through files in the project, not through a conversation: each opens a fresh one
+  every round.
+
+  What a role may write is declared in the playbook (`owns`, `appends`), rendered
+  into its prompt, and undone afterwards, with the file it
+  wrote kept under `violations/`. The undo reads the stage's own commits as well
+  as the worktree, so a role that commits a stray write is caught too.
+
+  `verify[]` runs real commands -- a build, a test run -- and a failure goes back
+  to the role that caused it with the failure text, up to `maxHandbacks`. Once
+  that budget is spent the round moves on with the failure on the record -- a
+  failed node would skip every role downstream, and a reviewer has to see a
+  failed build -- and the next round's prompt carries it.
+
+  A stint runs in a checkout of its own, cut from the project's head, so hours of
+  its commits do not collide with the conversation that started it.
+  `stop.maxRounds` defaults to 10 and is capped at 99; `stop.until` lets a role
+  end a stint early by reporting a marker on a line of its own. A round the
+  dispatch budget turns down pauses the stint rather than ending it, and says so.
+  A person can watch, extend, pause, stop, resume and answer questions from
+  `raven playbook stints ...`, the RPC surface and the page.
+
+- `raven playbook stint`: lay a project out for a stint (`init` writes `.stint/`:
+  a guard file per role, the shared prose, a link to the project's own
+  specification), and work the backlog its roles share (`task`, `ask`, `confirm`).
+
+- `raven agent --message-file` reads the turn's message from a file instead of
+  argv, and `raven agent --permission-mode ask|smart|full` binds the turn's
+  reading of the ask tier. Both are what an unattended driver needs: a prompt on
+  the command line is readable by every process on the box, and a one-shot has
+  nobody to ask when a tool call routes to approval.
+
 - The research agent's three modes are three stop rules rather than three sizes
   of one budget. `medium` may answer a settled general-knowledge question
   without searching: the first model call has the web tools withheld and a
@@ -748,8 +905,7 @@ All notable changes to Raven are documented here.
   OpenRouter, so a raven that already has an OpenRouter key is not asked for a second
   copy of it - and that reuse reads `providers.openrouter` alone, never a key parked in
   `custom`, which belongs to whichever private gateway that section names. It replaces the
-  deep_research step, which is unchanged and still reachable through
-  `raven deep-research enable`. Previously `subagents/install.sh` did the registering,
+  deep_research step. Previously `subagents/install.sh` did the registering,
   which could not work on a first install: it runs before `~/.raven/config.json` exists,
   read that file to decide whether an agent had an LLM to fall back on, and so declined
   to register every folder on exactly the machines that had just been set up. It now

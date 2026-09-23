@@ -152,7 +152,9 @@ async def test_execute_accepts_a_json_encoded_questions_argument():
 async def test_execute_rejects_unreadable_questions_instead_of_raising():
     tool, _ = _tool({})
 
-    assert await tool.execute(questions="not json at all") == "Error: ask_user requires at least one question"
+    assert await tool.execute(questions="not json at all") == (
+        "Error: ask_user questions is not valid JSON: Expecting value: line 1 column 1 (char 0)"
+    )
     assert await tool.execute(questions=42) == "Error: ask_user requires at least one question"
 
 
@@ -290,14 +292,11 @@ async def test_the_registry_path_normalizes_options_too():
 
 @pytest.mark.asyncio
 async def test_the_registry_path_reports_unreadable_input_in_the_tools_own_words():
-    # Not a schema complaint about a shape the model cannot act on: by the time
-    # validation runs the argument has been normalized, so what is left is a
-    # genuinely empty question list and the tool says so.
     registry, _ = _registered({})
 
     out = await registry.execute("ask_user", {"questions": "not json at all"})
 
-    assert "requires at least one question" in out
+    assert "questions is not valid JSON: Expecting value: line 1 column 1 (char 0)" in out
     assert "should be array" not in out
 
 
@@ -333,7 +332,7 @@ def test_schema_advertises_only_fields_the_tool_reads():
 
     assert "multiple" not in entry
     assert "custom" not in entry
-    assert set(entry) == {"question", "header", "options", "recommended"}
+    assert set(entry) == {"question", "header", "options", "recommended", "multi_select"}
     assert tool.parameters["properties"]["questions"]["maxItems"] == 4
 
 
@@ -354,9 +353,41 @@ async def test_header_and_batch_position_reach_the_broker():
     # Every round-trip carries the whole batch so a surface can render the set
     # and its progress while still collecting one answer at a time.
     assert broker.calls[0]["batch"] == [
-        {"question": "Base?", "header": "Base"},
-        {"question": "Squash?", "header": "Squash"},
+        {"question": "Base?", "header": "Base", "choices": [], "recommended": "", "multi_select": False},
+        {"question": "Squash?", "header": "Squash", "choices": [], "recommended": "", "multi_select": False},
     ]
+
+
+@pytest.mark.asyncio
+async def test_multi_select_reaches_the_broker_and_the_batch_entry():
+    tool, broker = _tool({"Toppings?": "cheese, olives"})
+
+    await tool.execute(
+        questions=[{"question": "Toppings?", "options": ["cheese", "olives", "ham"], "multi_select": True}]
+    )
+
+    assert broker.calls[0]["multi_select"] is True
+    assert broker.calls[0]["batch"] == [
+        {
+            "question": "Toppings?",
+            "header": "",
+            "choices": ["cheese", "olives", "ham"],
+            "recommended": "",
+            "multi_select": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_multi_select_is_forced_false_without_options():
+    """multi_select only means something alongside a choice list; a model that
+    sets it on a free-form question must not have it reach the broker as True."""
+    tool, broker = _tool({"Why?": "because"})
+
+    await tool.execute(questions=[{"question": "Why?", "multi_select": True}])
+
+    assert broker.calls[0]["multi_select"] is False
+    assert broker.calls[0]["batch"][0]["multi_select"] is False
 
 
 @pytest.mark.asyncio
@@ -593,6 +624,44 @@ async def test_round_trip_through_the_real_broker():
 
 
 @pytest.mark.asyncio
+async def test_a_surface_answering_the_whole_batch_in_one_reply_emits_one_frame():
+    """A page that renders the batch as one stepped form answers it in one
+    ``clarify.respond`` carrying every question's answer. The broker must stash
+    the later ones rather than making the tool loop's later questions wait out
+    a frame that never comes."""
+    from raven.rpc.question_broker import QuestionBroker
+
+    frames: list[dict] = []
+
+    async def send_frame(frame: dict) -> None:
+        frames.append(frame)
+        params = frame["params"]
+        broker.reply(
+            params["conversation_id"],
+            "main",
+            answers=["main", "yes", "squash"],
+        )
+
+    broker = QuestionBroker(send_frame, timeout_s=5.0)
+    tool = AskUserTool(broker=broker, conversation_id="tui:test")
+
+    result = await tool.execute(
+        questions=[
+            {"question": "Base?"},
+            {"question": "Rebase?"},
+            {"question": "Squash?"},
+        ]
+    )
+
+    assert isinstance(result, ToolResult)
+    assert len(frames) == 1, "the later questions must be answered from the stash, not a fresh frame each"
+    assert result.display_text == "Base? -> main\nRebase? -> yes\nSquash? -> squash"
+    assert 'User answered: "Base?" -> "main".' in result.model_text
+    assert 'User answered: "Rebase?" -> "yes".' in result.model_text
+    assert 'User answered: "Squash?" -> "squash".' in result.model_text
+
+
+@pytest.mark.asyncio
 async def test_execute_holds_the_conversation_lock_against_a_relayed_asker():
     """A relayed ACP question (which takes ``question_lock`` itself, per
     ``acp_client.ask_user._ask``) must wait for this call's own batch to
@@ -805,3 +874,33 @@ def test_an_option_written_as_an_object_reaches_the_user_as_its_words() -> None:
     }
     assert AskUserTool().cast_params(explicit)["questions"][0]["recommended"] == 1
     assert payload["questions"][0]["options"][0]["option"] == "dark", "the caller's payload is left alone"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoded_layers", [0, 1, 2])
+@pytest.mark.parametrize(
+    "malformed",
+    ['[{"question": "Which base?", "options": ["main", "develop"]]', '[\n{"question": "Which base?"\n]'],
+)
+async def test_invalid_questions_json_reports_location_without_asking(malformed, encoded_layers):
+    payload = malformed
+    for _ in range(encoded_layers):
+        payload = json.dumps(payload)
+    with pytest.raises(json.JSONDecodeError) as error:
+        json.loads(malformed)
+    expected = f"questions is not valid JSON: {error.value}"
+    tool, broker = _tool({})
+    registry, registry_broker = _registered({})
+    args = {"questions": payload}
+    original = copy.deepcopy(args)
+
+    assert tool.display_call(args) is None
+    direct = await tool.execute(**args)
+    registered = await registry.execute("ask_user", args)
+
+    assert expected in direct
+    assert expected in registered
+    assert "requires at least one question" not in direct
+    assert "requires at least one question" not in registered
+    assert broker.asked == registry_broker.asked == []
+    assert args == original

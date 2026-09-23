@@ -1,4 +1,9 @@
-# 追踪 API
+# 追踪与埋点 API { #tracing-api }
+
+<span id="api"></span>
+
+检查失败任务、导出经审核报告或制作回放回归用例，请先读
+[轨迹调试与回放](trajectory-debugging.md)。本页介绍埋点契约。
 
 **raven**（以及任何其他接入方）与仓库内的 `raven.tracing` 实现之间的契约。
 `raven-tracing` 是计划中的独立发行包，不是当前 Raven 包的独立依赖。
@@ -89,7 +94,7 @@ from raven.observability import semconv
 async def chat_with_retry(self, ...): ...
 ```
 
-`trace.instrument(name, *, kind=None, seed=None, on_open=None, extract=None)`
+`trace.instrument(name, *, kind=None, detached=False, root=False, seed=None, on_open=None, extract=None)`
 可以包装同步**或**异步方法：
 
 - `extract(span, bound_args, result, exc)`——在 `finally` 中执行（出错时输入也已捕获），
@@ -168,7 +173,8 @@ async def chat_with_retry(self, ...): ...
 
 命名规则：
 - `name` = `<domain>.<verb>`，小写点分。
-- 属性键 = `<domain>.<field>`，与该 span 的域一致。
+- 属性键 = `<domain>.<field>`，遵循上表的语义约定；命名空间可以与 span 名称不同，
+  例如 `session.turn` 使用 `turn.*` 属性。
 - kind 是封闭词表：`session|model|tool|subagent|skill|memory|plugin`。
 
 ## 3. 自定义节点 { #3-custom-nodes }
@@ -198,8 +204,8 @@ with trace.span("raven.sentinel.tick", {"sentinel.reason": r}, kind="plugin") as
    禁用时该 API 为空操作。
 4. 应用永远不导入 SDK 内部实现（存储、查看器）——只使用门面。
 
-不存在 monkeypatch 或自动埋点路径：全部埋点都是 raven 自身源码中显式的
-`@trace.instrument` 注解，因此它随代码移动、在 diff 中可见（不会在重构时悄悄失效）。
+Raven 在自身源码中显式使用 `@trace.instrument` 和 `trace.span` 埋点，
+不安装基于 monkeypatch 的自动探针。重构时应同步检查相关埋点和测试。
 
 ## 5. 版本与治理 { #5-versioning-governance }
 

@@ -1,4 +1,7 @@
-# 自进化映射
+# Evolver：设计与实现
+
+首次使用请先读[使用与实验](evolver.md)，了解维护状态、配置、成本和
+run/resume/finalize 操作流程。本页负责实现映射。
 
 **配套文档：** 权威的方法论规格是 `docs/specs/self-evolution-loop-sop.md`，
 与代码一同保留在仓库内，未在本站发布。本文回答的是：Raven 中哪些代码实现了 SOP 的每一条款、
@@ -10,20 +13,17 @@
 
 ## 0. 根本性的架构差异（请先读） { #0-the-fundamental-architectural-difference-read-first }
 
-SOP 的循环（§3 / §8.3）是 **Claude 驱动**的：没有驱动程序——由人打开 Claude，
-手工走完七步漏斗，状态持久化在三层文件中，各个组件是一组 CLI 脚本。
+SOP 的循环（§3 / §8.3）是 **Claude 驱动**的：由人打开 Claude，手工走完七步漏斗。
 Raven 以**程序驱动**的循环实现同一套方法论：
-`evolver/orchestrator/loop.py::EvolutionOrchestrator` 是漏斗的确定性驱动器，
-SOP 中的 CLI 组件则变成了嵌入循环内的函数。
+`evolver/orchestrator/loop.py::EvolutionOrchestrator` 驱动漏斗，
+SOP 中的 CLI 组件则变成了循环内的函数。
 
 SOP §8.0 的分工（语义交给模型、确定性算术交给代码）原样保留：
 诊断 / 设计 / 判定仍然是 LLM 调用，封装在
 `orchestrator/nodes/semantic.py::SemanticNode` 中（将解析错误反馈给模型，并在限定次数内重试修复）。
 改变的只是「由谁按下一步的按钮」。
 
-SOP 自己（§8.3）对这条路线的评价是：「打包成一键工具属于大型基准的任务」。
-Raven 选择现在就把集成做出来，换取跨窗口交接的自由与方法论的机械化
-（见 §5「超出 SOP 的部分」）。
+启动器会自动执行漏斗，并保存已完成轮次的检查点，操作者恢复实验时无需手工重建进度。
 
 ## 1. SOP §0 通用规则 → 实现 { #1-sop-0-general-rules-implementation }
 
@@ -35,10 +35,10 @@ Raven 选择现在就把集成做出来，换取跨窗口交接的自由与方�
 | 分工：语义归模型，确定性归代码 | 见上文 §0 | `orchestrator/nodes/semantic.py::SemanticNode` |
 | 两种判定：导航用 = K3 均值 > vanilla（入库）；计入战绩 = 配对 2σ（论文口径） | `PairedResult` 将二者保留为两个独立字段：`promoted`（导航）与 `credited_2sigma`（标签）；晋级只读取前者 | `orchestrator/gates/paired.py::PairedResult / paired_lift` |
 | 配对 σ：逐任务配对差值的标准差，消除任务间难度差异 | `d_i = rate_c,i − rate_v,i`，`se = stdev(d)/√n`，`z = lift/se` | `orchestrator/gates/paired.py::paired_lift` |
-| ★ 密封测试：每轮盲跑，对决策不可见，结束时解封用于留存评估 | `SealedTestRunner.score` 写入驱动器看不到的目录并**返回 None**（任何 test 数字在物理上都无法进入决策路径）；`unseal` 只在循环结束后执行 | `orchestrator/sealed/runner.py::SealedTestRunner / unseal_retention` |
+| 封存测试：测试结果不参与选择，结束后评估提升保留率 | AppWorld 启动器在收尾阶段通过 `unseal_retention` 评估基线和已记录的各轮交付版本。`SealedTestRunner.score` 返回 `None`，结果单独保存，但并未阻止任意代码访问这些文件。 | `orchestrator/sealed/runner.py::SealedTestRunner / unseal_retention` |
 | test 集绝不进入 anchor/train | 比 SOP 的纪律更强：一条机械化断言——发生泄漏时在启动阶段直接抛出 | `orchestrator/sealed/runner.py::assert_no_test_leak`，在 `loop.py` 构造时接入 |
 | 纪律：只从 train 轨迹做诊断 | 诊断语料来源只挂在 train 上；test 轨迹没有读取路径（密封 runner 只保存分数） | `orchestrator/scoring.py::EvalBackend.trajectories` |
-| 纪律：全程配置一致 | 在启动器层面机械化：`run_meta.json` 记录配置指纹；配置变更则拒绝续跑 | `evolver/launch/state.py::RunMeta.check_config` |
+| 纪律：全程配置一致 | `run_meta.json` 记录配置指纹；启动器通常拒绝配置变更或已结束的实验继续运行。`--force` 可绕过这些检查，但此后不能再视为有效的封存实验。 | `evolver/launch/state.py::RunMeta.check_config`；`evolver/launch/runner.py::_meta_guard` |
 
 ## 2. SOP §1 冷启动 → 实现 { #2-sop-1-cold-start-implementation }
 
@@ -80,9 +80,9 @@ Raven 选择现在就把集成做出来，换取跨窗口交接的自由与方�
 
 ## 5. 超出 SOP 的部分 { #5-where-we-exceed-the-sop }
 
-- **密封测试 runner 已机械化。** SOP §8.2/§9.2 明确记录了其最突出的方法论缺口：
-  「暂不建设；过渡期依靠纪律；评审者会质疑这一点」。Raven 的 `SealedTestRunner` 加
-  `assert_no_test_leak` 正是 SOP 所要求的那种机制隔离——这一方法论缺口在 Raven 中已得到补齐。
+- **封存测试评估已自动化。** `assert_no_test_leak` 检查任务集是否重叠。
+  收尾时，`unseal_retention` 评估已记录的提交，并按训练分数选择交付版本。
+  这些检查将测试评估与候选选择分开，但不隔离候选代码，也不阻止操作者读取文件。
 - **单个候选崩溃不会拖垮一整轮：** `errored` 状态，加上出错轮次不消耗耐心
   （`max_consecutive_errors` 作为独立兜底）；SOP 未覆盖此项。
 - **QD 归档与重组：** 按（WHERE × WHY）分格的精英库，加上跨格的重组候选
@@ -93,19 +93,18 @@ Raven 选择现在就把集成做出来，换取跨窗口交接的自由与方�
 - **伤害回放：** 当候选导致某个任务出现回归时，会将该任务在候选版本下的实际执行轨迹摘录
   提供给下一次候选设计；SOP 只要求记录翻转次数。
 
-## 6. 有意的偏离与尚未接线的部分（如实清单） { #6-deliberate-deviations-and-unwired-parts-honest-list }
+## 6. 实现差异与尚未接入的部分 { #6-deliberate-deviations-and-unwired-parts-honest-list }
 
 1. **零命中 preflight 默认关闭**（`zero_hit_preflight=False`，2026-07 决定）。
-   理由：Gate-b 已经不给从未触发的机制记功（不存在正确性漏洞）；preflight 只节省预算，
-   却带有小幅误剪风险；TRIGGER_REGEX 声明是可选的，实际剪枝率未知。
+   提供埋点数据时，Gate-b 排除未触发标记的任务；没有埋点数据时会跳过该检查。
+   Preflight 是独立的节省预算措施，也可能误删候选；TRIGGER_REGEX 声明可选，实际剪枝率尚不清楚。
    先收集数据（在某次运行中开启，检查历史里的 `pruned_inert` 条目），再决定默认值。
    SOP §2 把 ③ 标注为 [now]；这是一处有意的偏离。
 2. **借用机制未接线**（SOP §2 ⑤，标注为 [defer]）：`tree_aware_bandit` 已存在，
-   但编排器不调用它。AppWorld 的 train 集跑全量是负担得起的——
-   这与 SOP 的「小基准不需要它」一致；任务集大时再接线。
+   但编排器不调用它。AppWorld 当前跑完整 train 集；任务集变大后再考虑接入借用机制。
 3. **亲和度锚点缺少数据来源：** `select_anchor(affinity)` 接受该参数，
    但 appworld 一侧没有触发密度的来源（上游的 `affinity_picker.py` 未移植）。
-   当前锚点由破冰任务 + 哨兵任务 + 边界任务构成；筛选仍然有效，只是信息效率略低。
+   当前锚点由破冰任务、哨兵任务和边界任务构成；此处尚未测量缺少亲和度选择的影响。
 4. **WHERE 的机械绑定只有 4 级**（prompt/runtime/mixed/edit），
    比判定 schema 的 14 个类别更粗。对 QD 分格已经够用；
    若需要细粒度的杠杆统计，可细化 `_lever_of_path`。自我声明值与机械值都在账本中，
@@ -117,9 +116,8 @@ Raven 选择现在就把集成做出来，换取跨窗口交接的自由与方�
 
 SOP §8.3 的「手工编排」已被 `python -m evolver run --config <yaml>` 取代：
 这是一条命令驱动的状态机，依次执行冷启动 → 各轮 → 终止 → 解封，
-任何中断之后都可续跑（产物即状态：trial 文件 / journal / 元数据标记，共三类持久化状态记录）。
-配置漂移与解封的单向性都在 `run_meta.json` 中机械化
-（即 SOP §0 同一制式纪律的代码化）。
+结束前可从已保存的试验结果和已完成轮次的检查点恢复，并非从中断调用中的任意指令继续。
+配置漂移与结束状态通过 `run_meta.json` 检查；`--force` 可绕过这些检查。
 基准通过 `docs/specs/evolve-bench-contract.md` 中的契约接入（该文档与代码一同
 保留在仓库内）；实现位于 `evolver/launch/` 与 `evolver/cli.py`。
 

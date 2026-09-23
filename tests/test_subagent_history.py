@@ -115,6 +115,43 @@ def test_spawn_record_finish_records_the_output(tmp_path: Path) -> None:
     assert meta["ended_at_ms"] >= meta["started_at_ms"]
 
 
+def test_spawn_record_finish_keeps_the_closing_beside_the_whole_output(tmp_path: Path) -> None:
+    """The context read draws the answer row from `closing.md` when a lane left
+    one, so a narrating agent's progress notes are not repeated at the head of
+    its answer; `out.md` stays the whole reply, which is what the caller got."""
+    record = SpawnRecord.open(_session_dir(tmp_path, "web:abc"), task_id="t1", task="ask", meta={"agent": "Coder"})
+    with activity.collecting() as run:
+        activity.note_closing("the last thing said")
+    record.finish(status="completed", output="a plan first\n\nthe last thing said", activity=run)
+
+    assert record.file("closing.md").read_text(encoding="utf-8") == "the last thing said"
+    assert record.file("out.md").read_text(encoding="utf-8") == "a plan first\n\nthe last thing said"
+
+
+@pytest.mark.parametrize("closing", [None, "", "   "])
+def test_spawn_record_finish_writes_no_closing_the_lane_did_not_report(tmp_path: Path, closing: str | None) -> None:
+    """`None` is a lane that cannot tell, `""` a turn that said nothing after
+    its last step: either way the whole output is the answer row, and no file
+    is written for the reader to prefer."""
+    record = SpawnRecord.open(_session_dir(tmp_path, "web:abc"), task_id="t1", task="ask", meta={"agent": "Coder"})
+    with activity.collecting() as run:
+        if closing is not None:
+            activity.note_closing(closing)
+    record.finish(status="completed", output="the answer", activity=run)
+
+    assert not record.file("closing.md").exists()
+
+
+def test_a_failed_spawn_keeps_no_closing_for_an_answer_it_never_returned(tmp_path: Path) -> None:
+    record = SpawnRecord.open(_session_dir(tmp_path, "web:abc"), task_id="t1", task="ask", meta={"agent": "Coder"})
+    with activity.collecting() as run:
+        activity.note_closing("almost done")
+    record.finish(status="failed", error="boom", activity=run)
+
+    assert not record.file("closing.md").exists()
+    assert record.file("error.md").read_text(encoding="utf-8") == "boom"
+
+
 def test_spawn_record_finish_is_idempotent(tmp_path: Path) -> None:
     """A cancel racing a completion runs finish twice; the first outcome wins --
     no duplicate instance-log turn, no clobbered status."""

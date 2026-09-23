@@ -12,6 +12,9 @@ These tests exercise that assembly, which is the only place the wiring exists.
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,6 +22,7 @@ import pytest
 from raven.rpc.methods import session as session_module
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.models import TurnSendParams
+from raven.session.manager import SessionManager
 
 
 class _Loop:
@@ -162,3 +166,93 @@ def test_a_seam_that_cannot_run_reports_no_naming(parsed: TurnSendParams, monkey
 def test_no_agent_loop_reports_no_naming(parsed: TurnSendParams, monkeypatch: pytest.MonkeyPatch) -> None:
     _use_loop(monkeypatch, None)
     assert turn_module._name_session(parsed, agent_loop_factory=lambda: None, emitter=None) is False
+
+
+class _Handle:
+    async def cancel(self) -> None:
+        return None
+
+
+class _Scheduler:
+    def __init__(self) -> None:
+        self.submitted: list[Any] = []
+
+    def submit(self, req: Any) -> _Handle:
+        self.submitted.append(req)
+        return _Handle()
+
+
+class _FilingEmitter:
+    """Files the turn's question the way the submitted worker does.
+
+    ``scheduler.submit`` is synchronous and the emit below is the first await
+    after it, so the worker's opening write -- which now happens before its
+    first model call -- lands here. What the namer sees on disk therefore
+    depends on which side of this emit it is called from.
+    """
+
+    def __init__(self, mgr: SessionManager, session_key: str, text: str) -> None:
+        self._mgr = mgr
+        self._key = session_key
+        self._text = text
+        self.types: list[str] = []
+
+    async def emit(self, session_key: str, event: dict[str, Any]) -> None:
+        session = self._mgr.get_or_create(self._key)
+        session.add_message("user", self._text)
+        self._mgr.save(session)
+        self.types.append(str(event.get("type")))
+
+
+class _TitleCall:
+    arguments = json.dumps({"title": "Cut a release"})
+
+
+class _TitleResponse:
+    content = None
+    tool_calls = [_TitleCall()]
+
+
+class _TitlingLoop:
+    sessions = None
+
+    class provider:  # noqa: N801 - a stand-in, not a class the product names
+        @staticmethod
+        async def chat_with_retry(**_kwargs: Any) -> _TitleResponse:
+            return _TitleResponse()
+
+
+async def test_naming_starts_before_the_turn_files_its_opening_question(
+    parsed: TurnSendParams, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The namer identifies an opening turn by "no user message on disk", and
+    the turn now puts one there as its first act. Called from the far side of
+    the message.start emit, it found the question already filed and declined to
+    name anything -- so every new conversation kept the mechanical title."""
+    from raven.rpc.methods.turn import turn_send
+    from raven.rpc.session_naming import _tasks
+
+    mgr = SessionManager(tmp_path)
+    loop = _TitlingLoop()
+    monkeypatch.setattr(session_module, "_safe_invoke_factory", lambda _factory: loop)
+    # ``_name_session`` imports this one from ``raven.session.resolve`` at call
+    # time, which is where it is defined -- patching session.py's copy leaves
+    # the namer reading the real workspace.
+    monkeypatch.setattr("raven.session.resolve.manager_for", lambda _loop, _config: mgr)
+    emitter = _FilingEmitter(mgr, parsed.session_key, parsed.content or "")
+    turn_module._active_turns.clear()
+    try:
+        result = await turn_send(
+            {"session_key": parsed.session_key, "content": parsed.content},
+            emitter=emitter,
+            scheduler=_Scheduler(),
+            turn_ids={},
+            agent_loop_factory=lambda: loop,
+        )
+    finally:
+        turn_module._active_turns.clear()
+
+    assert emitter.types == ["message.start"], "the client still gets its opening event"
+    assert result["naming"] is True, "the namer was skipped -- the question was already on disk"
+    await asyncio.gather(*list(_tasks), return_exceptions=True)
+    assert mgr.get_or_create(parsed.session_key).metadata["title"] == "Cut a release"

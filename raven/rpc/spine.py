@@ -27,6 +27,7 @@ from raven.contracts.asking import ApprovalResponder, SupportsDirectAsk
 from raven.permissions import start_permission_turn
 from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import (
+    TRANSIENT_NOTICE_KINDS,
     Deliverable,
     EpisodeStart,
     MediaOut,
@@ -190,6 +191,11 @@ class RpcTurnRunner(AgentTurnRunner):
             conversation_id=cid,
             turn_id=req.turn_id or "",
             on_review=_on_review if watched else None,
+            # A direct chat is a person's turn answered by a named instance, and
+            # the instance's tools are the ones that will ask -- so the prompt
+            # names it, not the main agent.
+            origin="subagent" if req.direct_target else req.origin.value,
+            origin_name=req.direct_target[0] if req.direct_target else "",
         )
         # Function-level on purpose: the acp client family is future shelf
         # cargo and must not be named at this module's import time
@@ -221,14 +227,19 @@ class RpcTurnRunner(AgentTurnRunner):
         # the gateway's GatewayTurnRunner read-back path.
         if req.origin is Origin.CRON:
             text_sink: dict[str, str] = {}
-            outcome = await self._loop.run_turn(req, emit, drain, stream=False, text_sink=text_sink)
+            try:
+                outcome = await self._loop.run_turn(req, emit, drain, stream=False, text_sink=text_sink)
+            finally:
+                # A turn that fails stores nothing and the submitter pops by
+                # conversation, so the previous run's text must not be left for
+                # it to read back as this run's reply.
+                if req.conversation is not None:
+                    self._readback_texts.pop(req.conversation, None)
             if req.conversation is not None and (text := text_sink.get("text")) is not None:
                 self._readback_texts[req.conversation] = text
             return outcome
         usage_sink: dict[str, Any] = {}
-        outcome = await self._loop.run_turn(
-            req, emit, drain, stream=True, inline_tool_stream=True, usage_sink=usage_sink
-        )
+        outcome = await self._loop.run_turn(req, emit, drain, stream=True, usage_sink=usage_sink)
 
         # A synthetic tool.complete when the message tool fired (the loop
         # skips it on the general tool path), so the UI records the agent acted —
@@ -249,6 +260,19 @@ class RpcTurnRunner(AgentTurnRunner):
         return outcome
 
 
+# The notices that describe what the RUNTIME did to the turn, and so reach a
+# client that draws every tool call itself. Progress and tool-hint notices exist
+# for text-only channels that cannot draw a tool row; forwarding them here would
+# narrate the same work twice.
+_WIRE_NOTICE_KINDS = frozenset(
+    {
+        NoticeKind.ACTION_BLOCKED,
+        NoticeKind.LLM_RETRY,
+        NoticeKind.ORGAN_DEGRADED,
+    }
+)
+
+
 class RpcOutlet:
     """A client's send surface. Maps each spine event to its wire event on the
     conversation's subscription: streamed token content via ``send_stream_chunk``
@@ -256,9 +280,11 @@ class RpcOutlet:
     thinking.delta, ToolEvent -> tool.start / tool.complete, a non-streamed Text
     -> a token.delta). The turn's completion (``message.complete``) and failure
     (``error``) are emitted by the sink after the render barrier. A Notice the
-    runtime raised about the turn itself (``action_blocked``) rides ``notice``;
-    a MediaOut rides ``media``. Progress and tool-hint notices are eaten -- no
-    client shows per-turn progress today (a known gap, deferred)."""
+    runtime raised about the turn itself (``_WIRE_NOTICE_KINDS``) rides
+    ``notice``, stamped ``transient`` so a client knows whether to draw it as a
+    status the next output frame replaces or as a row that stays; a MediaOut
+    rides ``media``. Progress and tool-hint notices are eaten -- no client shows
+    per-turn progress today (a known gap, deferred)."""
 
     def __init__(
         self,
@@ -380,6 +406,13 @@ class RpcOutlet:
                             # file, so every payload the wire already carried keeps
                             # its shape.
                             **({"file_change": out.file_change} if out.file_change else {}),
+                            # Same rule, same reason: absent when the call
+                            # removed nothing, which is nearly every call.
+                            **({"file_removed": out.file_removed} if out.file_removed else {}),
+                            # Same rule again: absent when the call wrote
+                            # nothing a listing could see, which is every call
+                            # that was not a command.
+                            **({"file_written": out.file_written} if out.file_written else {}),
                         },
                     },
                 )
@@ -393,15 +426,19 @@ class RpcOutlet:
                     {"type": "token.delta", "payload": self._tagged({"text": out.content}, cid)},
                 )
         elif isinstance(out, Notice):
-            # Only the kinds that describe what the RUNTIME did to the turn go
-            # on the wire. Progress and tool-hint notices exist for text-only
-            # channels that cannot draw a tool row; this client draws every call
-            # already, so forwarding them would narrate the same work twice.
-            if out.kind is NoticeKind.ACTION_BLOCKED:
-                await self._emitter.emit(
-                    self._subscription(cid),
-                    {"type": "notice", "payload": {"kind": out.kind.value, "detail": out.detail or ""}},
+            if out.kind in _WIRE_NOTICE_KINDS:
+                # Tagged like token.delta: a direct chat's turn runs on its own
+                # lane, and an untagged notice is read as the main agent's, so a
+                # sub-agent's retry was drawn into the main conversation.
+                payload = self._tagged(
+                    {
+                        "kind": out.kind.value,
+                        "detail": out.detail or "",
+                        "transient": out.kind in TRANSIENT_NOTICE_KINDS,
+                    },
+                    cid,
                 )
+                await self._emitter.emit(self._subscription(cid), {"type": "notice", "payload": payload})
         elif isinstance(out, EpisodeStart):
             # Boundary marker; the TUI buckets this model call's reasoning +
             # text + tools into one collapsible episode.
@@ -523,7 +560,7 @@ def _make_rpc_sink(
         """Whether the ending turn is the one ``turn.send`` bound this lane to.
 
         A lane is serial but its slots are per-lane, so a turn the runtime
-        submitted itself (a sub-agent announce, a deep-research delivery) can end
+        submitted itself (a sub-agent announce, a verbatim delivery) can end
         while a client's turn is still QUEUED behind it on the same lane.
         Releasing the slots there opens the -32003 guard for a second send and
         leaves the queued turn's own end with no binding to report against.
@@ -605,7 +642,7 @@ def _make_rpc_sink(
                 # A turn the runtime opened (a delegated result re-entering the
                 # conversation) gets NO message.start -- that event belongs to
                 # turn.send. The delegated identity is the gate: another
-                # SUBAGENT shape, deep research's deliver_text turn, persists
+                # SUBAGENT shape -- a deliver_text turn with no delegated identity -- persists
                 # only an assistant entry -- no user entry opens this turn on
                 # reload, so emitting a live boundary here would advance the
                 # workspace counter in a way the stored history does not. But the client's live bookkeeping advances one

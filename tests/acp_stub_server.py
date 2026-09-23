@@ -10,6 +10,9 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
 - ``ok``           - full handshake, one text chunk plus a tool call, then end_turn.
 - ``reject_init``  - answers ``initialize`` with a JSON-RPC error.
 - ``no_session``   - handshake fine, ``session/new`` errors (an auth-shaped message).
+- ``no_session_sdk`` - like ``no_session``, but refused the way both ACP SDKs wrap
+                     an unhandled exception: the placeholder ``Internal error`` as
+                     the message and the reason in ``data.details``.
 - ``no_session_other`` - like ``no_session``, but the refusal is about anything
                      else. The handshake still advertises an auth method, which is
                      the point: an advertisement is not evidence that THIS refusal
@@ -148,8 +151,11 @@ def ok(request_id, result) -> None:
     send({"jsonrpc": "2.0", "id": request_id, "result": result})
 
 
-def err(request_id, code, message) -> None:
-    send({"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}})
+def err(request_id, code, message, data=None) -> None:
+    error = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    send({"jsonrpc": "2.0", "id": request_id, "error": error})
 
 
 def notify(method: str, params: dict) -> None:
@@ -258,6 +264,12 @@ def handle_response(frame) -> None:
     ok(request_id, {"stopReason": "end_turn"})
 
 
+def _permission_input() -> dict:
+    """The command a ``permission`` request names, when the test set one."""
+    command = os.environ.get("ACP_STUB_COMMAND")
+    return {"rawInput": {"command": command}} if command else {}
+
+
 def handle_prompt(request_id, params) -> None:
     session_id = params.get("sessionId") or "stub-session-1"
     if MODE == "echo_blocks":
@@ -336,7 +348,7 @@ def handle_prompt(request_id, params) -> None:
                 "method": "session/request_permission",
                 "params": {
                     "sessionId": session_id,
-                    "toolCall": {"toolCallId": "t1", "kind": "execute"},
+                    "toolCall": {"toolCallId": "t1", "kind": "execute", **_permission_input()},
                     "options": [
                         {"optionId": "no", "name": "Reject", "kind": "reject_once"},
                         {"optionId": "once", "name": "Allow Once", "kind": "allow_once"},
@@ -668,6 +680,13 @@ def main() -> None:
                 err(request_id, -32000, "no api key configured for this agent")
             elif MODE == "no_session_other":
                 err(request_id, -32000, "selected model is unavailable")
+            elif MODE == "no_session_sdk":
+                err(
+                    request_id,
+                    -32603,
+                    "Internal error",
+                    {"details": "Stub is not connected to any AI provider yet. Add an API key to pick one."},
+                )
             else:
                 global _SESSIONS
                 _SESSIONS += 1

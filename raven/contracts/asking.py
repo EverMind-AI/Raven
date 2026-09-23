@@ -24,8 +24,13 @@ class ApprovalResponder(Protocol):
     """Turn-scoped capability that can approve one exact action.
 
     ``command`` is the action as the human should read it -- a shell command
-    verbatim, any other tool as a short action line. The outcome distinguishes
-    a refusal that continues the turn from the one click that ends it
+    verbatim, any other tool as a short action line. The rest is what a richer
+    surface draws the prompt from: ``kind`` picks the layout, ``family`` the
+    wording, ``origin`` / ``origin_name`` say who is asking (the main agent or
+    a named sub-agent), and ``evidence`` is the tool's own account of the call
+    (the command and its directory, a path and a diff, an MCP tool's input). A
+    transport may ignore all of them. The outcome distinguishes a refusal that
+    continues the turn from the one click that ends it
     (:class:`~raven.contracts.permissions.ApprovalChoice`); every transport
     failure and timeout must come back as a deny, never as an exception.
     """
@@ -39,6 +44,11 @@ class ApprovalResponder(Protocol):
         command: str,
         description: str,
         suggested_pattern: str = "",
+        kind: str = "",
+        family: str = "",
+        origin: str = "",
+        origin_name: str = "",
+        evidence: dict[str, Any] | None = None,
     ) -> ApprovalOutcome: ...
 
 
@@ -51,7 +61,7 @@ class Asker(Protocol):
         *,
         index: int = 0,
         total: int = 1,
-        batch: list[dict[str, str]] | None = None,
+        batch: list[dict[str, Any]] | None = None,
     ) -> str | None: ...
 
 
@@ -75,6 +85,7 @@ class QuestionResponder(Protocol):
         timeout_s: float | None = None,
         header: str = "",
         recommended: str = "",
+        multi_select: bool = False,
         index: int = 0,
         total: int = 1,
         batch: list[dict[str, Any]] | None = None,
@@ -102,7 +113,7 @@ class SupportsDirectAsk(Protocol):
         *,
         index: int = 0,
         total: int = 1,
-        batch: list[dict[str, str]] | None = None,
+        batch: list[dict[str, Any]] | None = None,
     ) -> str | None: ...
 
 

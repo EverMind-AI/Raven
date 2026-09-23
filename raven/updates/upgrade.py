@@ -23,6 +23,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import httpx
 
@@ -741,6 +742,40 @@ def _is_editable_install() -> bool:
     directory = data["dir_info"]
     editable = directory.get("editable", False)
     return editable
+
+
+def editable_checkout_status() -> tuple[Path, int, int]:
+    """Read the installed checkout against its last fetched origin/main."""
+    data = _direct_url_data()
+    if data is None:
+        raise UpgradeError("Editable source checkout metadata is unavailable")
+    source_url = data["url"]
+    if not isinstance(source_url, str):
+        raise UpgradeError("Editable source checkout URL must be a string")
+    url = urlparse(source_url)
+    if url.scheme != "file" or url.netloc not in ("", "localhost"):
+        raise UpgradeError("Editable source checkout must be a local directory")
+    checkout = Path(url2pathname(url.path))
+    if not checkout.is_absolute():
+        raise UpgradeError("Editable source checkout path must be absolute")
+    try:
+        git = shutil.which("git")
+        if git is None:
+            raise FileNotFoundError("Git is not installed")
+        result = subprocess.run(
+            [git, "-C", str(checkout), "rev-list", "--left-right", "--count", "origin/main...HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        behind, ahead = map(int, result.stdout.split())
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise UpgradeError(
+            "Cannot compare the source checkout with origin/main; ensure Git is installed "
+            "and run git fetch origin main in the source checkout"
+        ) from exc
+    return checkout, ahead, behind
 
 
 def _uv_tool_target() -> ToolInstallTarget | None:

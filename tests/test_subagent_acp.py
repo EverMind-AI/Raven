@@ -16,6 +16,7 @@ import json
 import sys
 import time
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -39,7 +40,7 @@ from raven.acp_client.protocol import AcpRemoteError
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, third_party_agent_meta
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.manager import SubagentManager
-from raven.agent.subagent.probe import probe_one, run_test
+from raven.agent.subagent.probe import capabilities_wanted, probe_one, record_capabilities, run_test
 from raven.agent.subagent.probe_state import fingerprint
 from raven.agent.subagent.registry import _row_for
 from raven.config.schema import SubagentsConfig, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
@@ -301,6 +302,50 @@ async def test_a_refusal_about_anything_else_is_not_a_credential_verdict() -> No
     assert credential.needs_auth is True
 
 
+async def test_the_roster_and_the_connect_button_read_one_answer() -> None:
+    """One refusal, one verdict, whichever of the two asks.
+
+    Both ACP SDKs refuse with the placeholder Internal error and the reason
+    in data.details. The connect button came to read data while the
+    roster still read the message alone, and on the measured hermes refusal the
+    two disagreed: Connect said "no usable credential", the row did not say
+    Unauthorized, and Test showed the placeholder. Both read `reason_of` now,
+    through the same rule, so this runs one agent process through both.
+    """
+    from raven.agent.subagent.probe import ping_agent
+
+    reason = "Stub is not connected to any AI provider yet"
+
+    snapshot = await verify_agent(stub_config(mode="no_session_sdk"))
+    assert snapshot.needs_auth is True, "the roster reads the reason, not the placeholder"
+    assert reason in snapshot.detail, "and Test and the saved row detail show it"
+
+    pinged = await ping_agent(stub_config(mode="no_session_sdk"))
+    assert pinged.ok is False
+    assert "no usable credential" in pinged.detail
+    assert reason in pinged.detail
+
+
+async def test_a_handshake_refused_over_a_credential_carries_its_fix_into_the_test() -> None:
+    """Test is the sheet's way back for an unauthorized row, so its verdict names the fix.
+
+    Read off the handshake's own classification (`needs_auth`), not off the
+    detail: that ends in "(auth methods: ...)", an advertisement a working agent
+    makes too, so a refusal about anything else must not grow a sign-in fix --
+    which the second half pins against the same advertising stub.
+    """
+    from raven.agent.subagent.probe_state import Remedy
+
+    refused = await run_test(stub_config(mode="no_session_sdk"), source="config")
+    assert refused.ok is False
+    assert refused.remedy == Remedy("sign_in"), "no command is known for the stub, so the fix names none"
+
+    other = await run_test(stub_config(mode="no_session_other"), source="config")
+    assert other.ok is False
+    assert other.remedy is None
+    assert "auth methods" in other.detail, "the advertisement is there, and still is not the evidence"
+
+
 async def test_the_credential_verdict_outlives_the_process_that_measured_it(tmp_path: Path) -> None:
     """It is read back from disk on every later page load, so it has to persist.
 
@@ -423,6 +468,145 @@ def test_snapshot_store_ignores_a_row_it_cannot_read(tmp_path: Path) -> None:
     assert SnapshotStore(path=path).load([stub_config("a")]) == {}
 
 
+async def test_a_failed_manual_test_keeps_the_capabilities_the_last_record_measured(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A verify that fails before ``session/new`` carries no menu and no
+    statefulness. Recorded whole, one flaky Test cost the row both until the
+    next success -- the verdict visible, the loss not. The verdict is recorded;
+    the capabilities are the previous record's, the way ``SnapshotStore.load``
+    already trusts a stale row's."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    good = await verify_agent(cfg)
+    SnapshotStore(path=path).record(good)
+    assert good.can_resume is True and good.available_models
+
+    failed = replace(
+        good,
+        status="missing",
+        detail="executable not found",
+        can_resume=False,
+        can_load=False,
+        available_models=(),
+        model_choices=(),
+        measured_at_ms=good.measured_at_ms + 1,
+    )
+
+    async def fake_verify(_cfg: Any) -> CapabilitySnapshot:
+        return failed
+
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+    result = await run_test(cfg, source="config")
+
+    assert result.detail == "executable not found"
+    kept = SnapshotStore(path=path).load([cfg])["a"]
+    assert (kept.status, kept.detail, kept.measured_at_ms) == ("missing", "executable not found", failed.measured_at_ms)
+    assert kept.can_resume is True
+    assert kept.available_models == good.available_models
+    assert (await probe_one(cfg, source="config")).status == "missing", "the verdict itself is on the row"
+
+
+async def test_a_failed_test_after_a_config_edit_keeps_the_capabilities_the_roster_was_trusting(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The stale case the precedent is about: the roster reads a stale row's
+    capabilities (``allow_stale=True``), so the record a failed test writes over
+    it must keep them too -- under this test's fingerprint, or the row would
+    stay stale for good."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    good = await verify_agent(stub_config("a"))
+    SnapshotStore(path=path).record(good)
+    edited = stub_config("a", ready_timeout_ms=999)
+    assert acp_snapshot_for(edited).stale is True
+    failed = replace(good, fingerprint=snapshot_fingerprint(edited), status="missing", detail="gone", can_resume=False)
+
+    async def fake_verify(_cfg: Any) -> CapabilitySnapshot:
+        return failed
+
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+    await run_test(edited, source="config")
+
+    kept = SnapshotStore(path=path).load([edited])["a"]
+    assert (kept.status, kept.stale, kept.can_resume) == ("missing", False, True)
+    assert kept.fingerprint == snapshot_fingerprint(edited)
+
+
+async def test_the_connect_records_what_a_test_would(tmp_path: Path, monkeypatch) -> None:
+    """``record_capabilities`` is the writer the manual test and the connect
+    share, and ``capabilities_wanted`` is the boot backfill's own three cases:
+    no record, a record for a launch config that changed, a record from before
+    the menu was measured. A complete record is not re-measured."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    assert capabilities_wanted(cfg) is True
+
+    snapshot = await record_capabilities(cfg)
+
+    assert snapshot.usable is True
+    kept = SnapshotStore(path=path).load([cfg])["a"]
+    assert kept.can_resume is True and kept.model_menu_measured is True
+    assert capabilities_wanted(cfg) is False
+    assert capabilities_wanted(stub_config("a", ready_timeout_ms=999)) is True, "an edited launch is re-measured"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    for row in raw["snapshots"]:
+        row.pop("modelChoices", None)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert capabilities_wanted(cfg) is True, "a record from before the menu is re-measured"
+
+
+async def test_a_first_test_that_fails_is_recorded_as_it_is(tmp_path: Path, monkeypatch) -> None:
+    """Nothing to keep: with no previous record the failed measurement is the record."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    failed = replace(await verify_agent(cfg), status="missing", detail="gone", can_resume=False)
+
+    async def fake_verify(_cfg: Any) -> CapabilitySnapshot:
+        return failed
+
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+    await run_test(cfg, source="config")
+
+    kept = SnapshotStore(path=path).load([cfg])["a"]
+    assert (kept.status, kept.can_resume) == ("missing", False)
+
+
+async def test_a_row_recorded_before_the_menu_reads_attention_until_it_is_measured(tmp_path: Path, monkeypatch) -> None:
+    """A "ready" written before ``modelChoices`` existed predates a capability
+    the sheet now draws from; reporting it put a disabled "managed by itself"
+    pill on an agent that may offer a menu, with an INFO line as the only trace
+    when the boot backfill's re-verify failed. The row says what is missing
+    instead, and a verdict re-recorded over it keeps "never measured" apart
+    from "measured, none"."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    store = SnapshotStore(path=path)
+    store.record(await verify_agent(cfg))
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    for row in raw["snapshots"]:
+        row.pop("modelChoices", None)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    old = store.load([cfg])["a"]
+    assert old.model_menu_measured is False
+    assert store.has_model_menu("a") is False
+    probed = await probe_one(cfg, source="config")
+    assert probed.status == "attention"
+    assert "model menu has not been measured" in probed.detail
+
+    store.record(replace(old, status="missing", detail="a verdict over the old row"))
+    assert store.has_model_menu("a") is False, "re-recording a verdict must not mint a measured-empty menu"
+
+    store.record(await verify_agent(cfg))
+    assert store.has_model_menu("a") is True
+    assert (await probe_one(cfg, source="config")).status == "ready"
+
+
 # ---- relearning the mode menu from a live session --------------------------
 
 
@@ -531,6 +715,59 @@ def test_nothing_is_invented_for_an_agent_never_measured(tmp_path: Path) -> None
     store = SnapshotStore(path=tmp_path / "caps.json")
     assert relearn_session_modes(None, _session_result({"id": "fast"}), store=store) is None
     assert not (tmp_path / "caps.json").exists()
+
+
+def test_has_model_menu_is_false_for_a_row_recorded_before_the_key_existed(tmp_path: Path) -> None:
+    """A fabricated older-format row: everything ``record`` would have written,
+    minus the ``modelChoices`` key that did not exist yet when it was recorded.
+
+    ``CapabilitySnapshot.from_row`` cannot tell this apart from "measured, and
+    the agent offers no menu" -- both default the field to ``()`` -- so the
+    predicate has to read the raw row, not a loaded snapshot.
+    """
+    path = tmp_path / "caps.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "snapshots": [
+                    {
+                        "agent": "a",
+                        "fingerprint": "f",
+                        "status": "ready",
+                        "detail": "",
+                        "measuredAtMs": 1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = SnapshotStore(path=path)
+
+    assert store.has_model_menu("a") is False
+
+
+def test_has_model_menu_is_true_once_the_key_is_present_even_if_empty(tmp_path: Path) -> None:
+    """An agent genuinely measured to offer no menu is not "old format": the
+    key is there, it is just empty, and that must not force a re-verify."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    store.record(
+        CapabilitySnapshot(
+            agent="a", fingerprint=snapshot_fingerprint(cfg), status="ready", detail="", measured_at_ms=1
+        )
+    )
+
+    assert store.has_model_menu("a") is True
+
+
+def test_has_model_menu_is_true_for_an_agent_with_no_stored_row(tmp_path: Path) -> None:
+    """ "Never measured" is the missing-snapshot branch's job, not this one's --
+    the predicate must not itself demand a re-verify for a name nothing holds."""
+    store = SnapshotStore(path=tmp_path / "caps.json")
+
+    assert store.has_model_menu("nobody") is True
 
 
 def test_the_backend_rebuilds_the_agent_table_when_the_menu_moved(tmp_path: Path) -> None:
@@ -701,6 +938,401 @@ async def test_a_second_opening_frame_for_one_call_revises_it_rather_than_repeat
     # And the rendered rows pair up, with no assistant row left without its result.
     rows = col.messages()
     assert [row["role"] for row in rows] == ["assistant", "tool"], rows
+
+
+# ---- what a turn wrote -----------------------------------------------------
+
+
+async def _feed(collector: Any, *frames: dict) -> None:
+    for frame in frames:
+        await collector("session/update", {"update": frame})
+
+
+def _diff_block(path: str, new_text: str, old_text: str | None = None) -> dict:
+    """One ``diff`` entry of a tool call's content, as the spec shapes it."""
+    block: dict[str, Any] = {"type": "diff", "path": path, "newText": new_text}
+    if old_text is not None:
+        block["oldText"] = old_text
+    return block
+
+
+async def test_a_diff_block_for_a_new_file_is_recorded_as_a_creation(tmp_path: Path) -> None:
+    """The acp lane's only account of its agent's own writes. Without it a node
+    that produced ten files reported none, and the desk read "no changes"."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(
+            col,
+            {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit", "title": "Write deck.md"},
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block(str(tmp_path / "deck.md"), "one\ntwo\n")],
+            },
+        )
+
+    assert did.files == [{"path": "deck.md", "op": "add", "add": 2, "del": 0, "size": 8}]
+
+
+async def test_a_diff_block_over_an_existing_file_is_an_edit_with_its_counts(tmp_path: Path) -> None:
+    """``oldText`` is what says the file was there, and the two texts are the
+    only place the line counts can come from."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(
+            col,
+            {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"},
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("notes.md", "keep\nnew\nextra\n", old_text="keep\nold\n")],
+            },
+        )
+
+    # A relative path is resolved against the session's working directory, which
+    # is the only thing an adapter could have meant it relative to.
+    assert did.files == [{"path": "notes.md", "op": "edit", "add": 2, "del": 1, "size": 15}]
+
+
+async def test_a_failed_call_records_nothing_from_its_blocks(tmp_path: Path) -> None:
+    """Half an edit the agent then abandoned is not a change anyone can open:
+    the block is a claim, and only what the disk shows counts -- here nothing."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(
+            col,
+            {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"},
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "failed",
+                "content": [_diff_block("notes.md", "half\n")],
+            },
+        )
+
+    assert did.files == []
+
+
+async def test_one_call_settles_once_however_many_frames_repeat_it(tmp_path: Path) -> None:
+    """Adapters re-send frames (codebuddy re-opens a call it already announced),
+    and a second completion would count the same write twice."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    done = {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "c1",
+        "status": "completed",
+        "content": [_diff_block("notes.md", "one\ntwo\n")],
+    }
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        # Really on disk: with nothing at the path, a second settling cancels the
+        # entry away as a removal and the block puts it straight back, landing on
+        # these same numbers whether or not the call settled twice.
+        (tmp_path / "notes.md").write_text("one\ntwo\n", encoding="utf-8")
+        await _feed(col, done, dict(done))
+
+    assert did.files == [{"path": "notes.md", "op": "add", "add": 2, "del": 0, "size": 8}]
+
+
+async def test_a_file_a_call_left_on_disk_with_no_diff_block_is_still_recorded(tmp_path: Path) -> None:
+    """A command the agent ran reports its output and nothing else, so the only
+    sign of what it produced is the directory changing around the call."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "execute"})
+        (tmp_path / "built.txt").write_text("a\nb\n", encoding="utf-8")
+        await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed"})
+
+    assert did.files == [{"path": "built.txt", "op": "add", "add": 2, "del": 0, "size": 4}]
+
+
+async def test_a_file_this_turn_wrote_and_a_later_call_removed_reads_as_a_deletion(tmp_path: Path) -> None:
+    """Counted once, not twice: the watch reports the removal with the lines the
+    file held, and the listing that also saw it go is told to skip the path."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    made = tmp_path / "scratch.md"
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        made.write_text("one\ntwo\nthree\n", encoding="utf-8")
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("scratch.md", "one\ntwo\nthree\n")],
+            },
+        )
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c2", "kind": "execute"})
+        made.unlink()
+        await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "c2", "status": "completed"})
+
+    # Created and removed inside one run nets to nothing, the way git shows
+    # nothing for a file born and deleted inside one range.
+    assert did.files == []
+
+
+async def test_a_pre_existing_file_a_call_removes_is_a_deletion(tmp_path: Path) -> None:
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    doomed = tmp_path / "old.md"
+    doomed.write_text("one\ntwo\n", encoding="utf-8")
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "execute"})
+        doomed.unlink()
+        await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed"})
+
+    assert did.files == [{"path": "old.md", "op": "delete", "add": 0, "del": 0, "size": None}]
+
+
+async def test_a_running_acp_node_shows_its_files_through_the_live_account(tmp_path: Path) -> None:
+    """``tasks.list`` overlays a running node from the live activity, so a file
+    recorded mid-turn has to be readable there before the record lands."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+    from raven.rpc.methods.tasks import _overlay_live
+
+    with activity.collecting(live_key="acp-live") as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(
+            col,
+            {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"},
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("deck.md", "one\n")],
+            },
+        )
+        node: dict[str, Any] = {
+            "status": "running",
+            "files": [],
+            "tokens_in": None,
+            "tokens_out": None,
+            "tool_call_count": None,
+            "tool_failure_count": None,
+        }
+        _overlay_live(node, activity.live("acp-live"))
+
+    assert node["files"] == did.files == [{"path": "deck.md", "op": "add", "add": 1, "del": 0, "size": 4}]
+
+
+async def test_a_whole_file_block_over_a_file_that_was_there_is_a_rewrite(tmp_path: Path) -> None:
+    """claude-agent-acp announces every ``Write`` with no ``oldText``, whether or
+    not the file existed, so the block alone cannot tell a creation from a
+    rewrite -- the listing taken when the call opened can."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.acp_client.acp_dialects import ClaudeCodeDialect
+    from raven.agent.subagent import activity
+
+    kept = tmp_path / "w.md"
+    kept.write_text("old\n", encoding="utf-8")
+    with activity.collecting() as did:
+        col = _TurnCollector(dialect=ClaudeCodeDialect(), workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        kept.write_text("new\n", encoding="utf-8")
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("w.md", "new\n")],
+            },
+        )
+
+    assert did.files == [{"path": "w.md", "op": "write", "add": 1, "del": 0, "size": 4}]
+
+
+async def test_a_rewritten_file_a_later_call_removes_still_reads_as_a_deletion(tmp_path: Path) -> None:
+    """The cost of reading a rewrite as a creation: created-then-deleted nets to
+    nothing, so a file the user had would vanish from the account that says the
+    run deleted it."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.acp_client.acp_dialects import ClaudeCodeDialect
+    from raven.agent.subagent import activity
+
+    doomed = tmp_path / "w.md"
+    doomed.write_text("old\n", encoding="utf-8")
+    with activity.collecting() as did:
+        col = _TurnCollector(dialect=ClaudeCodeDialect(), workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        doomed.write_text("new\n", encoding="utf-8")
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("w.md", "new\n")],
+            },
+        )
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c2", "kind": "execute"})
+        doomed.unlink()
+        await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "c2", "status": "completed"})
+
+    assert did.files == [{"path": "w.md", "op": "delete", "add": 0, "del": 1, "size": None}]
+
+
+async def test_a_removal_reported_as_a_diff_block_is_a_deletion(tmp_path: Path) -> None:
+    """codex-acp reports a removal as the old content against an empty new one.
+    Read as an edit it would say the file is there and empty, and the listing
+    that also saw it go is told to skip the path -- so as the turn's last call
+    nothing would correct it."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    gone = tmp_path / "gone.md"
+    gone.write_text("one\ntwo\n", encoding="utf-8")
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "delete"})
+        gone.unlink()
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "diff",
+                        "path": "gone.md",
+                        "oldText": "one\ntwo\n",
+                        "newText": "",
+                        "_meta": {"kind": "delete"},
+                    }
+                ],
+            },
+        )
+
+    assert did.files == [{"path": "gone.md", "op": "delete", "add": 0, "del": 2, "size": None}]
+
+
+async def test_the_hunks_of_one_edit_are_one_change(tmp_path: Path) -> None:
+    """An adapter sends one block per hunk of the same edit (claude-agent-acp
+    builds them from the patch's structure), so keeping the last block alone
+    would report whichever hunk arrived last as the whole change."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    edited = tmp_path / "m.py"
+    edited.write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        edited.write_text("A\nb\nc\nd\nE\n", encoding="utf-8")
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [
+                    _diff_block("m.py", "A\nb", old_text="a\nb"),
+                    _diff_block("m.py", "d\nE", old_text="d\ne"),
+                ],
+            },
+        )
+
+    # Size off the file, not off a hunk: the block is a fragment, the panel shows
+    # the file.
+    assert did.files == [{"path": "m.py", "op": "edit", "add": 2, "del": 2, "size": 10}]
+
+
+async def test_a_file_two_calls_in_flight_both_see_is_counted_once(tmp_path: Path) -> None:
+    """Claude Code runs tool calls in parallel, and a file written while two are
+    open is created inside both windows -- recorded from each listing, its lines
+    are counted twice."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "a", "kind": "execute"})
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "b", "kind": "execute"})
+        (tmp_path / "byA.txt").write_text("1\n2\n3\n", encoding="utf-8")
+        await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "a", "status": "completed"})
+        await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "b", "status": "completed"})
+
+    assert did.files == [{"path": "byA.txt", "op": "add", "add": 3, "del": 0, "size": 6}]
+
+
+async def test_at_the_listing_ceiling_the_oldest_open_call_gives_up_its_own(tmp_path: Path) -> None:
+    """A call that never reports an end holds its listing for the turn. Refusing
+    the newest instead of dropping the oldest would leave every later call with
+    no account of what it did at all."""
+    from raven.acp_client.acp_agent import _MAX_OPEN_LISTINGS, _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        for index in range(_MAX_OPEN_LISTINGS + 1):
+            await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": f"k{index}", "kind": "execute"})
+        (tmp_path / "late.txt").write_text("x\n", encoding="utf-8")
+        await _feed(
+            col,
+            {"sessionUpdate": "tool_call_update", "toolCallId": f"k{_MAX_OPEN_LISTINGS}", "status": "completed"},
+        )
+
+    assert did.files == [{"path": "late.txt", "op": "add", "add": 1, "del": 0, "size": 2}]
+
+
+async def test_a_call_that_cannot_write_a_file_is_not_listed_around(tmp_path: Path) -> None:
+    """Two walks of the working tree run on the connection's read loop, which
+    every session sharing it waits behind. A read leaves no file to find."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting():
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "r1", "kind": "read"})
+        assert col._listings == {}
+
+
+async def test_a_call_first_seen_already_over_is_read_from_its_blocks_alone(tmp_path: Path) -> None:
+    """A listing taken once the call is over is the state after it. Read as the
+    state before, it would say every file the call created had been there all
+    along -- so a call with no opening frame gets no listing at all."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        (tmp_path / "deck.md").write_text("one\n", encoding="utf-8")
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("deck.md", "one\n")],
+            },
+        )
+
+    assert did.files == [{"path": "deck.md", "op": "add", "add": 1, "del": 0, "size": 4}]
 
 
 # ---- the roster ------------------------------------------------------------
@@ -890,6 +1522,50 @@ async def test_an_explicit_test_retries_past_a_stale_recorded_failure(tmp_path: 
     result = await run_test(cfg, source="config")
     assert result.ok, result.detail
     assert (await probe_one(cfg, source="config")).status == "ready"
+
+
+async def test_an_acp_test_is_the_agents_own_answer_and_not_its_handshake(tmp_path: Path, monkeypatch) -> None:
+    """The handshake cannot answer whether the agent works, so it is not the verdict.
+
+    ACP carries no authenticated-state field, so an agent that defers its
+    credential to the first model call opens a session happily and fails
+    afterwards -- six of the thirteen registry agents measured on 2026-09-07 did
+    exactly that. The stub's ``empty_turn`` is that agent: ``initialize`` and
+    ``session/new`` both succeed, and the prompt comes back empty with the
+    provider's 401 on stderr.
+    """
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
+    cfg = stub_config("defers-its-credential", mode="empty_turn")
+
+    assert (await verify_agent(cfg)).usable is True, "the premise: the handshake is happy about this agent"
+
+    result = await run_test(cfg, source="config")
+    assert result.ok is False, "the handshake passed but the agent cannot run a turn"
+    # The provider's own refusal reaches the operator: the whole point of asking
+    # the agent rather than its handshake is that only the agent knows this.
+    assert "HTTP 401" in result.detail
+    # The half that worked is kept behind the verdict, because "it connected and
+    # then said nothing" is a different failure from "it is not installed".
+    assert "connected to stub-agent" in result.detail
+
+
+async def test_recording_capabilities_never_prompts_the_agent(tmp_path: Path, monkeypatch) -> None:
+    """The seam that keeps every writer but the Test button free of a model call.
+
+    An explicit Test spends one on purpose. Nothing else may: the boot backfill
+    runs once per installed preset per boot, and a connect has already paid for
+    its own ping by the time it records. Both write through
+    ``record_capabilities``, so the line lives here rather than in each caller.
+    """
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
+
+    async def refuse_to_ping(_cfg: Any) -> Any:
+        raise AssertionError("record_capabilities must reach its verdict without prompting the agent")
+
+    monkeypatch.setattr("raven.agent.subagent.probe.ping_agent", refuse_to_ping)
+
+    snapshot = await record_capabilities(stub_config("recorded-for-free"))
+    assert snapshot.usable is True
 
 
 # ---- dispatch --------------------------------------------------------------
@@ -2580,6 +3256,65 @@ async def test_one_runs_steps_do_not_land_on_another_runs_record() -> None:
             await reader
 
 
+_TOOL_CALL_UPDATE = {
+    "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "t1",
+        "title": "read src/a.py",
+        "kind": "read",
+        "rawInput": {"path": "src/a.py"},
+    }
+}
+_TOOL_FAILED_UPDATE = {
+    "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "t1",
+        "status": "failed",
+        "content": [{"type": "content", "content": {"type": "text", "text": "no such file"}}],
+    }
+}
+
+
+async def test_a_running_turns_tool_count_is_published_as_the_calls_land() -> None:
+    """`tasks.list` draws a running node's tool count off the live account, and
+    the count used to be published once, when the turn ended -- so the board
+    chip stayed blank while the live transcript already listed the calls."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting("run") as run:
+        col = _TurnCollector()
+        await col("session/update", _TOOL_CALL_UPDATE)
+        assert len(run.tool_calls) == 1, "the call is counted the moment it is announced"
+        assert run.tool_failures == []
+        await col("session/update", _TOOL_FAILED_UPDATE)
+        assert len(run.tool_calls) == 1
+        assert len(run.tool_failures) == 1, "and its failure the moment the result lands"
+
+
+async def test_the_end_of_turn_record_does_not_count_the_calls_a_second_time() -> None:
+    import time
+
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    class _Span:
+        def set(self, **_attrs) -> None:
+            pass
+
+        def event(self, _name: str) -> None:
+            pass
+
+    backend = build_third_party_backend(stub_config("a"))
+    with activity.collecting("run") as run:
+        col = _TurnCollector()
+        await col("session/update", _TOOL_CALL_UPDATE)
+        await col("session/update", _TOOL_FAILED_UPDATE)
+        backend._record(_Span(), col, stop_reason="end_turn", started=time.monotonic(), frames={})
+        assert len(run.tool_calls) == 1, "the settled list replaces the live one rather than doubling it"
+        assert len(run.tool_failures) == 1
+
+
 class TestBackendDispatchSignature:
     """Every backend must accept what ``SubagentManager`` unconditionally sends.
 
@@ -2684,6 +3419,190 @@ async def test_an_observer_that_raises_still_yields_the_approval() -> None:
     answer = await handle("session/request_permission", acp_frames.CODEX_READ_PERMISSION)
 
     assert answer == {"outcome": {"outcome": "selected", "optionId": "allow_always"}}
+
+
+# ---- the host's own refusals bind what it approves --------------------------
+
+
+@pytest.fixture()
+def host_rules(tmp_path, monkeypatch):
+    """Write the host's config; the approver reads it live, as the host's gate does."""
+    from raven.acp_client import permissions
+
+    home = tmp_path / "host-home"
+    home.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    permissions._host_policy.cache_clear()
+
+    def write(config: dict[str, Any]) -> None:
+        (home / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    write({})
+    yield write
+    permissions._host_policy.cache_clear()
+
+
+def _asking(command: str | None, options: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    tool: dict[str, Any] = {"toolCallId": "t1", "kind": "execute", "status": "pending"}
+    if command is not None:
+        tool["rawInput"] = {"command": command}
+    offered = [
+        {"optionId": "always", "kind": "allow_always"},
+        {"optionId": "once", "kind": "allow_once"},
+        {"optionId": "no", "kind": "reject_once"},
+    ]
+    return {"sessionId": "s1", "toolCall": tool, "options": offered if options is None else options}
+
+
+def test_every_spelling_of_the_requested_command_is_read() -> None:
+    """The quoted raw form codex sends, the same without its quotes, and each
+    parsed action -- a compound command's refused segment need not be first."""
+    from raven.acp_client.permissions import requested_commands
+    from tests import acp_frames
+
+    assert requested_commands(acp_frames.CODEX_READ_PERMISSION) == [
+        "\"sed -n '1,200p' calc.py\"",
+        "sed -n '1,200p' calc.py",
+    ]
+    compound = {
+        "toolCall": {"rawInput": {"command": '"cd src && curl -s https://example.com"'}},
+        "_meta": {
+            "codex": {"params": {"commandActions": [{"command": "cd src"}, {"command": "curl -s https://example.com"}]}}
+        },
+    }
+    assert "curl -s https://example.com" in requested_commands(compound)
+    assert requested_commands(_asking(None)) == []
+    assert requested_commands({"toolCall": {"rawInput": {"command": ["curl", "x"]}}}) == []
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"permissions": {"tools": {"exec": {"curl *": "deny"}}}},
+        {"permissions": {"tools": {"exec": "deny"}}},
+        {"tools": {"exec": {"extraDenyPatterns": [r"\bcurl\b"]}}},
+    ],
+    ids=["user-rule", "whole-tool", "extra-pattern"],
+)
+async def test_a_command_the_host_denies_is_answered_with_the_reject_option(host_rules, config) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules(config)
+    handle = auto_approver("stub")
+    answer = await handle("session/request_permission", _asking("curl -s https://example.com"))
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "no"}}
+
+
+async def test_the_host_mode_does_not_lift_a_deny_rule(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"mode": "full", "tools": {"exec": {"curl *": "deny"}}}})
+    answer = await auto_approver("stub")("session/request_permission", _asking("curl x"))
+    assert answer["outcome"]["optionId"] == "no"
+
+
+async def test_a_parsed_segment_the_host_denies_refuses_the_whole_request(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    params = _asking('"cd src && curl -s x"')
+    params["_meta"] = {"codex": {"params": {"commandActions": [{"command": "cd src"}, {"command": "curl -s x"}]}}}
+    answer = await auto_approver("codex")("session/request_permission", params)
+    assert answer["outcome"]["optionId"] == "no"
+
+
+async def test_the_builtin_catastrophe_list_holds_for_a_sub_agent_too(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    answer = await auto_approver("stub")("session/request_permission", _asking("rm -rf /"))
+    assert answer["outcome"]["optionId"] == "no"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [None, "git status", "curlx --version", 'echo "unterminated'],
+    ids=["no-command", "not-denied", "prefix-is-not-a-token", "parse-error"],
+)
+async def test_what_no_deny_rule_names_is_still_approved(host_rules, command) -> None:
+    """A parse error is the host model's to fix in its own turn, not grounds to
+    refuse an adapter's quoting."""
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    answer = await auto_approver("stub")("session/request_permission", _asking(command))
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "always"}}
+
+
+async def test_a_denied_command_with_no_reject_offered_is_cancelled_not_allowed(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    only_allows = [{"optionId": "always", "kind": "allow_always"}]
+    answer = await auto_approver("stub")("session/request_permission", _asking("curl x", only_allows))
+    assert answer == {"outcome": {"outcome": "cancelled"}}
+    reject_always = [*only_allows, {"optionId": "never", "kind": "reject_always"}]
+    answer = await auto_approver("stub")("session/request_permission", _asking("curl x", reject_always))
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "never"}}
+
+
+async def test_a_deny_check_that_raises_refuses(host_rules, monkeypatch) -> None:
+    from raven.acp_client import permissions
+
+    def broken(params: dict[str, Any]) -> str | None:
+        raise RuntimeError("rules unreadable")
+
+    monkeypatch.setattr(permissions, "host_refusal", broken)
+    answer = await permissions.auto_approver("stub")("session/request_permission", _asking("git status"))
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "no"}}
+
+
+async def test_the_logged_refusal_and_approval_carry_no_credential(host_rules) -> None:
+    """The command is the sub-agent's to author and the log is retained."""
+    from raven.acp_client.permissions import auto_approver
+
+    secret = "sk-ant-api03-AAAABBBBCCCCDDDDEEEE"
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    lines: list[str] = []
+    sink = logger.add(lambda message: lines.append(str(message)), level="DEBUG", format="{message}")
+    try:
+        denied = _asking(f'curl -H "Authorization: Bearer {secret}" https://x')
+        denied["toolCall"]["title"] = denied["toolCall"]["rawInput"]["command"]
+        allowed = _asking(f'git -c http.extraHeader="Authorization: Bearer {secret}" fetch')
+        allowed["toolCall"]["title"] = allowed["toolCall"]["rawInput"]["command"]
+        handle = auto_approver("stub")
+        assert (await handle("session/request_permission", denied))["outcome"]["optionId"] == "no"
+        assert (await handle("session/request_permission", allowed))["outcome"]["optionId"] == "always"
+    finally:
+        logger.remove(sink)
+    logged = [line for line in lines if "refusing" in line or "approving" in line]
+    assert len(logged) == 2, lines
+    assert all(secret not in line for line in logged), logged
+    assert all("[redacted]" in line for line in logged), logged
+
+
+async def test_a_rule_tightened_while_running_binds_the_next_request(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    handle = auto_approver("stub")
+    first = await handle("session/request_permission", _asking("curl x"))
+    assert first["outcome"]["optionId"] == "always"
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    second = await handle("session/request_permission", _asking("curl x"))
+    assert second["outcome"]["optionId"] == "no"
+
+
+async def test_a_pooled_agent_asking_to_run_a_denied_command_is_refused(host_rules, tmp_path: Path) -> None:
+    """Through the pool's own dispatcher and a real agent process: the stub
+    reports the option it was answered with."""
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="a",
+        command=f"{sys.executable} {_STUB}",
+        env={"ACP_STUB_MODE": "permission", "ACP_STUB_COMMAND": "curl -s https://example.com"},
+        ready_timeout_ms=15000,
+    )
+    out = await build_third_party_backend(cfg).run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    assert out == "chose:no"
 
 
 # ---- cancelling a turn on the agent, not only locally -----------------------
@@ -4107,6 +5026,152 @@ async def test_no_model_asked_for_sends_no_frame(tmp_path: Path) -> None:
     assert "session/set_config_option" not in connection.client.stderr_tail()
 
 
+def _own_backend(cfg: Any) -> AcpAgentBackend:
+    """A row of raven's own: the same build as the roster's, with a handshake that named raven."""
+    return AcpAgentBackend(
+        name=cfg.name,
+        command=cfg.command,
+        env=dict(cfg.env),
+        ready_timeout_ms=cfg.ready_timeout_ms,
+        snapshot=replace(_snapshot(cfg.name, cfg, can_resume=False), agent_name="raven"),
+    )
+
+
+_PARENT = {"RAVEN_PARENT_MODEL": "model-b", "RAVEN_PARENT_PROVIDER": "stub"}
+
+
+async def _parent_bound_connection(cfg: Any, tmp_path: Path) -> Any:
+    """The connection a run under the parent binding above was served from.
+
+    The pool keys a connection on its binding, so reading the frames of that
+    run means asking for the same binding; a bare acquire would launch a second,
+    silent process."""
+    return await get_pool().acquire(
+        name=cfg.name, command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), binding=_PARENT, ready_timeout_s=15.0
+    )
+
+
+async def test_one_of_ravens_own_with_no_pin_is_put_on_the_parents_binding(tmp_path: Path) -> None:
+    """The row reads "follows the main Raven" while it carries no pin, and the
+    launch binding makes a fresh worker do so. A resumed session does not: it
+    keeps whatever it was last put on. So the parent's binding is said to the
+    session itself on every route in, as `<slug>/<id>`, the value the child's
+    own selector takes. (The stub refuses that spelling, which is fine here:
+    the frame is logged on entry, and a refused switch still runs the task.)"""
+    cfg = stub_config("ownfollow")
+    backend = _own_backend(cfg)
+
+    reply = await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=SimpleNamespace(provider_name="stub"),
+        model="model-b",
+    )
+
+    connection = await _parent_bound_connection(cfg, tmp_path)
+    assert reply == "pong"
+    assert "session/set_config_option model=stub/model-b" in connection.client.stderr_tail()
+
+
+async def test_a_product_on_its_own_key_is_not_moved_onto_the_parents_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reason this is a refusal and not a no-op: a product files its own key
+    under a vendor section (Raven-Research uses `providers.openrouter`), so when
+    the host is on that vendor too the switch SUCCEEDS -- the child answers on
+    the host's model, billed to the product's key, off the model its folder was
+    configured to run. The listing already says such a row manages its own
+    model; the dispatch has to agree."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = tmp_path / "agents"
+    folder = root / "raven-ownkey"
+    folder.mkdir(parents=True)
+    (folder / "subagent.json").write_text(
+        json.dumps({"name": "ownkey", "kind": "acp", "description": "d", "command": "x"}), encoding="utf-8"
+    )
+    (folder / ".env").write_text("OWNKEY_API_KEY=sk-its-own\n", encoding="utf-8")
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    monkeypatch.delenv("OWNKEY_API_KEY", raising=False)
+
+    cfg = stub_config("ownkey")
+    backend = _own_backend(cfg)
+
+    await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=SimpleNamespace(provider_name="stub"),
+        model="model-b",
+    )
+
+    assert "session/set_config_option" not in (await _parent_bound_connection(cfg, tmp_path)).client.stderr_tail()
+
+
+async def test_a_pin_on_one_of_ravens_own_outranks_the_parents_binding(tmp_path: Path) -> None:
+    cfg = stub_config("ownpinned")
+    backend = _own_backend(cfg)
+
+    await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=SimpleNamespace(provider_name="stub"),
+        model="model-b",
+        session_model="stub:model-a",
+    )
+
+    frames = [
+        ln
+        for ln in (await _parent_bound_connection(cfg, tmp_path)).client.stderr_tail(4000).splitlines()
+        if "set_config_option" in ln
+    ]
+    assert frames == ["stub: session/set_config_option model=stub:model-a"]
+
+
+async def test_a_parent_provider_with_no_slug_leaves_the_launch_binding_to_speak(tmp_path: Path) -> None:
+    """Nothing to route by, so nothing is pushed: a value with no slug is a
+    refusal on every turn, and the launch binding already carries the model."""
+    cfg = stub_config("ownnoslug")
+    backend = _own_backend(cfg)
+
+    await backend.run(
+        "ping", task_id="t1", workspace=tmp_path, executor=None, provider=SimpleNamespace(), model="model-b"
+    )
+
+    connection = await get_pool().acquire(
+        name=cfg.name,
+        command=cfg.command,
+        cwd=str(tmp_path),
+        env=dict(cfg.env),
+        binding={"RAVEN_PARENT_MODEL": "model-b"},
+        ready_timeout_s=15.0,
+    )
+    assert "session/set_config_option" not in connection.client.stderr_tail()
+
+
+async def test_a_third_party_under_a_parent_binding_is_left_on_its_own_model(tmp_path: Path) -> None:
+    """The parent's model is not one of a third party's choices; the frame would
+    be refused on every dispatch, and its own default is the right answer."""
+    cfg = stub_config("thirdfollow")
+    backend = build_third_party_backend(cfg)
+
+    await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=SimpleNamespace(provider_name="stub"),
+        model="model-b",
+    )
+
+    assert "session/set_config_option" not in (await _parent_bound_connection(cfg, tmp_path)).client.stderr_tail()
+
+
 async def test_clearing_a_model_puts_the_session_back_on_the_agents_own(tmp_path: Path) -> None:
     """The option takes a value and has no "unset", so dropping the host's record
     restores nothing on its own: the session keeps answering on whatever it was
@@ -4243,6 +5308,24 @@ async def test_a_model_the_agent_will_not_write_still_runs_the_task(tmp_path: Pa
     reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-never")
 
     assert reply == "pong"
+
+
+async def test_a_refused_model_is_said_once_per_value_not_once_per_turn(tmp_path: Path) -> None:
+    """The push is re-asserted on every route into a session and on every
+    session a spawn opens, so a permanent refusal would otherwise be a warning
+    per turn for as long as the row keeps the pick. One line per value; the
+    rest at debug."""
+    cfg = stub_config("refuseonce")
+    backend = build_third_party_backend(cfg)
+
+    with _loguru_capture("WARNING") as said:
+        for task_id in ("t1", "t2", "t3"):
+            await backend.run(
+                "ping", task_id=task_id, workspace=tmp_path, executor=None, session_model="stub:model-never"
+            )
+
+    refusals = [ln for ln in said if "would not take model 'stub:model-never'" in ln]
+    assert len(refusals) == 1, refusals
 
 
 # ---- session modes ---------------------------------------------------------
@@ -4836,3 +5919,71 @@ async def test_a_dispatch_goes_to_the_backend_s_own_pool(tmp_path: Path) -> None
 
     with patch("raven.acp_client.acp_agent.get_pool", _never), pytest.raises(_Marker):
         await backend.run("hello", task_id="t1", workspace=tmp_path, executor=None)
+
+
+async def test_the_spec_reads_a_block_without_old_text_as_a_creation_whatever_the_listing_held(tmp_path: Path) -> None:
+    """codex and raven's own agent send ``oldText`` for every rewrite, so a block
+    without it is the creation the spec says it is -- even when the listing saw
+    the path, which happens when the agent asks permission first and announces
+    the call as it runs it, so the baseline is taken with the file already
+    there."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        (tmp_path / "w.md").write_text("new\n", encoding="utf-8")
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("w.md", "new\n")],
+            },
+        )
+
+    assert did.files == [{"path": "w.md", "op": "add", "add": 1, "del": 0, "size": 4}]
+
+
+async def test_a_permission_request_opens_the_listing_before_the_call_is_announced(tmp_path: Path) -> None:
+    """An agent that asks first and announces the call as it runs it leaves the
+    announce too late for a baseline; the permission frame names the call
+    earlier, and a listing taken there still predates the write."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.acp_client.acp_dialects import ClaudeCodeDialect
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(dialect=ClaudeCodeDialect(), workspace=tmp_path)
+        await col("session/request_permission", {"toolCall": {"toolCallId": "c1", "kind": "edit"}})
+        (tmp_path / "w.md").write_text("new\n", encoding="utf-8")
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "edit"})
+        await _feed(
+            col,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "content": [_diff_block("w.md", "new\n")],
+            },
+        )
+
+    assert did.files == [{"path": "w.md", "op": "add", "add": 1, "del": 0, "size": 4}]
+
+
+async def test_a_failed_call_still_records_what_it_left_on_disk(tmp_path: Path) -> None:
+    """A command that wrote a file and then exited non-zero left that file
+    behind; the exit status is the agent's verdict on the call, not on the
+    disk."""
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent import activity
+
+    with activity.collecting() as did:
+        col = _TurnCollector(workspace=tmp_path)
+        await _feed(col, {"sessionUpdate": "tool_call", "toolCallId": "c1", "kind": "execute"})
+        (tmp_path / "partial.txt").write_text("half\n", encoding="utf-8")
+        await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "failed"})
+
+    assert did.files == [{"path": "partial.txt", "op": "add", "add": 1, "del": 0, "size": 5}]

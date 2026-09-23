@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection
 from uuid import uuid4
 
 from loguru import logger
@@ -42,12 +43,6 @@ from raven.agent.subagent import SubagentManager
 from raven.agent.subagent.direct_chat import DirectChatHandoff
 from raven.agent.subagent.spawn_tool import SpawnTool
 from raven.agent.tools.ask_user import AskUserTool
-from raven.agent.tools.deep_research import (
-    DeepResearchManager,
-    DeepResearchOfferTool,
-    DeepResearchTool,
-    deep_research_mode,
-)
 from raven.agent.tools.file_search import FindTool, GrepTool
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.media_gen import (
@@ -68,7 +63,7 @@ from raven.agent.tools.web import (
 )
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.llm_provider import LLMProvider, LLMResponse
-from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation, ToolOutput
+from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation, FileRemoval, ToolOutput
 from raven.memory_engine import MemoryConsolidator, MemoryStore, StorePipeline
 from raven.observability import semconv
 from raven.providers.base import send_max_tokens
@@ -190,12 +185,10 @@ if TYPE_CHECKING:
     from raven.config.schema import (
         AskUserToolConfig,
         ChannelsConfig,
-        DeepResearchToolConfig,
         ExecToolConfig,
         PlaybookConfig,
     )
     from raven.context_engine import ContextEngine
-    from raven.contracts.asking import QuestionResponder
     from raven.contracts.memory import MemoryBackend
     from raven.contracts.token_strategy import UsageSnapshot
     from raven.contracts.tool import Tool
@@ -221,9 +214,18 @@ class LoopOutcome:
     budget" for "done". ``checkpoint_id`` and
     ``edited_files`` carry the shadow-git snapshot info used to build the
     next turn's recovery prompt.
+
+    ``error`` is the loop's own account of why this turn has no answer, in the
+    words a reader is shown: a model call it gave up on, or an empty-response
+    recovery that spent every budget without a word coming back. None when the
+    turn produced an answer or a hook salvaged one, and also when the turn
+    returned no text at all with the recovery switched off, which the caller
+    fails on by itself. The caller fails the turn on it unless one of the
+    turn's tools has already put an answer in front of the reader.
     """
 
     status: str = "completed"  # "completed" | "interrupted" | "error"
+    error: str | None = None
     checkpoint_id: str | None = None
     edited_files: list[str] = field(default_factory=list)
 
@@ -339,6 +341,48 @@ _HOOK_INJECTED_KEY = "_hook_injected"
 #: reader typed -- which is the question now, and which the queue has already
 #: given up -- from the research it is entitled to discard.
 _MID_TURN_USER_KEY = "_mid_turn_user"
+
+#: Introduces the mid-turn arrivals on the way to the provider. Without it the
+#: model reads a correction the reader typed while it worked as a fresh question
+#: and answers it instead of steering, because nothing in the payload says the
+#: two arrived out of band.
+_MID_TURN_HEADER = "[Mid-turn messages — sent by the user while this turn was already running]"
+
+
+def merge_mid_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One user message per adjacent run of mid-turn arrivals, under the header.
+
+    Applied at the call seam, on the payload only: history keeps one entry per
+    message, so a reader and a re-run still see what was sent when. The mark
+    rides the merged message because the re-run seed reads it to find the
+    mid-turn messages again.
+
+    Only the private spelling counts. A replayed transcript carries the plain
+    ``mid_turn`` of an entry already saved, and labelling that again would put
+    the header on a question the model answered turns ago.
+    """
+    if not any(m.get(_MID_TURN_USER_KEY) for m in messages):
+        return messages
+    out: list[dict[str, Any]] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if not run:
+            return
+        body = "\n\n".join(run)
+        out.append({"role": "user", "content": f"{_MID_TURN_HEADER}\n\n{body}", _MID_TURN_USER_KEY: True})
+        run.clear()
+
+    for m in messages:
+        if m.get(_MID_TURN_USER_KEY):
+            # The merged message keeps the mark, so a second pass over the same
+            # list must not stack a second header onto its own output.
+            run.append(str(m.get("content") or "").removeprefix(f"{_MID_TURN_HEADER}\n\n"))
+            continue
+        flush()
+        out.append(m)
+    flush()
+    return out
 
 
 @dataclass(frozen=True)
@@ -500,6 +544,99 @@ def _file_change_payload(change: Any) -> dict[str, Any] | None:
     if before is not None:
         payload["before"] = before
     return payload
+
+
+def _file_removed_payload(removals: Any) -> list[dict[str, Any]] | None:
+    """The files a call made vanish, as plain mappings, or ``None`` for none.
+
+    Flattened here for the reason ``_file_change_payload`` is, and ``None`` rather
+    than an empty list so the emit site can leave the key off a payload entirely:
+    a call that removed nothing is every call, and the wire shape it already had
+    must not change under it.
+
+    ``before`` is dropped past the budget instead of truncated -- half a removed
+    file reads as a smaller deletion than the one that happened -- and the removal
+    is still reported without it. The budget is the event's and not each file's:
+    one command can unlink as many files as it names, and a per-file ceiling would
+    let a single payload carry all of them at full size.
+    """
+    out: list[dict[str, Any]] = []
+    budget = _FILE_CHANGE_MAX_CHARS
+    for removal in removals or ():
+        path = getattr(removal, "path", None)
+        if not isinstance(path, str) or not path:
+            continue
+        entry: dict[str, Any] = {"path": path}
+        before = getattr(removal, "before", None)
+        if isinstance(before, str) and len(before) <= budget:
+            entry["before"] = before
+            budget -= len(before)
+        out.append(entry)
+    return out or None
+
+
+#: A file the listing found is counted in lines only when it is text this size
+#: or under. Past it the count is unknown rather than wrong: reading a gigabyte
+#: to number it would cost the turn more than the row it draws is worth.
+_FILE_WRITTEN_TEXT_MAX_BYTES = 256 * 1024
+
+
+def _file_written_payload(
+    created: Collection[str],
+    modified: Collection[str],
+    after: dict[str, tuple[int, int]] | None,
+    *,
+    already: Collection[str] = (),
+) -> list[dict[str, Any]] | None:
+    """The files a command left behind, as plain mappings, or ``None`` for none.
+
+    The other half of ``_file_change_payload``: a file tool reports what it
+    wrote, a command reports its output and nothing else, so this is read off
+    two listings of the working directory instead of off a result. Sizes and a
+    line count rather than contents -- one command can write a hundred files,
+    and what a row draws is that they were written and how big they are.
+
+    ``lines`` belongs to a created file alone, and ``None`` there means unknown:
+    too large to read, or not text. A rewritten file has no count at all, since
+    the listing never held the old content and a number against nothing would
+    read as a change nobody measured.
+
+    ``already`` are the paths this same call accounted for by name. The listing
+    sees those too, and reporting one again would draw a single write twice.
+    """
+    accounted = {os.path.realpath(path) for path in already if isinstance(path, str) and path}
+    out: list[dict[str, Any]] = []
+    for path in created:
+        if os.path.realpath(path) in accounted:
+            continue
+        size = (after or {}).get(path, (0, 0))[0]
+        out.append({"path": path, "created": True, "size": size, "lines": _text_line_count(path, size)})
+    for path in modified:
+        if os.path.realpath(path) in accounted:
+            continue
+        out.append({"path": path, "created": False, "size": (after or {}).get(path, (0, 0))[0], "lines": None})
+    return out or None
+
+
+def _text_line_count(path: str, size: int) -> int | None:
+    """Lines in a file the listing found, or ``None`` when it cannot be counted."""
+    if size > _FILE_WRITTEN_TEXT_MAX_BYTES:
+        return None
+    try:
+        return len(Path(path).read_text(encoding="utf-8").splitlines())
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _listing_removals(deleted: Collection[str], *, already: Collection[str] = ()) -> list[FileRemoval]:
+    """Files a listing says went, for the deletions no tool reported itself.
+
+    Without a body: the file was gone before anything read it, and the turn only
+    knows it was there when the command started. ``already`` are the removals
+    the call reported by name, which the listing sees as well.
+    """
+    accounted = {os.path.realpath(path) for path in already if isinstance(path, str) and path}
+    return [FileRemoval(path=path) for path in deleted if os.path.realpath(path) not in accounted]
 
 
 def monotonic() -> float:

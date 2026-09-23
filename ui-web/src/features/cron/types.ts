@@ -10,10 +10,12 @@ export interface CronJob {
   id: string
   name: string
   what: string
-  freq: 'hour' | 'day' | 'week' | 'once' | 'cron'
+  freq: 'hour' | 'day' | 'week' | 'month' | 'once' | 'cron'
   at: string
   at_local?: string
   wd?: number
+  /* Day of the month, for a monthly job. */
+  dom?: number
   on: boolean
   deliver: string
   when: string
@@ -33,7 +35,7 @@ export interface CronDraft extends CronJob {
   bad?: string | null
 }
 
-/* The DS.cron contract both the fixture source (demo shell) and the rpc
+/* The DS.cron contract both the offline fixture library and the rpc
    source (live layer) implement. The island only ever talks to this. */
 export interface CronSource {
   rows(): Promise<CronJob[]>

@@ -644,22 +644,31 @@ async def test_the_loop_registers_all_three_tools_outside_the_schema(workspace: 
 
 
 async def test_a_default_loop_can_still_reach_the_hidden_tools(workspace: Path) -> None:
-    # Progressive disclosure is off by default, which used to take tool_call with
-    # it and leave all three controls advertised but unnameable -- a suspended
-    # node then waited out its whole adjudication timeout for a decision the
-    # model had no way to send.
-    loop = AgentLoop(
-        provider=_StubProvider(),
-        workspace=workspace,
-        model="stub",
-        # no tool_search_config: the default deploy
-        policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
-    )
+    # tool_call used to ride the fold's switch, which left all three controls
+    # advertised but unnameable wherever the fold was off -- a suspended node
+    # then waited out its whole adjudication timeout for a decision the model
+    # had no way to send. Both states are pinned because the switch moved: the
+    # factory default now folds, and a deploy that turns it off must keep the
+    # route the bug was about.
+    def _loop(cfg) -> AgentLoop:
+        return AgentLoop(
+            provider=_StubProvider(),
+            workspace=workspace,
+            model="stub",
+            policy=TurnPolicy(max_iterations=2),
+            tools=ToolWiring(restrict_to_workspace=True, tool_search_config=cfg),
+        )
 
-    assert loop.tools.has("tool_call")
-    assert loop.strategies.get("tool_search") is None, "the fold itself stays off"
-    assert loop.dag_control_reachable() is True
+    # No tool_search_config: the default deploy, which takes the schema's own.
+    default = _loop(None)
+    assert default.tools.has("tool_call")
+    assert default.strategies.get("tool_search") is not None, "the factory default folds"
+    assert default.dag_control_reachable() is True
+
+    off = _loop(ToolSearchConfig(enabled=False))
+    assert off.tools.has("tool_call")
+    assert off.strategies.get("tool_search") is None
+    assert off.dag_control_reachable() is True
 
 
 _HIDDEN = ("cancel_dag", "dag_status", "resolve_dag_node")

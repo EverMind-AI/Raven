@@ -806,22 +806,29 @@ def test_engine_factories_decline_without_their_config_slice(raven_home: Path, w
 
 @spawns_the_launcher
 def test_smoke_fails_a_green_handshake_whose_plugin_activation_failed(tmp_path: Path) -> None:
-    """H3c: a legal reply while the plugin registry failed to build is a broken
-    agent behind a green light -- the agent runs without its own tools, hooks
-    and plugin memory backend, so the smoke reds it instead of blessing it."""
+    """H3c: a legal reply while a plugin failed to load is a broken agent behind
+    a green light -- the agent runs without what that plugin contributes, its own
+    tools, hooks and memory backend when it is the agent's engine, so the smoke
+    reds it instead of blessing it. The stub prints the notice the host itself
+    writes, so the notice and the smoke's reader cannot drift apart."""
     from types import SimpleNamespace
 
     from raven.cli.agents_commands import _smoke_handshake
+    from raven.core.plugin_stack import plugin_failure_note
+    from raven.plugins import PluginActivationFailure, PluginManifest
 
+    note = plugin_failure_note(
+        PluginActivationFailure(
+            plugin_id="demo-flow",
+            reason="tool 'x' contributed by both 'other' and 'demo-flow'",
+            manifest=PluginManifest(id="demo-flow", version="0.1.0"),
+        )
+    )
     stub = tmp_path / "stub_launcher.py"
     stub.write_text(
         "import json\n"
         "import sys\n"
-        "print(\n"
-        "    'WARNING  plugin activation failed (tool contributed by two plugins); continuing without plugins.',\n"
-        "    file=sys.stderr,\n"
-        "    flush=True,\n"
-        ")\n"
+        f"print({note!r}, file=sys.stderr, flush=True)\n"
         "print(json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': {'protocolVersion': 1}}), flush=True)\n"
         "import time\n"
         "time.sleep(3)\n",
@@ -832,8 +839,8 @@ def test_smoke_fails_a_green_handshake_whose_plugin_activation_failed(tmp_path: 
     status, detail = _smoke_handshake(row)
 
     assert status == "failed"
-    assert "WITHOUT its own tools" in detail
-    assert "plugin activation failed" in detail
+    assert "WITHOUT what it contributes" in detail
+    assert "Plugin 'demo-flow' did not load" in detail
 
 
 def test_an_installed_engine_pollutes_nothing_and_two_scaffolds_no_longer_collide(

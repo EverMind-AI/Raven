@@ -279,9 +279,17 @@ class _FakeExec:
         instance: str | None = None,
         mode: str | None = None,
         authored_task: str | None = None,
+        session_model: str | None = None,
     ) -> str:
         self.calls.append(
-            {"task_id": task_id, "session_key": session_key, "instance": instance, "prompt": task, "mode": mode}
+            {
+                "task_id": task_id,
+                "session_key": session_key,
+                "instance": instance,
+                "prompt": task,
+                "mode": mode,
+                "session_model": session_model,
+            }
         )
         if task_id in self.fail_ids:
             raise RuntimeError(f"boom {task_id}")
@@ -606,6 +614,45 @@ async def test_run_dag_failure_cascades_to_skip() -> None:
     assert result.summary["failed"] == 1
     assert result.summary["skipped"] == 1  # b skipped because a failed
     assert result.terminal_outputs == []
+
+
+async def test_a_node_whose_reply_is_the_providers_error_fails_instead_of_completing() -> None:
+    """The same rule as a spawn's: a child engine that ends its turn on a failed
+    model call hands the error text back as its reply, and a node that wrote
+    it as output read completed and fed the error to the step downstream."""
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [
+                {
+                    "id": "a",
+                    "subagent": "x",
+                    "node_summary": "the node whose model call failed",
+                    "prompt_template": "hi",
+                },
+                {
+                    "id": "b",
+                    "subagent": "x",
+                    "node_summary": "the node downstream",
+                    "prompt_template": "{{ a.output }}",
+                    "depends_on": ["a"],
+                },
+            ],
+        }
+    )
+    backend = _InMemBackend()
+    result = await run_dag(
+        spec,
+        resolve=_by_name({"x": _FakeExec(reply="Error calling LLM (unknown@openrouter): HTTP 401: User not found.")}),
+        backend=backend,
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+    )
+    assert result.summary["failed"] == 1
+    assert result.summary["skipped"] == 1
+    assert "/hist/nodes/a.out.md" not in backend.files, "the error is not the node's output"
 
 
 async def test_run_dag_writes_node_status_transitions_to_registry(
@@ -4014,6 +4061,53 @@ async def test_a_node_writes_down_its_own_transcript() -> None:
     assert '"name": "read"' in written
 
 
+class _ClosingExec(_PublishingExec):
+    """The acp lane after a narrating turn: steps, then what it said last."""
+
+    async def run(self, task: str, **kw) -> str:
+        from raven.agent.subagent import activity
+
+        activity.note_closing("the report")
+        return await super().run(task, **kw)
+
+
+async def _run_one_node(exec_: _FakeExec) -> _InMemBackend:
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "node a", "prompt_template": "hello"}],
+        }
+    )
+    exec_.run_id = ""
+    backend = _InMemBackend()
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": exec_}),
+        backend=backend,
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+    )
+    return backend
+
+
+async def test_a_node_writes_down_its_closing_message_beside_its_output() -> None:
+    backend = await _run_one_node(_ClosingExec())
+
+    assert backend.files["/hist/nodes/a.closing.md"].decode() == "the report"
+    assert backend.files["/hist/nodes/a.out.md"], "the whole output is still written"
+
+
+async def test_a_node_whose_lane_reported_no_closing_leaves_an_empty_one() -> None:
+    """Empty rather than absent: the id is reused across attempts, and an
+    earlier attempt's closing left in place would stand in for this attempt's
+    answer. The reader treats a blank file as no closing."""
+    backend = await _run_one_node(_PublishingExec())
+
+    assert backend.files["/hist/nodes/a.closing.md"] == b""
+
+
 async def test_a_node_in_flight_is_findable_in_the_live_index() -> None:
     """The transcript file is written when the node ends, and a reader watching
     a node that is still going needs an answer before then."""
@@ -5378,9 +5472,9 @@ _TEST_ORIGIN = {"channel": "t", "chat_id": "t", "session_key": "t"}
 async def _run_two_node_dag(
     tmp_path,
     *,
-    desk,
+    desk=None,
     judge_node,
-    announce_exception,
+    announce_exception=None,
     max_continuations=2,
     exec_backend=None,
     instance_a=None,
@@ -5458,6 +5552,75 @@ async def test_a_node_judged_not_accomplished_suspends_and_reports(tmp_path):
     assert result.summary["skipped"] == 1
     assert reports[0][0] == "a"
     assert "missing_credential" in reports[0][1]
+
+
+async def test_a_judge_that_knows_what_to_say_retries_the_node_itself(tmp_path):
+    """No desk, no announcer, nobody reachable -- and the node still runs again.
+
+    A judge that ran a command holds the failing output, and "the build failed,
+    here is the error" is a complete instruction. Relaying that through a person
+    would be asking them to read it out; on an unattended run there is nobody to
+    read it to.
+    """
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    attempts = []
+
+    async def _judge(*, node, **_):
+        attempts.append(node.id)
+        if len([seen for seen in attempts if seen == node.id]) == 1:
+            return Verdict(accomplished=False, what_is_missing="build failed", follow_up="fix the build")
+        return Verdict(accomplished=True)
+
+    result = await _run_two_node_dag(tmp_path, judge_node=_judge, max_continuations=2)
+
+    assert result.summary["completed"] == 2
+    assert attempts.count("a") == 2, "the node ran again on its judge's own say-so"
+
+
+async def test_a_judge_with_a_follow_up_and_no_budget_left_falls_back_to_asking(tmp_path):
+    """The budget is what separates "retry" from "this needs somebody"."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    reports = []
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        reports.append(node_id)
+        desk.resolve(node_id, "abandon", None)
+
+    async def _judge(**_):
+        return Verdict(accomplished=False, what_is_missing="build failed", follow_up="fix the build")
+
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, max_continuations=0
+    )
+
+    assert result.summary["failed"] == 1
+    assert reports == ["a"]
+
+
+async def test_an_unanswerable_node_fails_and_its_dependents_skip(tmp_path):
+    """A node that did not accomplish its task, with nobody to ask about it.
+
+    It stays `failed`. Recording it as `completed` would hand the output a
+    judge rejected to every node downstream -- and a dependent reads its
+    dependency's output as fact.
+    """
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    async def _judge(*, node, **_):
+        return (
+            Verdict(accomplished=False, what_is_missing="which of the two?")
+            if node.id == "a"
+            else Verdict(accomplished=True)
+        )
+
+    result = await _run_two_node_dag(tmp_path, judge_node=_judge)
+
+    assert result.summary["failed"] == 1
+    assert result.summary["skipped"] == 1
 
 
 async def test_a_continued_node_runs_again_and_can_then_pass(tmp_path):
@@ -6984,6 +7147,105 @@ async def test_a_runner_with_no_mode_source_dispatches_without_one() -> None:
     )
 
     assert execu.calls[0]["mode"] is None
+
+
+async def test_a_node_on_an_acp_backend_receives_the_row_s_default_model() -> None:
+    """A node dispatched to a third-party acp agent carries that row's own
+    configured model, on the same terms a spawn to it would
+    (``SubagentManager.row_default_model``) -- a graph reaching the agent
+    through a different lane must not read a different model than a spawn to
+    it would."""
+    execu = _FakeExec()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "an acp node", "prompt_template": "hello"},
+                {"id": "b", "subagent": "y", "node_summary": "a row with no model set", "prompt_template": "hello"},
+            ],
+        }
+    )
+
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": execu, "y": execu}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        session_key="cli:direct",
+        model_for=lambda skey, agent, instance: {"x": "vendor/model-a"}.get(agent),
+    )
+
+    by_id = {call["task_id"]: call for call in execu.calls}
+    assert by_id["a"]["session_model"] == "vendor/model-a"
+    assert by_id["b"]["session_model"] is None
+
+
+async def test_an_instance_model_override_wins_over_the_row_s_default() -> None:
+    """A node naming an ``instance`` reads that instance's own model override
+    ahead of the row's default -- the same priority a spawn already gives
+    ``instance_model(...) or row_default_model(...)``."""
+    execu = _FakeExec()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [
+                {
+                    "id": "a",
+                    "subagent": "x",
+                    "node_summary": "continue the researcher",
+                    "prompt_template": "hello",
+                    "instance": "researcher",
+                },
+            ],
+        }
+    )
+
+    def model_for(session_key: str | None, agent: str | None, instance: str | None) -> str | None:
+        if instance == "researcher":
+            return "vendor/override"
+        return {"x": "vendor/row-default"}.get(agent or "")
+
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": execu}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        session_key="cli:direct",
+        model_for=model_for,
+    )
+
+    assert execu.calls[0]["session_model"] == "vendor/override"
+
+
+async def test_a_runner_with_no_model_source_dispatches_without_one() -> None:
+    """The unwired host (tests, an offline entry point, a bare `SubAgentDagTool`
+    built with no `model_for`) must not crash and must not guess."""
+    execu = _FakeExec()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "plain node", "prompt_template": "hello"}],
+        }
+    )
+
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": execu}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        session_key="cli:direct",
+    )
+
+    assert execu.calls[0]["session_model"] is None
 
 
 async def test_an_unstarted_background_run_retires_every_per_run_entry(tmp_path: Path) -> None:
@@ -8681,3 +8943,65 @@ async def test_a_judge_with_a_stale_signature_does_not_read_as_accomplished(tmp_
 
     assert result.summary["completed"] == 0, "an unjudgeable node must not pass"
     assert result.summary["failed"] == 1
+
+
+class _SettledPeeker(_FakeExec):
+    """Node a reports usage; node b, which runs after it, reads the account a
+    set aside at its end -- the manifest that will carry it is not written yet."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.run_id = ""
+        self.seen_settled: list[object] = []
+
+    async def run(self, task: str, **kw) -> str:
+        from raven.agent.subagent import activity
+        from raven.agent.subagent.dag_store import node_live_key
+
+        if kw["task_id"] == "a":
+            activity.note_usage({"prompt_tokens": 5, "completion_tokens": 1})
+        else:
+            self.seen_settled.append(activity.settled(node_live_key(self.run_id, "a")))
+        return await super().run(task, **kw)
+
+
+async def test_a_finished_nodes_account_is_set_aside_until_the_manifest_is_written() -> None:
+    """Between a node's end and the run's manifest a reader has nowhere else to
+    find the node's usage; the runner sets it aside, and the manifest takes it
+    over."""
+    import raven.agent.subagent.dag_runner as runner_mod
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.dag_store import node_live_key
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "node a", "prompt_template": "hello"},
+                {"id": "b", "subagent": "x", "node_summary": "node b", "prompt_template": "then", "depends_on": ["a"]},
+            ],
+        }
+    )
+    exec_ = _SettledPeeker()
+    mint = runner_mod.make_run_id
+
+    def _mint() -> str:
+        exec_.run_id = mint()
+        return exec_.run_id
+
+    runner_mod.make_run_id = _mint
+    try:
+        result = await run_dag(
+            spec,
+            resolve=_by_name({"x": exec_}),
+            backend=_InMemBackend(),
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
+        )
+    finally:
+        runner_mod.make_run_id = mint
+
+    assert exec_.seen_settled == [{"tokens_in": 5, "tokens_out": 1}], "b saw a's account while the run was going"
+    assert activity.settled(node_live_key(result.run_id, "a")) is None, "and the manifest took it over"

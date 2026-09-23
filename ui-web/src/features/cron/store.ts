@@ -1,12 +1,18 @@
-import { ds, shell, t } from '../../shell/bridge'
-import { show as toast } from '../../shell/toast'
+import { t } from '../../i18n/t'
+import * as settingsDialog from '../../state/settings'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
+import { show as toast } from '../../state/toast'
 
 import type { CronDraft, CronJob, CronSource } from './types'
 
-/* Page state, outside React on purpose: the legacy shell drives this page
- * imperatively (nav opens it, Esc closes it, a finished turn refreshes it,
- * a language flip redraws it), so the state lives in a plain store the
- * shims can call, and the component subscribes.
+/* Section state, outside React on purpose: the callers that drive this
+ * section are not React. Schedules is a section of the settings dialog rather
+ * than a page of its own, so `open` below raises that dialog on this section
+ * and the dialog's own Escape takes it back; the boot prefetches the rows
+ * (app/boot.ts) and the page's own teardown shuts the sheet
+ * (app/install.ts) -- so the state lives in a plain store those callers can
+ * reach, and the component subscribes.
  */
 
 export interface CronState {
@@ -15,51 +21,51 @@ export interface CronState {
      since a refresh swaps row objects without changing any identity a
      component's dep array could see. */
   rev: number
-  /* False until the first rows fetch answers: the legacy page cleared the
-     stage on first open rather than showing a not-yet-loaded empty state. */
+  /* False until the first rows fetch answers: the list is not drawn at all
+     until then, so a page still loading never reads as "no jobs". */
   loaded: boolean
   viewId: string | null
-  /* Drafts are mutable objects edited in place by uncontrolled inputs --
-     the same discipline the legacy form kept: a keystroke changes no state
-     anyone re-renders on, so focus and IME composition are never disturbed.
+  /* Drafts are mutable objects edited in place by uncontrolled inputs: a
+     keystroke changes no get() anyone re-renders on, so focus and IME
+     composition are never disturbed.
      `epoch` remounts the form subtrees when a draft is replaced. */
   draft: CronDraft | null
   sheet: CronDraft | null
+  /* Whether the sheet is parked: the reader left this section with a draft
+     still in it. The draft is kept rather than dropped, because the way out of
+     this form that a reader actually takes is the one link inside it -- "where
+     results go" opens Channels -- and dropping the draft there costs a
+     half-written job to a press that reads like a detour. Off screen while
+     parked, since the sheet is a veil at the body and would otherwise float
+     over whichever section the reader went to. */
+  parked: boolean
   epoch: number
-  /* Bumped only by a language flip: run stamps arrive language-baked from
-     the source, so the flip must refetch them, while the plain redraws the
-     island's own controls ask for must not. */
-  lang: number
 }
 
-let state: CronState = { rows: [], rev: 0, loaded: false, viewId: null, draft: null, sheet: null, epoch: 0, lang: 0 }
-const listeners = new Set<() => void>()
+const store = makeStore<CronState>({
+  rows: [], rev: 0, loaded: false, viewId: null, draft: null, sheet: null, parked: false, epoch: 0,
+})
 
-export const getState = (): CronState => state
+export const { get, subscribe, _resetForTests } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<CronState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
-function set(patch: Partial<CronState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
-}
-
-export const source = (): CronSource => ds<CronSource>('cron')
+export const source = (): CronSource => ds('cron')
 
 export async function refresh(): Promise<void> {
   try {
     const rows = await source().rows()
-    set({ rows, loaded: true, rev: state.rev + 1 })
+    set({ rows, loaded: true, rev: get().rev + 1 })
   } catch (e) {
     toast(t('gui.op.load_failed', { detail: String((e as Error).message || e) }))
-    set({ loaded: true, rev: state.rev + 1 })
+    set({ loaded: true, rev: get().rev + 1 })
   }
 }
 
-/* Boot calls this through the shim to prefetch without opening the page. */
+/* app/boot.ts calls this to prefetch the rows without opening the page. */
 export function warm(): Promise<void> {
   return source()
     .rows()
@@ -68,17 +74,25 @@ export function warm(): Promise<void> {
 }
 
 export function open(): void {
-  set({ viewId: null, draft: null })
-  shell().showPage('cronPage')
+  settingsDialog.openSection('cron')
+}
+
+/* What arriving at this section of the settings dialog costs: the list, from
+   the top -- so a reader who picks the row in the dialog's own nav gets the
+   same fetch the opener above does. Registered at this module's own evaluation
+   rather than by the page's wiring, the same shape features/desk/store.ts fills
+   state/escapeOrder.ts's slot with: the alternative is src/app/install.ts
+   importing three island stores for three lines, which is three island graphs
+   in the page's own wiring. */
+function enter(): void {
+  /* Un-parked: a draft the reader left here is what they come back to. */
+  set({ viewId: null, draft: null, parked: false })
   void refresh()
 }
-
-export function close(): void {
-  shell().showPage(null)
-}
+settingsDialog.onEnter('cron', enter)
 
 export function openDetail(j: CronJob): void {
-  set({ viewId: j.id, draft: { ...j }, epoch: state.epoch + 1 })
+  set({ viewId: j.id, draft: { ...j }, epoch: get().epoch + 1 })
 }
 
 export function backToList(): void {
@@ -90,7 +104,7 @@ export function backToList(): void {
    via epoch), never merely dropped -- a null draft here would fall through
    to the list with viewId still set. */
 export function viewSaved(saved: CronJob | null): void {
-  set({ viewId: saved ? saved.id : null, draft: saved ? { ...saved } : null, epoch: state.epoch + 1 })
+  set({ viewId: saved ? saved.id : null, draft: saved ? { ...saved } : null, epoch: get().epoch + 1 })
   void refresh()
 }
 
@@ -108,20 +122,25 @@ export function openSheet(j?: CronDraft): void {
     runs: [],
     fresh: true,
   }
-  set({ sheet: draft, epoch: state.epoch + 1 })
+  set({ sheet: draft, parked: false, epoch: get().epoch + 1 })
 }
 
 export function closeSheet(): void {
-  set({ sheet: null })
+  set({ sheet: null, parked: false })
 }
+
+/* What leaving the section costs: the sheet goes off screen, and the draft in
+   it does not. It used to be dropped here, which made the form's own link to
+   Channels -- the one a reader follows to set a delivery route up while they
+   are writing the job that needs it -- delete the job with no prompt. */
+function park(): void {
+  if (get().sheet) set({ parked: true })
+}
+settingsDialog.onLeave('parkCronSheet', park)
 
 /* A language flip changes nothing in this state, but every visible string
-   comes from T(), so a re-render is the whole redraw. */
+   comes from t(), so a re-render is the whole redraw. The island's own controls
+   ask for this after writing a draft in place, which no get() can see. */
 export function redraw(): void {
   set({})
-}
-
-/* The shim's redraw: what the legacy language flip calls. */
-export function langRedraw(): void {
-  set({ lang: state.lang + 1 })
 }

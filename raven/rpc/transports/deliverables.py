@@ -88,14 +88,20 @@ def _build_archive(tmp_name: str, records: list[DeliverableRecord]) -> None:
 
 def add_files_routes(
     app: web.Application,
-    store: DeliverableStore | None,
+    store: DeliverableStore | Callable[[], DeliverableStore | None] | None,
     *,
     guard: Callable[[web.Request], None] | None = None,
 ) -> None:
     """Register the deliverable download routes. A None store registers nothing,
-    so the gateway's control port exposes no download surface at all."""
+    so the gateway's control port exposes no download surface at all.
+
+    A callable is resolved per request instead, for a host whose store arrives
+    after the app is built: ``raven serve`` assembles its stack late on a first
+    run, and a store read once here would leave that process with no download
+    surface at all."""
     if store is None:
         return
+    read_store: Callable[[], DeliverableStore | None] = store if callable(store) else lambda: store
 
     async def download(request: web.Request) -> web.StreamResponse:
         if guard is not None:
@@ -103,7 +109,8 @@ def add_files_routes(
         token = request.query.get("token")
         if not token:
             raise web.HTTPBadRequest(text="token is required")
-        record = resolve_download(store, token)
+        current = read_store()
+        record = resolve_download(current, token) if current is not None else None
         if record is None:
             raise web.HTTPGone(text="deliverable is gone")
         return web.FileResponse(
@@ -118,7 +125,8 @@ def add_files_routes(
         if guard is not None:
             guard(request)
         tokens = request.query.getall("token", [])
-        records = [r for r in (resolve_download(store, t) for t in tokens) if r is not None]
+        current = read_store()
+        records = [r for r in (resolve_download(current, t) for t in tokens) if r is not None] if current else []
         if not records:
             raise web.HTTPGone(text="deliverables are gone")
 

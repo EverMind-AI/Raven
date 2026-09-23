@@ -20,7 +20,11 @@ top-level ``app`` via ``app.add_typer(playbook_app, name="playbook")``.
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
+import sys
+import time
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +32,8 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+
+from raven.cli.stint_commands import stint_app
 
 console = Console()
 err_console = Console(stderr=True)
@@ -169,6 +175,70 @@ def _located(path: Path, text: str, error: str) -> str:
     if len(hits) == 1:
         return f"{path}:{hits[0]}: {error}"
     return f"{path}: {error}"
+
+
+def _skeleton_path() -> Path:
+    """The shipped stint skeleton, beside the agent scaffold `agents new` copies."""
+    import raven
+
+    return Path(raven.__file__).resolve().parent / "templates" / "stint_skeleton.md"
+
+
+@playbook_app.command("new-stint")
+def playbook_new_stint(
+    name: str = typer.Argument(..., help="Name for the new playbook (its directory name)"),
+    description: str = typer.Option("", "--description", "-d", help="One line: when to use it"),
+):
+    """Write a `mode: stint` skeleton into the library for you to fill in.
+
+    The other modes are generated -- `playbook create` hands a description to a
+    model and the model writes the spec. A stint is not, and deliberately: its
+    `verify` commands are shell that runs on this machine every round, under one
+    approval that covers the whole run, so nothing a model writes gets to
+    schedule them (`tests/test_playbook_generator.py` holds that line).
+
+    Which left the only way to make one being to copy an existing file and find
+    out field by field what this build accepts. This is the cheap half of the
+    answer: no model, no network, a shape with every field explained and the
+    traps named next to the field that springs them. It validates as written, so
+    the first `raven playbook validate` reports what you changed rather than
+    where you started.
+    """
+    import re
+
+    from raven.playbook.types import NAME_RE
+
+    if not re.fullmatch(NAME_RE, name):
+        err_console.print(f"[red]Playbook names are kebab-case ({escape(NAME_RE)}); got {escape(repr(name))}.[/red]")
+        raise typer.Exit(code=1)
+    config = _load_config()
+    store = _store(config)
+    if (origin := store.origin_of(name)) is not None:
+        err_console.print(f"[red]Playbook {escape(repr(name))} already exists ({escape(origin)}).[/red]")
+        raise typer.Exit(code=1)
+
+    said = description.strip() or f"what {name} is for -- one line, written for retrieval"
+    body = (
+        _skeleton_path()
+        .read_text(encoding="utf-8")
+        .replace("{{name}}", name)
+        .replace("{{description}}", said)
+        .replace("{{task_summary}}", f"one round of {name}")
+    )
+    path = Path(store.root) / name / "playbook.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+    console.print(f"[green]Wrote[/green] {escape(str(path))}")
+    console.print(
+        "Two roles, three rounds, nothing checked -- a shape, not a plan. Fill in the "
+        "promptTemplates and what each role owns, then:"
+    )
+    console.print(f"  raven playbook validate {escape(name)}")
+    console.print(
+        "[dim]It is usable as soon as it validates; no enabling step. Read it before you run it -- "
+        "one approval covers every round.[/dim]"
+    )
 
 
 @playbook_app.command("create")
@@ -402,6 +472,19 @@ def playbook_run(
     )
     from raven.playbook.params import resolve_params, secret_param_names
     from raven.providers.factory import make_provider
+    from raven.providers.pool import ProviderPool
+
+    # Read before the graph tool is built, because the tool's approval channel
+    # depends on the playbook's mode (see below). Nothing wired an MCP source on
+    # this path, so a node's `mcps` resolved to "not connected on the host"
+    # however well the machine was configured. The spec is read here rather than
+    # taken from the runtime because the pre-flight has to know what to dial
+    # before the graph starts; a file that cannot be parsed is left to the
+    # runtime, which reports it below.
+    try:
+        spec = store.load(name)
+    except Exception:  # noqa: BLE001 - the runtime reports an unloadable file
+        spec = None
 
     provider = make_provider(config)
     manager = SubagentManager(
@@ -410,6 +493,7 @@ def playbook_run(
         model=config.agents.defaults.model,
         exec_config=config.tools.exec,
         agents=config.subagents.agents,
+        provider_pool=ProviderPool(config),
     )
     # The manager's table, so a node here resolves to the same agent it would in
     # a conversation -- built-in rows included, which is what lets the CLI run a
@@ -419,11 +503,23 @@ def playbook_run(
         registry=manager.registry,
         guide_skill_id=None,
         state_for=manager.instance_state,
+        model_for=manager.session_model_for,
+        # A stint only. Its `verify` is shell from a file, which is why such a
+        # playbook must keep `confirm: true`, and a gate nobody is asked at does
+        # not hold that line. Every other mode keeps this path's approval as it
+        # was -- with no channel wired, the graph runs -- because changing what
+        # `confirm` means on the command line for every playbook is its own
+        # decision, and a script that runs one unattended would start failing.
+        ask=ask_at_the_terminal if spec is not None and spec.mode == "stint" else None,
     )
     executor = PlaybookExecutor(
         dag_tool=dag_tool,
         provider=provider,
         compose_model=config.playbooks.model,
+        # The project a multi-round plan works, which is the repository the
+        # person is standing in -- not the agent home above, which is where runs
+        # and plan files are kept and is nobody's project.
+        workspace=Path.cwd(),
         background=False,
         # This path composes a prompt-mode graph itself. In a conversation the
         # caller is a model and gets the guidance to compose from; here there is
@@ -437,16 +533,6 @@ def playbook_run(
         executor=executor,
         disabled=config.playbooks.disabled,
     )
-
-    # Nothing wired an MCP source on this path, so a node's `mcps` resolved to
-    # "not connected on the host" however well the machine was configured. The
-    # spec is read here rather than taken from the runtime because the pre-flight
-    # has to know what to dial before the graph starts; a file that cannot be
-    # parsed is left to the runtime, which reports it below.
-    try:
-        spec = store.load(name)
-    except Exception:  # noqa: BLE001 - the runtime reports an unloadable file
-        spec = None
 
     async def run_with_mcp():
         if spec is None:
@@ -478,17 +564,37 @@ def playbook_run(
                 err_console.print(f"[yellow]MCP server {escape(server)}: {escape(state)}{escape(hint)}[/yellow]")
             manager.set_mcp_source(source)
             try:
-                return await runtime.load(name, values, fills, allow_disabled=True)
+                plan = await runtime.load(name, values, fills, allow_disabled=True)
+                # Inside the pre-flight, not after it: a stint's roles reach the
+                # servers it declared, and holding the process open outside this
+                # scope would hold it open with the connections already closed.
+                # A refused stint opened nothing, and there is nothing to hold for.
+                if plan is not None and getattr(spec, "mode", "") == "stint" and executor.rounds.holding():
+                    console.print(plan.reply, markup=False, soft_wrap=True)
+                    console.print(
+                        "[dim]Holding this terminal: a stint's rounds run in this process, and nothing "
+                        "else here would advance them. Ctrl-C stops it where it is; "
+                        "`raven playbook stints resume` takes it up.[/dim]"
+                    )
+                    await hold_until_the_stints_end(executor.rounds)
+                    held.append(plan)
+                return plan
             finally:
                 # The source outlives nothing: its connections close with the
                 # pre-flight, and a backend still holding it would resolve
                 # grants against a manager that has already let go.
                 manager.set_mcp_source(None)
 
+    held: list = []
     plan = asyncio.run(run_with_mcp())
     if plan is None:
         err_console.print(f"[red]Playbook {escape(repr(name))} did not load; see the log for the parse error.[/red]")
         raise typer.Exit(code=1)
+    if held:
+        # Printed before the hold, and a stint that ran to its end is not a
+        # failure: returning the load sentinel here told a script a finished
+        # stint had not loaded, with exit code 1.
+        return
     if plan.kind == "gaps":
         # Named as an unrunnable-here condition rather than a generic failure: the
         # playbook is fine, this entry point just has nobody to fill it in.
@@ -527,3 +633,455 @@ def playbook_delete(
         console.print(f"Deleted the user playbook {escape(repr(name))}; the builtin of the same name is visible again.")
     else:
         console.print(f"Deleted {escape(repr(name))}.")
+
+
+stints_app = typer.Typer(help="Multi-round runs a `mode: stint` playbook started")
+playbook_app.add_typer(stints_app, name="stints")
+
+# The project side of the same feature, under the singular: `stints` answers
+# "what has run on this machine", and `stint` acts on one project's own layout
+# and the backlog its roles share. One family, because a person who found
+# `raven playbook run` has no reason to guess at a second top-level noun.
+playbook_app.add_typer(stint_app, name="stint")
+
+
+def _stint_homes(config):
+    """Every conversation on this machine, as (its directory, its stint store).
+
+    A stint is kept beside the conversation that started it, and the person
+    asking here has a terminal rather than a conversation. Reading only the
+    keyless session's store is what made a stint started in the TUI invisible to
+    the commands that exist to watch it -- and invisible in the way that reads
+    as "nothing has run", not as "you are looking in the wrong place".
+
+    The directory comes back beside the store because deriving it from the
+    session key is the thing that does not work here. A conversation launched in
+    a project is grouped under that project, and this process has no project, so
+    the derivation lands in a directory nothing has ever written to. Searching
+    finds the stint; whoever then opens a round is handed the directory rather
+    than deriving it again and writing the round somewhere else.
+
+    Still only files: a stint is read far more often than it is run -- what round
+    is it on, what did it undo, what is it waiting for -- and constructing the
+    sub-agent stack to answer would make `stint list` cost what a dispatch costs.
+    """
+    from raven.agent.subagent.history import dag_root
+    from raven.session.manager import SessionManager
+    from raven.stint.record import STINTS_DIRNAME, StintStore
+
+    sessions = SessionManager(config.workspace_path).sessions_dir
+    found = []
+    for home in sorted(sessions.glob("*/*")):
+        root = dag_root(home) / STINTS_DIRNAME
+        if home.is_dir() and root.is_dir():
+            found.append((home, StintStore(root)))
+    return found
+
+
+def _stint_stores(config):
+    """Every stint store on this machine, for a caller with no use for the rest."""
+    return [store for _home, store in _stint_homes(config)]
+
+
+def _all_stints(config):
+    """Every stint on the machine, newest first, across conversations.
+
+    Stints whose holder has gone quiet are marked on the way past. A record is
+    the only claim a stint makes about itself and a host that died mid-round
+    writes nothing on its way out, so without this the list reports a corpse as
+    work in progress -- and a person waits for a notification nobody will send.
+    Marking only: taking one up again is `stints resume`, which is a person's
+    call because it spends money and hours.
+    """
+    from raven.stint.record import mark_adrift
+
+    stores = _stint_stores(config)
+    mark_adrift(stores)
+    found = [record for store in stores for record in store.list()]
+    found.sort(key=lambda record: (record.started_at_ms, record.stint_id), reverse=True)
+    return found
+
+
+def _require_stint(config, stint_id: str):
+    """The stint, the store holding it, and the conversation directory both are in.
+
+    The store so a writer writes back where it read; the directory so a verb
+    that opens a round puts the round where the stint's earlier ones are.
+    """
+    from raven.stint.record import mark_adrift
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", stint_id):
+        err_console.print(f"[red]{escape(stint_id)} is not a stint id; see `raven playbook stints list`.[/red]")
+        raise typer.Exit(code=1)
+    homes = _stint_homes(config)
+    mark_adrift([store for _home, store in homes])
+    for home, store in homes:
+        record = store.read(stint_id)
+        if record is not None:
+            return home, store, record
+    err_console.print(f"[red]No stint {escape(stint_id)} on this machine.[/red]")
+    raise typer.Exit(code=1)
+
+
+@stints_app.command("list")
+def plan_list():
+    """Every stint this machine has started, newest first."""
+    records = _all_stints(_load_config())
+    if not records:
+        console.print("[dim]No stints have been started here.[/dim]")
+        return
+    table = Table(title=f"Stints ({len(records)})")
+    # Folded, never truncated: the id is what every other verb takes, and a
+    # reader who was shown `stint-20260920T08584423470...` has to go and find
+    # the file to learn the rest.
+    table.add_column("Stint", style="cyan", overflow="fold", no_wrap=False)
+    table.add_column("Playbook", style="green")
+    table.add_column("Round")
+    table.add_column("State")
+    table.add_column("Why it stopped", overflow="fold")
+    for record in records:
+        # The status, not `live`. `live` answers "should something be advancing
+        # this", which is true of an interrupted stint too -- printing it as
+        # `running` is the lie this column exists to stop telling.
+        state = f"[yellow]{record.status}[/yellow]" if record.live else record.status
+        table.add_row(
+            escape(record.stint_id),
+            escape(record.playbook),
+            str(record.round_index),
+            state,
+            escape(record.stop_reason or ""),
+        )
+    console.print(table)
+
+
+@stints_app.command("get")
+def plan_get(stint_id: str = typer.Argument(..., help="Stint id, as listed")):
+    """One stint in full: its rounds, what was undone, and what it is waiting on."""
+    *_, record = _require_stint(_load_config(), stint_id)
+    console.print(f"[cyan]{escape(record.stint_id)}[/cyan]  {escape(record.playbook)}  [{escape(record.status)}]")
+    console.print(f"working in {escape(record.workdir)}" + (f" on {escape(record.branch)}" if record.branch else ""))
+    if record.stop_reason:
+        console.print(f"stopped because {escape(record.stop_reason)}")
+    rounds = Table(title="Rounds")
+    rounds.add_column("N")
+    rounds.add_column("Run", style="dim")
+    rounds.add_column("State")
+    rounds.add_column("Checks")
+    rounds.add_column("Undone")
+    for entry in record.rounds:
+        checks = ", ".join(f"{row.get('name')}={row.get('status')}" for row in entry.verify) or "-"
+        rounds.add_row(
+            str(entry.index),
+            escape(entry.run_id or "-"),
+            escape(entry.status),
+            escape(checks),
+            str(len(entry.violations)),
+        )
+    console.print(rounds)
+    for entry in record.rounds:
+        for note in entry.violations:
+            console.print(f"[yellow]round {entry.index}: {escape(note)}[/yellow]")
+    for position, question in enumerate(record.questions):
+        answered = str(question.get("answer") or "").strip()
+        mark = "[green]answered[/green]" if answered else "[red]waiting[/red]"
+        console.print(f"{position}. {mark} round {question.get('round')} {escape(str(question.get('text')))}")
+        if answered:
+            console.print(f"   -> {escape(answered)}")
+
+
+@stints_app.command("stop")
+def plan_stop(
+    stint_id: str = typer.Argument(..., help="Stint id, as listed"),
+    now: bool = typer.Option(False, "--now", help="Cut the round in flight short instead of letting it finish"),
+):
+    """Open no further rounds. A round already running finishes first, unless --now."""
+    from raven.stint.record import STOPPED
+
+    _, store, record = _require_stint(_load_config(), stint_id)
+    if not record.unfinished:
+        console.print(f"{escape(stint_id)} is already {escape(record.status)}.")
+        return
+    # Relayed before the file is written, because only the raven running the
+    # round can cut it short: the write is what that side does either way, and
+    # doing it twice would be the same write.
+    if now and _relayed("playbooks.stints.stop", {"stint_id": stint_id, "now": True}):
+        console.print(f"Stopped {escape(stint_id)}, and asked the round in flight to stop where it is.")
+        return
+    record.status = STOPPED
+    record.stop_reason = "a person stopped the stint"
+    store.write(record)
+    if now:
+        console.print(
+            f"Stopped {escape(stint_id)}. No raven is serving a page here, so the round in flight could not "
+            f"be reached: it is held by the terminal that opened it, and Ctrl-C there stops it where it is."
+        )
+        return
+    console.print(
+        f"Stopped {escape(stint_id)}. A round already in flight finishes and reports; no further round opens."
+    )
+
+
+@stints_app.command("pause")
+def plan_pause(stint_id: str = typer.Argument(..., help="Stint id, as listed")):
+    """Open no further rounds, and keep the stint so `resume` can take it up."""
+    from raven.stint.record import PAUSED
+
+    _, store, record = _require_stint(_load_config(), stint_id)
+    if not record.unfinished:
+        console.print(f"{escape(stint_id)} is already {escape(record.status)}.")
+        return
+    record.status = PAUSED
+    record.stop_reason = "a person paused the stint"
+    store.write(record)
+    console.print(
+        f"Paused {escape(stint_id)}. A round already in flight finishes; no further round opens. "
+        f"Take it up again with `raven playbook stints resume {escape(stint_id)}`."
+    )
+
+
+@stints_app.command("answer")
+def plan_answer(
+    stint_id: str = typer.Argument(..., help="Stint id, as listed"),
+    question: int = typer.Option(..., "--question", "-q", help="Which question, by its number in `stint get`"),
+    text: str = typer.Option(..., "--text", "-t", help="The answer, as the next round should read it"),
+):
+    """Answer a question a round left. It reaches the round after this one."""
+    _, store, record = _require_stint(_load_config(), stint_id)
+    if not 0 <= question < len(record.questions):
+        err_console.print(f"[red]{escape(stint_id)} has no question {question}; see `playbook stint get`.[/red]")
+        raise typer.Exit(code=1)
+    record.questions[question]["answer"] = text
+    record.questions[question]["answered_at"] = int(time.time() * 1000)
+    store.write(record)
+    console.print(f"Answered. The next round of {escape(stint_id)} reads it.")
+
+
+def _stint_driver(config, home: Path):
+    """The rounds driver, with every root pointed at the conversation `home`.
+
+    A stint verb that opens a round needs the whole sub-agent stack behind it and
+    not just the stint file, because a round is an ordinary graph and goes out
+    through the ordinary entry.
+
+    ``session_dir`` is injected rather than left to the tool's own derivation.
+    The tool derives a conversation's directory from its key through a slug-less
+    session manager, which is the gateway's grouping and not the one a
+    conversation launched in a project has -- so from a terminal the stint file,
+    the round's runs and its node artifacts would each be looked for under
+    ``sessions/<channel>/``, where nothing has ever written. `_stint_homes`
+    searched and found the real one; this is that answer, handed over rather
+    than derived a second time.
+    """
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.manager import SubagentManager
+    from raven.playbook.executor import PlaybookExecutor
+    from raven.providers.factory import make_provider
+
+    manager = SubagentManager(
+        provider=make_provider(config),
+        workspace=config.workspace_path,
+        model=config.agents.defaults.model,
+        exec_config=config.tools.exec,
+        agents=config.subagents.agents,
+    )
+    dag_tool = SubAgentDagTool(
+        workspace=config.workspace_path,
+        registry=manager.registry,
+        guide_skill_id=None,
+        state_for=manager.instance_state,
+        session_dir=lambda _key: home,
+        ask=ask_at_the_terminal,
+    )
+    driver = PlaybookExecutor(dag_tool=dag_tool, workspace=Path.cwd()).rounds
+    if driver is None:
+        err_console.print("[red]This build has no multi-round driver.[/red]")
+        raise typer.Exit(code=1)
+    return driver
+
+
+async def hold_until_the_stints_end(driver, *, every_sec: float = 2.0) -> None:
+    """Keep this process alive while a stint it just started still has rounds.
+
+    A stint dispatches each round in the background and opens the next one from
+    a callback on the finished run's own task. On a gateway that is somebody
+    else's problem -- the host outlives the turn. Here the command *is* the
+    host, and returning from ``asyncio.run`` closes the loop out from under the
+    round: the receipt says it started, the record says ``running``, and nothing
+    ever ran. Held here rather than dispatched in the foreground because the
+    hand-over that opens round two only exists on the background path.
+
+    Ctrl-C leaves the stint where it is. The round in flight dies with this
+    process and the record stops being touched, so the next reader marks it
+    interrupted and `stints resume` takes it up from the node it reached.
+
+    Asked of the driver, not of the records. A record is `live` whenever *some*
+    process holds it, and after a refusal -- `resume` of a stint another raven
+    is beating for -- that process is not this one: holding on it printed the
+    refusal and then never came back, while the banner told the person to run
+    the command it was blocking. An interrupted record never stops being live
+    at all.
+    """
+    import asyncio as _asyncio
+
+    while True:
+        await _asyncio.sleep(every_sec)
+        if not driver.holding():
+            return
+
+
+async def ask_at_the_terminal(_conversation: str, question: str) -> bool:
+    """The graph tool's approval gate, for a run whose person is at this terminal.
+
+    A stint is thirty rounds of shell from a file somebody handed over, and the
+    gate is what stands between that file and running. Built with no ``ask``,
+    the tool took the no-channel branch and approved on the person's behalf --
+    without so much as rendering the text that names the round budget and every
+    command. From a terminal the person is right here, so they are asked; with
+    no terminal to ask at, the answer is no, said out loud.
+    """
+    if not sys.stdin.isatty():
+        err_console.print(
+            "[red]This run asks for approval and there is no terminal to ask at, so it was not run. "
+            "Run it from an interactive terminal, or start it from a conversation.[/red]"
+        )
+        return False
+    console.print(question, markup=False, soft_wrap=True)
+    return await asyncio.to_thread(typer.confirm, "Run it?", default=False)
+
+
+def _relayed(method: str, params: dict) -> bool:
+    """Send a round-opening verb to the raven serving the page, if one is up.
+
+    A round runs in the process that opens it. Opened here, it would run in this
+    terminal, report to nobody, and end when the terminal does -- and when the
+    terminal is a model's shell tool, that is the tool's timeout. The page's
+    raven has the driver, the conversation the stint was started in, and the
+    announcer that conversation reads, so the verb goes there when it can.
+    False means no page is being served and the verb runs here as before.
+    """
+    from raven.cli._hosted_rpc import call, hosted_page
+
+    hosted = hosted_page()
+    if hosted is None:
+        return False
+    port, token = hosted
+    console.print(f"[dim]Sent to the raven serving the page on port {port}; the round runs there.[/dim]")
+    try:
+        result = call(port, token, method, params)
+    except RuntimeError as exc:
+        err_console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(code=1) from exc
+    reply = str((result or {}).get("reply") or "").strip()
+    if reply:
+        console.print(escape(reply))
+    return True
+
+
+def _held_here(driver, awaited: "Awaitable[str]") -> str:
+    """Say why the terminal is not coming back yet, then hold it."""
+    import asyncio as _asyncio
+
+    async def go() -> str:
+        text = await awaited
+        if driver.holding():
+            console.print(text, markup=False, soft_wrap=True)
+            console.print(
+                "[dim]Holding this terminal: a stint's rounds run in this process, and nothing else "
+                "here would advance them. Ctrl-C stops it where it is; `stints resume` takes it up.[/dim]"
+            )
+            await hold_until_the_stints_end(driver)
+            return ""
+        return text
+
+    return _asyncio.run(go())
+
+
+def _stint_session(record) -> str | None:
+    """The session the stint was started in, not this terminal's absence of one.
+
+    The driver reads the stint from that conversation's store and submits into
+    the same one, where the nodes its earlier rounds left still are.
+    """
+    return str(record.origin.get("session_key") or "") or None
+
+
+@stints_app.command("extend")
+def plan_extend(
+    stint_id: str = typer.Argument(..., help="Stint id, as listed"),
+    rounds: int = typer.Option(..., "--rounds", "-n", help="How many more rounds to allow"),
+):
+    """Give a stint more rounds. A stint that is over opens the next one here.
+
+    For the stint that ran its budget out with work still worth doing. It keeps
+    the checkout, the branch and the journal it already has -- starting a second
+    stint instead would cut a fresh worktree from the project's HEAD and begin
+    again from before this one's first commit.
+    """
+
+    config = _load_config()
+    home, _, record = _require_stint(config, stint_id)
+    if _relayed("playbooks.stints.extend", {"stint_id": stint_id, "rounds": rounds}):
+        return
+    driver = _stint_driver(config, home)
+    answer = _held_here(driver, driver.extend(stint_id, rounds, _stint_session(record)))
+    if answer:
+        console.print(escape(answer))
+
+
+@stints_app.command("sweep")
+def stint_sweep():
+    """Take up every stint here whose holder is gone.
+
+    The one move for "the machine restarted and I want my work back". Reading a
+    list marks them; this is the step that spends money, which is why it is a
+    verb rather than something a read does on a person's behalf. A stint another
+    process is still beating for is left where it is.
+    """
+    config = _load_config()
+    taken: list[str] = []
+
+    async def go() -> None:
+        # One loop for every home: the rounds this takes up run in this process,
+        # and a loop closed per home closed under the rounds it had just opened
+        # -- the receipt said "took up", the record said running, nothing ran.
+        drivers = [_stint_driver(config, home) for home, _store in _stint_homes(config)]
+        for driver in drivers:
+            taken.extend(await driver.sweep(None))
+        for stint_id in taken:
+            console.print(f"[green]took up[/green] {escape(stint_id)}")
+        if any(driver.holding() for driver in drivers):
+            console.print(
+                "[dim]Holding this terminal: the rounds taken up run in this process. "
+                "Ctrl-C stops them where they are; `stints resume` takes them up.[/dim]"
+            )
+            while any(driver.holding() for driver in drivers):
+                await asyncio.sleep(2.0)
+
+    asyncio.run(go())
+    if not taken:
+        console.print("[dim]Nothing here was left in flight.[/dim]")
+
+
+@stints_app.command("resume")
+def plan_resume(stint_id: str = typer.Argument(..., help="Stint id, as listed")):
+    """Take a stint up again from the node it stopped at.
+
+    For the stint whose gateway died mid-round. The roles that finished are named
+    rather than re-run, so what they produced is still what the rest of the
+    round reads.
+    """
+
+    config = _load_config()
+    home, _, record = _require_stint(config, stint_id)
+    # `unfinished` rather than `live`, which excludes a paused stint: pausing
+    # says to take it up later with this command, and a guard that then refused
+    # it would make that instruction false.
+    if not record.unfinished:
+        console.print(f"{escape(stint_id)} is {escape(record.status)} and has nothing left to take up.")
+        return
+    if _relayed("playbooks.stints.resume", {"stint_id": stint_id}):
+        return
+    driver = _stint_driver(config, home)
+    answer = _held_here(driver, driver.resume(stint_id, _stint_session(record)))
+    if answer:
+        console.print(escape(answer))

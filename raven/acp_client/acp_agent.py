@@ -25,6 +25,7 @@ Two consequences worth stating, because they are what the transport buys:
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
@@ -67,7 +68,10 @@ from raven.agent.subagent.backends.observability import (
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry
 from raven.agent.subagent.mcp_grant import McpDispatchError, McpGrant, McpSource, acp_target, resolve_grant
+from raven.agent.tools.removals import RemovalWatch
+from raven.agent.tools.snapshot import take as take_snapshot
 from raven.contracts.subagent_backend import SubagentActionAbortedError
+from raven.contracts.tool import FileChange
 from raven.mcp.endpoint import McpEndpoints, bridge_command
 from raven.spine.message import Media
 
@@ -152,6 +156,46 @@ async def _replay_dropped(router: Any, session_id: str) -> AsyncIterator[None]:
         router.detach(session_id, _drop)
 
 
+#: Workspace listings one turn holds for calls that have not settled. Each is a
+#: whole directory, and a call that never reports an end would otherwise keep
+#: its own copy for as long as the turn lasts. At the ceiling the oldest listing
+#: goes rather than the newest being refused: a call still open after sixty-four
+#: others is the one least likely to ever report an end.
+_MAX_OPEN_LISTINGS = 64
+
+#: Call kinds a listing would learn nothing from. The pair of walks costs tens of
+#: milliseconds of the connection's read loop -- which every session sharing it
+#: waits behind -- and none of these can leave a file behind. A frame with no
+#: kind is listed: codebuddy announces a call before it knows the kind.
+_KINDS_THAT_WRITE_NOTHING = frozenset({"read", "search", "think", "fetch"})
+
+
+def _diff_blocks(content: Any) -> list[dict[str, Any]]:
+    """The ``diff`` entries of a tool call's content, whole enough to record.
+
+    A block without a path or without the text it left is not a change anyone
+    can draw, so it is dropped rather than recorded with a guess in its place.
+    """
+    if not isinstance(content, list):
+        return []
+    return [
+        item
+        for item in content
+        if isinstance(item, dict)
+        and item.get("type") == "diff"
+        and isinstance(item.get("path"), str)
+        and item["path"]
+        and isinstance(item.get("newText"), str)
+    ]
+
+
+def _block_kind(block: dict[str, Any]) -> str | None:
+    """What an adapter says its block did, where it says so at all."""
+    meta = block.get("_meta")
+    kind = meta.get("kind") if isinstance(meta, dict) else None
+    return kind if isinstance(kind, str) else None
+
+
 class _TurnCollector:
     """Accumulates one session's notifications while a prompt is in flight.
 
@@ -181,6 +225,7 @@ class _TurnCollector:
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         dialect: AcpDialect | None = None,
         prompt: str | None = None,
+        workspace: Path | None = None,
     ) -> None:
         self._on_delta = on_delta
         # The prompt this turn was opened with. A ``user_message_chunk`` that
@@ -197,6 +242,16 @@ class _TurnCollector:
         # carries predates this run -- and a pooled connection shared by two
         # runs would put this one's steps on the other one's live record.
         self._run = activity.current()
+        # Where this turn's files are, for the account of what it wrote. The
+        # agent reports a diff block for a file its own tools touched; a file one
+        # of its commands produced is only ever visible as a directory that
+        # changed around the call, which is what the per-call listings are for.
+        self._workspace = workspace
+        self._blocks: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        self._listings: dict[str, Any] = {}
+        self._settled_calls: set[str] = set()
+        self._created: set[str] = set()
+        self._removals = RemovalWatch()
         self.answer: list[str] = []
         self.thoughts: list[str] = []
         self.kinds: list[str] = []
@@ -223,6 +278,12 @@ class _TurnCollector:
             call_id = str(tool.get("toolCallId") or "") if isinstance(tool, dict) else ""
             if command and call_id:
                 self._backfill_permission_command(call_id, command)
+            # The earliest frame that names the call. An agent that asks first
+            # and announces the call as it runs it -- raven's own does -- leaves
+            # the announce too late for a listing to be a baseline: the file the
+            # call writes is already there by then.
+            if call_id and call_id not in self._settled_calls:
+                await self._open_listing(call_id, tool.get("kind") if isinstance(tool, dict) else None)
             return
         update = params.get("update")
         if not isinstance(update, dict):
@@ -307,6 +368,7 @@ class _TurnCollector:
                         }
                     )
                     self._backfill_subject(str(update.get("toolCallId") or ""), update)
+            await self._note_files(update)
         elif kind == "plan":
             self._plan(update)
         elif kind == "usage_update":
@@ -316,6 +378,165 @@ class _TurnCollector:
         # exists after the answer is not a live view of anything.
         if kind in (*_ANSWER_UPDATES, *_THOUGHT_UPDATES, *_USER_UPDATES, "tool_call", "tool_call_update", "plan"):
             activity.set_transcript(self._run, self.messages(in_flight=True))
+        # The count beside it, on the same beat: `tasks.list` draws a running
+        # node's tool count off the live account, and a tally published only
+        # at the end of the turn left the chip blank while the transcript
+        # already listed the calls.
+        if kind in (*_BREAKING_UPDATES, "plan"):
+            activity.set_tool_calls(self._run, self.tool_calls, self.failed_calls)
+
+    async def _note_files(self, update: dict[str, Any]) -> None:
+        """Record what one tool call did to the files, once it has settled.
+
+        The account is built from two sources, because neither sees the other's
+        changes: the diff blocks the agent attaches to the call, which carry the
+        text and so the line counts, and a listing of the workspace taken when
+        the call opened against one taken when it completed, which is the only
+        sign of a file a command of the agent's wrote. A failed call keeps only
+        the second: its blocks are claims about a change that may not have
+        landed, while what the listing finds on disk is there whatever the exit
+        status said. A call id settles once, however many frames repeat it.
+
+        Written into the run captured at construction, not the ambient one: this
+        runs on the connection's read loop, whose ContextVar predates the run.
+        """
+        call_id = str(update.get("toolCallId") or "")
+        if not call_id or call_id in self._settled_calls:
+            return
+        status = update.get("status")
+        settling = status in ("completed", "failed")
+        # No listing for a call first seen already over: taken now it would be
+        # the state after the call, which is no baseline at all -- it would say
+        # every file the call created had been there all along.
+        if not settling:
+            await self._open_listing(call_id, update.get("kind"))
+        blocks_here: dict[str, list[dict[str, Any]]] = {}
+        for block in _diff_blocks(update.get("content")):
+            blocks_here.setdefault(self._absolute(block["path"]), []).append(block)
+        for path, group in blocks_here.items():
+            # Keyed by the resolved path, so one file revised twice in a call is
+            # one change and the newest frame's blocks for it are the ones that
+            # stand. Kept as a group: an adapter sends one block per hunk of a
+            # single edit, and only the whole frame describes what it did.
+            self._blocks.setdefault(call_id, {})[path] = group
+        if not settling:
+            return
+        self._settled_calls.add(call_id)
+        before = self._listings.pop(call_id, None)
+        blocks = self._blocks.pop(call_id, {})
+        if status == "failed":
+            # The blocks describe what the call meant to do, which a failed call
+            # may not have done; the disk says what it did do. A command that
+            # wrote a file and then exited non-zero left that file behind.
+            blocks = {}
+        accounted: list[str] = []
+        # Settled before this call's own blocks are noted, so a file it just
+        # wrote is not stat'ed to say it exists -- the order the in-process lane
+        # keeps around its own tool results.
+        for removal in self._removals.settle():
+            accounted.append(removal.path)
+            activity.record_file_change(
+                self._run,
+                activity.workspace_relative(removal.path, self._workspace),
+                "delete",
+                0,
+                len((removal.before or "").splitlines()),
+                None,
+            )
+        for path, group in blocks.items():
+            accounted.append(path)
+            self._record_blocks(path, group, before)
+        if before is not None:
+            activity.record_snapshot_changes(
+                before,
+                await self._listing(),
+                self._workspace,
+                already=accounted,
+                run=self._run,
+                seen_created=self._created,
+            )
+
+    async def _open_listing(self, call_id: str, kind: Any) -> None:
+        """Take the call's baseline listing, once, unless its kind writes nothing."""
+        if call_id in self._listings or kind in _KINDS_THAT_WRITE_NOTHING:
+            return
+        while len(self._listings) >= _MAX_OPEN_LISTINGS:
+            self._listings.pop(next(iter(self._listings)))
+        self._listings[call_id] = await self._listing()
+
+    def _record_blocks(self, path: str, blocks: list[dict[str, Any]], before: Any) -> None:
+        """Record one path's blocks from one call as the single change they are.
+
+        Summed, because an adapter sends one block per hunk: keeping the last
+        one would report a two-hunk edit as whichever hunk arrived last.
+        """
+        add = delete = 0
+        edited = False
+        for block in blocks:
+            # A block that carries no text for what was there says nothing about
+            # the file having existed, whether the field is absent, null, or a
+            # shape that is not text.
+            old_text = block.get("oldText")
+            old_text = old_text if isinstance(old_text, str) else None
+            edited = edited or old_text is not None
+            block_add, block_delete = activity.count_line_changes(old_text, block["newText"])
+            add += block_add
+            delete += block_delete
+        newest = blocks[-1]["newText"]
+        try:
+            size: int | None = os.stat(path).st_size
+        except OSError:
+            size = None
+        relative = activity.workspace_relative(path, self._workspace)
+        if not newest and (size is None or _block_kind(blocks[-1]) == "delete"):
+            # codex reports a removal as a block holding the old content and no
+            # new one. Recorded as the deletion it is: an edit down to zero bytes
+            # would read as a file that is there and empty.
+            activity.record_file_change(self._run, relative, "delete", 0, delete, None)
+            return
+        if edited:
+            op = "edit"
+        elif self._dialect.missing_old_text_is_creation:
+            # The spec's reading, and what codex and raven's own agent send: no
+            # `oldText` is a file that was not there.
+            op = "add"
+        elif before is not None and os.path.realpath(path) in before:
+            # claude-agent-acp announces every `Write` without `oldText`,
+            # existing file or not, so the listing is the only thing that tells
+            # a creation from a rewrite -- and a rewrite recorded as a creation
+            # would cancel itself away against a later removal of a file the
+            # user had.
+            op = "write"
+        else:
+            op = "add"
+        activity.record_file_change(
+            self._run, relative, op, add, delete, size if size is not None else len(newest.encode("utf-8"))
+        )
+        # Only when the block is the whole file: a hunk remembered as the file's
+        # text would count the hunk's lines as a later removal's.
+        if len(blocks) == 1 and (size is None or size == len(newest.encode("utf-8"))):
+            self._removals.note_write(FileChange(path=path, after=newest))
+
+    async def _listing(self) -> Any:
+        """A listing of the turn's workspace, taken off the read loop.
+
+        The walk is tens of milliseconds on a working tree, and every frame the
+        connection carries -- for every session sharing it -- waits behind it.
+        """
+        if self._workspace is None:
+            return None
+        return await asyncio.to_thread(take_snapshot, self._workspace)
+
+    def _absolute(self, path: str) -> str:
+        """A diff block's path as the filesystem knows it.
+
+        The spec calls for an absolute path and adapters have been seen to send
+        one relative to the session's working directory, which is the only thing
+        it could be relative to.
+        """
+        if os.path.isabs(path) or self._workspace is None:
+            return path
+        return str(Path(self._workspace) / path)
 
     def _revise_call(self, update: dict[str, Any]) -> None:
         """Re-read a call's arguments from a later frame.
@@ -708,6 +929,10 @@ class AcpAgentBackend:
         # send that choice again -- and nothing else remembers what it was.
         self._model_baseline: dict[str, str] = {}
         self._model_pushed: dict[str, str] = {}
+        # Values this agent has refused, so a refusal re-attempted on every
+        # route into a session -- and on every fresh session a spawn opens --
+        # is said once per value rather than once per turn.
+        self._model_refused: set[str] = set()
         self._registry = registry or get_registry()
         # Which pool this backend's turns are served from. Almost always the
         # process-wide one, and held unresolved until it is used so that
@@ -729,6 +954,32 @@ class AcpAgentBackend:
         self._event_sink: Any = None
         self._caps_listener: Any = None
         self._unprompted_announce: Any = None
+
+    @property
+    def _follows_parent(self) -> bool:
+        """Whether this agent runs on the parent's providers, and so on its model.
+
+        Two conditions, and they are the two the listing draws its model rule
+        from (``raven.rpc.methods.subagents._model_rule``) -- deliberately the
+        same pair, because a row saying its model is managed elsewhere while
+        every dispatch moves it is worse than either answer on its own.
+
+        The handshake names raven: a product built on ``raven acp`` says so
+        whatever its row is called here.
+
+        And its folder lends it no chat credential of its own. One that does is
+        launched on that key with the provider and model beside it, and pushing
+        the host's model at it is not merely pointless: a product keying the
+        same vendor the host uses (Raven-Research files its key under
+        ``providers.openrouter``) takes the switch and answers on the host's
+        model, paid for by its own key -- which is the one thing its folder's
+        configuration exists to decide.
+        """
+        if getattr(self._snapshot, "agent_name", "") != "raven":
+            return False
+        from raven.agent.subagent.vendored_agents import product_llm_key
+
+        return not product_llm_key(self.name)
 
     @property
     def pool(self) -> Any:
@@ -1190,6 +1441,20 @@ class AcpAgentBackend:
                 parent_protocol = str(getattr(provider, "api_protocol", "") or "")
                 if parent_protocol:
                     binding["RAVEN_PARENT_PROTOCOL"] = parent_protocol
+                # One of raven's own with no pin of its own follows the parent.
+                # The binding above puts a fresh worker on the parent's model at
+                # launch; this says the same to the session on every route in,
+                # because a resumed session keeps whatever it was last put on --
+                # a pin since cleared, kept in the agent's own session record
+                # across a host restart that forgot it ever pushed one -- and the
+                # page then reads "follows the main Raven" over a session that
+                # answers on something else. The value is the child's own
+                # spelling, `<slug>/<id>`; a parent whose provider names no slug
+                # gives it nothing to route by, so nothing is pushed and the
+                # launch binding stands. A third party is left alone: the
+                # parent's model is not one of its choices.
+                if not session_model and model and parent_provider and self._follows_parent:
+                    session_model = model if model.startswith(f"{parent_provider}/") else f"{parent_provider}/{model}"
                 connection = await self.pool.acquire(
                     name=self.name,
                     command=self.command,
@@ -1238,7 +1503,12 @@ class AcpAgentBackend:
                 sink = bounded_delta(on_delta, self.max_output_chars)
                 # From the live handshake, not the stored snapshot: this is the
                 # process actually answering, and a snapshot can be stale.
-                collector = _TurnCollector(sink, dialect_for(connection.initialize), prompt=task)
+                # `session_cwd` rather than `workspace`: it is the directory the
+                # agent's own tools resolve against, so it is where a file this
+                # turn writes actually lands.
+                collector = _TurnCollector(
+                    sink, dialect_for(connection.initialize), prompt=task, workspace=Path(session_cwd)
+                )
                 # Built here, in the turn's context, for the reason `_TurnCollector`
                 # documents: the read loop's ContextVars predate this run, and the
                 # asker is bound per turn.
@@ -1599,7 +1869,10 @@ class AcpAgentBackend:
         answers invalid-params and one that will not take the value answers with
         its own code; either way the task still runs on the agent's own model,
         and failing the run would be a worse outcome than running it on a model
-        the caller did not pick.
+        the caller did not pick. Said once per value: the push is re-asserted
+        on every route in and on every session a spawn opens, so a permanent
+        refusal would otherwise be a warning per turn for as long as the row
+        keeps the pick.
         """
         pushed = self._model_pushed.get(session_id)
         if model:
@@ -1629,23 +1902,26 @@ class AcpAgentBackend:
                 timeout=budget,
             )
         except AcpRemoteError as exc:
-            logger.warning(
+            self._say_model_refused(
+                target,
                 "acp agent {!r}: session {} would not take model {!r} ({}); running on its default",
                 self.name,
                 session_id,
-                model,
+                target,
                 exc.message,
             )
             return
         except AcpError as exc:
-            logger.warning(
+            self._say_model_refused(
+                target,
                 "acp agent {!r}: could not set model {!r} on session {} ({}); running on its default",
                 self.name,
-                model,
+                target,
                 session_id,
                 exc,
             )
             return
+        self._model_refused.discard(target)
         # Reached only when the agent took it, which both refusal arms above
         # return before. That is what keeps this record true in either
         # direction: a refused switch must not leave this host believing it
@@ -1656,6 +1932,11 @@ class AcpAgentBackend:
             self._model_pushed[session_id] = target
         else:
             self._model_pushed.pop(session_id, None)
+
+    def _say_model_refused(self, value: str, message: str, *args: Any) -> None:
+        first = value not in self._model_refused
+        self._model_refused.add(value)
+        logger.log("WARNING" if first else "DEBUG", message, *args)
 
     async def _set_mode(self, client: Any, session_id: str, mode: str | None, *, budget: float) -> None:
         """Put this session in ``mode`` before the prompt, if one was asked for.
@@ -1735,11 +2016,10 @@ class AcpAgentBackend:
         )
         # The same facts to the run's own record, so a reader sees what the agent
         # did without opening a trace viewer. Once, not per notification: an ACP
-        # agent's `usage_update` is cumulative for the turn.
-        for title in collector.tool_calls:
-            activity.note_tool_call(title)
-        for title in collector.failed_calls:
-            activity.note_tool_failure(title)
+        # agent's `usage_update` is cumulative for the turn. The calls were
+        # already published as they landed; this is the settled list, with the
+        # labels every later frame corrected, written over it rather than added.
+        activity.set_tool_calls(activity.current(), collector.tool_calls, collector.failed_calls)
         activity.note_usage(collector.usage)
         activity.note_steps(counts)
         activity.note_thoughts(thought_chars)

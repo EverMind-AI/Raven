@@ -311,8 +311,9 @@ await executor.stop()
 沙箱不会放宽命令权限。工具注册表在向任一后端派发命令前，都会应用相同的拒绝和审批规则。
 由于 `/workspace` 是可读写挂载，在其中删除文件也会删除宿主机上的对应文件。
 
-`ExecTool` 还会执行自身的命令和工作区限制。`restrict_to_workspace` 对两个后端均生效：
-引用工作区之外路径的命令会被拒绝并记录。
+`ExecTool` 还会执行自身的命令和工作区检查。`restrict_to_workspace` 对两个后端均生效：
+它检查命令文本中可识别的路径，并拒绝超出允许工作目录的命令，但无法检查被调用程序
+内部的每一次文件访问。需要隔离时，仍应配置虚拟机挂载范围和操作系统权限。
 
 ## 6. 接入 `AgentLoop` { #6-wiring-into-agentloop }
 
@@ -633,10 +634,10 @@ MCP 往返测试（`test_npx_mcp_server_everything`）每次运行都会在 `nod
 uv run python -m pytest tests/test_sandbox_unit.py tests/integration/test_sandbox_real_vm.py -v
 ```
 
-**运行项目完整测试套件**（全部测试文件，不含集成测试）：
+**运行项目测试，但排除集成测试：**
 
 ```bash
-uv run python -m pytest tests/ --ignore=tests/integration/test_sandbox_real_vm.py -q
+uv run pytest tests/ --ignore=tests/integration -q
 ```
 
 ### 9.6 运行单个测试 { #96-run-a-single-test }

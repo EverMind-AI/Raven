@@ -6,12 +6,15 @@
  * draws from.
  */
 
-import type { ModelTagFacts } from '../../shell/model-tags'
+import type { ModelTagFacts } from '../../components/ModelTags'
 
 export interface Provider {
   id: string
   name: string
   homepage?: string
+  keyUrl?: string
+  /* Custom request headers by name, each value redacted by the server. */
+  headers?: Record<string, string>
   /* Everything this provider could serve: its configured list plus a curated
      shortlist plus a catalogue. The picker does not offer this -- see
      `offered` below -- but the onboarding step, which runs before anything has
@@ -25,6 +28,18 @@ export interface Provider {
      its models would fail on the next turn rather than at the click. */
   on: boolean
   kind?: string
+  /* Resells other vendors' models under vendor/model ids (the registry's
+     `is_gateway`). The settings catalogue filters on it. */
+  gateway?: boolean
+  /* Every model-id prefix that names this provider, which is what one spelling
+     of a model has to be stripped of before it can be compared with another
+     (`ModelHost` below). Absent on a wire that does not carry the set, and on
+     every offline fixture. */
+  routes?: readonly string[]
+  /* The provider the running conversation's model is served by, as the wire
+     marks it (`is_current`). The picker uses it to place that model in the
+     right column when the column does not carry it. */
+  current?: boolean
   protocols?: Record<string, string>
   protocolOverrides?: Record<string, string>
   /* Keyed by the id as it appears in `models`. Absent for a model the registry
@@ -33,12 +48,196 @@ export interface Provider {
   labels?: Record<string, ModelTagFacts & { label?: string; description?: string }>
 }
 
+/* The buckets a model list filters by, `registry_data.KINDS`. Ordered as the
+   add-model row draws its tabs and as the typed-id chip cycles. */
+export type Kind = 'text' | 'image' | 'embedding' | 'reranker' | 'audio' | 'video'
+export const KIND_ORDER: readonly Kind[] = ['text', 'image', 'embedding', 'reranker', 'audio', 'video']
+
+/* What ONE opening of the picker lists, and what a pick there means.
+ *
+ * The composer opens with the default offer -- text models, every connected
+ * provider, a pick switches this conversation. A settings role slot opens with
+ * its own: its kind, the providers that role may use, its name in the header,
+ * the model it holds today, and its own write in place of the switch.
+ *
+ * The kind narrows each provider's COLUMN, never the provider list: a provider
+ * whose key works but whose model list nobody has built yet still has to be
+ * visible, or the reader cannot tell it is connected (and a model set by
+ * onboarding, never "added", would have nowhere to be marked). */
+/* What one opening of the picker lists and what picking means.
+ *
+ * DEBT: every opening draws from the model store, so a caller that owns its
+ * own list cannot use this picker at all -- which is why
+ * `components/ModelPicker` is still in the tree for the agents page, where an
+ * ACP agent advertises its own choices. Paying it means a field here for a
+ * caller-supplied list and one for suppressing the typed row; `store.column()`
+ * needs nothing, since `offered` already falls back to `models` and an
+ * untagged model already reads as text. That file's header has the rest. */
+export interface Offer {
+  kind: Kind
+  /* Provider ids this opening may list; absent means every connected one. */
+  providers?: string[]
+  /* The slot's name, drawn in the header; absent for the composer, which also
+     selects the below-the-anchor placement and the settings footer's absence. */
+  title?: string
+  /* The pair this opening marks: the slot's model and the provider serving it.
+     Listed in that provider's column even when the column does not carry it.
+     Absent means this slot holds nothing yet -- or, for an opening with no
+     `pick` (the composer's), the conversation's current model. */
+  current?: { model: string; provider: string }
+  /* What a pick does. Absent means switch this conversation (`store.choose`).
+     `typed` is true for an id the provider does not list yet, and `kind` is
+     what the chip beside it was showing -- what the person says that id IS,
+     which no catalogue can tell the caller. */
+  pick?(model: string, provider: string, typed: boolean, kind: Kind): Promise<void>
+}
+
+/* Which bucket a model is in, and what a name alone says it is.
+
+   One classifier, in Python: `registry_data.kind_of` files a model by what it
+   WRITES -- reading pictures is something a text model does -- and the answer
+   rides on every `model.options` label as `kind`. Nothing here derives one from
+   capabilities or modalities; two classifiers eventually disagree and only one
+   of them is the one that routes.
+
+   `guessKind` is the exception, and it guesses about a model nobody has
+   described: an id a person just typed. It is a translation of
+   `registry_data.inferred_tags` -- same two patterns, same last path segment,
+   rerank asked first because a reranker is usually named after the embedding
+   family it reranks for. `tests/test_provider_registry_data.py` and
+   `types.test.ts` assert the same nine rows so the copy cannot drift. */
+
+/* The registry's answer, or text. A model with no label entry is one nothing
+   describes, which `kind_of((), ())` also calls text; an unknown string is a
+   catalogue newer than this page, and text is the honest fallback. */
+export const modelKind = (facts: ModelTagFacts | undefined): Kind =>
+  (KIND_ORDER as readonly string[]).includes(facts?.kind ?? '') ? (facts!.kind as Kind) : 'text'
+
+/* What a provider answers to: its own name, and every name it used to answer
+   to. `providers/wire.py`'s `merge_key` strips any of them, so a page holding
+   only the current name asks a narrower question than the backend answers. The
+   set travels on the wire because `ProviderSpec.route_names` says a caller must
+   compare against it rather than rebuild it, and a second copy of the alias
+   table here is exactly the drift that warns against. */
+export interface ModelHost {
+  readonly id: string
+  readonly routes?: readonly string[]
+}
+
+/* One model, however it was spelled. The backend's identity rule is
+   `providers/wire.py`'s `merge_key`: strip a leading prefix naming this
+   provider, lowercase, compare. Two surfaces need it -- a provider's list mixes
+   ids added by hand (as typed) with ids the vendor reports (qualified), and a
+   role stores the spelling it was given while `model.add_model` stores the one
+   it derived. Both drew the same model twice before this.
+
+   `routes` absent is the provider's own name alone, which is what a wire that
+   does not carry the set, and every offline fixture, gives -- the old rule,
+   narrower than the backend's rather than wrong about a different one. */
+export const bareModel = (host: ModelHost, id: string): string => {
+  const lower = id.toLowerCase()
+  for (const head of host.routes?.length ? host.routes : [host.id]) {
+    const prefix = `${head.toLowerCase()}/`
+    if (lower.startsWith(prefix)) return lower.slice(prefix.length)
+  }
+  return lower
+}
+
+export const sameModel = (host: ModelHost, a: string, b: string): boolean =>
+  bareModel(host, a) === bareModel(host, b)
+
+/* The next kind in the cycle. Both surfaces that let an id be typed offer the
+   same wheel, and the arithmetic was written four times between them. */
+export const nextKind = (kind: Kind): Kind =>
+  KIND_ORDER[(KIND_ORDER.indexOf(kind) + 1) % KIND_ORDER.length]!
+
+export const KIND_LABEL: Record<Kind, string> = {
+  text: 'gui.model.type.text',
+  image: 'gui.model.type.image',
+  audio: 'gui.model.type.audio',
+  video: 'gui.model.type.video',
+  embedding: 'gui.model.type.embedding',
+  reranker: 'gui.model.type.reranker',
+}
+
+/* The sprite id in components/ModelTags.tsx for each kind. The sprite is a
+   table of capabilities plus `text`, so it has `embedding` and `rerank` and the
+   `*-generation` compounds, and no bare `image` / `audio` / `video` /
+   `reranker`: every glyph drawn for a kind goes through here, never through the
+   Kind value. */
+export const KIND_GLYPH: Record<Kind, string> = {
+  text: 'text',
+  image: 'image-generation',
+  audio: 'audio-generation',
+  video: 'video-generation',
+  embedding: 'embedding',
+  reranker: 'rerank',
+}
+
+const RERANK = /rerank/i
+const EMBEDDING = /(?:^|[-_/])(?:bge|gte|e5|m3e|text2vec|uae|jina-clip)(?:[-_.]|$)|embed/i
+
+export function guessKind(id: string): Kind {
+  const bare = id.split('/').pop() ?? id
+  if (RERANK.test(bare)) return 'reranker'
+  if (EMBEDDING.test(bare)) return 'embedding'
+  return 'text'
+}
+
+/* The tags a person states for a typed id, by the kind they named. Text states
+   nothing: the backend infers from the name (`registry_data.inferred_tags`),
+   and an overlay of empty lists would overwrite a description somebody wrote. */
+export const statedTags = (kind: Kind): { capabilities?: string[]; output_modalities?: string[] } => {
+  if (kind === 'text') return {}
+  const table: Record<Exclude<Kind, 'text'>, [string, string[]]> = {
+    image: ['image-generation', ['text', 'image']],
+    audio: ['audio-generation', ['audio']],
+    video: ['video-generation', ['video']],
+    embedding: ['embedding', ['vector']],
+    reranker: ['rerank', ['text']],
+  }
+  const [capability, outputs] = table[kind]
+  return { capabilities: [capability], output_modalities: outputs }
+}
+
 export type ApiProtocol = 'auto' | 'chat' | 'responses' | 'anthropic'
 
 /* The models a picker offers for a provider: the added ones. Older sources
    that predate the split hand back only `models`, and falling through to it
-   keeps them working rather than emptying their picker. */
-export const offered = (p: Provider): string[] => p.configured ?? p.models
+   keeps them working rather than emptying their picker.
+
+   Given a kind, the ones of that kind -- and a provider with nothing added yet
+   offers the registry's own shortlist, for text and text only. The first-run
+   wizard connects a vendor and picks a chat model in one step, before anyone
+   has visited the providers page to build a list, and an empty column there is
+   the whole of that step. The fallback is never taken for a kind the wizard
+   does not ask for, where the vendor's whole catalogue would be a worse answer
+   than "nothing here yet, type an id".
+
+   On the public surface because two domains draw a column from it: the picker
+   (through `store.column`, which pins the slot's own model on top) and the
+   agents page, whose rows of raven's own run on these same providers. */
+export const offered = (p: Provider, kind?: Kind): string[] => {
+  const listed = p.configured ?? p.models
+  if (!kind) return listed
+  const source = listed.length || kind !== 'text' ? listed : p.models
+  return source.filter((m) => modelKind(p.labels?.[m]) === kind)
+}
+
+/* The column, with the value a slot currently holds kept in it.
+
+   A picker whose current value is absent from its rows renders with nothing
+   marked, and a reader then has to trust the control beside it to know what
+   the slot is on. The value can be absent for ordinary reasons -- a model
+   added by hand, one this provider no longer lists, one from a credential
+   since removed -- so it is put back rather than hidden. The ACP option
+   builder does the same thing for the same reason, under the name `Current`;
+   this is that rule for the pickers raven draws itself.
+
+   `held` is compared by the backend's identity rule, not by string, so a
+   provider-qualified spelling and a bare one do not list one model twice. */
+export const withCurrent = (host: ModelHost, rows: string[], held: string | null | undefined): string[] =>
+  held && !rows.some((m) => sameModel(host, m, held)) ? [held, ...rows] : rows
 
 export interface ModelSource {
   providers(): Provider[]
@@ -50,11 +249,20 @@ export interface ModelSource {
      meaningful: the picker rolls the local pick back. Resolving to ``'staged'``
      means the pick was held rather than applied (a draft has no session yet),
      and the picker words its toast accordingly. */
-  persist(m: string, provider: string, scope: 'session' | 'default'): Promise<void | 'staged'>
+  persist(m: string, provider: string, scope: 'session' | 'default'): Promise<void | 'staged' | 'needs_restart'>
+  /* Add a model to a provider's list. The picker's typed-id row calls it
+     before the switch, so a conversation never names a model its provider does
+     not list. `kind` states what the person said it is, for an id no catalogue
+     describes; absent (text) states nothing and leaves the backend's own
+     name-based inference standing. */
+  addModel?(m: string, provider: string, kind?: Kind): Promise<void>
   setProtocol?(m: string, provider: string, protocol: ApiProtocol): Promise<void>
   /* The settings door, for the picker's own footer. Only offered when the
      picker was opened from the composer chip, since the settings page opening
-     itself is not a way out of it. */
+     itself is not a way out of it. It lands on Model providers, which is the
+     page the footer names: keys are entered and model lists are built there,
+     and a door that opened wherever settings was left last answered a reader
+     who asked for one particular page. */
   openSettings(): void
   openProviderModels?(provider: string): void
 }

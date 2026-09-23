@@ -1,24 +1,27 @@
 import { createRoot } from 'react-dom/client'
 
+import { t } from '../../i18n/t'
+import { copy } from '../../lib/clipboard'
+import { md } from '../../lib/prose'
+import { current as currentSession } from '../../lib/session'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
+import { pane } from '../../state/wsPane'
 import * as browser from '../browser/mount'
 import * as agents from '../subagents/mount'
 import * as deliveries from './deliveries'
-import { ds, shell, t } from '../../shell/bridge'
-import { copy } from '../../shell/clipboard'
-import { current as currentSession } from '../../shell/session'
-import { md } from '../../shell/prose'
 
 import type { WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
 import type { ReactElement } from 'react'
 import type { Root } from 'react-dom/client'
-import type { Shell } from '../../shell/bridge'
 
-/* Page state, outside React on purpose: the legacy shell drives this panel
- * imperatively (the tab bar, the open/close buttons and the tool hooks all
- * live in legacy parts and call drawWs), so the state lives where the shims
- * can reach it and the component subscribes. The workspace record lives here
- * as well; the legacy fixture adapter reaches the stable record through the
- * island bag, while the live layer uses the narrow accessors below.
+/* Pane state, outside React on purpose: the callers that drive this pane are
+ * not React. The pane's own chrome dispatches every repaint (state/ws.ts's
+ * draw calls `mount` below), the session pipeline writes the record as a turn
+ * runs (state/session/{registry,residency,runtime,stages}.ts) and the shared
+ * drawer opens a file through it -- so the state lives where those can reach
+ * it and the component subscribes. The workspace record lives here as well,
+ * and the accessors below are what the page reads it through.
  */
 
 export type WsRoute = 'launch' | 'diff' | 'file'
@@ -27,8 +30,7 @@ export interface WsIslandState {
   route: WsRoute
 }
 
-let state: WsIslandState = { route: 'launch' }
-const listeners = new Set<() => void>()
+const store = makeStore<WsIslandState>({ route: 'launch' })
 
 const workspace: WsShared = { changes: [], urls: [], file: null, turn: 0, unseen: 0 }
 
@@ -66,34 +68,22 @@ function resetShared(): void {
   restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
 }
 
-export const getState = (): WsIslandState => state
+export const { get, subscribe } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<WsIslandState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
-function set(patch: Partial<WsIslandState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
-}
-
-export const source = (): WorkspaceSource => ds<WorkspaceSource>('workspace')
-
-function verb<K extends keyof Shell>(name: K): NonNullable<Shell[K]> {
-  const v = shell()[name]
-  if (!v) throw new Error(`RavenShell.${String(name)} is not wired`)
-  return v as NonNullable<Shell[K]>
-}
+export const source = (): WorkspaceSource => ds('workspace')
 
 export function copyToClip(text: string, done: string): void {
   copy(text, done)
 }
 
-/* Straight to the renderer, not out through the shell and back: prose.ts is a
-   pure function in this same bundle, so a bridge verb here would round-trip
-   window.RavenShell.md -> window.md -> this module for nothing, and would hide
-   the file viewer from anyone auditing md()'s callers. */
+/* Straight to the renderer: prose.ts is a pure function in this same bundle,
+   so a verb here that went out through a seam and back would hide the file
+   viewer from anyone auditing md()'s callers. */
 export const mdHtml = (src: string): string => md(src)
 export const hostPlatform = (): string => source().hostPlatform()
 
@@ -103,13 +93,13 @@ export function redraw(): void {
   set({})
 }
 
-/* The routing the legacy drawWs kept, minus the two tabs with islands of
-   their own: agents and browser are dispatched before this runs. Marking
-   the changes seen happens HERE, synchronously, because the legacy callers
-   run bumpWs() right after drawWs() and count on the render having marked
-   them -- the React render itself lands later. */
+/* Which view the pane's own body shows, minus the two tabs with islands of
+   their own: agents and browser are dispatched by `mount` before this runs.
+   Marking the changes seen happens HERE, synchronously, because the header
+   badge is re-counted (state/ws.ts's bump) right after the repaint and counts
+   on the render having marked them -- the React render itself lands later. */
 export function sync(): void {
-  const view = verb('wsView')()
+  const view = pane().view()
   const ws = shared()
   const bare = !ws.changes.length && !ws.urls.length
   const route: WsRoute = bare && !view.picked ? 'launch' : view.tab === 'file' ? 'file' : 'diff'
@@ -124,19 +114,20 @@ export function setRenderer(f: () => ReactElement): void {
 
 let root: Root | null = null
 
-/* What the drawWs shim calls. The island owns #wsBody for its own views;
-   the agents tab belongs to the subagents island and the browser tab to the
+/* Where the pane's React roots are mounted and unmounted, on every repaint
+   state/ws.ts's draw asks for. The island owns #wsBody for its own views; the
+   agents tab belongs to the subagents island and the browser tab to the
    browser island, so this root steps aside (unmounts) and hands them the
-   cleared box -- the same box, no wrapper, because .ws-body[data-view]
-   styles its direct children. */
-export function draw(): void {
+   cleared box -- the same box, no wrapper, because .ws-body[data-view] styles
+   its direct children. */
+export function mount(): void {
   const host = document.getElementById('wsBody')
   if (!host) return
-  const view = verb('wsView')()
+  const view = pane().view()
   /* Each tab island's root must leave while the DOM it owns is intact --
      BEFORE any wipe -- and the browser's frame watch must drop whenever this
-     draw lands anywhere but a visible browser view: what its own drawWs
-     wrapper did while the dispatch was legacy. */
+     lands anywhere but a visible browser view, which is why detach() runs
+     before the branch rather than inside it. */
   browser.detach()
   agents.detach()
   if (view.tab === 'browser' || view.tab === 'agents') {
@@ -158,7 +149,7 @@ export function draw(): void {
   }
   browser.hidden()
   sync()
-  if (state.route === 'file' && source().canBrowse) host.dataset.view = 'file'
+  if (get().route === 'file' && source().canBrowse) host.dataset.view = 'file'
   else delete host.dataset.view
   if (!root && renderEl) {
     host.innerHTML = ''
@@ -168,7 +159,7 @@ export function draw(): void {
 }
 
 export function pick(tab: string): void {
-  verb('wsPick')(tab)
+  pane().pick(tab)
 }
 
 /* ── file viewing ──────────────────────────────────────────────────── */
@@ -182,6 +173,19 @@ export const fileURL = (p: string): string => {
 /* The same route asked for a PDF rendering of the file instead of its bytes:
    the page cannot draw a deck, so it frames what LibreOffice makes of it. */
 export const renderURL = (p: string): string => fileURL(p) + '&render=pdf'
+/* The first page of a deck as a picture, for a tile that has room for one
+   picture and not for a viewer. */
+export const thumbURL = (p: string): string => fileURL(p) + '&render=thumb'
+/* One page of the rendering as a picture. The viewer draws a PDF this way
+   rather than framing the document: Safari does not draw a framed PDF served
+   under the sandbox policy these files carry, and that policy is what keeps an
+   agent's document away from the page's cookie and its socket, so it stays.
+   Pictures need no policy, look the same in every browser, and run nothing.
+
+   `version` rides along as a query the gateway ignores, so a deck delivered
+   again under the same path is fetched again rather than shown from cache. */
+export const pageURL = (p: string, n: number, version?: number | null): string =>
+  fileURL(p) + '&render=page&p=' + n + (version ? '&v=' + version : '')
 
 /* The same route, asked to serve the file under a policy that lets its scripts
    run. One view of one file: the route remembers nothing, so the next request
@@ -207,11 +211,11 @@ export function fileKind(p: string): string {
   if (TEXT_EXT.has(ext)) return 'code'
   return 'bin'
 }
-export const RENDERED: Record<string, 1> = { md: 1, img: 1, svg: 1, pdf: 1, html: 1, csv: 1, json: 1 }
+export const RENDERED: Record<string, 1> = { md: 1, img: 1, svg: 1, pdf: 1, html: 1, csv: 1, json: 1, pptx: 1 }
 
 /* ── which application gets a file the page cannot render ──────────────
    Per EXTENSION, not one global default, because that is the shape of the
-   want: code in an editor, a deck in a presentation app. Front-end state
+   want: code in an editor, a deck in a presentation app. Front-end get()
    mirrored to localStorage -- the gateway is told the name on each call
    rather than holding the map, so nothing about this preference has to be
    valid on another machine.
@@ -285,7 +289,10 @@ export function openInApp(path: string, app?: string | null): Promise<unknown> {
   return src.openIn(path, app || undefined)
 }
 
-export function _resetAppsForTests(): void {
+/* Test seam only: the island roots this module made, and the state behind
+   them, both outlive a case's DOM. */
+export function _resetForTests(): void {
+  store._resetForTests()
   apps = null
 }
 
@@ -295,6 +302,16 @@ export function relToWorkspace(p: string): string | null {
   if (m) return m[1] ?? null
   if (s.startsWith('/') || s.startsWith('~')) return null
   return s.replace(/^\.\//, '')
+}
+
+/* The desk's file opener, handed in by src/main.tsx for the same reason the
+   subagents panel takes its pane opener that way: features/desk/store
+   imports this module back. Null leaves the panel path below, which is what a
+   page without a desk has. */
+let deskFile: ((path: string) => void) | null = null
+
+export function setDeskOpener(fn: ((path: string) => void) | null): void {
+  deskFile = fn
 }
 
 let fileSeq = 0
@@ -307,14 +324,13 @@ export function makeFile(p: string): WsFile {
 }
 
 export function showFile(p: string): void {
-  const desk = window.RavenIslands?.workspace as { openFile?: (path: string) => void } | undefined
-  if (desk?.openFile) {
-    desk.openFile(p)
+  if (deskFile) {
+    deskFile(p)
     return
   }
   const ws = shared()
   ws.file = makeFile(p)
-  verb('showWorkspace')('file')
+  pane().show('file')
 }
 
 /* Everything the island opens goes through the real viewer when the source
@@ -396,8 +412,10 @@ export async function loadFileText(f: WsFile): Promise<void> {
   }
 }
 
-/* A different session is a different workspace state. Called by the demo
-   shell's wsReset. */
+/* A fresh record, for a page that has no saved one to put back. Nothing on the
+   page calls it -- leaving a conversation restores the snapshot kept for the
+   one being opened instead (state/session/residency.ts) -- and what reaches it
+   is the desk's cases, which need the empty record a first-ever session has. */
 export function reset(): void {
   resetShared()
 }

@@ -238,12 +238,12 @@ def _require_llm_configured() -> None:
     ``memory.backend`` defaults to ``"everos"`` in the schema while the
     everos.toml template ships ``[llm]`` with an empty ``api_key``.
     """
-    from raven_everos.config import everos_role_configured, get_everos_config_path
+    from raven_everos.config import everos_role_configured
 
     if everos_role_configured("llm"):
         return
     raise EverosNotConfiguredError(
-        f"EverOS memory LLM is not configured: [llm] in {get_everos_config_path()} needs both model and api_key."
+        "EverOS memory LLM is not configured: pick a model and a provider for it in settings, or run `raven onboard`."
     )
 
 
@@ -697,14 +697,12 @@ def _child_env() -> dict[str, str]:
     # rather than at each launch is what makes those two the same case.
     #
     # Applied whole rather than per missing key, and with no guard against
-    # overwriting: `host_embedding_env` is empty exactly when EverOS already
-    # has an endpoint of its own, and a backend that bound one into this
-    # process left a complete set, which is one of the two ways it can. So
-    # there is nothing here to protect, and a per-key fill would be the one
-    # thing worth avoiding -- three variables from two sources.
-    from raven_everos.config import host_embedding_env
+    # overwriting: on a root raven owns, these four roles are raven's to say, and
+    # a role raven does not hold is sent empty on purpose -- suppressing a section
+    # left in the file is what makes clearing a role in the UI mean anything.
+    from raven_everos.config import everos_env
 
-    env.update(host_embedding_env())
+    env.update(everos_env())
     return env
 
 
@@ -729,6 +727,65 @@ def _require_written_port(root: Path, want: int) -> None:
         raise RuntimeError(f"could not read back [api] from {path}: {exc}") from exc
     if written != want:
         raise RuntimeError(f"[api] write to {path} did not take effect: expected port {want}, read back {written!r}")
+
+
+_ROLE_DIGEST_FILE = ".raven-role-digest"
+"""Where a spawn records the credentials it handed the server.
+
+In the root rather than beside the pidfile: it describes the process serving
+this data, and the two have to be found together or a moved config directory
+turns "we do not know" into "nothing changed".
+"""
+
+
+def _digest_path(root: Path | str) -> Path:
+    return Path(root).expanduser() / _ROLE_DIGEST_FILE
+
+
+def record_role_digest(root: Path | str) -> None:
+    """Remember what the server just spawned was handed.
+
+    Best effort on purpose: a root that cannot take this file is a root that
+    could not have taken ``everos.toml`` either, so the spawn has already
+    failed by the time this could. Failing the start over the bookkeeping would
+    trade a running server for a missing note.
+    """
+    from raven_everos.config import role_env_digest
+
+    try:
+        _digest_path(root).write_text(role_env_digest(), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("everos: could not record what {} was started with: {}", root, exc)
+
+
+def roles_changed_since_spawn(root: Path | str) -> bool:
+    """Whether the server serving ``root`` booted on credentials raven no longer holds.
+
+    The one thing a health probe cannot answer. EverOS builds its model clients
+    in the API lifespan, so a rotated key reaches the config file and never
+    reaches the running process -- and every surface stays green while memory
+    fails on a revoked credential in EverOS's own log. Restarting when a save
+    happens covers the saves raven can see; this covers the rest, `raven
+    provider set` and a hand-edited config.json included, because every session
+    passes through :func:`ensure_everos_server` on its way to memory.
+
+    ``False`` for a root raven does not own: raven records that server's address
+    and never starts or stops it, the same rule ``restart_for_config_change``
+    reads.
+
+    A missing record means the server predates this bookkeeping, which is
+    exactly the install whose credentials nobody has ever compared -- so it
+    restarts once, and records one on the way back up.
+    """
+    from raven_everos.config import everos_owned, role_env_digest
+
+    if not everos_owned():
+        return False
+    try:
+        recorded = _digest_path(root).read_text(encoding="utf-8").strip()
+    except OSError:
+        return True
+    return recorded != role_env_digest()
 
 
 def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
@@ -795,6 +852,7 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
                 )
             logger.info("started everos server for {} at {} (log: {})", root, base_url, log_path)
             _write_pidfile(proc.pid, base_url=base_url, root=root)
+            record_role_digest(root)
             return proc
     except LockTimeoutError:
         logger.debug("everos server startup lock held by another process; skipping spawn")
@@ -839,19 +897,54 @@ async def ensure_everos_server(
     for.
     """
     if await asyncio.to_thread(_probe_health, base_url):
-        if await asyncio.to_thread(_speaks_our_api, base_url):
+        if not await asyncio.to_thread(_speaks_our_api, base_url):
+            # Alive, ours by address, and unable to serve us. Adopting it is what
+            # makes the failure silent, so refuse instead and say which port.
+            raise RuntimeError(
+                f"an EverOS server is running at {base_url} but does not serve "
+                f"{_API_PROBE_PATH}, so it is too old for this raven. Stop it and let "
+                f"raven start its own, or upgrade that server to match."
+            )
+        from raven_everos.config import everos_root
+
+        root = everos_root()
+        if not await asyncio.to_thread(roles_changed_since_spawn, root):
             logger.info("everos server already running at {}", base_url)
             return None
-        # Alive, ours by address, and unable to serve us. Adopting it is what
-        # makes the failure silent, so refuse instead and say which port.
-        raise RuntimeError(
-            f"an EverOS server is running at {base_url} but does not serve "
-            f"{_API_PROBE_PATH}, so it is too old for this raven. Stop it and let "
-            f"raven start its own, or upgrade that server to match."
-        )
+        # Precheck before the stop, the order `restart_for_config_change` reads:
+        # a replacement that cannot boot must not cost the machine the server it
+        # already has. A stale credential serves most of what memory asks; no
+        # server serves none of it.
+        block = await asyncio.to_thread(precheck_spawn)
+        if block:
+            logger.warning(
+                "everos at {} holds credentials raven has since changed, and a replacement "
+                "could not start ({}); leaving the old one serving",
+                base_url,
+                block,
+            )
+            return None
+        logger.info("everos at {} holds credentials raven has since changed; restarting", base_url)
+        outcome = await asyncio.to_thread(stop_for_reload, root)
+        if outcome is not StopOutcome.STOPPED:
+            # ``None`` counts as a failure here and does not in
+            # ``restart_for_config_change``: that one may run with nothing
+            # serving, while the probe two lines up already found a healthy
+            # server. So ``None`` means the lock could not name it, not that it
+            # is absent -- and falling through to the spawn would leave the old
+            # process holding the port while ``ensure`` probes its ``/health``
+            # and reports success for a credential that never took.
+            logger.warning(
+                "everos at {} could not be moved onto the current credentials: {}",
+                base_url,
+                _STOP_REASON.get(outcome, "the process serving it could not be identified"),
+            )
+            return None
 
-    # Only on the spawn path: a server that answers /health has already built
-    # its LLM client, so its credentials are proven by the probe above.
+    # Only on the spawn path. The probe above says a server is answering, not
+    # that its credentials work: /health never touches a model, which is why a
+    # revoked key survives there unnoticed and `roles_changed_since_spawn` has
+    # to ask raven's own config instead.
     _require_llm_configured()
 
     # A machine whose per-user inotify cap is exhausted cannot hold a spawned
@@ -907,6 +1000,119 @@ async def ensure_everos_server(
     )
 
 
+# The wording a stop that did not finish reaches the user with. Held beside
+# StopOutcome rather than at each caller: the wizard and the settings page were
+# the two callers, and the day they disagreed about what "still draining" means
+# is the day one of them starts explaining a different event.
+_STOP_REASON: dict[StopOutcome, str] = {
+    StopOutcome.SIGNAL_FAILED: "the stop signal could not be delivered",
+    StopOutcome.STILL_DRAINING: "it is still finishing memory work",
+    StopOutcome.NOT_OURS: "the process serving this directory is not one raven started",
+}
+
+
+def precheck_spawn() -> str | None:
+    """``None`` when a spawn could succeed, else why it could not.
+
+    The two refusals :func:`ensure_everos_server` makes before it spawns, asked
+    without spawning anything. A restart has to know the answer *first*: stopping
+    a healthy server and then finding the replacement cannot boot leaves the
+    machine with no memory service at all, and nothing here would bring one
+    back -- spawning happens in ``EverosBackend.start()``, once per session.
+    """
+    from raven.core.plugin_stack import everos_platform_note
+
+    platform_block = everos_platform_note()
+    if platform_block is not None:
+        return platform_block
+    try:
+        _require_llm_configured()
+    except EverosNotConfiguredError as exc:
+        return str(exc)
+    return _inotify_gate()
+
+
+def stop_for_reload(root: Path | str) -> StopOutcome | None:
+    """Stop the server serving ``root``. ``None`` when nothing is.
+
+    ``lock_holder`` + ``stop_pid`` and no screen output, so the wizard and the
+    settings page act on one answer rather than two. EverOS builds its model
+    clients in the API lifespan, so a process already running keeps the models it
+    booted with: without this, a rewritten configuration is inert until some
+    unrelated restart, with nothing saying so.
+
+    The pid the lock named, not the one the pidfile remembers -- asking the
+    pidfile would report ``NOT_OURS`` about the process just identified, which is
+    the state the lock lookup exists to get out of.
+    """
+    holder = lock_holder(root)
+    if holder is None:
+        return None
+    return stop_pid(holder.pid)
+
+
+async def restart_for_config_change(
+    root: Path | str, base_url: str, *, on_result: Callable[[bool, str | None], None]
+) -> None:
+    """Apply a configuration that was just written.
+
+    Order is load-bearing: the precheck runs before the stop, so a restart that
+    cannot succeed leaves the old server serving. Stopped-and-not-started is the
+    one genuinely bad state -- spawning happens only in ``EverosBackend.start()``,
+    so nothing in this session would bring it back.
+
+    A stop that does not reach STOPPED must not fall through to the spawn:
+    ``ensure_everos_server`` would find the old server answering, adopt it, and
+    report success for a configuration that never took -- this function's own bug,
+    arriving by a different door.
+
+    ``on_result`` is called exactly once, success included. A page that is only
+    told about failures cannot clear the banner a failure left behind.
+    """
+    run_id = f"{os.getpid()}-{time.monotonic_ns():x}"
+    logger.info("everos restart {} begin (root={}, base_url={})", run_id, root, base_url)
+    from raven_everos.config import everos_owned
+
+    if not everos_owned():
+        # `_require_owned` sits on the write primitives so a new caller cannot
+        # opt out of it. This is a new caller and it is not a write primitive,
+        # so it did: the embedding role is exempt from the ownership gate by
+        # design, which let a save on a user-managed root reach the stop and
+        # SIGTERM the server that root belongs to. `everos_owned`'s own
+        # docstring is the rule -- "never start or stop the process".
+        logger.info("everos restart {} end: the root is the user's, nothing stopped", run_id)
+        on_result(
+            False,
+            "the EverOS you manage was not restarted: raven records its address and "
+            "never starts or stops it. Restart it yourself to pick this up.",
+        )
+        return
+    try:
+        block = await asyncio.to_thread(precheck_spawn)
+        if block:
+            logger.info("everos restart {} end: precheck refused, server left running", run_id)
+            on_result(False, block)
+            return
+        outcome = await asyncio.to_thread(stop_for_reload, root)
+        if outcome is not None and outcome is not StopOutcome.STOPPED:
+            logger.info("everos restart {} end: stop returned {}", run_id, outcome.value)
+            on_result(False, _STOP_REASON.get(outcome, "it did not stop"))
+            return
+        try:
+            await ensure_everos_server(base_url)
+        except Exception as exc:  # noqa: BLE001 - every startup failure is the page's to show
+            logger.info("everos restart {} end: {}", run_id, exc)
+            on_result(False, str(exc))
+            return
+        logger.info("everos restart {} end: serving at {}", run_id, base_url)
+        on_result(True, None)
+    except BaseException:
+        # Cancellation included: a chain that stops mid-way without saying so
+        # leaves the banner on whatever the last run put there.
+        logger.info("everos restart {} end: abandoned", run_id)
+        raise
+
+
 __all__ = [
     "DEFAULT_EVEROS_BASE_URL",
     "ProbeVerdict",
@@ -917,5 +1123,10 @@ __all__ = [
     "StopOutcome",
     "ensure_everos_server",
     "lock_holder",
+    "precheck_spawn",
+    "record_role_digest",
+    "restart_for_config_change",
+    "roles_changed_since_spawn",
+    "stop_for_reload",
     "stop_pid",
 ]

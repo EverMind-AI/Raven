@@ -15,6 +15,9 @@ import asyncio
 import json
 import os
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args
 
@@ -78,6 +81,28 @@ def _install_meta_name() -> str | None:
 # ---------------------------------------------------------------------------
 # ext.list
 # ---------------------------------------------------------------------------
+
+
+def _mcp_credential_state(name: str, sc: Any) -> tuple[str, bool]:
+    """How a server authenticates and whether it holds what that needs.
+
+    OAuth: a stored token. API key: the templated header or env entry the
+    install wrote, non-empty. None: nothing to hold. Read from the config and
+    the credential store only, never the catalog -- this runs on every page load.
+    """
+    auth = str(getattr(sc, "auth", "none") or "none")
+    if auth == "oauth":
+        try:
+            from raven.mcp.oauth import has_stored_tokens
+
+            return auth, bool(has_stored_tokens(name))
+        except Exception:
+            logger.exception("ext.list: could not read the credential store for {}", name)
+            return auth, False
+    if auth == "apikey":
+        values = {**dict(getattr(sc, "headers", None) or {}), **dict(getattr(sc, "env", None) or {})}
+        return auth, any(str(v).strip() for v in values.values())
+    return "none", True
 
 
 async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
@@ -216,9 +241,31 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                     }
                 row["enabled"] = bool(getattr(sc, "enabled", True))
                 row["auth_url"] = pending_url(name)
+                row["auth"], row["credentialed"] = _mcp_credential_state(name, sc)
                 mcp.append(row)
         except Exception:
             logger.exception("ext.list: config mcp merge failed")
+        # Which tools carry no switch, asked as the question the switch
+        # actually answers: would the loop honour an entry naming this tool in
+        # `tools.disabledTools`? Two groups would not. The MCP resource and
+        # prompt meta-tools are registered and withdrawn by the loop itself as
+        # servers come and go, so an entry naming one is a preference nothing
+        # can act on -- `_report_reserved_disabled_tools` says so in those
+        # words. The two tool-search meta-tools are fixed by product decision:
+        # they are the doorway every hidden tool is reached through.
+        #
+        # NOT the schema-hidden set, which is what this asked before. Hidden
+        # from the schema and withheld from the model are different mechanisms:
+        # `offers()` consults `withheld_names()`, which reads the off switch,
+        # whatever the schema shows. Measured on a real gateway -- putting
+        # `cancel_dag` in `tools.disabledTools` flips its `enabled` to false --
+        # so the DAG controls were being drawn as fixed while their switch
+        # worked.
+        from raven.agent.tools.tool_search import META_TOOL_NAMES
+        from raven.mcp.prompts import PROMPT_TOOL_NAMES
+        from raven.mcp.resources import RESOURCE_TOOL_NAMES
+
+        fixed = META_TOOL_NAMES | RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES
         for name in loop.tools.tool_names:
             tool = loop.tools.get(name)
             # Asked, not inferred from membership: a tool the operator switched
@@ -235,9 +282,11 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                     "enabled": offered,
                     "mcp_server": tool_owner.get(name),
                     "needs": None if offered else _needs_of(name),
+                    "builtin": name in fixed,
                 }
             )
         tools.extend(_gated_tools({t["name"] for t in tools}, getattr(loop, "web_search_provider", "serper")))
+        tools.extend(_absent_meta_tools({t["name"] for t in tools}))
 
     return {"skills": skills, "plugins": plugins, "tools": tools, "mcp": mcp}
 
@@ -293,6 +342,37 @@ def _needs_of(name: str) -> dict | None:
     return None
 
 
+def _absent_meta_tools(registered: set[str]) -> list[dict]:
+    """Rows for meta-tools the loop did not register, for the same reason
+    ``_gated_tools`` exists: absent from the list reads as deleted.
+
+    Only ``tool_search`` reaches this. It is registered when progressive tool
+    disclosure is on (``tools.toolSearch.enabled``, off by default) and skipped
+    when it is not, so a default install showed a card named after tool search
+    holding the one meta-tool that is not tool search. ``tool_call`` is
+    registered either way and never lands here.
+
+    ``builtin`` is true and it is not a convenience: this page writes
+    ``tools.disabledTools``, and an entry there would not register this tool.
+    Its switch is a different setting, which is what the row's own note says.
+    """
+    rows: list[dict] = []
+    from raven.agent.tools.tool_search import META_TOOL_NAMES
+
+    for name in sorted(META_TOOL_NAMES - registered):
+        rows.append(
+            {
+                "name": name,
+                "description": "",
+                "enabled": False,
+                "mcp_server": None,
+                "needs": None,
+                "builtin": True,
+            }
+        )
+    return rows
+
+
 def _gated_tools(registered: set[str], search_provider: str = "serper") -> list[dict]:
     """Rows for key-gated tools that are not registered, so the page can offer
     the field instead of showing nothing at all."""
@@ -309,6 +389,9 @@ def _gated_tools(registered: set[str], search_provider: str = "serper") -> list[
                 "enabled": False,
                 "mcp_server": None,
                 "needs": {"setting": setting, "env": env},
+                # A key away from being offered: the switch is exactly what
+                # this row exists to carry.
+                "builtin": False,
             }
         )
     return rows
@@ -445,8 +528,9 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
 
     Every fire writes the job prompt as a user message into that session, so
     one user message = one run; a run counts as ok once its turn produced a
-    non-empty assistant reply. The job state's last_error names the newest
-    failure (per-run errors are not stored anywhere else).
+    non-empty assistant reply and did not then say it had failed. The job
+    state's last_error names the newest failure (per-run errors are not stored
+    anywhere else).
     """
     from datetime import datetime
 
@@ -484,6 +568,16 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
             cur = {"at_ms": _iso_ms(m.get("timestamp")), "ok": False, "preview": ""}
             runs.append(cur)
         elif role == "assistant" and cur is not None:
+            ended = m.get("turn_ended")
+            if isinstance(ended, dict):
+                # Read before the text, and the last word on this run: the marker
+                # is an assistant message too, and so is the half-answer that
+                # streamed before the turn broke, so both read as a reply here.
+                cur["ok"] = False
+                reason = str(ended.get("reason") or "").strip()
+                if reason:
+                    cur["preview"] = reason[:140]
+                continue
             text = _msg_text(m.get("content")).strip()
             if text:
                 cur["ok"] = True
@@ -592,7 +686,7 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
             disable_channel(name)
         return {"applied": True, "previous": not value}
 
-    if key in ("plugins.disabled", "tools.disabledTools"):
+    if key in ("plugins.disabled", "tools.disabledTools", "skillForge.blocklist"):
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
             raise ConfigValidationError(f"{key} must be a list of strings")
         return _write_raw_key(key, value)
@@ -635,7 +729,18 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
 #: the write merges instead of replacing. ``sessionTitle`` carries enabled, the
 #: timeout and the width gate beside its pin, and a replacing write would drop
 #: every one of them.
-_MERGED_KEYS = frozenset({"tools.media.image", "sessionTitle", "translate", "knowledge"})
+_MERGED_KEYS = frozenset(
+    {
+        "tools.media.image",
+        "tools.media.speech",
+        "tools.media.video",
+        "sessionTitle",
+        "context",
+        "skillForge",
+        "translate",
+        "knowledge",
+    }
+)
 
 
 def _as_written(node: dict, name: str) -> str:
@@ -845,6 +950,15 @@ def _chk_image_selection(value: Any) -> dict:
 # no confirmation step, so it must not contain the settings that decide what an
 # attacker who reaches it can then do. Editing the config file for those is the
 # friction, and it is the point.
+def _chk_int_or_null(key: str, lo: int, hi: int):
+    inner = _chk_int(key, lo, hi)
+
+    def chk(v: Any) -> int | None:
+        return None if v is None else inner(v)
+
+    return chk
+
+
 _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.exec.timeout": _chk_int("tools.exec.timeout", 5, 3600),
     "tools.web.search.apiKey": _chk_str("tools.web.search.apiKey", 200),
@@ -861,7 +975,6 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.media.image.model": _chk_str("tools.media.image.model"),
     "tools.media.image.quality": _chk_enum("tools.media.image.quality", "", "low", "medium", "high"),
     "tools.media.image": _chk_image_selection,
-    "tools.deepResearch.apiKey": _chk_str("tools.deepResearch.apiKey", 200),
     "channels.sendProgress": _chk_bool("channels.sendProgress"),
     "channels.sendToolHints": _chk_bool("channels.sendToolHints"),
     "memory.memoryTopK": _chk_int("memory.memoryTopK", 1, 50),
@@ -884,6 +997,21 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
     "agents.defaults.reasoningEffort": _chk_enum("agents.defaults.reasoningEffort", "minimal", "low", "medium", "high"),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),
+    "agents.defaults.maxToolIterations": _chk_int("agents.defaults.maxToolIterations", 1, 200),
+    "agents.defaults.contextWindowTokens": _chk_int_or_null("agents.defaults.contextWindowTokens", 1024, 100_000_000),
+    "context.curatorModel": _chk_pin_model("context.curatorModel"),
+    "context.curatorProvider": _chk_pin_provider("context.curatorProvider"),
+    "skillForge.llmGateModel": _chk_pin_model("skillForge.llmGateModel"),
+    "skillForge.llmGateProvider": _chk_pin_provider("skillForge.llmGateProvider"),
+    # The two pins as one write each, the way sessionTitle already is: a pair
+    # written a key at a time can be left half-changed by a dropped connection.
+    "context": _chk_pin_pair("context", "curatorModel", "curatorProvider"),
+    "skillForge": _chk_pin_pair("skillForge", "llmGateModel", "llmGateProvider"),
+    # The same selection object the image tool takes; the three media tools
+    # share one config shape.
+    "tools.media.speech": _chk_image_selection,
+    "tools.media.video": _chk_image_selection,
+    "sessions.autoArchiveAfterDays": _chk_int_or_null("sessions.autoArchiveAfterDays", 1, 3650),
 }
 
 
@@ -892,22 +1020,57 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 
 
+def _parse_day(value: Any, field: str):
+    """An ISO date (``YYYY-MM-DD``) or None; anything else is refused."""
+    if value is None or value == "":
+        return None
+    from datetime import date
+
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        raise ConfigValidationError(f"{field} must be a date like 2026-09-17") from None
+
+
+def _usage_range(params: dict):
+    """The days a usage query covers: ``from``/``to`` when given (inclusive,
+    clamped to 90 days back), else ``days`` back from today."""
+    from datetime import date, timedelta
+
+    today = date.today()
+    earliest = today - timedelta(days=89)
+    frm = _parse_day(params.get("from"), "from")
+    to = _parse_day(params.get("to"), "to")
+    if frm is not None or to is not None:
+        to = min(to or today, today)
+        frm = max(frm or earliest, earliest)
+        if frm > to:
+            raise ConfigValidationError("from must not be after to")
+    else:
+        days = params.get("days")
+        days = days if isinstance(days, int) and not isinstance(days, bool) else 30
+        days = max(1, min(days, 90))
+        to = today
+        frm = today - timedelta(days=days - 1)
+    dates = [frm + timedelta(days=i) for i in range((to - frm).days + 1)]
+    return frm, to, dates
+
+
 async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     """Aggregate API usage for the settings page.
 
-    LLM side reads the UsageTracker telemetry files
-    (``~/.raven/telemetry/usage-YYYY-MM-DD.jsonl``, one JSON row per call);
-    tool side counts ``tool_calls`` entries across session transcripts whose
-    file mtime falls inside the window. Both scans are read-only and bounded
-    by ``days`` (default 30, max 90).
+    Both halves read the same UsageTracker telemetry files
+    (``~/.raven/telemetry/usage-YYYY-MM-DD.jsonl``, one JSON row per call, one
+    per tool call), so one range means one thing across the whole reply. The
+    scan is read-only and bounded by ``days`` (default 30, max 90). Session
+    transcripts are read for their titles only.
     """
-    from datetime import date, datetime, timedelta
+    from datetime import datetime
 
     from raven.config.loader import load_config
 
-    days = params.get("days")
-    days = days if isinstance(days, int) and not isinstance(days, bool) else 30
-    days = max(1, min(days, 90))
+    frm, to, dates = _usage_range(params)
+    days = len(dates)
 
     from raven.providers.usage import reported_cost, token_count
 
@@ -929,7 +1092,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
 
     selected_session = params.get("session_key") or None
     sessions: set[str] = set()
-    member_sessions: set[str] = {selected_session} if selected_session else set()
     models: dict[str, dict[str, Any]] = {}
     total = empty_totals()
     # The same resolution the writer uses (usage_tracker._default_telemetry_dir):
@@ -938,9 +1100,10 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     from raven.config.loader import raven_home
 
     tel_dir = raven_home() / "telemetry"
-    today = date.today()
-    for i in range(days):
-        p = tel_dir / f"usage-{(today - timedelta(days=i)).isoformat()}.jsonl"
+    daily: dict[str, dict[str, Any]] = {d.isoformat(): {"date": d.isoformat(), **empty_totals()} for d in dates}
+    for day in dates:
+        day_key = day.isoformat()
+        p = tel_dir / f"usage-{day_key}.jsonl"
         if not p.is_file():
             continue
         try:
@@ -961,13 +1124,11 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                 sessions.add(root)
             if selected_session and root != selected_session:
                 continue
-            if isinstance(row.get("session_key"), str):
-                member_sessions.add(row["session_key"])
             name = str(row.get("model") or "?")
             acc = models.setdefault(name, {"model": name, **empty_totals()})
             cost = reported_cost(row.get("cost_usd")) if row.get("schema_version") == 2 else None
             legacy = row.get("schema_version") != 2 and row.get("estimated_cost_usd") is not None
-            for target in (acc, total):
+            for target in (acc, total, daily[day_key]):
                 target["calls"] += 1
                 target["legacy_cost_calls"] += int(legacy)
                 for key, value, missing in (
@@ -985,10 +1146,9 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     session_titles: dict[str, str] = {}
     tools: dict[str, int] = {}
     tool_total = 0
-    telemetry_tool_ids: set[str] = set()
     try:
-        for i in range(days):
-            p = tel_dir / f"usage-{(today - timedelta(days=i)).isoformat()}.jsonl"
+        for day in dates:
+            p = tel_dir / f"usage-{day.isoformat()}.jsonl"
             if not p.is_file():
                 continue
             try:
@@ -1000,15 +1160,23 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                     if selected_session and root != selected_session:
                         continue
                     name = row.get("name")
-                    if isinstance(row.get("tool_call_id"), str):
-                        telemetry_tool_ids.add(row["tool_call_id"])
                     if isinstance(name, str):
                         tools[name] = tools.get(name, 0) + 1
                         tool_total += 1
             except Exception:
                 continue
+        # Titles only. Tool calls were also counted from transcripts here, to
+        # cover conversations older than the day tool rows started being
+        # written, and a transcript counted as in-range when its file mtime
+        # was -- which gave the range every tool call the conversation had ever
+        # made while its model calls, dated per day, stayed outside it. A reply
+        # cannot carry two readings of one range: a page showing thousands of
+        # tool calls beside no model calls reads as broken, and is.
         sess_root = Path(load_config().workspace_path) / "sessions"
-        cutoff = (datetime.now() - timedelta(days=days)).timestamp()
+        # A floor rather than a window: a transcript last written before the
+        # range cannot name a session the range saw, and which sessions it saw
+        # is what the telemetry above already answered.
+        cutoff = datetime.combine(frm, datetime.min.time()).timestamp()
         for p in sess_root.glob("*/*.jsonl"):
             try:
                 if p.stat().st_mtime < cutoff:
@@ -1016,43 +1184,25 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                 lines = p.read_text(encoding="utf-8").splitlines()
             except Exception:
                 continue
-            metadata = None
             for line in lines:
                 try:
                     entry = json.loads(line)
                 except ValueError:
                     continue
-                if isinstance(entry, dict) and entry.get("_type") == "metadata":
-                    metadata = entry
-            if metadata:
-                key = metadata.get("key")
-                title = (metadata.get("metadata") or {}).get("title")
-                if isinstance(key, str) and isinstance(title, str):
+                if not isinstance(entry, dict) or entry.get("_type") != "metadata":
+                    continue
+                key = entry.get("key")
+                title = (entry.get("metadata") or {}).get("title")
+                if isinstance(key, str) and key in sessions and isinstance(title, str):
                     session_titles[key] = title
-            if selected_session and (not metadata or metadata.get("key") not in member_sessions):
-                continue
-            for line in lines:
-                try:
-                    msg = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(msg, dict):
-                    continue
-                for tc in msg.get("tool_calls") or []:
-                    if not isinstance(tc, dict):
-                        continue
-                    name = tc.get("name") or (tc.get("function") or {}).get("name")
-                    call_id = tc.get("id")
-                    if isinstance(call_id, str) and call_id in telemetry_tool_ids:
-                        continue
-                    if name:
-                        tools[str(name)] = tools.get(str(name), 0) + 1
-                        tool_total += 1
     except Exception:
         logger.exception("settings.usage: tool scan failed")
 
     return {
         "days": days,
+        "from": frm.isoformat(),
+        "to": to.isoformat(),
+        "daily": list(daily.values()),
         "session_key": selected_session,
         "sessions": sorted(sessions),
         "session_titles": session_titles,
@@ -1070,9 +1220,6 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
 # ---------------------------------------------------------------------------
 # settings.everos — the EverOS model roles behind long-term memory
 # ---------------------------------------------------------------------------
-
-_EVEROS_FIELDS = ("model", "api_key", "base_url", "provider")
-_EVEROS_REQUIRED = ("llm", "embedding")
 
 
 def _everos_config_module():
@@ -1112,169 +1259,271 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
             "sections": {},
             "config_path": "",
         }
-    from raven.config.raven import load_raven_config
-    from raven_everos.config import (
-        WRITABLE_SECTIONS,
-        everos_has_own_embedding,
-        get_everos_config_path,
-        host_embedding_section,
-        load_everos_config,
-    )
+    from raven_everos.config import describe_roles
 
-    data = load_everos_config()
-    sections = {}
-    for sec in WRITABLE_SECTIONS:
-        cur = data.get(sec) or {}
-        if sec == "embedding" and not everos_has_own_embedding():
-            # The endpoint's other home. Reading only the file left this card
-            # blank for an install the wizard had just configured, and filling
-            # it in from there wrote a second endpoint that silently outranked
-            # the one a knowledge base goes on reading.
-            #
-            # The pair as stored, beside the address it resolves to: the model
-            # the card offers to edit has to be the one on file, not the id the
-            # vendor is addressed by, or saving the row back would store a
-            # spelling the user never chose.
-            pin = load_raven_config().embedding
-            cur = {
-                **host_embedding_section(),
-                "model": pin.model or "",
-                "provider": pin.provider or "",
-            }
-        model = str(cur.get("model") or "")
-        # A guard against a hand-written "<fill me>", not the mechanism that
-        # makes an unconfigured role read as unset: the shipped template seeds
-        # every section with a real model name and an empty key, so a role
-        # nobody configured arrives here with a model. `api_key_set` is what
-        # carries "not configured" to the card.
-        if model.startswith("<"):
-            model = ""
-        sections[sec] = {
-            "model": model,
-            "base_url": str(cur.get("base_url") or ""),
-            "provider": str(cur.get("provider") or ""),
-            "api_key_set": bool(cur.get("api_key")),
+    return describe_roles()
+
+
+# One restart at a time, and one more run queued at most. Two saves in quick
+# succession must end at the final configuration without their stop/spawn
+# windows overlapping -- overlapping ones race for the same port and the loser
+# reports a startup failure for a configuration that is actually in force.
+_everos_restart: dict[str, Any] = {"running": False, "again": False, "loops": []}
+# Held rather than dropped: a bare create_task is collectable while it is the
+# only reference to a running task, and a collected one silently skips the
+# restart the save promised.
+_everos_restart_tasks: set[asyncio.Task] = set()
+
+
+async def _restart_everos_for_config(loop: Any) -> None:
+    """Apply what was just written, and report the outcome to the page.
+
+    Backgrounded by the caller: a spawn is seconds, and a save that blocks on
+    one cannot say anything while it waits. The outcome arrives as
+    ``memory.health``, the frame the page's standing banner already reads --
+    success included, because that is the only thing that clears it.
+    """
+    from raven_everos.config import everos_root, recorded_slice
+    from raven_everos.server import DEFAULT_EVEROS_BASE_URL, restart_for_config_change
+
+    # Every session that asked, not the one that happened to start the run. The
+    # outcome of a restart a second session queued is that session's answer too,
+    # and reporting only to the first left its banner on whatever was there.
+    loops: list = _everos_restart["loops"]
+    if not any(existing is loop for existing in loops):
+        loops.append(loop)
+
+    if _everos_restart["running"]:
+        _everos_restart["again"] = True
+        return
+    _everos_restart["running"] = True
+
+    def _report(ok: bool, error: str | None) -> None:
+        for target in list(_everos_restart["loops"]):
+            try:
+                target._emit_mcp_event("memory.health", {"ok": ok, "error": error})
+            except Exception:  # noqa: BLE001 - one closed session must not silence the rest
+                logger.debug("settings/everos: could not report the restart to a session")
+
+    try:
+        while True:
+            _everos_restart["again"] = False
+            # Read inside the loop: a second save that arrived mid-restart
+            # changed these, and the whole point of the extra run is to end at
+            # what it wrote.
+            base_url = str(recorded_slice().get("base_url") or DEFAULT_EVEROS_BASE_URL)
+            try:
+                await restart_for_config_change(everos_root(), base_url, on_result=_report)
+            except asyncio.CancelledError:
+                # A gateway shutting down mid-restart. Said out loud, because the
+                # banner otherwise keeps whatever the last run put there and the
+                # next session inherits a claim nobody can check.
+                _report(False, "the restart was interrupted before it finished")
+                raise
+            except Exception as exc:  # noqa: BLE001 - a dropped outcome leaves the banner lying
+                logger.warning("settings/everos: restart chain failed: {}", exc)
+                _report(False, str(exc))
+            if not _everos_restart["again"]:
+                return
+    finally:
+        _everos_restart["running"] = False
+        _everos_restart["loops"] = []
+
+
+def _everos_applied(agent_loop_factory: Any, cost: str = "") -> dict:
+    """Start the restart the write just earned, or say why it did not run.
+
+    Refused synchronously when no loop is up: the outcome only reaches the page
+    as a pushed frame, so a restart started here would report to nobody -- and
+    the caller would read ``applied`` as "this configuration is running" while
+    the old server kept serving.
+
+    ``cost`` is what the write costs the stores -- moving the embedding model
+    orphans every vector already written under the old one. Said here because
+    this is where the person made the change; it outranks the refusal text,
+    which describes when the change takes effect rather than what it costs.
+    """
+    loop = _safe_loop(agent_loop_factory)
+    if loop is None:
+        return {
+            "applied": False,
+            "warning": cost
+            or (
+                "Saved, but the memory service was not restarted: no session is connected "
+                "to report the outcome to. The change takes effect at the next start."
+            ),
         }
-    return {
-        "available": True,
-        "note": None,
-        "sections": sections,
-        "config_path": str(get_everos_config_path()),
-    }
+    task = asyncio.get_running_loop().create_task(_restart_everos_for_config(loop))
+    _everos_restart_tasks.add(task)
+    task.add_done_callback(_everos_restart_tasks.discard)
+    return {"applied": True, **({"warning": cost} if cost else {})}
+
+
+def everos_follows_provider(slug: str, agent_loop_factory: Any) -> None:
+    """Restart EverOS when ``slug`` is what one of its four roles runs on.
+
+    A role stores a pin -- a model and a provider -- and resolves the address
+    and key from that provider at spawn time. So a credential edited on the
+    models page changes what the *next* spawn would hand the server while the
+    one already running keeps what it booted with, and nothing on any screen
+    says so: EverOS's health endpoint never touches a model, so a revoked key
+    reads as healthy right up until memory fails in EverOS's own log.
+
+    ``roles_changed_since_spawn`` catches this at the next session whatever
+    wrote the credential, ``raven provider set`` and a hand-edited config.json
+    included. This is the half that makes it the moment the person made the
+    change instead.
+
+    Silent when the install has no EverOS, when no role names this provider, or
+    when no session is connected to hear the outcome. None of those is a reason
+    to fail a save that already succeeded.
+    """
+    try:
+        from raven.providers.registry import names_same_provider
+        from raven_everos.config import ROLES, role_pin
+    except ImportError:
+        return
+    try:
+        for section in ROLES:
+            pin = role_pin(section)
+            if pin is not None and names_same_provider(pin[1], slug):
+                break
+        else:
+            return
+    except Exception:  # noqa: BLE001 - a save must not fail over this question
+        logger.debug("settings/everos: could not tell whether {} serves a memory role", slug)
+        return
+    _everos_applied(agent_loop_factory)
 
 
 async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
-    """Merge fields into one EverOS section, or clear an optional section."""
+    """Record which model and provider serve one EverOS role, or clear the role.
+
+    A forwarder by design: the plugin owns these keys, validates them, and
+    enforces the ownership guard at its own write primitive so a new caller --
+    this one, most recently -- cannot opt out of it.
+
+    The pair is stored, not the credential. What used to be ``borrow_from``, which
+    copied a lender's key into ``everos.toml``, is now just ``provider``: the file
+    is no longer read by EverOS for these sections, so the reason that copy
+    existed is gone, and a stored name follows a later key rotation on its own.
+
+    ``protocol`` is the one thing a pair cannot answer for: reranking against
+    somebody's own server needs a request shape, and no table knows what they
+    deployed. Ignored for every vendor the table does answer for.
+    """
     _everos_config_module()
+    from raven.config.update import EmbeddingPinError
     from raven_everos.config import (
-        WRITABLE_SECTIONS,
-        clear_everos_section,
-        embedding_is_env_managed,
-        everos_has_own_embedding,
-        host_embedding_section,
-        set_everos_section,
+        RERANK_PROTOCOLS,
+        ROLES,
+        EverosRootNotOwnedError,
+        RoleRequiredError,
+        clear_role,
+        rerank_protocol,
+        rerank_protocol_for_role,
+        role_is_env_managed,
+        role_pin,
+        set_role,
     )
 
     section = str(params.get("section", ""))
-    if section not in WRITABLE_SECTIONS:
-        raise ConfigValidationError(f"unknown everos section: {section}")
+    if section not in ROLES:
+        raise ConfigValidationError(f"unknown everos role: {section}")
 
     if params.get("clear") is True:
-        if section in _EVEROS_REQUIRED:
-            raise ConfigValidationError(f"{section} is required for EverOS memory and cannot be cleared")
-        clear_everos_section(section)
-        return {"applied": True}
-
-    fields = params.get("fields")
-    if not isinstance(fields, dict):
-        raise ConfigValidationError("fields must be an object")
-    clean: dict[str, str] = {}
-    for k, v in fields.items():
-        if k not in _EVEROS_FIELDS:
-            raise ConfigValidationError(f"field not writable: {k}")
-        if not isinstance(v, str):
-            raise ConfigValidationError(f"{k} must be a string")
-        v = v.strip()
-        if len(v) > 500:
-            raise ConfigValidationError(f"{k} too long (max 500)")
-        if v:
-            clean[k] = v
-    # Which home this save lands in, decided before the borrow: raven's block
-    # names the provider rather than holding a copy of its credentials, so
-    # there a borrow is the name itself and lending would produce two fields
-    # the block has no place for.
-    to_host_block = section == "embedding" and not everos_has_own_embedding()
-
-    borrow = params.get("borrow_from")
-    if borrow is not None:
-        if not isinstance(borrow, str) or not borrow.strip():
-            raise ConfigValidationError("borrow_from must be a provider name")
-        if to_host_block:
-            clean["provider"] = borrow.strip()
-        else:
-            from raven.config.update_providers import lend_provider_credentials
-
-            try:
-                lent = lend_provider_credentials(borrow.strip())
-            except KeyError as exc:
-                raise ConfigValidationError(f"no such provider: {borrow}") from exc
-            except ValueError as exc:
-                raise ConfigValidationError(str(exc)) from exc
-            # The borrowed values win over anything the client sent for the same
-            # keys: the page cannot read a stored key -- `model.endpoints` redacts
-            # it -- so a client-sent api_key alongside a borrow is the redaction
-            # itself being echoed back, which would overwrite a real key with the
-            # word for one.
-            clean.update(lent)
-
-    if not clean:
-        raise ConfigValidationError("fields must carry at least one non-empty value")
-    if section == "embedding" and embedding_is_env_managed():
-        # The exported variables outrank both files, so a save here would be
-        # accepted, written, and then ignored -- the silent no-op this card was
-        # just fixed for, arriving by the one route left. Naming the variables
-        # is the only thing raven can usefully do: it cannot edit a shell.
-        raise ConfigValidationError(
-            "the embedding endpoint is set by the EVEROS_EMBEDDING__MODEL / __BASE_URL / __API_KEY "
-            "environment variables, which outrank anything saved here; change them instead"
-        )
-    if to_host_block:
-        # Written where it is read from, so the card cannot edit one home while
-        # the service and the knowledge base use the other. The block names a
-        # model and a provider and holds no credential of its own, so an
-        # address or a key sent here is refused rather than dropped: a value
-        # accepted and discarded reads to the caller as one that was stored.
-        # The card renders the resolved address, because a reader configuring an
-        # endpoint wants to see where it goes -- and the row then sends it back
-        # on every save. An address equal to what the provider already answers
-        # with is this page echoing what it was shown, the same shape as the
-        # redacted key the borrow path already drops; refusing it made the row
-        # unsaveable without emptying a field nobody had touched. An address
-        # that differs is an instruction, and the block has no place for it.
-        # Only the address, and only when it matches: the card renders it as a
-        # `defaultValue`, so every save carries it back whether or not anyone
-        # touched it. The key is a placeholder rather than a value, so one that
-        # arrives here was typed on purpose and still has nowhere to live.
-        shown = host_embedding_section().get("base_url", "")
-        if shown and clean.get("base_url", "").rstrip("/") == shown.rstrip("/"):
-            clean.pop("base_url")
-        stray = sorted(k for k in ("base_url", "api_key") if k in clean)
-        if stray:
-            raise ConfigValidationError(
-                f"{' and '.join(stray)} belongs to the provider, not to raven's embedding endpoint; "
-                "pick the provider that serves this model instead"
-            )
-        from raven.config.update import EmbeddingPinError, embedding_model_change, set_embedding_endpoint
-
-        pin = {"model": clean.get("model"), "provider": clean.get("provider")}
+        # The rule is `clear_role`'s now, so this door translates rather than
+        # restates it -- a second copy here is what let the wizard's own copy
+        # drift from this one.
         try:
-            previous = set_embedding_endpoint(pin)
-        except EmbeddingPinError as exc:
-            raise ConfigValidationError(str(exc)) from exc
-        warning = embedding_model_change(previous, pin)
-        return {"applied": True, "warning": warning} if warning else {"applied": True}
-    set_everos_section(section, clean)
-    return {"applied": True}
+            clear_role(section)
+        except RoleRequiredError as e:
+            raise ConfigValidationError(str(e)) from e
+        return _everos_applied(agent_loop_factory)
+
+    model = str(params.get("model") or "").strip()
+    provider = str(params.get("provider") or "").strip()
+    if not model or not provider:
+        raise ConfigValidationError("both model and provider are required")
+    if len(model) > 500 or len(provider) > 500:
+        raise ConfigValidationError("model and provider must be under 500 characters")
+    protocol = str(params.get("protocol") or "").strip()
+    if protocol and protocol not in RERANK_PROTOCOLS:
+        raise ConfigValidationError(f"unknown rerank protocol: {protocol}")
+    if role_is_env_managed(section):
+        # The exported variables outrank both raven and the file, so a save here
+        # would be accepted, written, and then ignored. Naming the variables is
+        # the only useful thing raven can do: it cannot edit a shell.
+        #
+        # All four roles, not just embedding: `everos_env` skips an env-managed
+        # role whole, so a save accepted for any of them is a save that silently
+        # never takes.
+        prefix = f"EVEROS_{section.upper()}__"
+        raise ConfigValidationError(
+            f"the {section} endpoint is set by the {prefix}MODEL / {prefix}BASE_URL / "
+            f"{prefix}API_KEY environment variables, which outrank anything saved here; "
+            "change them instead"
+        )
+
+    # Refused here rather than discovered later: a pin naming a provider with no
+    # usable credential saves cleanly and then reads back as "not configured",
+    # which looks like the save was lost. The same question the gate asks.
+    from raven.config.update_providers import resolve_provider_credentials
+
+    try:
+        resolved = resolve_provider_credentials(provider)
+    except KeyError:
+        raise ConfigValidationError(f"unknown provider: {provider}") from None
+    if resolved is None:
+        raise ConfigValidationError(
+            f"{provider} has no usable credential, so a role pinned to it cannot run -- give it an API key first"
+        )
+
+    if section == "rerank" and not protocol and not rerank_protocol(provider):
+        # The shape already on file, when this save keeps the same vendor. A
+        # role the wizard configured against somebody's own box carries the
+        # answer they gave; not reading it back made that role permanently
+        # unsaveable from the page -- not even a model-only edit.
+        pinned = role_pin("rerank")
+        protocol = rerank_protocol_for_role() or "" if pinned and pinned[1] == provider else ""
+    if section == "rerank" and not protocol and not rerank_protocol(provider):
+        # Refused rather than guessed. EverOS falls back to its own default shape
+        # when told nothing, and posting a deepinfra-shaped request to a vLLM
+        # server is the defect this change started from -- silent, and looking
+        # exactly like a bad model.
+        raise ConfigValidationError(
+            f"reranking on {provider} needs its request shape named "
+            f"({' / '.join(RERANK_PROTOCOLS)}); nothing knows what a self-hosted server runs"
+        )
+
+    try:
+        cost = set_role(section, model=model, provider=provider, protocol=protocol)
+    except EmbeddingPinError as exc:
+        # A pair that cannot embed. The embedding branch used to catch this and
+        # the rewrite dropped it, which sent the page `internal_error` plus a
+        # traceback instead of the sentence naming the model.
+        raise ConfigValidationError(str(exc)) from exc
+    except EverosRootNotOwnedError as exc:
+        # A refusal the page has to be able to read. Left as a RuntimeError it
+        # reaches the dispatcher, which renders any non-RpcError as
+        # "internal_error" plus a traceback -- and the one useful thing this
+        # refusal carries, the path of the root somebody else manages, never
+        # arrives.
+        raise ConfigValidationError(str(exc)) from exc
+    if section == "llm":
+        # The CLI wizard records the backend name on a CONFIGURED outcome from
+        # its own onboard step; a web save has no such step, so record it here.
+        # Only where no key exists: an explicit null is the CLI step's record
+        # of a reader who declined memory, and a model saved for it does not
+        # overturn that.
+        from raven.config.loader import get_config_path, read_raw_or_raise
+        from raven.config.update import set_memory_backend
+        from raven.core.plugin_stack import SHIPPED_DEFAULT_BACKEND
+
+        raw = read_raw_or_raise(get_config_path())
+        if "backend" not in (raw.get("memory") or {}):
+            set_memory_backend(SHIPPED_DEFAULT_BACKEND)
+    return _everos_applied(agent_loop_factory, cost)
 
 
 # ---------------------------------------------------------------------------
@@ -1427,20 +1676,32 @@ async def channels_configure(params: dict, *, agent_loop_factory=None) -> dict:
     # all until the next launch -- for a scan-login entrance that meant no QR
     # could ever appear, and the page said "reopen Raven App" instead of
     # signing anyone in. Ask the gateway to start (or stop) it now.
+    answer: dict[str, Any] = {"applied": True}
     if enabled is not None:
         from raven.gateway.live_probe import channel_start, reset_cache
 
         try:
-            await channel_start(name, enabled=enabled)
+            # A credential written onto a channel that is already running
+            # reaches config and nothing else: the adapter holds the slice it
+            # was built with and re-reads none of it, so the corrected value
+            # only takes effect once the gateway rebuilds it.
+            outcome = await channel_start(name, enabled=enabled, restart=bool(payload) and enabled)
         except Exception:
-            # Nobody answered, or the gateway refused: the config write stands
-            # and the next launch honours it, which is what the page already
-            # says while an adapter is not up.
-            pass
+            outcome = None
+        # Nobody answered, or the gateway refused to say: the config write
+        # stands and the next launch honours it, which is the one case the
+        # page's "reopen the app" sentence is true of. Every other outcome was
+        # swallowed here too, so a channel whose SDK is missing and a channel
+        # nothing was running reached the reader as the same silence.
+        answer["outcome"] = outcome or "unreachable"
+        if outcome == "missing_dep":
+            from raven.gateway.manager import missing_dep_hint
+
+            answer["detail"] = missing_dep_hint()
         # The liveness cache is three seconds old at most, but the poll right
         # after this write is exactly the one that should see the new adapter.
         reset_cache()
-    return {"applied": True}
+    return answer
 
 
 async def channels_qr(params: dict) -> dict:
@@ -1640,6 +1901,96 @@ def _walk_dirs(target: Path, agent_home: Path) -> dict:
     }
 
 
+# The native folder dialog, per host. Each prints the chosen folder on stdout
+# and exits non-zero (macOS) or prints nothing (the other two) when dismissed.
+# Only the first tool found on PATH is offered on Linux, where no dialog ships
+# with every desktop.
+_PICK_DIR_PROMPT = "Choose the folder this conversation will work in"
+
+
+def _pick_dir_argv() -> list[str] | None:
+    """The command that opens this host's folder dialog, or None where none is known."""
+    if sys.platform == "darwin":
+        return ["osascript", "-e", f'POSIX path of (choose folder with prompt "{_PICK_DIR_PROMPT}")']
+    if sys.platform.startswith("win"):
+        return [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Add-Type -AssemblyName System.Windows.Forms;"
+            "$d=New-Object System.Windows.Forms.FolderBrowserDialog;"
+            f"$d.Description='{_PICK_DIR_PROMPT}';"
+            "if($d.ShowDialog() -eq 'OK'){Write-Output $d.SelectedPath}",
+        ]
+    for argv in (
+        ["zenity", "--file-selection", "--directory", f"--title={_PICK_DIR_PROMPT}"],
+        ["kdialog", "--getexistingdirectory", str(Path.home()), "--title", _PICK_DIR_PROMPT],
+    ):
+        if shutil.which(argv[0]):
+            return argv
+    return None
+
+
+async def _run_pick_dir(argv: list[str]) -> str | None:
+    """Run the dialog and read the folder back, or None when it was dismissed.
+
+    A thread and a blocking run, not an asyncio subprocess: under the event
+    loop's child handling the macOS dialog closed itself after about three
+    seconds with "user canceled" (-128) and nobody at the keyboard, and the
+    same command run synchronously stays up until the person answers
+    (measured 2026-09-22). One thread held for as long as the dialog is up is
+    the price, and the page opens one dialog at a time.
+
+    A dismissed dialog is not an error -- `choose folder` exits 1 with "User
+    canceled", the others print nothing -- and both read as no folder.
+    """
+
+    def run() -> str | None:
+        done = subprocess.run(argv, capture_output=True, check=False)
+        text = done.stdout.decode("utf-8", errors="replace").strip()
+        return text or None
+
+    return await asyncio.to_thread(run)
+
+
+async def fs_pick_dir(params: dict, *, agent_loop_factory=None) -> dict:
+    """``fs.pick_dir`` -- a folder chosen in the host's own folder dialog.
+
+    The other half of the page's working-directory picker: ``fs.dirs`` walks
+    the tree in the page, this opens Finder (or the platform's equivalent) on
+    the gateway's host and hands the choice back. Only sensible where that host
+    is the reader's own desktop, which is the page's call to make -- it knows
+    where it is being served from -- so the method itself does not refuse a
+    remote caller; it would merely open a dialog nobody sees, and a host with
+    no dialog says so instead.
+
+    The answer carries the same ``ok`` ``fs.dirs`` puts on every entry, so the
+    page can decline a folder the create would refuse without a second call.
+    """
+    from raven.agent.workdir import validate_override
+    from raven.config.loader import load_config
+
+    argv = _pick_dir_argv()
+    if argv is None:
+        raise ConfigValidationError("no folder dialog is available on this host")
+    try:
+        chosen = await _run_pick_dir(argv)
+    except OSError as e:
+        raise ConfigValidationError(f"folder dialog failed: {e}") from None
+    if not chosen:
+        return {"ok": False}
+    target = Path(chosen).expanduser()
+    if not target.is_absolute() or not target.is_dir():
+        raise ConfigValidationError(f"not a directory: {chosen}")
+    target = target.resolve()
+    try:
+        validate_override(target, load_config().workspace_path)
+        ok = True
+    except ValueError:
+        ok = False
+    return {"path": str(target), "ok": ok}
+
+
 _UPLOAD_DIR = "uploads"
 
 
@@ -1648,6 +1999,30 @@ def _safe_name(name: str) -> str:
     base = Path(str(name or "file")).name
     cleaned = "".join(c for c in base if c.isalnum() or c in "._- ()[]").strip()
     return (cleaned or "file")[:120]
+
+
+def viewer_root(workspace: Path, rel: Path) -> Path:
+    """Which root a relative path handed to the viewer is relative to.
+
+    Two roots, each deliberate, and one kind of path belongs to the other one.
+    ``fs.upload`` deposits into agent home whichever session asked -- it is the
+    root always writable, and ``turn.send`` fences an attachment there -- and
+    answers with a path relative to it. Everything else the viewer is handed is
+    relative to the session's own working directory, which is what the file
+    panel browses. The two are the same directory for a session that runs where
+    the agent lives, and part company for one pinned elsewhere: there a picture
+    the reader attached came back 404 from ``/file`` and its bubble fell back to
+    a file name.
+
+    The session's own root is tried first, so a session that keeps an
+    ``uploads`` directory of its own still serves its own file; agent home
+    answers only for a path that is an upload and is actually there.
+    """
+    if (workspace / rel).exists():
+        return workspace
+    if rel.parts[:1] == (_UPLOAD_DIR,) and (_upload_root() / rel).exists():
+        return _upload_root()
+    return workspace
 
 
 def _upload_root() -> Path:
@@ -1719,6 +2094,77 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
     }
 
 
+def _reader_language() -> str:
+    """The language the page is in, which is the language its templates speak.
+
+    One setting, not a parameter on every call: the picker's covers, the pages
+    behind them and the file a pick hands over are the same reader's, and a
+    caller that could disagree with the page about which language that is would
+    be a way to get a Chinese cover over an English gallery.
+    """
+    from raven.config.loader import load_config
+
+    try:
+        return load_config().language
+    except Exception:  # noqa: BLE001 - an unreadable config is the shipped language
+        return deck_templates_source_language()
+
+
+def deck_templates_source_language() -> str:
+    from raven.rpc import deck_templates
+
+    return deck_templates.SOURCE_LANGUAGE
+
+
+async def deck_templates_list(params: dict, *, agent_loop_factory=None) -> dict:
+    """The bundled deck templates, with a cover each where this host has drawn one.
+
+    ``available`` is false without the deck engine, and the page hides the
+    picker on it: a button that opens an empty gallery is a broken button.
+    ``pending`` is true while a cover is still being drawn in the background,
+    and the page asks again until it is not.
+    """
+    from raven.rpc import deck_templates
+
+    rows, pending = await deck_templates.listing(
+        with_covers=bool(params.get("covers", True)), language=_reader_language()
+    )
+    return {"templates": rows, "available": deck_templates.templates_dir() is not None, "pending": pending}
+
+
+async def deck_templates_pages(params: dict, *, agent_loop_factory=None) -> dict:
+    """Every page of one bundled template, for the reader to flip through before picking."""
+    from raven.rpc import deck_templates
+
+    name = str(params.get("name") or "").strip()
+    template = deck_templates.find(name)
+    if template is None:
+        raise ConfigValidationError(f"no bundled deck template named {name!r}")
+    pages = await deck_templates.pages_for(template, _reader_language())
+    return {"pages": [deck_templates.data_url(p) for p in pages]}
+
+
+async def deck_templates_pick(params: dict, *, agent_loop_factory=None) -> dict:
+    """Deposit a bundled template under ``<agent home>/uploads`` and answer as ``fs.upload`` does.
+
+    The route that reaches the deck engine opens on a ``.pptx`` the turn hands
+    over, and ``turn.send`` admits exactly the paths ``fs.upload`` mints -- so a
+    picked template is made into one of those rather than into a new kind of
+    thing the turn would have to learn.
+    """
+    from raven.rpc import deck_templates
+
+    name = str(params.get("name") or "").strip()
+    template = deck_templates.find(name)
+    if template is None:
+        raise ConfigValidationError(f"no bundled deck template named {name!r}")
+    try:
+        target = deck_templates.deposit(template, _upload_root() / _UPLOAD_DIR, _reader_language())
+    except OSError as e:
+        raise ConfigValidationError(f"cannot place the template under uploads: {e}") from None
+    return {"path": f"{_UPLOAD_DIR}/{target.name}", "abs_path": str(target), "size": target.stat().st_size}
+
+
 async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
     """Show one file in the host's file manager, selected.
 
@@ -1726,12 +2172,16 @@ async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
     for the localhost page that is the reader's own desktop, which is the whole
     use. Fenced exactly like the viewer (``resolve_readable``): a path the page
     may not render is not one it may pop a Finder window on either.
-    """
-    import subprocess
-    import sys
 
+    ``place`` is the one way past that fence, and it takes no path: it names one
+    of two locations the gateway resolves from its own config (see
+    :func:`_reveal_place`).
+    """
     from raven.rpc.files import resolve_readable
 
+    place = params.get("place")
+    if place:
+        return _reveal_place(str(place))
     raw = str(params.get("path") or "").strip()
     if not raw:
         raise ConfigValidationError("path is required")
@@ -1749,19 +2199,48 @@ async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
         target = resolve_readable(str(p))
     except (ValueError, PermissionError, FileNotFoundError, IsADirectoryError, OSError) as e:
         raise ConfigValidationError(str(e)) from None
+    _show_in_file_manager(target, select=True)
+    return {"ok": True}
+
+
+def _reveal_place(place: str) -> dict:
+    """Show one of raven's own locations: the config file, or agent home.
+
+    The settings page's About rows are addresses, and pressing one should go
+    there. Both live under the state directory the viewer's fence refuses, and
+    agent home is a folder, which the fence refuses too -- so they are named
+    here rather than sent as paths. The page picks one of two places this
+    gateway resolves from its own config, which reaches nothing else and reads
+    nothing back: the reveal opens a window on the host and answers ``ok``.
+    """
+    from raven.config.loader import get_config_path, load_config
+
+    if place == "config":
+        target, select = get_config_path(), True
+    elif place == "workspace":
+        target, select = Path(load_config().workspace_path).expanduser(), False
+    else:
+        raise ConfigValidationError(f"unknown place: {place}")
+    if not target.exists():
+        raise ConfigValidationError(f"{target} does not exist")
+    _show_in_file_manager(target.resolve(), select=select)
+    return {"ok": True}
+
+
+def _show_in_file_manager(target: Path, *, select: bool) -> None:
+    """Open the host's file manager on ``target``: selected in its folder, or opened."""
     if sys.platform == "darwin":
-        argv = ["open", "-R", str(target)]
+        argv = ["open", "-R", str(target)] if select else ["open", str(target)]
     elif sys.platform.startswith("win"):
-        argv = ["explorer", f"/select,{target}"]
+        argv = ["explorer", f"/select,{target}"] if select else ["explorer", str(target)]
     else:
         # No cross-desktop "select this file" verb exists, so the containing
         # folder is the best any Linux file manager can be asked for.
-        argv = ["xdg-open", str(target.parent)]
+        argv = ["xdg-open", str(target.parent if select else target)]
     try:
         subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
         raise ConfigValidationError(f"reveal failed: {e}") from None
-    return {"ok": True}
 
 
 # An application NAME, and nothing that could be anything else. The check is a
@@ -1790,9 +2269,6 @@ async def fs_open(params: dict, *, agent_loop_factory=None) -> dict:
     ``app`` is placed as a single argv element, never concatenated into a
     command line and never passed to a shell.
     """
-    import subprocess
-    import sys
-
     from raven.rpc.files import resolve_readable
 
     raw = str(params.get("path") or "").strip()
@@ -1813,6 +2289,12 @@ async def fs_open(params: dict, *, agent_loop_factory=None) -> dict:
         target = resolve_readable(str(p))
     except (ValueError, PermissionError, FileNotFoundError, IsADirectoryError, OSError) as e:
         raise ConfigValidationError(str(e)) from None
+    _open_with_system(target, app)
+    return {"ok": True, **({"app": app} if app else {})}
+
+
+def _open_with_system(target: Path, app: str = "") -> None:
+    """Hand ``target`` to the desktop's opener (or to ``app``), on this host."""
     if sys.platform == "darwin":
         argv = ["open", "-a", app, str(target)] if app else ["open", str(target)]
     elif sys.platform.startswith("win"):
@@ -1827,7 +2309,6 @@ async def fs_open(params: dict, *, agent_loop_factory=None) -> dict:
         subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
         raise ConfigValidationError(f"open failed: {e}") from None
-    return {"ok": True, **({"app": app} if app else {})}
 
 
 async def fs_read(params: dict, *, agent_loop_factory=None) -> dict:
@@ -1937,8 +2418,12 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("channels.qr", channels_qr)
     dispatcher.register("fs.list", bind(fs_list))
     dispatcher.register("fs.dirs", bind(fs_dirs))
+    dispatcher.register("fs.pick_dir", bind(fs_pick_dir))
     dispatcher.register("fs.read", bind(fs_read))
     dispatcher.register("fs.upload", bind(fs_upload))
+    dispatcher.register("deck.templates.list", bind(deck_templates_list))
+    dispatcher.register("deck.templates.pages", bind(deck_templates_pages))
+    dispatcher.register("deck.templates.pick", bind(deck_templates_pick))
     dispatcher.register("fs.reveal", bind(fs_reveal))
     dispatcher.register("fs.open", bind(fs_open))
     dispatcher.register("deliverables.list", bind(deliverables_list))

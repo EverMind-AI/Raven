@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import socket
 from contextlib import closing
@@ -493,7 +494,16 @@ async def test_stateful_cli_test_leaves_the_real_registry_untouched(
     assert instances_mod._registry.list_instances() == []
 
 
-async def test_openai_test_never_sends_a_completion() -> None:
+async def test_an_openai_test_asks_the_endpoint_to_answer() -> None:
+    """Both halves, in this order, and the order is the whole economy of it.
+
+    The free models probe goes first and refuses on its own when the endpoint
+    does not know the credential, so nothing is spent on one that cannot answer.
+    Past it, the endpoint is asked the same prompt every other kind is asked,
+    because knowing the credential is not the same as being able to serve the
+    model behind it.
+    """
+
     async def models(request: web.Request) -> web.Response:
         return web.json_response({"data": [{"id": "m1"}]})
 
@@ -518,9 +528,54 @@ async def test_openai_test_never_sends_a_completion() -> None:
         res = await run_test(_openai(f"http://127.0.0.1:{port}/v1", model="m1"), source="config")
         assert res.ok is True
         assert res.reply is None
-        assert seen == ["/v1/models"]
+        assert seen == ["/v1/models", "/v1/chat/completions"]
     finally:
         await runner.cleanup()
+
+
+async def test_an_openai_test_asks_an_endpoint_that_serves_no_model_list() -> None:
+    """The free probe vetoes only when it has proved there is nothing to send to.
+
+    `/models` is optional: the backend only ever POSTs `/chat/completions`, so an
+    endpoint that serves completions and answers 404 for the list is a working
+    agent. Letting the probe veto it would fail a Test that Connect accepts --
+    the very disagreement this gate exists to remove -- so anything reachable is
+    settled by asking it.
+    """
+    seen: list[str] = []
+    port = _free_port()
+    app = web.Application()
+
+    async def no_model_list(request: web.Request) -> web.Response:
+        seen.append(request.path)
+        return web.json_response({"error": "not found"}, status=404)
+
+    async def record_completion(request: web.Request) -> web.Response:
+        seen.append(request.path)
+        return web.json_response({"choices": [{"message": {"content": "PONG"}}]})
+
+    app.router.add_get("/v1/models", no_model_list)
+    app.router.add_post("/v1/chat/completions", record_completion)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", port).start()
+    try:
+        res = await run_test(_openai(f"http://127.0.0.1:{port}/v1", model="m1"), source="config")
+        assert res.ok is True, res.detail
+        assert seen == ["/v1/models", "/v1/chat/completions"]
+    finally:
+        await runner.cleanup()
+
+
+async def test_an_openai_test_spends_nothing_on_an_endpoint_it_cannot_reach() -> None:
+    """The one verdict the free probe can reach alone: nothing is listening, so
+    there is no request to make and no quota to consider."""
+    port = _free_port()
+
+    res = await run_test(_openai(f"http://127.0.0.1:{port}/v1", model="m1"), source="config")
+
+    assert res.ok is False
+    assert "unreachable" in res.detail
 
 
 async def test_test_result_wire_shape_is_camel_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -807,6 +862,20 @@ def test_the_factory_honours_the_bounds_its_caller_overrides() -> None:
     assert untouched.timeout == 300
 
 
+def _host_with_a_provider_key() -> None:
+    """Give the isolated home one usable provider.
+
+    The empty-menu re-measure is bounded on this: a child raven advertises no
+    model at all while the catalogue it inherits is empty, so a host with no
+    credentials would be relaunching children to be told what it already knows.
+    Written to the real config the bound reads rather than stubbing the check,
+    since "which sections count as usable" is half of what is under test.
+    """
+    from raven.home import get_config_path
+
+    get_config_path().write_text(json.dumps({"providers": {"openai": {"apiKey": "sk-test"}}}), encoding="utf-8")
+
+
 class _FakeRow:
     def __init__(self, name: str, *, kind: str = "acp", enabled: bool = True, config: object = None) -> None:
         self.name = name
@@ -1083,6 +1152,278 @@ class TestAutomaticSnapshotVerification:
 
         assert called == ["on"]
 
+    async def test_a_store_without_has_model_menu_does_not_force_a_reverify(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A caller's stand-in store (a bare ``record``-only object, as several
+        tests in this class substitute) must not be treated as "every row is on
+        the older format" -- the predicate is optional, and its absence must
+        leave a fresh, non-stale snapshot alone exactly as before this hook."""
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            status: str = "ready"
+            stale: bool = False
+
+        row = _FakeRow("fresh")
+        recorded: list[str] = []
+
+        async def fake_verify(cfg: object) -> Snap:
+            recorded.append(getattr(cfg, "name", "?"))
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: Snap())
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        task = schedule_snapshot_verification(_FakeManager([row]))
+        await task
+
+        assert recorded == []
+
+    async def test_a_snapshot_missing_the_model_choices_key_is_reverified(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A snapshot recorded before ``modelChoices`` existed is fresh and not
+        stale by every other measure, but a row stuck on it would never learn
+        the agent's model menu until the agent is edited or Test is pressed by
+        hand -- so the older format alone must trigger a re-verify."""
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            status: str = "ready"
+            stale: bool = False
+
+        row = _FakeRow("old-format")
+        recorded: list[str] = []
+
+        async def fake_verify(cfg: object) -> Snap:
+            recorded.append(getattr(cfg, "name", "?"))
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: Snap())
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type(
+                "S",
+                (),
+                {
+                    "record": staticmethod(lambda s: None),
+                    "has_model_menu": staticmethod(lambda agent: False),
+                },
+            )(),
+        )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        task = schedule_snapshot_verification(_FakeManager([row]))
+        await task
+
+        assert recorded == ["old-format"]
+
+    async def test_one_of_ravens_own_rows_that_measured_no_menu_is_measured_again(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Raven's own agents run on raven's provider catalogue, so an empty menu
+        there is a handshake from before that catalogue reached them -- and one
+        nothing invalidates, since the launch config it was measured against has
+        not moved. A third party that advertised none is taken at its word: it
+        would otherwise be relaunched at every boot to say so again."""
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            agent_name: str = "raven"
+            status: str = "ready"
+            stale: bool = False
+            needs_auth: bool = False
+            model_menu_measured: bool = True
+            model_choices: tuple = ()
+
+        _host_with_a_provider_key()
+        own, third_party = _FakeRow("Raven-PPT"), _FakeRow("Codex")
+        snapshots = {id(own.config): Snap(), id(third_party.config): Snap(agent_name="codex")}
+        verified: list[str] = []
+
+        async def fake_verify(cfg: object) -> Snap:
+            verified.append(getattr(cfg, "name", "?"))
+            return Snap(model_choices=("v/a",))
+
+        monkeypatch.setattr(probe_mod, "_MENULESS_OWN_RE_MEASURED", set())
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: snapshots[id(cfg)])
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type(
+                "S",
+                (),
+                {"record": staticmethod(lambda s: None), "has_model_menu": staticmethod(lambda agent: True)},
+            )(),
+        )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([own, third_party]))
+        assert verified == ["Raven-PPT"]
+
+        snapshots[id(own.config)] = Snap(model_choices=("v/a",))
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+        await schedule_snapshot_verification(_FakeManager([own, third_party]))
+        assert verified == ["Raven-PPT"], "the menu is measured once; the record it wrote is then trusted"
+
+    async def test_a_row_told_again_it_has_no_menu_is_not_re_measured_a_third_time(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The one re-measure reason nothing invalidates has to spend itself.
+
+        An agent that answers "no models" twice is answering about itself, not
+        about a catalogue that had not arrived yet -- and since the record it
+        writes is the record that arms this reason, an unspent one would put a
+        child launch on every boot and on every connect after it, forever.
+        """
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import capabilities_wanted, schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            agent_name: str = "raven"
+            status: str = "ready"
+            stale: bool = False
+            needs_auth: bool = False
+            model_menu_measured: bool = True
+            model_choices: tuple = ()
+
+        _host_with_a_provider_key()
+        own = _FakeRow("Raven-PPT")
+        verified: list[str] = []
+
+        async def fake_verify(cfg: object) -> Snap:
+            verified.append(getattr(cfg, "name", "?"))
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "_MENULESS_OWN_RE_MEASURED", set())
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: Snap())
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type(
+                "S",
+                (),
+                {"record": staticmethod(lambda s: None), "has_model_menu": staticmethod(lambda agent: True)},
+            )(),
+        )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([own]))
+        assert verified == ["Raven-PPT"]
+
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+        await schedule_snapshot_verification(_FakeManager([own]))
+        assert verified == ["Raven-PPT"], "told once that this row really has none, and it is not asked again"
+        assert capabilities_wanted(own.config) is False, "nor by the connect, which reads the same rule"
+
+    async def test_a_host_with_no_provider_of_its_own_re_measures_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing for the child to inherit, so nothing for a handshake to find:
+        the fallback's premise is a catalogue this raven can pass on."""
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import capabilities_wanted, schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            agent_name: str = "raven"
+            status: str = "ready"
+            stale: bool = False
+            needs_auth: bool = False
+            model_menu_measured: bool = True
+            model_choices: tuple = ()
+
+        own = _FakeRow("Raven-PPT")
+        verified: list[str] = []
+
+        async def fake_verify(cfg: object) -> Snap:
+            verified.append(getattr(cfg, "name", "?"))
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "_MENULESS_OWN_RE_MEASURED", set())
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: Snap())
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type(
+                "S",
+                (),
+                {"record": staticmethod(lambda s: None), "has_model_menu": staticmethod(lambda agent: True)},
+            )(),
+        )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([own]))
+        assert verified == []
+        assert capabilities_wanted(own.config) is False
+
+
+async def test_capabilities_wanted_re_measures_one_of_ravens_own_rows_with_an_empty_menu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The connect's own reading of the backfill's rule, off real stored rows.
+
+    The two must answer alike: a connect that skipped this row would leave it
+    menuless until the next restart, and one that re-measured every third party
+    with no menu would spend a handshake per connect to be told the same thing.
+    """
+    from raven.acp_client.capabilities import AcpModelChoice, CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
+    from raven.agent.subagent.probe import capabilities_wanted
+
+    store_path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: store_path)
+
+    def recorded(
+        name: str, *, agent_name: str, menu: tuple[str, ...] = (), status: str = "ready"
+    ) -> ThirdPartyAcpSubagentConfig:
+        cfg = ThirdPartyAcpSubagentConfig(name=name, command=f"{name} acp")
+        SnapshotStore(path=store_path).record(
+            CapabilitySnapshot(
+                agent=name,
+                fingerprint=snapshot_fingerprint(cfg),
+                status=status,
+                detail="",
+                measured_at_ms=1,
+                agent_name=agent_name,
+                model_choices=tuple(AcpModelChoice(value=v, name=v, group="V") for v in menu),
+            )
+        )
+        return cfg
+
+    assert capabilities_wanted(recorded("own-empty", agent_name="raven")) is False, "no provider of raven's own yet"
+    _host_with_a_provider_key()
+    monkeypatch.setattr(probe_mod, "_MENULESS_OWN_RE_MEASURED", set())
+    assert capabilities_wanted(recorded("own-empty", agent_name="raven")) is True
+    assert capabilities_wanted(recorded("own-menu", agent_name="raven", menu=("v/a",))) is False
+    assert capabilities_wanted(recorded("third-party-empty", agent_name="codex")) is False
+    # Ready, or the empty menu says nothing about the catalogue: an agent that
+    # did not come up is the missing-snapshot case, not this one.
+    assert capabilities_wanted(recorded("own-broken", agent_name="raven", status="attention")) is False
+
 
 def test_a_preset_the_table_cannot_be_read_from_offers_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Three ways the shipped table can fail to answer, and none may reach the boot.
@@ -1157,3 +1498,75 @@ def test_only_resolvable_unconfigured_acp_presets_are_offered_for_verification(
     # the row on screen from the login shell's, so reading a different one here
     # would skip an agent the page is reporting as installed.
     assert set(seen_paths) == {"/login/shell/bin"}
+
+
+async def test_a_hand_written_npx_row_is_not_held_to_a_shims_requirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The requirement rides on provenance: a row that merely wears the preset's name runs its own command."""
+    _fake_executable(tmp_path, "npx")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(name="Pi", command="npx -y my-own-acp-shim@1.0.0")
+
+    res = await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert res.status == "attention"
+
+
+async def test_a_shim_that_ships_its_own_agent_asks_after_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``codex-acp`` bundles the agent as its own binary; what it wants is a login, not an install."""
+    _fake_executable(tmp_path, "npx")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="Codex", preset="codex", command="npx -y @agentclientprotocol/codex-acp@1.1.14"
+    )
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path))
+
+    assert res.status == "attention"
+
+
+async def test_a_shim_row_whose_agent_is_installed_goes_on_to_the_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    npx = _fake_executable(tmp_path, "npx")
+    _fake_executable(tmp_path, "pi")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(name="Pi", preset="pi", command="npx -y pi-acp@0.0.33")
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path))
+
+    assert res.status == "attention"
+    assert res.target == str(npx)
+
+
+async def test_a_shim_row_is_missing_when_the_agent_it_drives_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``npx`` resolving says nothing about whether ``pi`` is installed.
+
+    The shim is fetched on connect and fails a minute later with "executable not
+    found" when the agent it drives is absent. That is the sentence the probe can
+    say up front, with the install beside it, so the row reads absent rather
+    than connectable -- the same reading a local-executable row gets.
+    """
+    _fake_executable(tmp_path, "npx")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(name="Pi", preset="pi", command="npx -y pi-acp@0.0.33")
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path))
+
+    assert res.status == "missing"
+    assert res.target == "pi"
+    assert res.detail == (
+        "pi is not on the login shell PATH; install with npm install -g @earendil-works/pi-coding-agent"
+    )
+
+
+def _fake_executable(tmp_path: Path, name: str) -> Path:
+    exe = tmp_path / name
+    exe.write_text("#!/bin/sh\nexit 0\n")
+    exe.chmod(0o755)
+    return exe

@@ -23,6 +23,10 @@ import { getUiState, resetUiState } from '../app/uiStore.js'
 
 type FakeUnsubscribe = () => Promise<void>
 
+// The catalogue sentence, spelled out rather than read back through the helper
+// the code under test uses.
+const STOPPED_BARE = 'Stopped by user'
+
 interface FakeRpc extends ChatStreamRpcClient {
   __pushEvent: (event: TurnEvent) => void
   __sendCalls: Array<{ method: string; params: unknown }>
@@ -165,12 +169,12 @@ describe('createChatStream', () => {
       payload: { code: -32800, message: 'cancelled by client', reason: 'cancelled_by_client' }
     })
 
-    // Input prompt restored: not busy, status reset to 'ready' (or
-    // 'interrupted' cooldown — either is acceptable as long as it's not
-    // a stuck 'running').
+    // Input prompt restored: not busy, status reset to 'ready' (or the
+    // catalogue's stop sentence during the cooldown -- either is acceptable as
+    // long as it's not a stuck 'running').
     const ui = getUiState()
     expect(ui.busy).toBe(false)
-    expect(ui.status === 'ready' || ui.status === 'interrupted').toBe(true)
+    expect(ui.status === 'ready' || ui.status === STOPPED_BARE).toBe(true)
   })
 
   it('cancel() routes through turn.cancel when a turn is in flight', async () => {

@@ -1,0 +1,30 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the onboarding wizard > keeps its rendered shape > model step 1`] = `
+"div.ob-app
+  header.ob-top
+    div.ob-brand
+    nav.ob-steps
+      div.ob-sitem[data-state=current]
+        span.ob-dot
+        span
+      div.ob-sitem[data-state=upcoming]
+        span.ob-dot
+        span
+      div.ob-sitem[data-state=upcoming]
+        span.ob-dot
+        span
+      div.ob-sitem[data-state=upcoming]
+        span.ob-dot
+        span
+    div.ob-lang
+      button
+      button
+  div.ob-main
+    div.ob-col[data-step=model]
+      div.fake-model
+  footer.ob-foot
+    div.ob-col
+      span.ob-grow
+      button.ob-btn.ob-primary"
+`;

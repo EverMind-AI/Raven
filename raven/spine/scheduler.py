@@ -16,9 +16,9 @@ from uuid import uuid4
 
 from loguru import logger
 
-from raven.spine.events import RunnerEvent, TurnEnded, TurnEvent, TurnFailed, TurnStarted
+from raven.spine.events import RunnerEvent, TurnEnded, TurnEvent, TurnFailed, TurnStarted, bound_failure_text
 from raven.spine.runner import Emit, TurnOutcome, TurnRunner
-from raven.spine.turn import BusyPolicy, Origin, TurnRequest
+from raven.spine.turn import AnswerlessTurnError, BusyPolicy, Origin, TurnRequest
 
 
 def describe_failure(exc: BaseException) -> str:
@@ -28,9 +28,16 @@ def describe_failure(exc: BaseException) -> str:
     what a stalled model stream raises -- has an empty one, so the client was
     told ``turn_failed`` and nothing else, and the parent of a sub-agent read
     that as a crash of whatever tool call it saw last.
+
+    An ``AnswerlessTurnError`` is the runner's own wording of the failure and
+    is carried as it is -- bounded where it was built, by the layer that knows
+    what it cut. A crash's message is bounded here instead: it is arbitrary, and
+    this text reaches a chat reply and a cron job record, not only a log.
     """
     text = str(exc).strip()
     name = type(exc).__name__
+    if isinstance(exc, AnswerlessTurnError):
+        return text or name
     if not text:
         return name
     # Several SDK errors already open with their own class name; a second
@@ -38,8 +45,8 @@ def describe_failure(exc: BaseException) -> str:
     # than by the provider layer's own prefix rule: the kernel does not import
     # providers.
     if text.startswith(f"{name}:") or text.startswith(f"{name} ") or text == name:
-        return text
-    return f"{name}: {text}"
+        return bound_failure_text(text)
+    return bound_failure_text(f"{name}: {text}")
 
 
 def conversation_id(req: TurnRequest) -> str:
@@ -322,9 +329,11 @@ class Lane:
             # its end.
             self._payload_reported = False
             self._run_task = asyncio.create_task(self._run_turn(req))
-            outcome: TurnOutcome | None = None
+            outcome: TurnOutcome | TurnFailed | None = None
             try:
-                outcome = await self._run_task  # None on cancel/failure, outcome on success
+                # The payload's three answers: the outcome of a turn that ran, the
+                # report it filed when it failed, None when it was cancelled.
+                outcome = await self._run_task
             except asyncio.CancelledError:
                 if not self._run_task.cancelled():
                     # The worker itself was cancelled (process shutdown): cascade
@@ -414,11 +423,11 @@ class Lane:
 
         return emit
 
-    async def _run_turn(self, req: TurnRequest) -> TurnOutcome | None:
+    async def _run_turn(self, req: TurnRequest) -> TurnOutcome | TurnFailed | None:
         # Resolve the turn's identity here, once, and put it back on the request so
         # the runner and the lifecycle events agree on one value. Minted when the
         # submitter supplied none: a turn the runtime submits onto a busy lane (a
-        # sub-agent announce, a deep-research delivery) must still be
+        # sub-agent announce, a runtime-submitted verbatim reply) must still be
         # distinguishable from the client turn queued behind it, or a consumer keyed
         # on a per-lane slot ends the wrong turn.
         # Falsy, not just None: turn_id is a public field and an empty string
@@ -492,19 +501,26 @@ class Lane:
             # resolves -- this event is what clears it. Both branches reporting
             # unconditionally is what retired the ``started`` flag they used to
             # consult.
-            await self._sink(
-                TurnFailed(
-                    error=describe_failure(exc),
-                    cancelled=False,
-                    conversation_id=self._conversation_id,
-                    turn_id=turn_id,
-                )
+            # Handed back as well as emitted: a submitter that only awaits the
+            # handle -- cron is the one in tree -- otherwise has to invent a
+            # sentence for a failure the turn had already worded.
+            failed = TurnFailed(
+                error=describe_failure(exc),
+                cancelled=False,
+                conversation_id=self._conversation_id,
+                turn_id=turn_id,
+                # The runner worded this one itself, so a consumer may quote it;
+                # every other exception here is a crash whose message names
+                # hosts and paths.
+                reported=isinstance(exc, AnswerlessTurnError),
             )
+            await self._sink(failed)
             self._payload_reported = True
-            return None
+            return failed
         finally:
-            # A drained inject shares this turn's outcome (None on cancel/failure);
-            # resolved here, in the turn that merged it, not by the worker.
+            # A drained inject shares this turn's outcome -- None on cancel, and
+            # None on failure too, because the local is only ever the runner's own
+            # return; resolved here, in the turn that merged it, not by the worker.
             for inject_fut in chained:
                 inject_fut.set_result(outcome)
         latency_ms = (time.monotonic() - run_start) * 1000
@@ -527,7 +543,11 @@ class TurnHandle:
         self._lane = lane
         self._fut = fut
 
-    async def result(self) -> TurnOutcome | None:
+    async def result(self) -> TurnOutcome | TurnFailed | None:
+        """How the turn ended, in three: the ``TurnOutcome`` of a turn that ran to
+        an answer, the ``TurnFailed`` its lane filed for a turn that failed with a
+        name, or None when it was cancelled or never got to run.
+        """
         return await self._fut
 
     async def cancel(self) -> None:

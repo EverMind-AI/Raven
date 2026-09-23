@@ -75,6 +75,13 @@ dependencies = [
     # ours, not an incidental one -- declared for the same reason as numpy and
     # idna above, and range-matched to what a2a-sdk itself allows.
     "protobuf>=5.29.5,<7",
+    # OOXML surgery behind the deck template picker (rpc/deck_templates.py): a
+    # copy of a template in the reader's language is made by rewriting the slide
+    # XML in place, and lxml is what keeps the namespace prefixes the file was
+    # authored with. Named directly: it used to arrive only through the tools
+    # extra (readability-lxml) and the ppt-engine plugin, and a picker in the
+    # core is not theirs to keep working. Range-matched to the engine's own pin.
+    "lxml>=5.0,<7",
 ]
 
 [project.optional-dependencies]
@@ -88,7 +95,7 @@ channel-slack = [
     "slackify-markdown>=0.2.0,<1.0.0",
 ]
 channel-discord = ["websockets>=16.0,<17.0"]
-channel-whatsapp = []
+channel-whatsapp = ["websockets>=16.0,<17.0"]
 channel-matrix = [
     "matrix-nio>=0.25.2; sys_platform != 'win32'",
     "mistune>=3.0.0,<4.0.0",
@@ -191,6 +198,7 @@ include = [
     "raven/providers/data/*.toml",
     # Playbook role-pool defaults and the builtin playbook library.
     "raven/playbook/*.yaml",
+    "raven/playbook/*.json",
     "raven/playbook/builtin/**/*.md",
     # Tracing dashboard viewer (dependency-free Node server + static client),
     # a CLI-launched surface, so it lives beside the CLI and not in the kernel.
@@ -285,12 +293,17 @@ ignore = ["DEP002", "DEP004"]
 #   nothing breaks.
 # cryptography: fallback AES path in the weixin adapter, reached under
 #   `with suppress(ImportError)` when pycryptodome is not present.
+# pymupdf / fitz: the rasteriser behind the deck template gallery in
+#   rpc/deck_templates.py, imported inside a function and probed with find_spec
+#   first. The gallery only exists when the ppt-engine plugin is installed, and
+#   that plugin is what pins PyMuPDF (under either import name); the core must
+#   not carry an AGPL dependency for a feature that is absent without the plugin.
 #
 # The list is per-module, not per-file, so a later unguarded import of any other
 # package is still caught by both rules.
 [tool.deptry.per_rule_ignores]
-DEP001 = ["raven_everos", "requests", "cryptography"]
-DEP003 = ["raven_everos", "requests", "cryptography"]
+DEP001 = ["raven_everos", "requests", "cryptography", "pymupdf", "fitz"]
+DEP003 = ["raven_everos", "requests", "cryptography", "pymupdf", "fitz"]
 
 [tool.ty]
 # A call-correctness gate, not a typing-strictness project. Of ty's 133 rules,
@@ -600,6 +613,11 @@ source_modules = [
     # The outbound shelf, seated as `acp_client`'s mirror: `a2a_client/` is
     # raven calling somebody else's agent, `a2a/` is the entrance.
     "raven.a2a_client",
+    # What one stint needs over a workspace -- the ownership grades, the journal
+    # window, the project git and the checks. Consumed by `mode: stint` through
+    # `raven.playbook`, by the CLI and RPC surfaces that read a stint's record,
+    # and by the dispatch path that carries its ref; it imports no surface itself.
+    "raven.stint",
 ]
 forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp", "raven.a2a"]
 # Debt allowlist: none. The last allowlisted edge (market reaching the skill

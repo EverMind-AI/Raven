@@ -63,12 +63,12 @@ describe('/perm', () => {
     expect(h.main[0]).toContain('default permission mode: ask')
   })
 
-  it('falls back to ask only when the engine answers nothing', async () => {
+  it('falls back to the shipped default only when the engine answers nothing', async () => {
     const rpc = vi.fn(() => Promise.resolve({ config: {} }))
     const h = run('', rpc)
     await settle()
 
-    expect(h.main[0]).toContain('permission mode: ask')
+    expect(h.main[0]).toContain('permission mode: smart')
   })
 
   it('writes a valid tier through config.set', async () => {

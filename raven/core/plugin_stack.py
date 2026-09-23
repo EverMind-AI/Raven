@@ -12,9 +12,9 @@ AgentLoop expects (a ready-to-use :class:`MemoryBackend` instance):
   return ``None`` when no backend is selected / the requested
   contribution isn't available.
 
-Both functions are intentionally lenient: a missing
-plugin / activation error logs a warning and falls through to ``None``
-rather than crashing the host.
+Both functions are intentionally lenient: a plugin that fails to
+activate is skipped alone and said to the user, and a missing backend falls
+through to ``None`` rather than crashing the host.
 
 Lifecycle (``backend.start()`` / ``backend.stop()``) is the **caller's**
 responsibility. These helpers only construct; CLI bootstrap code does
@@ -29,16 +29,17 @@ sub-agent trace writer. :func:`everos_plugin_installed` and
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from collections.abc import Callable
+from contextlib import suppress
 from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from raven.plugins import (
-    PluginConflictError,
-    PluginFactoryImportError,
+    PluginActivationFailure,
     PluginNotFoundError,
     PluginRegistry,
     ServiceLocator,
@@ -104,6 +105,22 @@ def everos_plugin_missing_note() -> str:
     )
 
 
+def everos_platform_note() -> str | None:
+    """Why EverOS cannot run on this machine, or ``None`` where it can.
+
+    Native Windows, for now: the server is spawned, found and stopped through
+    POSIX tooling. Asked before any surface probes, spawns or offers to
+    configure the service, so a Windows install reads one sentence instead of a
+    connection refused and a retry button that cannot help.
+    """
+    if sys.platform != "win32":
+        return None
+    return (
+        "EverOS long-term memory is not available on Windows yet; support is coming soon. "
+        "Raven runs without long-term memory here for now (WSL has it today)."
+    )
+
+
 def plugin_discovery_sources() -> dict:
     """Resolve the four fixed discovery-source locations the host scans.
 
@@ -151,14 +168,16 @@ def discover_plugins(config: "RavenConfig | None" = None) -> "list[DiscoveredPlu
 
 def build_plugin_registry(
     config: "RavenConfig",
+    *,
+    notify: "Callable[[str], None] | None" = None,
 ) -> PluginRegistry:
     """Discover + activate every installed plugin admitted by ``config``.
 
     Reads ``config.plugins.disabled`` and forwards it to
-    :func:`assemble_plugin_registry`. Activation errors
-    (:class:`PluginConflictError`, :class:`PluginFactoryImportError`) are
-    caught and logged — the caller receives an **empty** registry so
-    AgentLoop can still boot and fall back to the legacy path.
+    :func:`assemble_plugin_registry`. A plugin that fails to activate is
+    skipped on its own -- the rest of the registry is unaffected -- and each
+    one is said to the user through ``notify`` when the host lent one, else on
+    stderr, because a plugin that vanished leaves no other trace a user sees.
 
     Discovery spans three fixed sources plus the roots ``plugins.dirs``
     names (priority user > project = named roots > entry_points):
@@ -168,19 +187,37 @@ def build_plugin_registry(
     - **entry_points** — the ``raven.plugins`` group, where
       third-party pip-installed plugins register their factories.
     """
-    disabled = frozenset(config.plugins.disabled)
-    try:
-        return assemble_plugin_registry(
-            **plugin_discovery_sources(),
-            extra_dirs=named_plugin_roots(config),
-            disabled=disabled,
-        )
-    except (PluginConflictError, PluginFactoryImportError) as e:
-        logger.warning(
-            "plugin activation failed (%s); continuing without plugins. AgentLoop will use its legacy memory path.",
-            e,
-        )
-        return PluginRegistry()
+    registry = assemble_plugin_registry(
+        **plugin_discovery_sources(),
+        extra_dirs=named_plugin_roots(config),
+        disabled=frozenset(config.plugins.disabled),
+    )
+    for failure in registry.activation_failures():
+        message = plugin_failure_note(failure)
+        if notify is not None:
+            notify(message)
+        else:
+            print(message, file=sys.stderr)
+    return registry
+
+
+PLUGIN_FAILURE_MARKER = "did not load and is off for this session"
+"""The words every failed-plugin notice carries; the agent smoke check reads a
+child's stderr for them, so the notice and that check change together."""
+
+
+def _failure_cause(failure: "PluginActivationFailure") -> str:
+    """The failure's reason without the plugin-id prefix the sentence already carries."""
+    return failure.reason.removeprefix(f"plugin {failure.plugin_id!r}: ").rstrip(".")
+
+
+def plugin_failure_note(failure: "PluginActivationFailure") -> str:
+    """The sentence a user reads about one plugin that did not load."""
+    return (
+        f"Plugin {failure.plugin_id!r} {PLUGIN_FAILURE_MARKER}: {_failure_cause(failure)}. "
+        f"Other plugins continue loading. Fix or remove it, or add {failure.plugin_id!r} "
+        f"to plugins.disabled to stop loading it."
+    )
 
 
 def maybe_build_memory_backend(
@@ -244,6 +281,19 @@ def maybe_build_memory_backend(
             f"Long-term memory is off: memory.backend={name!r} but no installed plugin provides it "
             f"(installed: {', '.join(registry.memory_backend_names()) or 'none'})."
         )
+        # A provider that is installed but failed to activate is not "no
+        # installed plugin": name it and its reason, so the reader fixes the
+        # plugin instead of reinstalling something that is there.
+        failed = [
+            f
+            for f in registry.activation_failures()
+            if any(c.name == name for c in f.manifest.contributes.memory_backends)
+        ]
+        if failed:
+            message = (
+                f"Long-term memory is off: memory.backend={name!r} is provided by plugin "
+                f"{failed[0].plugin_id!r}, which did not load: {_failure_cause(failed[0])}."
+            )
         # The shipped default names a backend that ships separately, so the
         # commonest way to reach this line is an install that simply lacks the
         # distribution. Saying only which backends are installed leaves that
@@ -411,6 +461,27 @@ def build_onboard_steps(
         except Exception as e:
             logger.warning("onboard step %r factory raised (%s); skipping it.", name, e)
     return steps
+
+
+def memory_enabled(workspace: Path, config: "RavenConfig") -> bool:
+    """Whether the memory backend recorded on disk says it is configured.
+
+    The wire-side twin of ``raven.cli.onboard_commands._memory_enabled``: same
+    two-step check (a raw-config read for the recorded name, then that
+    backend's own onboard screen for whether it says it works), kept as a
+    separate copy here because the CLI's version is reached by tests that
+    monkeypatch it and its neighbours directly.
+    """
+    from raven.config.loader import get_config_path, read_raw_or_raise
+
+    raw = read_raw_or_raise(get_config_path())
+    selected = (raw.get("memory") or {}).get("backend") or None
+    if not selected:
+        return False
+    steps = [step for name, step in build_onboard_steps(workspace, config) if name == selected]
+    if not steps:
+        return True
+    return any(step.configured() for step in steps)
 
 
 def build_plugin_hooks(
@@ -661,7 +732,77 @@ def _plugin_id_for_backend(
     return None
 
 
+# Held so a detached start cannot be collected mid-flight, and so one place can
+# retire them. asyncio keeps only a weak reference to a running task. Paired
+# with the backend it belongs to: a generation retires its own start, not one
+# belonging to the generation replacing it.
+_PENDING_BACKEND_STARTS: list[tuple[Any, asyncio.Task]] = []
+
+
+def start_backend_detached(backend: Any, *, logger: Any) -> None:
+    """Bring the memory backend up without holding the boot on it.
+
+    The same shape as ``warm_up_in_background`` for litellm: a resident host
+    starts the slow thing once and goes on serving, and the on-demand path
+    reports a failure to whoever needs it. Here that path is the backend's own
+    state machine -- ``store`` answers False so the loop retries the record,
+    and ``recall`` returns no hits for that turn and schedules a probe, so a
+    turn arriving before the service is up costs that turn its recall and
+    nothing else.
+
+    Awaited, this cost every first session of a machine's uptime the readiness
+    budget: a cold start that overruns it leaves the session reporting no
+    long-term memory while the child is still booting behind it.
+
+    Only for hosts that serve many turns. A caller that acts on the service
+    immediately -- an import checking readiness, a sub-agent writing one
+    record, a one-shot turn that then exits -- must keep awaiting ``start()``,
+    because for those there is no later turn to recover into.
+    """
+    if backend is None:
+        return
+
+    async def _start() -> None:
+        try:
+            await backend.start()
+        except Exception:
+            logger.exception("memory backend start failed; continuing with legacy memory path")
+
+    task = asyncio.create_task(_start(), name="memory-backend-start")
+    entry = (backend, task)
+    _PENDING_BACKEND_STARTS.append(entry)
+
+    def _release(_done: asyncio.Task) -> None:
+        with suppress(ValueError):
+            _PENDING_BACKEND_STARTS.remove(entry)
+
+    task.add_done_callback(_release)
+
+
+async def cancel_pending_backend_starts(backend: Any) -> None:
+    """Retire ``backend``'s start, and wait for it to leave, before stopping it.
+
+    Awaited rather than fired: ``Task.cancel`` only requests cancellation, so
+    returning at that point lets ``stop()`` run while ``start()`` is still
+    inside the backend. The contract asks a backend to survive ``stop()``
+    *after* a failed start, not concurrently with one -- a plugin that finishes
+    wiring after teardown, or touches what ``stop`` has just closed, is the
+    failure that buys. Reproduced as ``start-enter -> stop -> start-exit`` and
+    pinned in tests/test_core_runtime_swap.py.
+
+    Scoped to one backend by identity: a generation retires the start it owns,
+    never one belonging to the generation taking its place. Idempotent -- a
+    finished task has already dropped itself.
+    """
+    mine = [task for held, task in _PENDING_BACKEND_STARTS if held is backend]
+    for task in mine:
+        task.cancel()
+    if mine:
+        await asyncio.gather(*mine, return_exceptions=True)
+
+
 __all__ = [
+    "PLUGIN_FAILURE_MARKER",
     "build_onboard_steps",
     "build_plugin_hooks",
     "build_plugin_registry",
@@ -669,7 +810,10 @@ __all__ = [
     "build_plugin_services",
     "build_plugin_session_observers",
     "build_plugin_tool_gates",
+    "cancel_pending_backend_starts",
     "discover_plugins",
     "maybe_build_memory_backend",
     "plugin_discovery_sources",
+    "plugin_failure_note",
+    "start_backend_detached",
 ]

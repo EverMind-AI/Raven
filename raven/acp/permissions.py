@@ -40,7 +40,6 @@ from uuid import uuid4
 
 from loguru import logger
 
-from raven.acp import redact
 from raven.acp.outbound import (
     DEFAULT_REQUEST_TIMEOUT_S,
     ConnectionClosedError,
@@ -49,10 +48,13 @@ from raven.acp.outbound import (
 )
 from raven.acp.updates import UpdateTranslator
 from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
+from raven.security import redact
 
 ALLOW_KIND = "allow_once"
 SESSION_KIND = "allow_always"
 REJECT_KIND = "reject_once"
+#: The ``approval_kind`` the shell tool declares (``ExecTool``).
+EXEC_KIND = "shell.exec"
 
 
 # The two outcomes that are a person's answer. Every other name in this file is
@@ -86,10 +88,10 @@ class AcpPermissionBroker:
         self._outbound = outbound
         self._translator = translator
         # A parameter rather than the callee's default, and not because a test
-        # wants it short. The RPC broker's ceiling is 35 seconds because a
-        # terminal overlay owns a visible countdown; here a person is reading a
-        # diff, and the deadline is a product decision that belongs to whoever
-        # assembles the connection.
+        # wants it short. The RPC broker waits without a deadline because a
+        # person is looking at its prompt; here the other side is an editor
+        # process that can stop answering, and the deadline is a product
+        # decision that belongs to whoever assembles the connection.
         self._timeout_s = timeout_s
         # Counted per outcome rather than logged per request: a turn that ran
         # twenty commands would otherwise write twenty lines saying the same
@@ -105,11 +107,22 @@ class AcpPermissionBroker:
         command: str,
         description: str,
         suggested_pattern: str = "",
+        kind: str = "",
+        family: str = "",
+        origin: str = "",
+        origin_name: str = "",
+        evidence: dict[str, Any] | None = None,
     ) -> ApprovalOutcome:
         """Ask, and return the grant the client's user chose.
 
-        ``suggested_pattern`` is accepted for the responder contract and unused:
-        this wire has no editor a human could confirm a rule in.
+        ``suggested_pattern`` and most of the prompt's view (``family``,
+        ``origin``) are accepted for the responder contract and unused: this
+        wire has no editor a human could confirm a rule in, and
+        ``session/request_permission`` has its own shape for what a client
+        shows. A shell call's command is the exception and rides as the spec's
+        ``rawInput.command``, because the title is prose and the client may be
+        a raven whose own deny rules have to read the command
+        (``raven/acp_client/permissions.py``).
 
         Fails closed on every path. The signature is the one the permission
         gate calls, including the keyword-only arguments, so this object can be
@@ -149,6 +162,9 @@ class AcpPermissionBroker:
         }
         if request["_meta"] is None:
             del request["_meta"]
+        shell_command = (evidence or {}).get("command") if kind == EXEC_KIND else None
+        if isinstance(shell_command, str) and shell_command.strip():
+            request["toolCall"]["rawInput"] = {"command": redact.redact(shell_command)}
 
         try:
             result = await self._outbound.call("session/request_permission", request, timeout=self._timeout_s)
@@ -235,4 +251,4 @@ class AcpPermissionBroker:
         return ApprovalOutcome(choice=choice, answered=outcome in _ANSWERED)
 
 
-__all__ = ["ALLOW_KIND", "REJECT_KIND", "AcpPermissionBroker"]
+__all__ = ["ALLOW_KIND", "EXEC_KIND", "REJECT_KIND", "AcpPermissionBroker"]

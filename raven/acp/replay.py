@@ -8,11 +8,17 @@ needs no second renderer.
 
 What makes this worth its own module is that the stored shape and the live shape
 are different vocabularies. A transcript is a list of provider messages with
-extras hung off them (``reasoning_content``, ``tool_calls``, ``diff``); the wire
-is a sequence of typed chunks. The mapping is order-sensitive in one place that
-matters: a tool call is announced on the assistant entry that made it and
-answered by a later ``role="tool"`` entry, so the ``tool_call`` and its
-``tool_call_update`` come from two different messages and must stay in that order.
+extras hung off them (``reasoning_content``, ``tool_calls``, ``diff``,
+``notice``, ``turn_ended``); the wire is a sequence of typed chunks. The mapping
+is order-sensitive in one place that matters: a tool call is announced on the
+assistant entry that made it and answered by a later ``role="tool"`` entry, so
+the ``tool_call`` and its ``tool_call_update`` come from two different messages
+and must stay in that order.
+
+The other rule the marks carry is whose voice an entry is in. ``notice`` and
+``turn_ended`` mark assistant entries the runtime wrote for the model to read,
+so their stored text is never replayed as the assistant speaking -- the live
+wording for the same event is sent in its place, from :mod:`raven.acp.updates`.
 
 Pure and synchronous on purpose. Everything here is list-in, list-out, so each
 case is one unit test whose frames are checked against the official schema --
@@ -30,8 +36,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from raven.acp import redact
 from raven.acp.tool_kinds import locations, title_for, tool_kind
+from raven.acp.updates import notice_text, turn_failure_text
+from raven.security import redact
 
 # A replayed transcript is bounded by what a client can draw, not by what is
 # stored: a session with two thousand messages would otherwise emit two thousand
@@ -101,24 +108,44 @@ def _assistant(entry: dict[str, Any], *, cwd: str | None) -> list[dict[str, Any]
     """The thought, then the words, then the calls -- the order they happened in.
 
     A notice recorded on the entry replaces the answer rather than accompanying
-    it (that is what ``action_blocked`` means), so it is rendered as the message
-    when there is no text of its own.
+    it (that is what ``action_blocked`` means), and the text stored beside it is
+    the runtime's instruction to the model, not an answer, so the notice is
+    drawn in the text's position and the text itself is not sent.
     """
+    ended = entry.get("turn_ended")
+    if isinstance(ended, dict):
+        return _turn_ended(ended)
     out: list[dict[str, Any]] = []
     reasoning = entry.get("reasoning_content")
     if isinstance(reasoning, str) and reasoning.strip():
         out.append(_chunk("agent_thought_chunk", _clip(reasoning)))
-    text = _text_of(entry)
-    if text:
-        out.append(_chunk("agent_message_chunk", text))
     notice = entry.get("notice")
-    if isinstance(notice, str) and notice.strip() and not text:
-        out.append(_chunk("agent_message_chunk", _clip(notice)))
+    if isinstance(notice, dict):
+        if said := notice_text(notice):
+            out.append(_chunk("agent_message_chunk", _clip(said)))
+    elif text := _text_of(entry):
+        out.append(_chunk("agent_message_chunk", text))
     for call in entry.get("tool_calls") or ():
         announced = _tool_call(call, cwd=cwd)
         if announced is not None:
             out.append(announced)
     return out
+
+
+def _turn_ended(ended: dict[str, Any]) -> list[dict[str, Any]]:
+    """The marker entry as the ending it records.
+
+    A cancel replays as nothing, exactly as the live path sends nothing for one:
+    the person who stopped the turn is the person reading the transcript. Every
+    other ending is a failure and is worded the way the live failure was worded,
+    less the error code, which the marker does not keep.
+    The marker's own text ("(turn failed: ...)") is the account the model reads
+    on the next turn, so replaying it would have the assistant confess in its
+    own voice.
+    """
+    if ended.get("status") == "cancelled":
+        return []
+    return [_chunk("agent_message_chunk", _clip(turn_failure_text(ended.get("reason"))))]
 
 
 def _tool_call(call: Any, *, cwd: str | None) -> dict[str, Any] | None:

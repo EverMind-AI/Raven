@@ -165,6 +165,27 @@ def test_session_pause_blocks_then_clears():
     ch._assert_session_active()  # no raise once cleared
 
 
+def test_a_paused_session_does_not_read_as_a_paired_account():
+    """For the hour errcode -14 buys, nothing arrives and every send raises --
+    so the pairing signal the page draws its row from has to leave `live`, and
+    say when it comes back."""
+    ch = _channel()
+    ch._token = "tok"
+    assert ch.connected is True
+    assert ch.rebind_state()["paused_until"] is None
+
+    ch._session_pause_until = time.time() + 600
+    assert ch.connected is False
+    assert ch.rebind_state()["paused_until"] == ch._session_pause_until
+    # Reading it leaves the pause where it is; only the poll's own helper clears
+    # an expired one.
+    assert ch._session_pause_until > 0
+
+    ch._session_pause_until = time.time() - 1
+    assert ch.connected is True
+    assert ch.rebind_state()["paused_until"] is None
+
+
 # ── outbound message envelope ─────────────────────────────────────────
 
 
@@ -371,6 +392,22 @@ def test_qr_login_clears_the_code_when_it_gives_up():
     assert asyncio.run(ch._qr_login()) is False
     assert seen == ["https://scan/1"]
     assert ch.connected is False
+
+
+def test_start_clears_a_code_the_login_gave_up_on():
+    """The entrance the gateway uses needs login()'s finally too: a code left
+    published after the flow gave up is still served to the page, which draws it
+    as one to scan for as long as the dialog stays open."""
+    ch = _channel()
+
+    async def _gives_up():
+        ch.pending_qr = "https://scan/stale"
+        return False
+
+    ch._authenticate = _gives_up
+    asyncio.run(ch.start())
+    assert ch.pending_qr is None
+    assert ch.is_running is False
 
 
 def test_login_clears_a_pending_code_on_the_way_out():

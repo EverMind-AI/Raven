@@ -42,7 +42,9 @@ _STUB_CASES = [
     ("session.steer", "session.steer not supported", True),
     # session.title / session.undo promoted to real handlers in methods/session.py
     # (parity tests live in test_rpc_session.py)
-    ("session.usage", "session.usage not supported", True),
+    # session.usage promoted to a real handler in methods/session.py that sums
+    # the conversation's own telemetry rows — see
+    # test_rpc_session.py::test_session_usage_*
     # skills.reload
     ("skills.reload", "skills.reload not supported", True),
     # reload.env

@@ -124,12 +124,16 @@ def _normalize_oas_type(
         else:
             out["type"] = node["type"]
     if "enum" in node:
-        out["enum"] = sorted(node["enum"])
+        # Nullability is not compared (see the module docstring), so a null
+        # listed among an enum's values is left out the way a null branch is.
+        out["enum"] = sorted(v for v in node["enum"] if v is not None)
     if "const" in node:
         out["const"] = node["const"]
-    if node.get("type") == "array" and "items" in node:
+    # Read the reduced type, not the raw one: a nullable ``["object", "null"]``
+    # still has properties to descend into.
+    if out.get("type") == "array" and "items" in node:
         out["items"] = _normalize_oas_type(node["items"], schema, _seen)
-    if node.get("type") == "object":
+    if out.get("type") == "object":
         if "properties" in node:
             out["properties"] = {
                 pname: _normalize_oas_type(psub, schema, _seen) for pname, psub in node["properties"].items()
@@ -441,6 +445,17 @@ def test_schema_match_the_boundary_a_suspended_dag_node_emits(schema: dict[str, 
     for shape in (
         {"type": "turn.started", "payload": {"turn_id": "t1", "delegated": {**notice, "content": "..."}}},
         {"type": "subagent.delivered", "payload": {**notice, "content": "..."}},
+    ):
+        jsonschema.validate(shape, {**schema["components"]["schemas"]["TurnEvent"], "components": schema["components"]})
+        TypeAdapter(TurnEvent).validate_python(shape)
+
+    # And the fifth: a spawn stopped before it finished (the manager's
+    # CancelledError branch announces it). Declared on both sides so a client
+    # draws a stop as a stop, not as the result the run never returned.
+    cancelled = {"kind": "spawn", "label": "poster", "status": "cancelled", "content": "..."}
+    for shape in (
+        {"type": "turn.started", "payload": {"turn_id": "t1", "delegated": cancelled}},
+        {"type": "subagent.delivered", "payload": cancelled},
     ):
         jsonschema.validate(shape, {**schema["components"]["schemas"]["TurnEvent"], "components": schema["components"]})
         TypeAdapter(TurnEvent).validate_python(shape)

@@ -36,13 +36,14 @@ from urllib.parse import unquote, urlparse
 
 from loguru import logger
 
-from raven.acp import protocol, redact
+from raven.acp import protocol
 from raven.acp.capabilities import ClientCapabilities, initialize_result
 from raven.acp.config_options import MODEL_OPTION_ID, model_option, set_model
 from raven.acp.modes import SessionModes, build_session_modes
 from raven.acp.replay import replay
 from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTranslator
 from raven.config import load_config
+from raven.security import redact
 
 # Methods in the stable manifest that raven does not serve yet. Answered with
 # method-not-found, which is the same answer an unknown name gets -- the
@@ -55,10 +56,6 @@ UNIMPLEMENTED_METHODS = frozenset(
 )
 
 AVAILABLE_COMMANDS: tuple[tuple[str, str], ...] = (
-    (
-        "deep-research",
-        "Run MiroThinker-backed deep research over multiple sources and return a cited report.",
-    ),
     (
         "playbook",
         "Run a stored orchestration (playbook library) for a reusable procedure, or list the library.",
@@ -74,7 +71,7 @@ A deliberate white-list, not a reflection of the Typer app: the CLI surface
 includes verbs whose meaning is internal to a terminal (`acp`, `gateway`
 plumbing) or that a command panel has no business offering as a quick action,
 and reflecting it would put those in front of a reader and drift with every new
-verb. These six are the user-facing actions raven can start or inspect from a
+verb. These five are the user-facing actions raven can start or inspect from a
 conversation; each is announced once per session as
 ``available_commands_update``."""
 
@@ -337,7 +334,7 @@ class AcpMethods:
         # Offered at creation so a client can put a model picker in the session
         # menu without a second round trip. Absent rather than empty when there
         # is nothing to offer -- an empty list is a menu that opens onto nothing.
-        options = await self._config_options()
+        options = await self._config_options(session.session_key)
         if options:
             result["configOptions"] = options
         return self._with_modes(result, session.session_id)
@@ -663,11 +660,16 @@ class AcpMethods:
             await set_model(self._call, session_id=session.session_key, value=params.get("value"))
         except ValueError as exc:
             raise AcpMethodError(protocol.INVALID_PARAMS, str(exc), {"field": "value"}) from exc
-        return {"configOptions": await self._config_options()}
+        return {"configOptions": await self._config_options(session.session_key)}
 
-    async def _config_options(self) -> list[dict[str, Any]]:
-        """Every configuration option this agent exposes, currently one."""
-        option = await model_option(self._call)
+    async def _config_options(self, session_key: str) -> list[dict[str, Any]]:
+        """Every configuration option this agent exposes, currently one.
+
+        Asked for one session: the model option's current value is that
+        session's, so the answer to a switch shows the switch rather than the
+        configured default the whole process starts on.
+        """
+        option = await model_option(self._call, session_id=session_key)
         return [] if option is None else [option]
 
     async def _session_prompt(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -718,7 +720,11 @@ class AcpMethods:
                         }
                         stored = sessions.get_or_create(session.session_key)
                         stored.metadata["usage_owner"] = owner
-                        sessions.save(stored)
+                        # The turn reads this off the same manager, so the
+                        # in-memory write is what it needs; the patch is for
+                        # the record, and no longer manufactures a transcript
+                        # for a session that has not had one yet.
+                        sessions.append_metadata_patch(session.session_key, {"usage_owner": owner})
                 # The charter this dispatch brought, staged for the turn below.
                 # Held on the loop rather than in session metadata: it describes
                 # one dispatch, and metadata survives the process.

@@ -2,11 +2,11 @@
 
 # Raven <span class="em-accent">documentation</span>
 
-<p class="em-standfirst">Install and configure Raven, choose a deployment method, and explore its commands.</p>
+<p class="em-standfirst">Install and use Raven, connect it to agents and messaging, or build your own extensions.</p>
 
-Start with installation, deploy Raven with Docker or from source, and use the
-WebUI for everyday work. The reference guides cover commands, runtime
-architecture, and repository structure.
+Start with installation, then choose the path that matches your goal. **Guide**
+covers daily work and deployment. **Reference** defines protocols and runtime
+behaviour. **Developer Guide** explains how to build, debug, and extend Raven.
 
 ## Start here
 
@@ -39,84 +39,64 @@ architecture, and repository structure.
 
 </div>
 
-## Choose how to run it
+## Use Raven { #use-raven }
 
-<div class="grid cards em-run" markdown>
+<div class="grid cards em-use" markdown>
 
--   __Docker Compose__
-
-    ---
-
-    Build and start the gateway and WebUI together in a container.
-
-    [Start with Compose](self-hosting.md#compose)
-
--   __Run from source__
+-   __Use Raven__
 
     ---
 
-    Build and run Raven from a local clone to develop features or try
-    unreleased changes.
+    Work through daily tasks with sub-agents, browser collaboration, knowledge
+    bases, Playbooks, proactive follow-ups, and Oncall.
 
-    [Start from source](self-hosting.md#from-source)
+    [Open the guide](using-raven.md)
+
+-   __Connect and extend Raven__
+
+    ---
+
+    Connect messaging platforms and agents, then add skills, memory, MCP,
+    plugins, and other extensions.
+
+    [Explore integrations](agent-integrations.md)
+
+-   __Deploy and run Raven__
+
+    ---
+
+    Choose self-hosting or Docker, launch the WebUI, and set boundaries for
+    local tool execution.
+
+    [Open deployment guide](self-hosting.md)
 
 </div>
 
-See [Self-Hosting](self-hosting.md) for both deployment methods, configuration,
-and Docker image builds.
+## Explore the documentation { #explore-the-documentation }
 
-## Explore the documentation
+<div class="grid cards em-explore" markdown>
 
-<div class="grid cards em-docs" markdown>
-
--   __Self-Hosting__
+-   __Architecture and Runtime Contracts__
 
     ---
 
-    Deploy with Docker Compose or from source, and manage configuration.
+    Understand Raven's architecture, protocols, orchestration, permissions,
+    commands, and repository structure.
 
-    [Read](self-hosting.md)
+    [Browse the reference](architecture.md)
 
--   __Docker Deployment__
-
-    ---
-
-    Understand container services, sign-in, model providers, and data storage.
-
-    [Read](docker.md)
-
--   __Launch WebUI__
+-   __Build and Extend Raven__
 
     ---
 
-    Open the browser interface and start or stop the background service.
+    Build and extend Raven with agents, plugins, adapters, trajectory replay,
+    Evolver, and tracing.
 
-    [Read](webui.md)
-
--   __Architecture__
-
-    ---
-
-    Understand the Assembly Root, runtime layers, and core systems.
-
-    [Read](architecture.md)
-
--   __Command Reference__
-
-    ---
-
-    Find Raven commands and learn what each one does.
-
-    [Read](commands.md)
-
--   __Repo Layout__
-
-    ---
-
-    Explore the top-level directories, runtime packages, and commit scopes.
-
-    [Read](repo-layout.md)
+    [Open the developer guide](development.md)
 
 </div>
+
+Use the site search or [Command Reference](commands.md) to find a feature's
+setup instructions, examples, and troubleshooting steps.
 
 Raven is developed in the open by EverMind.

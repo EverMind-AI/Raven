@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -43,6 +44,7 @@ from raven.rpc.methods.session import (
     session_resume,
     session_set_mode,
     session_title,
+    session_usage,
 )
 from raven.session.manager import SessionManager
 
@@ -250,6 +252,34 @@ async def test_session_resume_reports_where_the_session_actually_runs(
     result = await session_resume({"session_id": session_key}, agent_loop_factory=lambda: _loop_with_resolver(tmp_path))
 
     assert result["info"]["cwd"] == str(pinned)
+
+
+async def test_session_resume_sizes_the_banner_by_the_model_the_session_switched_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The banner reports the session's model, so it must report that model's
+    window: the pair is what the context bar divides. The same baseline serves
+    ``session.usage``, and both used to read the window off the default
+    binding.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.agents.defaults.context_window_tokens = None
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    windows = {"boot/model": 100_000, "switched/model": 200_000}
+    monkeypatch.setattr(session_module, "resolve_context_window", lambda model: windows.get(model, 0))
+
+    session_key = "tui:20260610_143052_switched"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": "hello"}])
+    loop = _loop_with_resolver(tmp_path)
+    loop.model = "boot/model"
+    loop.session_model = lambda _key: "switched/model"
+
+    result = await session_resume({"session_id": session_key}, agent_loop_factory=lambda: loop)
+
+    assert result["info"]["model"] == "switched/model"
+    assert result["info"]["context_window"] == 200_000
+    assert result["info"]["usage"]["context_max"] == 200_000
 
 
 async def test_session_resume_reports_the_policy_default_not_the_launch_dir(
@@ -592,6 +622,248 @@ async def test_session_list_returns_sessions_for_tui_channel(tmp_path: Path, mon
     ids = [item["id"] for item in items]
     assert "tui:20260610_100000_aaa111" in ids
     assert "tui:20260610_110000_bbb222" in ids
+
+
+async def test_session_list_says_which_sessions_have_a_turn_in_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A page that has just loaded has no other way to know: the running turn's
+    frames went to a socket it did not have. Without the flag the rail draws a
+    conversation that is answering as idle, and a send into it is refused."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    busy_key, quiet_key = "tui:20260610_100000_busy11", "tui:20260610_110000_quiet1"
+    for key in (busy_key, quiet_key):
+        s = mgr.get_or_create(key)
+        s.add_message("user", "hello")
+        mgr.save(s)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    turn_module._active_turns.clear()
+    try:
+        turn_module._active_turns[busy_key] = object()
+        result = await session_list({})
+    finally:
+        turn_module._active_turns.clear()
+
+    running = {item["id"]: item["running"] for item in result["sessions"]}
+    assert running == {busy_key: True, quiet_key: False}
+
+
+async def test_session_resume_says_whether_the_session_is_answering_right_now(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same fact on the bundle a reload reads, which is where the page
+    learns to put the stop button back."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_running"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": "read the repo"}])
+
+    turn_module._active_turns.clear()
+    try:
+        quiet = await session_resume({"session_id": session_key})
+        turn_module._active_turns[session_key] = object()
+        busy = await session_resume({"session_id": session_key})
+    finally:
+        turn_module._active_turns.clear()
+
+    assert quiet["info"]["running"] is False
+    assert busy["info"]["running"] is True
+
+
+async def test_a_direct_chat_alone_does_not_report_the_conversation_as_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sub-agent's direct chat runs on ``session#agent/handle``, a lane of its
+    own whose events are routed to that chat. Reported as the conversation's
+    running turn, a reload during it armed the main composer with a stop button
+    that cancelled the wrong lane and queued every message until the chat ended
+    and the reader reloaded again. The main lane is the fact the page reads."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    session_key = "tui:20260610_143052_direct"
+    s = mgr.get_or_create(session_key)
+    s.add_message("user", "ask the coder")
+    mgr.save(s)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    turn_module._active_turns.clear()
+    try:
+        turn_module._active_turns[f"{session_key}#raven-code/h1"] = object()
+        assert turn_module.is_session_busy(session_key) is True
+        chatting = await session_resume({"session_id": session_key})
+        listed = await session_list({})
+        turn_module._active_turns[session_key] = object()
+        answering = await session_resume({"session_id": session_key})
+    finally:
+        turn_module._active_turns.clear()
+
+    assert chatting["info"]["running"] is False
+    assert {item["id"]: item["running"] for item in listed["sessions"]} == {session_key: False}
+    assert answering["info"]["running"] is True
+
+
+class _LaneScheduler:
+    """The spine's scheduler as these readers ask it: one lane in flight."""
+
+    def __init__(self, lane: str) -> None:
+        self._lane = lane
+
+    def has_inflight(self, conversation_id: str) -> bool:
+        return conversation_id == self._lane
+
+
+async def test_session_list_says_running_for_a_turn_turn_send_never_saw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cron run is in flight on the lane and in no map this surface writes.
+
+    ``_active_turns`` is ``turn.send``'s bookkeeping, so a scheduled turn that
+    had been answering for a minute and a half listed as idle: no badge on the
+    rail, and opening it gave an idle composer over a question with no answer.
+    The lane is the fact, whoever filed the work onto it.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    cron_key, quiet_key = "cron:20260610_100000_job111", "tui:20260610_110000_quiet1"
+    for key in (cron_key, quiet_key):
+        s = mgr.get_or_create(key)
+        s.add_message("user", "hello")
+        mgr.save(s)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    turn_module._active_turns.clear()
+    monkeypatch.setattr(turn_module, "_scheduler", _LaneScheduler(cron_key))
+    result = await session_list({"channels": ["tui", "cron"]})
+
+    running = {item["id"]: item["running"] for item in result["sessions"]}
+    assert running == {cron_key: True, quiet_key: False}
+
+
+async def test_session_resume_says_running_for_a_turn_turn_send_never_saw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same fact on the bundle a reload reads, and the elapsed with it:
+    the question the scheduler is answering is on disk, so the age measures
+    from it exactly as it does for a turn this surface started."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    monkeypatch.setattr(session_module, "datetime", _FixedGatewayClock)
+
+    session_key = "cron:20260610_143052_job222"
+    _running_session(tmp_path, session_key, "2026-09-22T10:00:00")
+
+    turn_module._active_turns.clear()
+    monkeypatch.setattr(turn_module, "_scheduler", _LaneScheduler(session_key))
+    busy = await session_resume({"session_id": session_key})
+    monkeypatch.setattr(turn_module, "_scheduler", _LaneScheduler("cron:someone_else"))
+    quiet = await session_resume({"session_id": session_key})
+
+    assert busy["info"]["running"] is True
+    assert busy["info"]["running_ms"] == 5 * 60 * 1000
+    assert quiet["info"]["running"] is False
+
+
+async def test_session_create_reports_a_session_nothing_is_running_in() -> None:
+    """A key minted this instant cannot have a turn on it, and the field is
+    required on the bundle either way."""
+    result = await session_create({})
+    assert result["info"]["running"] is False
+
+
+_GATEWAY_NOW = datetime(2026, 9, 22, 10, 5, tzinfo=timezone(timedelta(hours=8)))
+
+
+class _FixedGatewayClock(datetime):
+    """A gateway whose wall clock stands at 10:05 in a +08:00 zone.
+
+    Answers the two ways the stdlib does, because the measurement depends on
+    both: naive is that zone's wall clock, aware is the same instant rendered
+    in the zone asked for.
+    """
+
+    @classmethod
+    def now(cls, tz: timezone | None = None) -> datetime:
+        return _GATEWAY_NOW.astimezone(tz) if tz is not None else _GATEWAY_NOW.replace(tzinfo=None)
+
+
+def _running_session(tmp_path: Path, session_key: str, stamp: str) -> None:
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "read the repo", timestamp=stamp)
+    mgr.save(session)
+
+
+@pytest.mark.parametrize("stamp", ["2026-09-22T10:00:00", "2026-09-22T02:00:00+00:00"])
+async def test_session_resume_measures_the_running_turn_against_the_gateway_clock(
+    stamp: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The age of the turn, not the stamp it is measured from.
+
+    The loop writes that stamp off this machine's wall clock with no offset on
+    it, so a reader in another zone parsing it against its own clock got the
+    difference between the two zones back as the turn's age -- a turn five
+    minutes old reading as eight hours, or as not yet started. Measured here
+    the zone cancels, which is why both spellings of the same instant answer
+    the same number.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    monkeypatch.setattr(session_module, "datetime", _FixedGatewayClock)
+
+    session_key = "tui:20260610_143052_running"
+    _running_session(tmp_path, session_key, stamp)
+
+    turn_module._active_turns.clear()
+    try:
+        turn_module._active_turns[session_key] = object()
+        busy = await session_resume({"session_id": session_key})
+    finally:
+        turn_module._active_turns.clear()
+
+    assert busy["info"]["running_ms"] == 5 * 60 * 1000
+
+
+async def test_session_resume_reports_no_elapsed_it_cannot_measure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing in flight has no age, and an unreadable stamp is not a zero.
+
+    Zero would draw a turn that has just this second started, on a turn that
+    has been running for however long: the client leaves its clock alone on a
+    null and has nothing to leave it alone on if the field is a guess.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_nostamp"
+    _running_session(tmp_path, session_key, "the day before yesterday")
+
+    turn_module._active_turns.clear()
+    try:
+        quiet = await session_resume({"session_id": session_key})
+        turn_module._active_turns[session_key] = object()
+        busy = await session_resume({"session_id": session_key})
+    finally:
+        turn_module._active_turns.clear()
+
+    assert quiet["info"].get("running_ms") is None
+    assert busy["info"]["running_ms"] is None
 
 
 async def test_session_list_sorted_by_updated_at_desc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1616,6 +1888,61 @@ async def test_session_resume_carries_a_stored_tool_diff(tmp_path: Path, monkeyp
     assert msgs[1]["diff"].startswith("@@ -1 +1 @@")
 
 
+async def test_session_resume_carries_the_files_a_stored_call_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing else in a stored transcript records a deletion: the command's
+    arguments are a string, and the file it names is gone by the time a reloaded
+    page looks. The line count travels, not the body -- what the page needs is
+    that the file went and how big the hole is."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_667788"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "clean it up")
+    session.add_message(
+        "tool",
+        "swept",
+        tool_call_id="c1",
+        name="exec",
+        file_removed=[{"path": "/w/gone.txt", "del": 2}],
+    )
+    mgr.save(session)
+
+    msgs = (await session_resume({"session_id": session_key}))["messages"]
+    assert msgs[1]["file_removed"] == [{"path": "/w/gone.txt", "del": 2}]
+
+
+async def test_session_resume_carries_the_files_a_stored_command_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A command's own result says only that it ran, so a reloaded page has no
+    other record that it wrote anything. The stored shape is the live one here:
+    a size and a line count are already what the page draws."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_778899"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "build it")
+    session.add_message(
+        "tool",
+        "ran",
+        tool_call_id="c1",
+        name="exec",
+        file_written=[{"path": "/w/made.txt", "created": True, "size": 8, "lines": 2}],
+    )
+    mgr.save(session)
+
+    msgs = (await session_resume({"session_id": session_key}))["messages"]
+    assert msgs[1]["file_written"] == [{"path": "/w/made.txt", "created": True, "size": 8, "lines": 2}]
+
+
 async def test_session_resume_carries_the_broken_turn_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``turn_ended`` says why a transcript stops where it does; without it a
     reloaded page renders the marker's model-facing text as an answer."""
@@ -1829,8 +2156,88 @@ async def test_session_pin_persists_and_shows_up_in_the_list(tmp_path: Path, mon
 
     result = await session_pin({"session_id": "tui:20260610_100000_pin001", "pinned": False})
     assert result["pinned"] is False
+    # Unpinned is written, not left unsaid: one appended key cannot remove a
+    # key, and every reader of this flag asks whether it is true.
     reloaded = SessionManager(tmp_path).peek("tui:20260610_100000_pin001")
-    assert reloaded is not None and "pinned" not in reloaded.metadata
+    assert reloaded is not None and reloaded.metadata.get("pinned") is False
+    listed = await session_list({})
+    row = next(r for r in listed["sessions"] if r["id"] == "tui:20260610_100000_pin001")
+    assert row["pinned"] is False
+
+
+async def test_a_refused_pin_or_rename_is_reported_rather_than_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A filesystem that refuses the append answers pending, not success.
+
+    Same contract the archive verb answers under: the flag holds in memory for
+    as long as this process lives, and the reply says it did not reach the
+    disk, so a client does not draw a state the next load will contradict.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+    for key in ("tui:20260610_100000_pinrefused", "tui:20260610_100000_titlerefused"):
+        session = mgr.get_or_create(key)
+        session.add_message("user", "hello")
+        mgr.save(session)
+
+    def refuse(*_args: object, **_kwargs: object) -> bool:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(mgr, "append_metadata_patch", refuse)
+
+    pinned = await session_pin({"session_id": "tui:20260610_100000_pinrefused", "pinned": True})
+    assert pinned == {"pinned": True, "session_key": "tui:20260610_100000_pinrefused", "pending": True}
+    assert mgr.get_or_create("tui:20260610_100000_pinrefused").metadata["pinned"] is True
+
+    named = await session_title({"session_id": "tui:20260610_100000_titlerefused", "title": "by hand"})
+    assert named == {"title": "by hand", "session_key": "tui:20260610_100000_titlerefused", "pending": True}
+    assert mgr.get_or_create("tui:20260610_100000_titlerefused").metadata["title"] == "by hand"
+
+
+async def test_pinning_and_renaming_keep_a_key_another_writer_added(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each verb speaks for its own key and for nothing else.
+
+    Both used to persist by saving the whole session, which rewrites the
+    metadata record from this manager's copy of it -- so a flag written to the
+    file after that copy was loaded was dropped by an unrelated pin or rename.
+    A page and a terminal over one home are two managers over one file, which
+    is how archiving a conversation from one of them and renaming it from the
+    other put it back in everybody's list.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    for key, verb in (
+        ("tui:20260610_100000_pinkeep", "pin"),
+        ("tui:20260610_100000_titlekeep", "title"),
+    ):
+        session = mgr.get_or_create(key)
+        session.add_message("user", "two writers hold this")
+        mgr.save(session)
+        # Somebody else archives it straight on the file; this manager's copy
+        # of the metadata knows nothing about it.
+        SessionManager(tmp_path).append_metadata_patch(key, {"archived": True})
+        assert mgr.get_or_create(key).metadata.get("archived") is None
+
+        if verb == "pin":
+            assert (await session_pin({"session_id": key, "pinned": True}))["pending"] is False
+        else:
+            assert (await session_title({"session_id": key, "title": "renamed"}))["pending"] is False
+
+        reloaded = SessionManager(tmp_path).peek(key)
+        assert reloaded is not None
+        assert reloaded.metadata.get("archived") is True, verb
 
 
 async def test_session_archive_persists_and_filters_the_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1855,6 +2262,93 @@ async def test_session_archive_persists_and_filters_the_list(tmp_path: Path, mon
     result = await session_archive({"session_id": session_key, "archived": False})
     assert result == {"archived": False, "session_key": session_key, "pending": False}
     assert [row["id"] for row in (await session_list({}))["sessions"]] == [session_key]
+
+
+async def test_archiving_keeps_a_key_another_writer_added(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Archiving speaks for the archived flag and for nothing else.
+
+    It used to persist by saving the whole session, which rewrites the metadata
+    record from this manager's copy of it -- so every key written to the file
+    after that copy was loaded was dropped by an unrelated archive. A page and
+    a terminal over one home are two managers over one file, and that is how a
+    conversation came back after being archived: not because archiving failed,
+    but because somebody else's save spoke for a flag it had never seen.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_100000_foreignkey"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "two writers hold this")
+    mgr.save(session)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    # Somebody else writes a flag straight to the file; this manager's copy of
+    # the metadata knows nothing about it.
+    SessionManager(tmp_path).append_metadata_patch(session_key, {"pinned": True})
+    assert mgr.get_or_create(session_key).metadata.get("pinned") is None
+
+    result = await session_archive({"session_id": session_key, "archived": True})
+    assert result == {"archived": True, "session_key": session_key, "pending": False}
+
+    reloaded = SessionManager(tmp_path).peek(session_key)
+    assert reloaded is not None
+    assert reloaded.metadata.get("archived") is True
+    assert reloaded.metadata.get("pinned") is True
+
+
+async def test_archiving_a_session_with_no_transcript_says_so(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing reached the disk, and the reply says it rather than implying it.
+
+    A conversation minted but never saved has no file to fold the flag into.
+    The call answers ``pending``, and a client that reads that as a success
+    takes the row off its list and finds it back on the next load.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    mgr = SessionManager(tmp_path)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    session_key = "tui:20260610_100000_nofile"
+    result = await session_archive({"session_id": session_key, "archived": True})
+    assert result == {"archived": True, "session_key": session_key, "pending": True}
+    assert not mgr.exists(session_key)
+    assert mgr.get_or_create(session_key).metadata.get("archived") is True
+
+
+async def test_a_refused_write_is_reported_rather_than_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A filesystem that refuses the append answers pending, not success.
+
+    The flag is still applied in memory so the session behaves as asked for as
+    long as this process lives, but the reply says it did not reach the disk --
+    a client that takes the row off its list on a plain success would find it
+    back on the next load.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_100000_refused"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "hello")
+    mgr.save(session)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    def refuse(*_args: object, **_kwargs: object) -> bool:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(mgr, "append_metadata_patch", refuse)
+
+    result = await session_archive({"session_id": session_key, "archived": True})
+    assert result == {"archived": True, "session_key": session_key, "pending": True}
+    assert mgr.get_or_create(session_key).metadata["archived"] is True
+    assert SessionManager(tmp_path).peek(session_key).metadata.get("archived") is None
 
 
 async def test_session_archive_via_dispatcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2606,3 +3100,418 @@ async def test_a_clear_wins_over_a_mode_given_alongside_it():
     )
     assert result["mode"] == "high"
     assert loop.policies["tui:1"] == "high"
+
+
+# ---------------------------------------------------------------------------
+# session.list {archived} and the lazy auto-archive pass
+# ---------------------------------------------------------------------------
+
+
+def _seed_session_file(mgr: SessionManager, key: str, *, days_ago: int, pinned: bool = False, archived=None) -> Path:
+    """A session file written the way ``save`` writes it, with old timestamps."""
+    from datetime import datetime, timedelta
+
+    when = (datetime.now() - timedelta(days=days_ago)).isoformat()
+    meta: dict = {"title": key, "pinned": pinned}
+    if archived is not None:
+        meta["archived"] = archived
+    path = mgr.session_path(key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        json.dumps(
+            {
+                "_type": "metadata",
+                "key": key,
+                "created_at": when,
+                "updated_at": when,
+                "metadata": meta,
+                "last_consolidated": None,
+                "pending_clarification": None,
+            }
+        ),
+        json.dumps({"role": "user", "content": "hello", "timestamp": when}),
+    ]
+    path.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+    return path
+
+
+def _last_meta(path: Path) -> dict:
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [r for r in records if r.get("_type") == "metadata"][-1]["metadata"]
+
+
+def _archive_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, after_days) -> SessionManager:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    mgr = SessionManager(tmp_path)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+    monkeypatch.setattr(
+        session_module,
+        "load_raven_config",
+        lambda: SimpleNamespace(sessions=SimpleNamespace(auto_archive_after_days=after_days)),
+    )
+    return mgr
+
+
+async def test_session_list_archived_true_returns_only_archived(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mgr = _archive_setup(tmp_path, monkeypatch, after_days=None)
+    _seed_session_file(mgr, "tui:a", days_ago=1, archived=True)
+    _seed_session_file(mgr, "tui:b", days_ago=1)
+    archived = await session_list({"archived": True})
+    live = await session_list({})
+    assert [s["id"] for s in archived["sessions"]] == ["tui:a"]
+    assert [s["id"] for s in live["sessions"]] == ["tui:b"]
+
+
+async def test_auto_archive_marks_stale_unpinned_sessions_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = _archive_setup(tmp_path, monkeypatch, after_days=30)
+    old = _seed_session_file(mgr, "tui:old", days_ago=40)
+    pinned = _seed_session_file(mgr, "tui:pinned", days_ago=40, pinned=True)
+    fresh = _seed_session_file(mgr, "tui:fresh", days_ago=1)
+    before = {p: len(p.read_text().splitlines()) for p in (old, pinned, fresh)}
+
+    live = await session_list({})
+    assert [s["id"] for s in live["sessions"]] == ["tui:fresh", "tui:pinned"]
+    assert _last_meta(old) == {"title": "tui:old", "pinned": False, "archived": True, "archivedBy": "auto"}
+    assert "archived" not in _last_meta(pinned)
+    assert "archived" not in _last_meta(fresh)
+    assert len(old.read_text().splitlines()) == before[old] + 1
+
+    await session_list({})
+    assert len(old.read_text().splitlines()) == before[old] + 1
+    assert [s["id"] for s in (await session_list({"archived": True}))["sessions"]] == ["tui:old"]
+
+
+async def test_restored_session_is_never_auto_archived_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = _archive_setup(tmp_path, monkeypatch, after_days=30)
+    old = _seed_session_file(mgr, "tui:old", days_ago=40, archived=True)
+    await session_archive({"session_id": "tui:old", "archived": False})
+    assert _last_meta(old)["archived"] is False
+    live = await session_list({})
+    assert [s["id"] for s in live["sessions"]] == ["tui:old"]
+    assert _last_meta(old)["archived"] is False
+
+
+async def test_auto_archive_off_appends_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = _archive_setup(tmp_path, monkeypatch, after_days=None)
+    old = _seed_session_file(mgr, "tui:old", days_ago=400)
+    lines = len(old.read_text().splitlines())
+    await session_list({})
+    assert len(old.read_text().splitlines()) == lines
+
+
+async def test_auto_archive_never_loads_transcripts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = _archive_setup(tmp_path, monkeypatch, after_days=30)
+    for i in range(50):
+        _seed_session_file(mgr, f"tui:s{i}", days_ago=40)
+    loads: list[str] = []
+    real_load = SessionManager._load
+
+    def spy(self, key):
+        loads.append(key)
+        return real_load(self, key)
+
+    monkeypatch.setattr(SessionManager, "_load", spy)
+    await session_list({})
+    assert loads == []
+    assert len((await session_list({"archived": True}))["sessions"]) == 50
+
+
+def test_as_local_datetime_answers_none_for_anything_but_an_iso_string() -> None:
+    assert session_module._as_local_datetime(None) is None
+    assert session_module._as_local_datetime("") is None
+    assert session_module._as_local_datetime("yesterday") is None
+    assert session_module._as_local_datetime(1_700_000_000) is None
+    parsed = session_module._as_local_datetime("2026-09-01T00:00:00Z")
+    assert parsed is not None and parsed.tzinfo is None
+
+
+def test_auto_archive_pass_leaves_everything_alone_when_the_config_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken():
+        raise RuntimeError("config unreadable")
+
+    monkeypatch.setattr(session_module, "load_raven_config", broken)
+    touched: list[str] = []
+    mgr = SimpleNamespace(append_metadata_patch=lambda key, patch: touched.append(key))
+    entries = [{"key": "tui:old", "metadata": {}, "last_message_at": "2000-01-01T00:00:00+00:00"}]
+    session_module._auto_archive_stale(mgr, entries)
+    assert touched == [] and "archived" not in entries[0]["metadata"]
+
+
+def test_auto_archive_pass_skips_a_keyless_entry_and_survives_a_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        session_module,
+        "load_raven_config",
+        lambda: SimpleNamespace(sessions=SimpleNamespace(auto_archive_after_days=30)),
+    )
+
+    def failing(key: str, patch: dict) -> None:
+        raise OSError("disk full")
+
+    mgr = SimpleNamespace(append_metadata_patch=failing)
+    stale = "2000-01-01T00:00:00+00:00"
+    entries = [
+        {"key": None, "metadata": {}, "last_message_at": stale},
+        {"key": "tui:old", "metadata": {}, "last_message_at": stale},
+    ]
+    session_module._auto_archive_stale(mgr, entries)
+    assert all("archived" not in e["metadata"] for e in entries)
+
+
+def test_append_metadata_patch_is_a_no_op_for_a_missing_or_headless_file_and_updates_the_cache(
+    tmp_path: Path,
+) -> None:
+    mgr = SessionManager(tmp_path)
+    mgr.append_metadata_patch("tui:absent", {"archived": True})
+    assert not mgr.session_path("tui:absent").exists()
+    headless = mgr.session_path("tui:headless")
+    headless.parent.mkdir(parents=True, exist_ok=True)
+    headless.write_text(json.dumps({"role": "user", "content": "no metadata record"}) + "\n", encoding="utf-8")
+    mgr.append_metadata_patch("tui:headless", {"archived": True})
+    assert headless.read_text(encoding="utf-8").count("\n") == 1
+    live = mgr.get_or_create("tui:cached")
+    mgr.save(live)
+    mgr.append_metadata_patch("tui:cached", {"archived": True, "archivedBy": "auto"})
+    assert live.metadata["archived"] is True and live.metadata["archivedBy"] == "auto"
+
+
+# ---------------------------------------------------------------------------
+# session.usage — what one conversation has spent, its delegations included
+# ---------------------------------------------------------------------------
+
+
+def _usage_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the handler at a throwaway workspace and a throwaway raven home."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    # Pinned, so context_max is the number this test chose rather than whatever
+    # the provider table says about the default model today.
+    cfg.agents.defaults.context_window_tokens = 200_000
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    home = tmp_path / "home"
+    monkeypatch.setattr(session_module, "raven_home", lambda: home)
+    return home
+
+
+def _usage_row(
+    session_key: str,
+    *,
+    root: str | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cost_usd: float | None = None,
+    schema_version: int = 2,
+) -> dict:
+    """One telemetry row, carrying the fields the scanner reads."""
+    row: dict = {
+        "ts": "2026-09-22T10:00:00+08:00",
+        "model": "claude-sonnet-5",
+        "schema_version": schema_version,
+        "session_key": session_key,
+        "root_session_key": root if root is not None else session_key,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cache_write_tokens": cache_write_tokens,
+        "finish_reason": "stop",
+    }
+    if cost_usd is not None:
+        row["cost_usd"] = cost_usd
+    return row
+
+
+def _write_telemetry(home: Path, day: date, rows: list[dict]) -> None:
+    telemetry = home / "telemetry"
+    telemetry.mkdir(parents=True, exist_ok=True)
+    with (telemetry / f"usage-{day.isoformat()}.jsonl").open("a", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row) + "\n")
+
+
+async def test_session_usage_sums_the_sessions_calls_its_delegations_included(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _usage_setup(tmp_path, monkeypatch)
+    root = "tui:20260922_101500_aabbcc"
+    _write_session(tmp_path, root, [{"role": "user", "content": "hello"}])
+    _write_telemetry(
+        home,
+        date.today(),
+        [
+            _usage_row(
+                root,
+                input_tokens=1000,
+                output_tokens=200,
+                cache_read_tokens=300,
+                cache_write_tokens=50,
+                cost_usd=0.01,
+            ),
+            _usage_row("agent:sub_1", root=root, input_tokens=500, output_tokens=100, cost_usd=0.005),
+            _usage_row("tui:20260922_090000_deadbe", input_tokens=9999, cost_usd=1.0),
+            {**_usage_row(root, input_tokens=4000), "_type": "tool_call", "tool_name": "read"},
+        ],
+    )
+
+    result = await session_usage({"session_id": root})
+
+    assert result["calls"] == 2
+    assert result["input"] == 1500
+    assert result["output"] == 300
+    assert result["cache_read"] == 300
+    assert result["cache_write"] == 50
+    assert result["total"] == 2150
+    assert result["cost_usd"] == pytest.approx(0.015)
+    assert result["cost_status"] == "exact" and result["cost_missing_calls"] == 0
+    assert result["model"]
+    assert result["context_max"] == 200_000
+    assert 0 < result["context_used"] < result["context_max"]
+    assert result["context_estimated"] is True
+
+
+async def test_session_usage_for_a_worker_that_only_delegated_reports_zeros(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sub-agent's own calls are recorded under the session that dispatched it."""
+    home = _usage_setup(tmp_path, monkeypatch)
+    parent = "tui:20260922_101500_aabbcc"
+    _write_session(tmp_path, parent, [{"role": "user", "content": "hello"}])
+    _write_telemetry(home, date.today(), [_usage_row("agent:sub_1", root=parent, input_tokens=500, cost_usd=0.005)])
+
+    result = await session_usage({"session_id": "agent:sub_1"})
+
+    assert result["calls"] == 0 and result["total"] == 0
+    assert result["cost_usd"] is None
+
+
+async def test_session_usage_ignores_the_days_before_the_session_existed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _usage_setup(tmp_path, monkeypatch)
+    root = "tui:20260922_101500_aabbcc"
+    _seed_session_file(SessionManager(tmp_path), root, days_ago=2)
+    _write_telemetry(home, date.today() - timedelta(days=5), [_usage_row(root, input_tokens=77, cost_usd=0.5)])
+    _write_telemetry(home, date.today() - timedelta(days=2), [_usage_row(root, input_tokens=30, cost_usd=0.002)])
+    _write_telemetry(home, date.today(), [_usage_row(root, input_tokens=100, cost_usd=0.01)])
+
+    result = await session_usage({"session_id": root})
+
+    assert result["calls"] == 2 and result["input"] == 130
+
+
+async def test_session_usage_counts_only_provider_reported_costs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy row's local estimate is not a bill; it is counted missing."""
+    home = _usage_setup(tmp_path, monkeypatch)
+    priced = "tui:20260922_101500_aabbcc"
+    unpriced = "tui:20260922_101501_bbccdd"
+    _write_session(tmp_path, priced, [{"role": "user", "content": "hello"}])
+    _write_session(tmp_path, unpriced, [{"role": "user", "content": "hello"}])
+    _write_telemetry(
+        home,
+        date.today(),
+        [
+            _usage_row(priced, input_tokens=10, cost_usd=0.02),
+            {**_usage_row(priced, input_tokens=10, schema_version=1), "estimated_cost_usd": 0.5},
+            _usage_row(unpriced, input_tokens=10, schema_version=1),
+        ],
+    )
+
+    priced_result = await session_usage({"session_id": priced})
+    assert priced_result["cost_usd"] == pytest.approx(0.02)
+    assert priced_result["cost_status"] == "estimated" and priced_result["cost_missing_calls"] == 1
+
+    unpriced_result = await session_usage({"session_id": unpriced})
+    assert unpriced_result["cost_usd"] is None and unpriced_result["cost_missing_calls"] == 1
+    assert unpriced_result["total"] == 10
+
+
+async def test_session_usage_measures_the_window_of_the_model_the_session_runs_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gauge divides by the window of the model this session switched to.
+
+    Read off the default binding instead, a session moved from a 100k model to
+    a 200k one is reported on the model it switched to and measured against the
+    window it left, so the percentage is wrong by the ratio between them.
+    """
+    home = _usage_setup(tmp_path, monkeypatch)
+    # No pin, so the model is what answers: the pin outranks it either way and
+    # would hide which model was asked.
+    session_module.load_config().agents.defaults.context_window_tokens = None
+    windows = {"boot/model": 100_000, "switched/model": 200_000}
+    monkeypatch.setattr(session_module, "resolve_context_window", lambda model: windows.get(model, 0))
+    root = "tui:20260922_101500_aabbcc"
+    _write_session(tmp_path, root, [{"role": "user", "content": "hello"}])
+    _write_telemetry(home, date.today(), [_usage_row(root, input_tokens=42, cost_usd=0.001)])
+    loop = SimpleNamespace(model="boot/model", session_model=lambda _key: "switched/model")
+
+    result = await session_usage({"session_id": root}, agent_loop_factory=lambda: loop)
+
+    assert result["model"] == "switched/model"
+    assert result["context_max"] == 200_000
+    assert result["context_percent"] == round(100 * result["context_used"] / 200_000)
+
+
+async def test_session_usage_answers_a_null_cost_its_published_schema_accepts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unpriced session answers ``cost_usd: null``, and the wire contract has
+    to accept the value the handler returns -- both generated clients type
+    themselves off this schema, and a consumer that validates rejects the whole
+    result, not the one field."""
+    import jsonschema
+
+    home = _usage_setup(tmp_path, monkeypatch)
+    root = "tui:20260922_101500_aabbcc"
+    _write_session(tmp_path, root, [{"role": "user", "content": "hello"}])
+    _write_telemetry(home, date.today(), [_usage_row(root, input_tokens=42)])
+
+    result = await session_usage({"session_id": root})
+
+    assert result["cost_usd"] is None
+    schema = json.loads((Path(__file__).resolve().parent.parent / "rpc-schema" / "openrpc.json").read_text())
+    method = next(entry for entry in schema["methods"] if entry["name"] == "session.usage")
+    jsonschema.validate(result, {**method["result"]["schema"], "components": schema["components"]})
+
+
+async def test_session_usage_requires_a_session_id() -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError) as exc:
+        await session_usage({})
+    assert exc.value.data == {"field": "session_id"}
+
+
+async def test_session_usage_is_no_longer_a_stub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The promoted handler answers ``session.usage`` end to end."""
+    from raven.rpc.methods import register_aligned_methods
+    from raven.rpc.methods._stubs import HERMES_ONLY_STUB_METHODS
+    from raven.rpc.models import METHOD_MODELS
+
+    assert "session.usage" not in HERMES_ONLY_STUB_METHODS
+
+    home = _usage_setup(tmp_path, monkeypatch)
+    root = "tui:20260922_101500_aabbcc"
+    _write_session(tmp_path, root, [{"role": "user", "content": "hello"}])
+    _write_telemetry(home, date.today(), [_usage_row(root, input_tokens=42, cost_usd=0.001)])
+
+    dispatcher = Dispatcher()
+    register_aligned_methods(dispatcher)
+    assert "session.usage" in dispatcher.methods()
+    response = await dispatcher.dispatch(
+        {"jsonrpc": "2.0", "id": 1, "method": "session.usage", "params": {"session_id": root}}
+    )
+
+    assert "error" not in response, response
+    METHOD_MODELS["session.usage"][1].model_validate(response["result"])
+    assert response["result"]["input"] == 42

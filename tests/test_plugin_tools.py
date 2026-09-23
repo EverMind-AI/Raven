@@ -16,7 +16,6 @@ from raven.plugins import (
     Contributes,
     DiscoveredPlugin,
     ManifestOrigin,
-    PluginConflictError,
     PluginContext,
     PluginManifest,
     PluginNotFoundError,
@@ -164,13 +163,17 @@ class TestRegistryTools:
 
         _install_test_module("_tp_tools_c", {"make_tool": f})
         reg = PluginRegistry()
-        with pytest.raises(PluginConflictError, match="tool 'dup'"):
-            reg.activate(
-                [
-                    _discovered_with_tools("one", [("dup", "_tp_tools_c:make_tool")]),
-                    _discovered_with_tools("two", [("dup", "_tp_tools_c:make_tool")]),
-                ]
-            )
+        reg.activate(
+            [
+                _discovered_with_tools("one", [("dup", "_tp_tools_c:make_tool")]),
+                _discovered_with_tools("two", [("dup", "_tp_tools_c:make_tool")]),
+            ]
+        )
+        assert reg.activated_ids() == ["one"]
+        assert reg.tool_plugin_id("dup") == "one"
+        [failure] = reg.activation_failures()
+        assert failure.plugin_id == "two"
+        assert "tool 'dup' contributed by both 'one' and 'two'" in failure.reason
 
     def test_unknown_tool_raises(self) -> None:
         reg = PluginRegistry()

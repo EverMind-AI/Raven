@@ -7,10 +7,11 @@ and ``_build_subagent_prompt``, extracted verbatim so a spawned sub-agent's
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Awaitable, Callable, Collection, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -26,13 +27,18 @@ from raven.agent.subagent.mcp_grant import (
     raven_loop_target,
     resolve_grant,
 )
+from raven.agent.subagent.tool_vocabulary import RAVEN_NAME
+from raven.agent.tools import snapshot
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry, call_failed
+from raven.agent.tools.removals import RemovalWatch
 from raven.agent.tools.shell import ExecTool
+from raven.agent.tools.snapshot import take as take_snapshot
 from raven.agent.tools.web import ImageSearchTool, WebFetchTool, WebSearchTool, image_search_vendor, resolve_vendor_key
-from raven.config.live import LiveConfig, exec_extra_deny_patterns
+from raven.config.live import LiveConfig, exec_extra_deny_patterns, live_vendor_key
 from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
+from raven.contracts.participant import StepView
 from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentNoAnswerError
 from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.memory_engine import filter_by_required_tools
@@ -41,6 +47,9 @@ from raven.providers.tool_calls import openai_tool_call
 from raven.security.trust import wrap_untrusted
 from raven.spine.message import Media
 from raven.utils.messages import build_assistant_message
+
+if TYPE_CHECKING:
+    from raven.providers.binding import ModelBinding
 
 _LIVE_CONFIG = LiveConfig()
 #: The ladder a spawn waits out when its caller passed none. Only a rig that
@@ -57,6 +66,62 @@ def _live_exec_extra_deny() -> list[str] | None:
     permission gates a delegated shell the same call it gates a direct one.
     """
     return exec_extra_deny_patterns(_LIVE_CONFIG)
+
+
+def _append_participant_note(messages: list[dict[str, Any]], note: str) -> None:
+    """Append generated advice without importing the main loop back into this backend."""
+    if not messages or not note:
+        return
+    body = messages[-1].get("content")
+    if isinstance(body, str):
+        messages[-1]["content"] = f"{body}\n\n{note}" if body else note
+    elif isinstance(body, list):
+        messages[-1]["content"] = [*body, {"type": "text", "text": note}]
+    elif body is None:
+        messages[-1]["content"] = note
+
+
+def _withheld_here(tools: ToolRegistry, mcp_source: "McpSource | None") -> frozenset[str]:
+    """Which of this run's tools are not on offer right now.
+
+    Two sources, asked per assembly the way ``AgentLoop._withheld_tool_names``
+    asks them: the operator's MCP blacklist, and every registered tool that
+    says it is unconfigured. This lane builds its own registry, so without the
+    second source a source install without the browser extra advertised eight
+    ``browser_*`` tools to a delegated run that could only watch them fail --
+    the main loop withholds exactly those, and a delegated run is not a
+    different deployment.
+    """
+    withheld: set[str] = set(mcp_source.disabled_tools()) if mcp_source is not None else set()
+    for name in tools.names():
+        spec = tools.spec_of(name)
+        if spec is None or spec.configured is None:
+            continue
+        try:
+            offered = bool(spec.configured())
+        except Exception as exc:
+            logger.warning("tool {} could not say whether it is configured: {}", name, exc)
+            continue
+        if not offered:
+            withheld.add(name)
+    return frozenset(withheld)
+
+
+def _file_change_counts(file_change: Any, diff: str | None) -> tuple[int, int]:
+    """Added/removed line counts for one file change, preferring the tool's own diff.
+
+    A unified diff, when the tool produced one, is counted directly. A rewrite
+    the tool dropped for being too large to render (or a write with no prior
+    content to diff against) has no ``diff``, so the two contents are compared
+    directly: a new file (``before is None``) counts every line of ``after`` as
+    added, and an existing file is compared line-by-line with ``difflib``.
+    """
+    if diff:
+        lines = diff.splitlines()
+        add = sum(1 for line in lines if line.startswith("+") and not line.startswith("+++"))
+        delete = sum(1 for line in lines if line.startswith("-") and not line.startswith("---"))
+        return add, delete
+    return activity.count_line_changes(file_change.before, file_change.after)
 
 
 def build_subagent_prompt(
@@ -158,9 +223,14 @@ class RavenLoopBackend:
         mcp_allow: Collection[str] | None = None,
         retry_delays: "Sequence[float] | None" = None,
         retry_after_output: bool = False,
+        pin: Callable[[], ModelBinding | None] | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
+        # The row's own model paired with its own credential, resolved per run
+        # (`SubagentManager.build_builtin_backend`); None means this agent runs
+        # on whatever pair the dispatch brings.
+        self._pin = pin
         # Global, unlike the per-run ``workspace``: memory and skills are the
         # agent's identity and stay in one place whatever directory a session
         # works in.
@@ -262,7 +332,7 @@ class RavenLoopBackend:
         finally:
             IN_SUBAGENT_RUN.reset(token)
 
-    async def _run(
+    async def _run(  # noqa: C901 -- this is the bounded in-process worker loop
         self,
         task: str,
         *,
@@ -284,6 +354,14 @@ class RavenLoopBackend:
         # for callers that drive a backend directly.
         provider = provider or self.provider
         model = model or self.model
+        # The row's own model, when it has one, over the pair the dispatch
+        # brought: a per-agent model is a fact about this agent, and the turn's
+        # binding is the fallback it was always meant to be. Read per run
+        # because this backend is cached across bindings; a pin that resolves
+        # to nothing usable leaves the pair alone (see `live_pin_resolver`).
+        pinned = self._pin() if self._pin is not None else None
+        if pinned is not None:
+            provider, model = pinned.provider, pinned.model
         # Build subagent tools (no message tool, no spawn tool). The gate is
         # unattended by construction: a spawned task inherits the parent turn's
         # context -- responder included -- and a sub-agent must never pop an
@@ -329,8 +407,7 @@ class RavenLoopBackend:
 
         _verifier = DefaultAction()
         tools = ToolRegistry(permission_gate=gate, verifier_provider=lambda: _verifier)
-        if self.mcp_source is not None:
-            tools.set_withheld_source(self.mcp_source.disabled_tools)
+        tools.set_withheld_source(lambda: _withheld_here(tools, self.mcp_source))
         for wrapper, origin in grant.for_registry():
             tools.register(wrapper, origin=origin)
 
@@ -365,6 +442,14 @@ class RavenLoopBackend:
                     follow_binding=False,
                 )
             )
+
+        def live_key(vendor: str) -> Callable[[], str]:
+            # Read on every call, as the main loop's are: a refused key pauses
+            # the tool and points the user at the config slot, so the slot has
+            # to be what the next call reads -- for all three tools, since all
+            # three carry that advice.
+            return lambda: live_vendor_key(_LIVE_CONFIG, vendor, boot=self._web_key(vendor))
+
         # Withheld without a key, same as the main loop: a sub-agent that reaches
         # for a search it cannot run reports the failure to its caller, and that
         # text ends up in the parent turn. The whitelist stacks on top: a
@@ -372,14 +457,14 @@ class RavenLoopBackend:
         if allowed("web_search"):
             search_provider = self.web_search_provider
             web_search = WebSearchTool(
-                api_key=self._web_key(search_provider), proxy=self.web_proxy, provider=search_provider
+                api_key=live_key(search_provider), proxy=self.web_proxy, provider=search_provider
             )
             if web_search.api_key:
                 tools.register(web_search)
         if self.image_search and allowed("image_search"):
             picture_vendor = image_search_vendor(self.web_search_provider, self._web_key)
             image_search = ImageSearchTool(
-                api_key=self._web_key(picture_vendor), proxy=self.web_proxy, provider=picture_vendor
+                api_key=live_key(picture_vendor), proxy=self.web_proxy, provider=picture_vendor
             )
             if image_search.api_key:
                 tools.register(image_search)
@@ -388,8 +473,16 @@ class RavenLoopBackend:
                 self.web_fetch_provider, self._web_key(self.web_fetch_provider)
             )
             tools.register(
-                WebFetchTool(api_key=self._web_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
+                WebFetchTool(api_key=live_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
             )
+        # The same browser the parent drives, in a tab of this run's own: the
+        # tools name the run in flight as their owner, so two sub-agents
+        # browsing at once are two tabs, never one page typed into twice.
+        from raven.agent.tools.browser import browser_tools
+
+        for tool in browser_tools():
+            if allowed(tool.name):
+                tools.register(tool)
 
         # A resumed instance brings its own history, system prompt included;
         # rebuilding the prompt here would append a second system turn. A
@@ -404,6 +497,43 @@ class RavenLoopBackend:
                 }
             ]
         )
+        iteration = 0
+        participants = charter_mod.charter_participants()
+        original_task = task
+
+        async def participant_answer(verb: str, *args: Any) -> Any:
+            if not participants:
+                return None
+            try:
+                return await getattr(participants[0], verb)(*args)
+            except Exception:
+                logger.exception("generated charter participant %s raised; treating it as silence", verb)
+                return None
+
+        def participant_step(phase: str, *, response: Any = None) -> StepView:
+            return StepView(
+                session_key=session_key or task_id,
+                iteration=iteration,
+                response=response,
+                transcript=tuple(messages),
+                history=tuple(history or ()),
+                turn_base=len(history or ()),
+                question=original_task,
+                rollbacks=0,
+                mode=None,
+                mode_overlay=None,
+                phase=phase,
+                tools=tuple(tools.get_definitions()),
+                max_iterations=self._MAX_ITERATIONS,
+            )
+
+        if participants:
+            intake = await participant_answer("intake", task, participant_step("user_inbound"))
+            if isinstance(intake, Mapping):
+                if intake.get("reply") is not None:
+                    return str(intake["reply"])
+                if isinstance(intake.get("text"), str):
+                    task = intake["text"]
         messages.append({"role": "user", "content": with_attachment_note(task, media)})
         # Where this run's own turns begin. Taken here rather than assumed to be
         # index 2, because a resumed instance arrives with its whole history in
@@ -411,21 +541,46 @@ class RavenLoopBackend:
         # node's work as this node's.
         own_turns_from = len(messages)
 
-        iteration = 0
         final_result: str | None = None
         # Whether the LAST model response of this run was cut at the output
         # ceiling, not whether any was: a round that was cut and then answered
         # in full delivered its answer, and the verdict reading this is asking
         # what the run has to show for itself.
         cut_at_ceiling = False
+        # What this run has written, so a command of its own that removes one of
+        # those files reaches the record. Per run, like everything else here: the
+        # backend object is shared and other runs write beside this one.
+        removal_watch = RemovalWatch()
         while iteration < self._MAX_ITERATIONS:
             iteration += 1
+            if participants:
+                advice = await participant_answer("advise", participant_step("iteration"))
+                if isinstance(advice, str) and advice:
+                    _append_participant_note(messages, advice)
             if on_delta is None:
                 response = await provider.chat_with_retry(
                     messages=messages,
                     tools=tools.get_definitions(),
                     model=model,
                 )
+                if response.finish_reason == "error" and not response.has_tool_calls:
+                    # The ladder was chat_with_retry's own, so an error here is
+                    # one it already gave up on. Raised rather than returned: the
+                    # error text would otherwise be the run's answer and the
+                    # record would read completed (see SubagentNoAnswerError).
+                    await activity.note_provider_usage(
+                        response.usage,
+                        model=str(model or ""),
+                        session_key=session_key,
+                        task_id=task_id,
+                    )
+                    verdict = response.error_classification
+                    raise SubagentNoAnswerError(
+                        "sub-agent's model call failed"
+                        + (f" ({verdict.category})" if verdict is not None else "")
+                        + ": "
+                        + (response.content or "")[:200]
+                    )
             else:
                 # A spawned run keeps the retry ladder; only a caller that asked
                 # to watch the reply form gives it up (a stream that already
@@ -447,13 +602,20 @@ class RavenLoopBackend:
                     **generation_kwargs(provider),
                 )
                 if response.finish_reason == "error" and not response.has_tool_calls:
-                    # The stream ended before anything deliverable arrived
-                    # (``stream_llm_call`` hands that back as an error reply rather
-                    # than raising, for the loop that owns a ladder). Its text is a
-                    # diagnostic, not the answer. The failed call's tokens were still
-                    # spent -- a cut mid-thought is 11-15k reasoning tokens -- so they
-                    # are billed before the reply is replaced.
-                    activity.note_usage(response.usage)
+                    # An error reply has two sources: a stream that died before
+                    # anything deliverable arrived (still retryable), or one that
+                    # died after rendering, whose retry ``stream_llm_call`` has
+                    # already spent so the same words are not drawn twice. Either
+                    # way its text is a diagnostic, not the answer. The failed
+                    # call's tokens were still spent -- a cut mid-thought is 11-15k
+                    # reasoning tokens -- so they are billed before the reply is
+                    # replaced.
+                    await activity.note_provider_usage(
+                        response.usage,
+                        model=str(model or ""),
+                        session_key=session_key,
+                        task_id=task_id,
+                    )
                     verdict = response.error_classification
                     if verdict is None and (classify := getattr(provider, "classify_error", None)) is not None:
                         verdict = classify(content=response.content or None)
@@ -482,7 +644,12 @@ class RavenLoopBackend:
                         model=model,
                     )
                     if response.finish_reason == "error" and not response.has_tool_calls:
-                        activity.note_usage(response.usage)
+                        await activity.note_provider_usage(
+                            response.usage,
+                            model=str(model or ""),
+                            session_key=session_key,
+                            task_id=task_id,
+                        )
                         raise SubagentNoAnswerError(
                             "sub-agent's model call failed in transport twice: " + (response.content or "")[:200]
                         )
@@ -490,7 +657,12 @@ class RavenLoopBackend:
             # the model once per round and the run's cost is their sum, unlike an
             # ACP agent's one cumulative report for the whole turn. Both arms
             # land here -- a streamed reply costs the same as a waited-for one.
-            activity.note_usage(response.usage)
+            await activity.note_provider_usage(
+                response.usage,
+                model=str(model or ""),
+                session_key=session_key,
+                task_id=task_id,
+            )
             cut_at_ceiling = response.truncated
             if response.has_tool_calls:
                 tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
@@ -510,7 +682,62 @@ class RavenLoopBackend:
                     # asking "what happened" most needs to see.
                     activity.note_tool_call(tool_call.name)
                     set_current_tool_call_id(tool_call.id)
+                    # Only around a command: every other tool reports the file it
+                    # touched, and walking the workspace twice per call would cost
+                    # a run far more than the one change it could find. Off the
+                    # loop, because the walk is tens of milliseconds of it and
+                    # every other session on this process waits behind them. The
+                    # directory is the one the command runs in, which the tool
+                    # itself resolves: the workspace unless the call names another.
+                    exec_root = (
+                        snapshot.root_for(tools.get(tool_call.name), tool_call.arguments, workspace)
+                        if RAVEN_NAME.get(tool_call.name, tool_call.name) == "exec"
+                        else None
+                    )
+                    before_files = await asyncio.to_thread(take_snapshot, exec_root) if exec_root is not None else None
                     result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
+                    # What this call already accounted for by name, so the listing
+                    # below does not report the same change a second time.
+                    accounted: list[str] = []
+                    # Settled before this call's own write is noted, so the file
+                    # it just wrote is not stat'ed to say it exists.
+                    for removal in removal_watch.settle(getattr(result, "removed", ())):
+                        accounted.append(removal.path)
+                        # No add, and no size: the file is gone, and a zero there
+                        # would read as a file that is present and empty.
+                        activity.note_file_change(
+                            activity.workspace_relative(removal.path, workspace),
+                            "delete",
+                            0,
+                            len((removal.before or "").splitlines()),
+                            None,
+                        )
+                    removal_watch.note_write(getattr(result, "file_change", None))
+                    if (file_change := getattr(result, "file_change", None)) is not None:
+                        accounted.append(file_change.path)
+                        # The op is the tool's, except that a write onto nothing
+                        # is a creation: `before is None` is the only record that
+                        # the file did not exist, and a reader draws an added file
+                        # differently from a rewritten one.
+                        add, delete = _file_change_counts(file_change, getattr(result, "diff", None))
+                        if "edit" in RAVEN_NAME.get(tool_call.name, tool_call.name):
+                            op = "edit"
+                        else:
+                            op = "add" if file_change.before is None else "write"
+                        activity.note_file_change(
+                            activity.workspace_relative(file_change.path, workspace),
+                            op,
+                            add,
+                            delete,
+                            len(file_change.after.encode("utf-8")),
+                        )
+                    if before_files is not None:
+                        activity.record_snapshot_changes(
+                            before_files,
+                            await asyncio.to_thread(take_snapshot, exec_root),
+                            workspace,
+                            already=accounted,
+                        )
                     # Recorded beside the call, so the run's account says how
                     # its calls went and not only that it made them. Through the
                     # registry's own predicate: a call refused before dispatch
@@ -557,6 +784,10 @@ class RavenLoopBackend:
                         if getattr(result, "continuation", None) is Continuation.ABORT_TURN:
                             raise SubagentActionAbortedError
                         break
+                if participants:
+                    advice = await participant_answer("advise", participant_step("after_iteration", response=response))
+                    if isinstance(advice, str) and advice:
+                        _append_participant_note(messages, advice)
             else:
                 final_result = response.content
                 break
@@ -587,13 +818,29 @@ class RavenLoopBackend:
                 ],
                 model=model,
             )
+            if wrap_up.finish_reason == "error":
+                await activity.note_provider_usage(
+                    wrap_up.usage,
+                    model=str(model or ""),
+                    session_key=session_key,
+                    task_id=task_id,
+                )
+                raise SubagentNoAnswerError("sub-agent's wrap-up model call failed: " + (wrap_up.content or "")[:200])
             final_result = (wrap_up.content or "").strip() or None
-            activity.note_usage(wrap_up.usage)
+            await activity.note_provider_usage(
+                wrap_up.usage,
+                model=str(model or ""),
+                session_key=session_key,
+                task_id=task_id,
+            )
             cut_at_ceiling = wrap_up.truncated
         # Reported before the raise below, so a run that ends with no answer at
         # all carries the reason as well -- that is the shape this exists for.
         if cut_at_ceiling:
             activity.note_output_limit()
+        if final_result is None and participants:
+            salvaged = await participant_answer("salvage", participant_step("answerless"))
+            final_result = salvaged if isinstance(salvaged, str) and salvaged else None
         if final_result is None:
             # Nothing to hand back. Raised rather than returned, so the node
             # fails instead of completing with a sentence the next step would

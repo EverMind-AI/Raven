@@ -16,10 +16,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from pydantic import ValidationError
 
 from raven.rpc.dispatcher import Dispatcher
-from raven.rpc.errors import ModelNotAvailableError, RpcError, TurnInProgressError
+from raven.rpc.errors import InvalidParamsError, ModelNotAvailableError, RpcError, TurnInProgressError
 from raven.rpc.methods.turn import register_turn_methods, turn_send
 
 
@@ -207,12 +206,25 @@ async def test_turn_send_without_scheduler_surfaces_build_error_code() -> None:
 
 
 async def test_turn_send_rejects_missing_session_key() -> None:
-    with pytest.raises(ValidationError):
+    """As invalid params, not as a server fault. The page reaches this by racing
+    itself -- a second message typed while the first is still making the
+    conversation carries a session_key of null -- and an internal error there is
+    a traceback in the log and a red failure row over a message that goes on to
+    be delivered."""
+    with pytest.raises(InvalidParamsError) as caught:
         await turn_send({"content": "missing session_key"}, scheduler=FakeScheduler())
+
+    assert caught.value.code == -32602
+    assert caught.value.message == "invalid_params"
+
+
+async def test_turn_send_rejects_a_null_session_key() -> None:
+    with pytest.raises(InvalidParamsError):
+        await turn_send({"session_key": None, "content": "hi"}, scheduler=FakeScheduler())
 
 
 async def test_turn_send_rejects_missing_content() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(InvalidParamsError):
         await turn_send({"session_key": "tui:default"}, scheduler=FakeScheduler())
 
 
@@ -487,7 +499,7 @@ async def test_no_target_leaves_direct_target_none() -> None:
 
 async def test_a_partial_target_is_refused_at_the_schema() -> None:
     """Both halves are the instance's identity; one alone would address nothing."""
-    with pytest.raises(ValidationError):
+    with pytest.raises(InvalidParamsError):
         await turn_send(
             {"session_key": "tui:default", "content": "hi", "target": {"agent": "Raven-Code"}},
             scheduler=FakeScheduler(),
@@ -731,6 +743,112 @@ async def test_busy_inject_hands_the_text_to_the_running_turn() -> None:
     assert turn_ids == {"tui:default": "running-1"}, "the running turn keeps the lane's slot"
 
 
+async def test_an_inject_carries_the_time_it_arrived() -> None:
+    """The stored entry is stamped from here, not from the gap it waits for.
+
+    An inject sits in the lane's mailbox until the running turn reaches its next
+    tool-loop gap, which on the long turns people correct is minutes away -- so
+    the loop's own clock filed a message typed at 11:50 under 11:51, after the
+    work it was meant to change."""
+    from datetime import datetime
+
+    from raven.rpc.methods import turn as turn_mod
+
+    scheduler = FakeScheduler()
+    turn_mod._active_turns["tui:default"] = FakeHandle()
+    before = datetime.now()
+
+    await turn_send(
+        {"session_key": "tui:default", "content": "only the last quarter", "busy": "inject"},
+        scheduler=scheduler,
+        turn_ids={"tui:default": "running-1"},
+    )
+
+    stamped = datetime.fromisoformat(scheduler.submitted[0].received_at)
+    assert before <= stamped <= datetime.now()
+
+
+async def test_an_ordinary_send_is_stamped_when_it_runs() -> None:
+    """The turn path stamps a turn that runs at once, so nothing is carried."""
+    scheduler = FakeScheduler()
+
+    await turn_send({"session_key": "tui:default", "content": "hi"}, scheduler=scheduler, turn_ids={})
+
+    assert scheduler.submitted[0].received_at is None
+
+
+async def test_an_accepted_inject_is_announced_to_every_window() -> None:
+    """The merge path draws no bubble anywhere unless it says so here.
+
+    ``turn.send`` answers before the text has reached the running turn, and a
+    second window never sees that call at all -- so the sender and the watcher
+    both draw this message from this one frame. Not ``message.start``: that
+    event opens a turn, and a client that took it for one would advance the turn
+    number and close the fold over the work still running."""
+    from raven.rpc.methods import turn as turn_mod
+
+    emitter = FakeEmitter()
+    turn_mod._active_turns["tui:default"] = FakeHandle()
+
+    result = await turn_send(
+        {"session_key": "tui:default", "content": "only the last quarter", "busy": "inject"},
+        emitter=emitter,
+        scheduler=FakeScheduler(),
+        turn_ids={"tui:default": "running-1"},
+    )
+
+    assert emitter.types() == ["message.injected"]
+    [(session_key, event)] = emitter.emitted
+    assert session_key == "tui:default"
+    assert event["payload"] == {"turn_id": result["turn_id"], "content": "only the last quarter"}
+
+
+async def test_an_inject_aimed_at_an_instance_carries_its_target() -> None:
+    """One subscription per session carries every lane's events, so an untagged
+    frame is drawn into the main conversation -- which is the whole reason the
+    tag exists."""
+    from raven.rpc.methods import turn as turn_mod
+    from raven.spine import direct_lane
+
+    emitter = FakeEmitter()
+    lane = direct_lane("tui:default", "Raven-Code", "refactor-auth")
+    turn_mod._active_turns[lane] = FakeHandle()
+
+    await turn_send(
+        {
+            "session_key": "tui:default",
+            "content": "the docs first",
+            "busy": "inject",
+            "target": {"agent": "Raven-Code", "handle": "refactor-auth"},
+        },
+        emitter=emitter,
+        scheduler=FakeScheduler(),
+        turn_ids={},
+    )
+
+    assert emitter.types() == ["message.injected"]
+    assert emitter.emitted[0][1]["payload"]["target"] == {"agent": "Raven-Code", "handle": "refactor-auth"}
+
+
+async def test_a_refused_inject_is_announced_to_nobody() -> None:
+    """A bubble for text the scheduler never took is a message the reader
+    watches nothing answer."""
+    from raven.rpc.methods import turn as turn_mod
+    from raven.spine.scheduler import SchedulerDrainingError
+
+    emitter = FakeEmitter()
+    turn_mod._active_turns["tui:default"] = FakeHandle()
+
+    await turn_send(
+        {"session_key": "tui:default", "content": "only the last quarter", "busy": "inject"},
+        emitter=emitter,
+        scheduler=FakeScheduler(raises=SchedulerDrainingError("draining")),
+        turn_ids={"tui:default": "running-1"},
+    )
+
+    assert "message.injected" not in emitter.types()
+
+
 async def test_busy_inject_on_an_idle_lane_is_an_ordinary_send() -> None:
     scheduler = FakeScheduler()
     result = await turn_send({"session_key": "tui:idle", "content": "hi", "busy": "inject"}, scheduler=scheduler)
@@ -816,7 +934,7 @@ class _DrainOnceLoop:
         self.started.setdefault(text, asyncio.Event())
         return self.release.setdefault(text, asyncio.Event())
 
-    async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None, text_sink=None):
+    async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None):
         from raven.spine.events import Usage
         from raven.spine.runner import TurnOutcome
 
@@ -1002,6 +1120,75 @@ async def test_two_undrained_injects_each_get_their_own_turn_promoted_and_cancel
         assert await turn_cancel({"session_key": lane}, emitter=emitter, turn_ids=turn_ids) == {"cancelled": True}
         assert lane not in turn_mod._pending_injects and not turn_mod.is_turn_active(lane)
         assert loop.saw == [("wake", []), ("first steer", []), ("second steer", [])]
+    finally:
+        for gate in loop.release.values():
+            gate.set()
+        await teardown()
+
+
+async def test_an_undrained_inject_is_announced_once_and_opened_once() -> None:
+    """The two views of one message, under one id.
+
+    The merge path announces the text as it is accepted; the fallback -- the
+    host turn ended before its next drain -- opens it as a turn of its own with
+    ``message.start``. A client reads the shared id and keeps the bubble it
+    already drew; a second ``message.injected`` here, or a second inject frame
+    for the same text, would leave it drawing two."""
+    loop, emitter, scheduler, turn_ids, teardown = await _spine_with_injects()
+    lane = "acp:w2"
+    try:
+        await turn_send({"session_key": lane, "content": "go"}, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids)
+        await asyncio.wait_for(loop.started.setdefault("go", asyncio.Event()).wait(), 2)
+
+        steer = await turn_send(
+            {"session_key": lane, "content": "the docs first", "busy": "inject"},
+            emitter=emitter,
+            scheduler=scheduler,
+            turn_ids=turn_ids,
+        )
+        loop.gate("go").set()
+        await asyncio.wait_for(loop.started.setdefault("the docs first", asyncio.Event()).wait(), 2)
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        injected = [e for _k, e in emitter.emitted if e["type"] == "message.injected"]
+        assert [e["payload"]["turn_id"] for e in injected] == [steer["turn_id"]]
+        starts = [e for _k, e in emitter.emitted if e["type"] == "message.start"]
+        assert [e["payload"]["turn_id"] for e in starts].count(steer["turn_id"]) == 1
+    finally:
+        for gate in loop.release.values():
+            gate.set()
+        await teardown()
+
+
+async def test_a_stop_leaves_an_unmerged_inject_to_run_as_its_own_turn() -> None:
+    """Pinned as it is, not as it might be. A person who stops the turn has
+    stopped the work, not withdrawn the words they typed into it: the text that
+    never reached a gap runs as the next turn, and the client has the
+    ``message.start`` that opens it."""
+    from raven.rpc.methods.turn import turn_cancel
+
+    loop, emitter, scheduler, turn_ids, teardown = await _spine_with_injects()
+    lane = "acp:w3"
+    try:
+        await turn_send({"session_key": lane, "content": "go"}, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids)
+        await asyncio.wait_for(loop.started.setdefault("go", asyncio.Event()).wait(), 2)
+        steer = await turn_send(
+            {"session_key": lane, "content": "the docs first", "busy": "inject"},
+            emitter=emitter,
+            scheduler=scheduler,
+            turn_ids=turn_ids,
+        )
+
+        await turn_cancel({"session_key": lane}, emitter=emitter, turn_ids=turn_ids)
+        loop.gate("go").set()
+        await asyncio.wait_for(loop.started.setdefault("the docs first", asyncio.Event()).wait(), 2)
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert ("the docs first", []) in loop.saw, "the stopped turn never drained it; it runs on its own"
+        starts = [e["payload"]["turn_id"] for _k, e in emitter.emitted if e["type"] == "message.start"]
+        assert steer["turn_id"] in starts
     finally:
         for gate in loop.release.values():
             gate.set()

@@ -466,6 +466,27 @@ async def test_cli_backend_publishes_stdout_to_the_live_console(tmp_path: Path) 
     assert "watch me work" in did.console
 
 
+async def test_cli_backend_records_the_files_its_child_left_behind(tmp_path: Path) -> None:
+    """This lane sees nothing of what the child did -- no tool results, no
+    protocol -- so the only account of the files is the directory before the
+    process started against the directory after it exited."""
+    from raven.agent.subagent import activity
+
+    work = tmp_path / "ws"
+    work.mkdir()
+    (work / "seed.md").write_text("one\n", encoding="utf-8")
+    command = "sh -c \"printf 'a\\nb\\n' > made.txt; rm seed.md; echo done\""
+    be = CliAgentBackend(name="maker", command=command)
+    with activity.collecting() as did:
+        out = await be.run("make it", task_id="t-files", workspace=work, executor=None)
+
+    assert out == "done"
+    assert did.files == [
+        {"path": "made.txt", "op": "add", "add": 2, "del": 0, "size": 4},
+        {"path": "seed.md", "op": "delete", "add": 0, "del": 0, "size": None},
+    ]
+
+
 async def test_cli_backend_publishes_stderr_logs_to_the_live_console(tmp_path: Path) -> None:
     from raven.agent.subagent import activity
 
@@ -2533,9 +2554,10 @@ def test_every_install_hint_names_a_row_that_defers_to_a_local_install() -> None
 
     Two ways that goes wrong silently, so both are pinned: a key that is not in
     the table at all, and a key belonging to a shim-launched row, whose command
-    is an ``npx`` one that always resolves -- the absent-executable branch these
-    hints serve is unreachable there, so a hint on such a row is dead weight
-    advertising itself as coverage.
+    is an ``npx`` one that always resolves -- the ``argv[0]`` branch these hints
+    serve never fires there. The executable such a row needs is declared beside
+    its own install in ``SHIM_REQUIRED_EXECUTABLES``, so a hint here would be a
+    second spelling of it that nothing reads.
     """
     from raven.agent.subagent.acp_registry_presets import ACP_REGISTRY_INSTALL_HINTS
     from raven.agent.subagent.presets import SHIM_LAUNCHED_PRESETS
@@ -2543,9 +2565,37 @@ def test_every_install_hint_names_a_row_that_defers_to_a_local_install() -> None
     unknown = set(ACP_REGISTRY_INSTALL_HINTS) - set(THIRD_PARTY_SUBAGENT_PRESETS)
     assert not unknown, f"install hints for presets that do not exist: {sorted(unknown)}"
     fetched = set(ACP_REGISTRY_INSTALL_HINTS) & SHIM_LAUNCHED_PRESETS
-    assert not fetched, f"these rows fetch their own command, so the hint is unreachable: {sorted(fetched)}"
+    assert not fetched, f"shim-launched rows declare their install in SHIM_REQUIRED_EXECUTABLES: {sorted(fetched)}"
     for key, hint in ACP_REGISTRY_INSTALL_HINTS.items():
         assert hint.strip() == hint and hint, key
+
+
+def test_every_shim_requirement_names_a_shim_launched_row() -> None:
+    """The executable a fetched command needs is only a question for a fetched command.
+
+    A local-executable row is probed by ``argv[0]`` and carries its install in
+    ``ACP_REGISTRY_INSTALL_HINTS``; a key here for one would make the probe ask
+    after a second executable that row never needed. The two tables split the
+    acp presets by launch shape, and this holds the split.
+    """
+    from raven.agent.subagent.presets import SHIM_LAUNCHED_PRESETS, SHIM_REQUIRED_EXECUTABLES
+
+    misplaced = set(SHIM_REQUIRED_EXECUTABLES) - SHIM_LAUNCHED_PRESETS
+    assert not misplaced, f"a local-executable row cannot need a second executable: {sorted(misplaced)}"
+    for key, (executable, install) in SHIM_REQUIRED_EXECUTABLES.items():
+        assert executable and " " not in executable, key
+        assert install.strip() == install and install, key
+
+
+def test_a_shim_that_brings_its_own_agent_is_not_held_to_a_local_install() -> None:
+    """``codex-acp`` ships the agent as its own binary, and ``claude-agent-acp``
+    runs the CLI its SDK pin carries as a per-platform optional dependency, so
+    a ``claude`` on PATH is neither needed nor the one that answers. A
+    requirement for either would report a working adapter as missing on a
+    machine that never installed the CLI globally."""
+    from raven.agent.subagent.presets import SHIM_REQUIRED_EXECUTABLES
+
+    assert {"claude_code", "codex"}.isdisjoint(SHIM_REQUIRED_EXECUTABLES)
 
 
 def test_presets_declare_their_own_provenance() -> None:
@@ -4176,3 +4226,446 @@ def test_the_modes_a_manager_reports_are_the_probes(tmp_path: Path, monkeypatch)
     assert [m.id for m in mgr.agent_modes("Researcher")] == ["fast", "deep"]
     assert mgr.agent_modes("claude_code") == ()
     assert mgr.agent_modes("nobody") == ()
+
+
+def test_a_credential_refusal_is_named_as_one_with_its_command() -> None:
+    """The connect path says what the reader can act on, not only what the agent said.
+
+    The agent's own words arrive as whatever prose its vendor chose inside a
+    JSON-RPC code, and the fact a reader needs -- installed, no credential -- is
+    never in them. This is the message measured from a live adapter against a
+    CLI whose own ``auth status`` reported ``loggedIn: false``.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.probe import _refusal_detail
+
+    said = (
+        "request failed: [-32603] Internal error: "
+        "Failed to authenticate: OAuth session expired and could not be refreshed."
+    )
+
+    known = _refusal_detail(SimpleNamespace(preset="claude_code"), said)
+    assert "no usable credential" in known
+    assert "auth login" in known, "the command is the whole point for a row that has one"
+    assert said in known, "the agent's own words stay as the evidence"
+
+    # A row whose sign-in command this repo does not know still gets the fact.
+    unknown = _refusal_detail(SimpleNamespace(preset="opencode"), said)
+    assert "no usable credential" in unknown
+    assert "sign in to it" in unknown
+    assert "`" not in unknown, "no command is better than a guessed one"
+
+
+def test_the_shim_row_that_reported_this_gets_its_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The failure that prompted this, with the machine it was measured on.
+
+    Measured 2026-09-23 from the shipped preset: the agent answered
+    ``[-32000] Authentication required: Your access token could not be
+    refreshed. Please log out and sign in again.`` That already read as a
+    credential failure -- the fact reached the reader -- but the row had no
+    entry, so the sentence ended "sign in to it and connect again" with nothing
+    to run. On the same machine ``codex`` was not on the login PATH, because
+    the row is shim-launched and the adapter never links its copy: the spelling
+    that fires here is the one that needs no install.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.presets import SHIM_LAUNCHED_PRESETS, SIGN_IN_HINTS
+
+    assert "codex" in SHIM_LAUNCHED_PRESETS, "both spellings are only warranted for a shim row"
+    said = (
+        "request failed: [-32000] Authentication required: "
+        "Your access token could not be refreshed. Please log out and sign in again."
+    )
+    cfg = SimpleNamespace(preset="codex")
+    hint = SIGN_IN_HINTS["codex"]
+
+    assert (hint.exe, hint.local, hint.anywhere) == ("codex", "codex login", "npx -y @openai/codex login"), (
+        "read from codex's own help"
+    )
+    assert hint.does == "sign_in", "codex login signs in through a browser"
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    clean = probe_mod._refusal_detail(cfg, said)
+    assert "sign in with `npx -y @openai/codex login`" in clean, "the measured machine had no codex on PATH"
+
+    # Backticked, because the local spelling is a substring of the npx one: a
+    # bare `codex login` in the text would pass whichever of the two was offered.
+    monkeypatch.setattr(
+        probe_mod.shutil, "which", lambda exe, path=None: "/opt/homebrew/bin/codex" if exe == "codex" else None
+    )
+    installed = probe_mod._refusal_detail(cfg, said)
+    assert "sign in with `codex login`" in installed
+    assert "npx" not in installed
+
+
+def test_a_row_with_one_spelling_is_not_offered_a_second(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A locally installed agent has one command, and it is offered as one.
+
+    The two spellings exist for a shim-launched row, which runs where the
+    agent's CLI was never installed globally. ``hermes`` is not such a row --
+    its command is a bare ``hermes``, so a reader who has no ``hermes`` stops
+    at the absent executable, a different message with a different answer.
+
+    The hazard this pins is the ``None`` half being read as a command: with the
+    executable off PATH, the shim row's branch would print "sign in with
+    `None`", which is the one thing worse than no command at all.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.presets import SIGN_IN_HINTS
+
+    assert SIGN_IN_HINTS["hermes"].anywhere is None, "a bare-command row has no second spelling"
+    said = "Failed to authenticate: OAuth session expired and could not be refreshed."
+    cfg = SimpleNamespace(preset="hermes")
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/Users/somebody/.local/bin/hermes")
+    assert "`hermes model`" in probe_mod._refusal_detail(cfg, said)
+
+    # The same row on a machine where the executable is not resolvable: there
+    # is no second spelling to fall back to, so the one command stands.
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    off_path = probe_mod._refusal_detail(cfg, said)
+    assert "`hermes model`" in off_path
+    assert "None" not in off_path
+
+
+def test_an_endpoint_row_is_told_where_its_key_goes() -> None:
+    """A row that is a URL and a key cannot be signed in to, so it is not told to.
+
+    Measured 2026-09-23 against the shipped preset, whose ``apiKey`` is empty on
+    purpose: the agent answered ``HTTP 401: {"error":"missing api key"}``. That
+    reads as a credential failure to the same rule the roster uses, so before
+    this the reader was told to "sign in to it and connect again" -- advice with
+    no referent, since nothing was installed and there is no CLI to sign in to.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.probe import _refusal_detail
+
+    said = 'OpenAI-API agent \'MiroThinker\' HTTP 401: {"error":"missing api key"}'
+    out = _refusal_detail(SimpleNamespace(preset="mirothinker", kind="openai"), said)
+
+    assert "API key" in out
+    assert "settings" in out, "where the key goes is the whole of what this reader can act on"
+    assert "sign in" not in out, "there is no CLI here to sign in to"
+    assert said in out, "the agent's own words stay as the evidence"
+
+    # Any endpoint row, not the one preset: a hand-written row has no preset at all.
+    hand_written = _refusal_detail(SimpleNamespace(preset=None, kind="openai"), said)
+    assert "API key" in hand_written and "sign in" not in hand_written
+
+    # And only a credential refusal: an endpoint that is down is not told to find a key.
+    down = "OpenAI-API agent 'MiroThinker' HTTP 502: bad gateway"
+    assert _refusal_detail(SimpleNamespace(preset="mirothinker", kind="openai"), down) == down
+
+
+_HERMES_NO_PROVIDER = (
+    "Hermes is not connected to any AI provider yet. Run `hermes model` to pick one (the free Nous tier "
+    "needs no API key), type `/login` in chat, or add a key with `hermes auth add <provider>`. (Advanced: "
+    "put an API key such as OPENROUTER_API_KEY in ~/.hermes/.env.)"
+)
+"""What hermes answered `session/new` with on 2026-09-23, verbatim, as `data.details`."""
+
+
+def test_an_agent_that_answers_with_a_placeholder_is_read_from_its_data() -> None:
+    """The reason was in the answer all along; only the placeholder was printed.
+
+    Both ACP SDKs turn an unhandled exception into ``[-32603] Internal error``
+    and put the exception's own text in ``data.details``. `AcpRemoteError` kept
+    the field and printed only the code and message, so hermes's whole answer --
+    no provider, and the command that picks one -- reached the page as the placeholder.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpRemoteError
+    from raven.agent.subagent.probe import _refusal_detail, _said
+
+    exc = AcpRemoteError("request", -32603, "Internal error", {"details": _HERMES_NO_PROVIDER})
+    assert str(exc) == "request failed: [-32603] Internal error", "the placeholder is all str() carries"
+
+    out = _refusal_detail(SimpleNamespace(preset="hermes"), *_said(exc))
+    assert "no usable credential; sign in with `hermes model`" in out, "the advice is ours, not the agent's"
+    assert "not connected to any AI provider" in out, "the agent's own reason is the evidence"
+    assert "[-32603] Internal error" in out, "and the code it came with is kept"
+
+
+def test_only_a_reason_is_read_from_data() -> None:
+    """``data`` is any JSON; only the fields that carry a reason are read.
+
+    A string, a ``details`` string -- what both SDKs write for an unhandled
+    exception -- or, failing that, a ``message`` string, which is where
+    codex-acp puts its hand-built turn failures (``createTurnErrorData``).
+    Everything else is machine data: invalid params arrive as a validator's
+    error list, which is noise to a reader. An adapter that names the reason in
+    ``message`` too (the JS SDK's ``internalError(data, additionalMessage)``) is
+    not made to say it twice.
+    """
+    from raven.acp_client.protocol import AcpRemoteError, reason_of
+
+    def reason(data: object, message: str = "Internal error") -> str:
+        return reason_of(AcpRemoteError("request", -32603, message, data))
+
+    assert reason({"details": "no provider"}) == "Internal error: no provider"
+    assert reason("no provider") == "Internal error: no provider"
+    codex = {"message": "unexpected status 401 Unauthorized", "codexErrorInfo": {"type": "unauthorized"}}
+    assert reason(codex) == "Internal error: unexpected status 401 Unauthorized"
+    assert reason({"details": "the details", "message": "the message"}) == "Internal error: the details"
+
+    validator = {"errors": [{"type": "string_type", "loc": ["sessionId"], "msg": "Input should be a valid string"}]}
+    for noise in (validator, ["a", "b"], 42, None, {"details": 7}, {"details": "   "}, {"message": None}, ""):
+        assert reason(noise) == "Internal error", f"{noise!r} is not a reason"
+
+    said_twice = reason({"details": "Failed to authenticate"}, message="Internal error: Failed to authenticate")
+    assert said_twice == "Internal error: Failed to authenticate"
+
+
+def test_a_refusal_raised_through_a_wrapper_keeps_its_reason() -> None:
+    """A row with an MCP note re-raises the agent's refusal inside raven's own error.
+
+    `_annotate_mcp_failure` wraps any failure as ``McpDispatchError(f"{exc}\\n\\n
+    [raven] {note}.") from exc``, so the refusal survives only as ``__cause__``
+    and a reader of the outer error alone loses ``data`` again. The reason is
+    spliced in after the agent's words and before raven's note. Only
+    ``__cause__`` is followed: an implicit ``__context__`` says a refusal was
+    being handled when something else broke, not that it is the cause.
+    """
+    from raven.acp_client.protocol import AcpRemoteError, remote_error_in
+    from raven.agent.subagent.mcp_grant import McpDispatchError
+    from raven.agent.subagent.probe import _said
+
+    inner = AcpRemoteError("request", -32603, "Internal error", {"details": "no provider"})
+    note = "MCP server 'github' was not delivered because it is not connected on the host"
+    try:
+        try:
+            raise inner
+        except AcpRemoteError as exc:
+            raise McpDispatchError(f"{exc}\n\n[raven] {note}.") from exc
+    except McpDispatchError as wrapped:
+        shown, answer = _said(wrapped)
+    assert shown == f"request failed: [-32603] Internal error: no provider\n\n[raven] {note}."
+    assert answer == "Internal error: no provider", "the verdict is read from the agent's answer alone"
+
+    try:
+        try:
+            raise inner
+        except AcpRemoteError:
+            raise RuntimeError("the cleanup failed")  # noqa: B904 - the implicit chain is the point
+    except RuntimeError as unrelated:
+        assert remote_error_in(unrelated) is None
+        assert _said(unrelated) == ("the cleanup failed", None)
+
+
+def test_raven_s_own_note_does_not_decide_the_verdict() -> None:
+    """Words raven adds about an MCP server are not the agent reporting its credential.
+
+    The notes name OAuth and authorization ("withheld because OAuth needs user
+    interaction"), which the credential rule reads as a sign-in failure. So the
+    agent's answer is classified on its own, and the note is only shown.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpRemoteError
+    from raven.agent.subagent.mcp_grant import McpDispatchError
+    from raven.agent.subagent.probe import _refusal_detail, _said
+
+    note = "MCP server 'github' was withheld because OAuth needs user interaction"
+    cfg = SimpleNamespace(preset="hermes")
+
+    def refused(details: str) -> str:
+        inner = AcpRemoteError("request", -32603, "Internal error", {"details": details})
+        wrapped = McpDispatchError(f"{inner}\n\n[raven] {note}.")
+        wrapped.__cause__ = inner
+        return _refusal_detail(cfg, *_said(wrapped))
+
+    other = refused("context window of 4096 tokens is below the 8192 floor")
+    assert "credential" not in other and "sign in" not in other
+    assert note in other, "the note is still shown"
+
+    assert "sign in with `hermes model`" in refused(_HERMES_NO_PROVIDER)
+
+
+def test_a_remedy_that_names_a_credential_command_is_not_a_credential_failure() -> None:
+    """An agent names its credential commands in remedies for other problems too.
+
+    Reading ``data`` means the rule now sees the agent's whole remedy text, and
+    hermes's mentions ``hermes auth`` and "credentials" in failures that are
+    about a rate limit or a missing package. All three below are hermes's own
+    words, from its source; its comment on the first says a benched key "is not
+    a missing credential". The veto sits in the shared rule, so the roster reads
+    them the same way.
+    """
+    from raven.acp_client.capabilities import looks_like_auth
+
+    not_credentials = (
+        "Anthropic credentials are rate-limited for claude-opus-4-5; other Claude models remain available "
+        "(see `hermes auth list`).",
+        "Provider 'openrouter' is set in config.yaml but its only credential is cooling down after a rate "
+        "limit / quota error (429); the next one resets at 14:02. Wait for the reset, add another credential "
+        "with `hermes auth add openrouter`, or switch to a different provider with `hermes model`.",
+        "Azure Foundry Entra ID auth requires the 'azure-identity' package. Install it with: pip install "
+        "azure-identity (import failed: No module named 'azure')",
+    )
+    for text in not_credentials:
+        assert not looks_like_auth(text), text
+
+    assert looks_like_auth(f"Internal error: {_HERMES_NO_PROVIDER}")
+    assert looks_like_auth("Failed to authenticate: OAuth session expired and could not be refreshed.")
+
+
+def test_a_reason_that_is_not_about_credentials_is_shown_not_classified() -> None:
+    """Reading ``data`` gives every refusal better words, and names none of them.
+
+    A reason the roster's rule does not read as a credential one is passed
+    through as the agent said it -- which is still better than the placeholder,
+    and still not a guess about what it means.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpRemoteError
+    from raven.agent.subagent.probe import _refusal_detail, _said
+
+    reason = "context window of 4096 tokens is below the 8192 floor"
+    exc = AcpRemoteError("request", -32603, "Internal error", {"details": reason})
+    out = _refusal_detail(SimpleNamespace(preset="hermes"), *_said(exc))
+    assert out == f"request failed: [-32603] Internal error: {reason}"
+    assert "credential" not in out
+
+
+async def test_the_connect_path_reads_the_answer_whole(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ping reports what the agent answered, not what `str()` of it prints.
+
+    Pinned at the caller because that is where the reason was lost: every piece
+    below it already had the field. The advice sentence is asserted, not only
+    the reason -- hermes's reply names `hermes model` itself, so a caller that
+    stopped classifying would still pass on the reply's words alone.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpRemoteError
+    from raven.agent.subagent import probe as probe_mod
+
+    def _refused(*args: object, **kwargs: object) -> object:
+        raise AcpRemoteError("request", -32603, "Internal error", {"details": _HERMES_NO_PROVIDER})
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", _refused)
+    result = await probe_mod.ping_agent(SimpleNamespace(name="Hermes Agent", preset="hermes", kind="acp"))
+
+    assert result.ok is False
+    assert "no usable credential; sign in with `hermes model`" in result.detail
+    assert "not connected to any AI provider" in result.detail
+
+
+def test_each_agent_s_fix_is_named_as_data_from_the_one_decision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The page's fix and the terminal's sentence come out of the same call.
+
+    For every agent the table knows, and for one it does not: the remedy says
+    which kind of fix and the command this machine can run, and the sentence
+    returned beside it is exactly the one `_refusal_detail` has always written --
+    so the page and a terminal cannot disagree about what one refusal needs.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    said = "Failed to authenticate: OAuth session expired and could not be refreshed."
+    on_path = {"claude"}  # measured: claude on PATH, codex not, hermes installed locally
+    monkeypatch.setattr(
+        probe_mod.shutil, "which", lambda exe, path=None: f"/usr/local/bin/{exe}" if exe in on_path else None
+    )
+    cases = [
+        (SimpleNamespace(preset="claude_code", kind="acp"), Remedy("sign_in", "claude auth login")),
+        (SimpleNamespace(preset="codex", kind="acp"), Remedy("sign_in", "npx -y @openai/codex login")),
+        (SimpleNamespace(preset="hermes", kind="acp"), Remedy("setup", "hermes model")),
+        (SimpleNamespace(preset="opencode", kind="acp"), Remedy("sign_in")),
+        (SimpleNamespace(preset="mirothinker", kind="openai"), Remedy("api_key")),
+    ]
+    for cfg, expected in cases:
+        text, remedy = probe_mod._refusal(cfg, said)
+        assert remedy == expected, cfg.preset
+        assert text == probe_mod._refusal_detail(cfg, said), f"{cfg.preset}: one decision, one sentence"
+
+    # Not about a credential: no fix, and the words pass through as they came.
+    assert probe_mod._refusal(SimpleNamespace(preset="codex", kind="acp"), "connection ended (exit 127)") == (
+        "connection ended (exit 127)",
+        None,
+    )
+
+
+async def test_the_ping_hands_its_caller_the_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The connect path is where the page's refused-add line gets its fix from."""
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpRemoteError
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    def _refused(*args: object, **kwargs: object) -> object:
+        raise AcpRemoteError("request", -32603, "Internal error", {"details": _HERMES_NO_PROVIDER})
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", _refused)
+    result = await probe_mod.ping_agent(SimpleNamespace(name="Hermes Agent", preset="hermes", kind="acp"))
+    assert result.remedy == Remedy("setup", "hermes model")
+
+
+def test_a_failure_that_is_not_about_credentials_keeps_its_own_words() -> None:
+    """Only the refusals that read as credential ones are renamed.
+
+    Everything else is reported as it came: a guess about what an unclassified
+    failure means would send a reader to fix the wrong thing.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.probe import _refusal_detail
+
+    for said in ("it started and then answered nothing", "connection ended (exit 127)"):
+        out = _refusal_detail(SimpleNamespace(preset="claude_code"), said)
+        assert out == said
+        assert "credential" not in out
+
+
+def test_the_connect_path_and_the_roster_ask_one_question() -> None:
+    """Both read the same rule, so they cannot disagree about one failure.
+
+    They did: the roster marked such a row "go and sign in" while the connect
+    button printed the raw error, because only one of them classified it.
+    """
+    from raven.acp_client.capabilities import looks_like_auth
+
+    said = "Failed to authenticate: OAuth session expired and could not be refreshed."
+    assert looks_like_auth(said)
+    assert not looks_like_auth("it started and then answered nothing")
+
+
+def test_the_sign_in_command_is_one_the_machine_can_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A shim row runs where the agent's CLI was never installed globally.
+
+    That setup is the one ``SHIM_REQUIRED_EXECUTABLES`` deliberately does not
+    hold these rows to: the adapter carries its own copy of the CLI as a
+    per-platform dependency and never links it onto PATH. Naming the bare
+    executable there would answer a credential failure with a second one --
+    ``command not found`` -- and leave the reader with no way out of the very
+    thing this message exists to explain. Both spellings end at the same
+    credential, which is the machine's rather than any one copy's.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.presets import SIGN_IN_HINTS
+
+    said = "Failed to authenticate: OAuth session expired and could not be refreshed."
+    hint = SIGN_IN_HINTS["claude_code"]
+    cfg = SimpleNamespace(preset="claude_code")
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/usr/local/bin/claude")
+    assert hint.local in probe_mod._refusal_detail(cfg, said)
+
+    # The supported clean setup: nothing of the agent's on PATH.
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    clean = probe_mod._refusal_detail(cfg, said)
+    assert hint.anywhere in clean
+    assert f"`{hint.local}`" not in clean, "a command that is not there to run is no better than a guess"

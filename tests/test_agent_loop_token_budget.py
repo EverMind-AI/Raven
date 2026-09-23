@@ -118,14 +118,26 @@ def test_a_ceiling_as_large_as_the_window_still_leaves_room_for_history(workspac
     # A loose bound is the right shape for it -- `reserved_system` embeds the
     # workspace path, so this figure moves with the length of a temp directory:
     # measured 129_090 / 129_060 / 129_035 at path lengths 22 / 62 / 121.
-    assert budget.available_history > 128_000, "an honest ceiling must not squeeze history toward zero"
+    assert budget.available_history > 127_000, "an honest ceiling must not squeeze history toward zero"
     # `reserved_tools` is what the old 129_000 bound was really watching, and it
-    # is invariant across those same three paths: 5773 tokens, paid on every
-    # turn of every conversation. Asserted directly so a grown tool description
-    # trips it for that reason rather than because a worktree sits deeper than
-    # the one this was measured on. Trim somewhere before raising it, and say
-    # what was traded.
-    assert budget.reserved_tools < 6_000, f"tool surface grew: {budget.reserved_tools} tokens reserved"
+    # is invariant across those same three paths: paid on every turn of every
+    # conversation. Asserted directly so a grown tool description trips it for
+    # that reason rather than because a worktree sits deeper than the one this
+    # was measured on. Trim somewhere before raising it, and say what was
+    # traded.
+    #
+    # Raised from 6_000 (measured 5773) when the eight `browser_*` tools were
+    # admitted: their schemas cost ~1100 tokens, measured 7115 here. What was
+    # traded for it, and what was trimmed first: every description was cut to
+    # the facts a caller cannot infer from the parameters, and the hand-off
+    # note (a login or payment is the user's to do) now rides on
+    # `browser_navigate` alone rather than on three tools. The remainder is the
+    # surface itself -- one tool per verb, because the permission gate rules by
+    # tool name and a single `browser(action=...)` tool would put clicking and
+    # reading on one tier. The bill is only paid where the browser extra is
+    # installed: without playwright the tools report themselves unconfigured
+    # and never reach the schema.
+    assert budget.reserved_tools < 7_400, f"tool surface grew: {budget.reserved_tools} tokens reserved"
 
 
 def test_an_honest_but_large_ceiling_does_not_eat_the_window(workspace, monkeypatch) -> None:

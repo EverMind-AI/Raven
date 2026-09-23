@@ -16,6 +16,7 @@ from __future__ import annotations
 import typer
 
 from raven.a2a.gate import refuse_if_subagent
+from raven.core import plugin_stack
 
 a2a_app = typer.Typer(name="a2a", help="Serve and switch the A2A protocol face.")
 
@@ -77,11 +78,7 @@ def serve(
         # builds contributed plugin services inert, so a resident host is the one
         # that must start them, and dispose() is what retires the full generation
         # (services, MCP, backend) together on the way out.
-        if runtime.backend is not None:
-            try:
-                await runtime.backend.start()
-            except Exception:
-                logger.exception("memory backend start failed; continuing with legacy memory path")
+        plugin_stack.start_backend_detached(runtime.backend, logger=logger)
         await runtime.loop.start_plugin_services()
         try:
             await serve_standalone(cfg.a2a, host=host, port=port, run_turn=run_turn)

@@ -217,9 +217,13 @@ describe('/mode', () => {
       vi.fn(() =>
         Promise.resolve({
           availableModes: [
-            { description: 'The least effort a sub-agent is asked for.', id: 'medium', name: 'Medium' },
+            { description: 'Faster and cheaper, for small, well-defined tasks.', id: 'medium', name: 'Medium' },
             { description: 'The middle rung, and where every session starts.', id: 'high', name: 'High' },
-            { description: 'The most effort a sub-agent is asked for.', id: 'max', name: 'Max' }
+            {
+              description: 'Deepest reasoning and full sub-agent effort, for complex or open-ended work.',
+              id: 'max',
+              name: 'Max'
+            }
           ],
           mode: 'high'
         })
@@ -229,7 +233,7 @@ describe('/mode', () => {
 
     const out = h.main.join('\n')
     expect(out.match(/Raven's own effort/g) ?? []).toHaveLength(1)
-    expect(out).toContain('The least effort a sub-agent is asked for.')
+    expect(out).toContain('Faster and cheaper, for small, well-defined tasks.')
   })
 
   it('says so for an agent that offers none, instead of printing an empty menu', async () => {

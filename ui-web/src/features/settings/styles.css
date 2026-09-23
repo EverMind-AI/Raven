@@ -1,0 +1,754 @@
+/* The settings dialog's own stylesheet.
+ *
+ * The prototype's rules, class for class, with every class carrying the
+ * domain's prefix (`settings-`) so nothing collides with the page's
+ * vocabulary; imported by SettingsApp.tsx and inlined after styles/page.css by
+ * ui-web/build.py (features/extAgents/styles.css says how). The colour tokens
+ * are the page's own; the two the prototype added are scoped to the panel.
+ */
+.settings-panel { --stage: #eceae4; --disp: var(--sans); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .settings-panel { --stage: #181818; } }
+:root[data-theme="dark"] .settings-panel { --stage: #181818; }
+
+/* The onboarding wizard renders ModelStepBody/WebStepBody (SetupBodies.tsx) as its own
+   step bodies, in a scroll pane the wizard owns rather than the dialog's
+   #spanels -- this neutralises any height and scroll rule .settings-panel
+   carries so the two panes stack as a plain column, and sets no width of its
+   own: the wizard owns that. */
+.settings-setup { max-height: none; overflow: visible; }
+
+/* Dense data reads at a fixed size inside the dialog. A relative one (.85em)
+   computes off whatever it happens to sit in, and this dialog offers six
+   different sizes to sit in, so the same key rendered at six sizes. */
+.settings-panel .mono, .settings-setup .mono,
+.settings-panel code, .settings-setup code { font-size: 13px; }
+
+
+h1,h2,h3,h4 {font-family:var(--disp); margin:0; text-wrap:balance}
+code,.settings-mono {font-family:var(--mono); font-size:13px}
+.settings-wrap {max-width:1180px; margin:0 auto; padding:34px 22px 40px}
+.settings-mast {padding:40px 0 22px}
+.settings-eyebrow {font-family:var(--disp); font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); font-weight:600}
+h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
+.settings-lede {color:var(--muted); max-width:64ch}
+.settings-premise {display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1px; background:var(--line);
+  border:1px solid var(--line); border-radius:10px; overflow:hidden; margin:22px 0 8px}
+.settings-pcell {background:var(--paper); padding:12px 14px}
+.settings-pcell .settings-h {font-family:var(--disp); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); font-weight:600}
+.settings-pcell .settings-v {font-size:14px; margin-top:3px}
+.settings-pcell .settings-v b {font-weight:600}
+.settings-count-note {color:var(--faint); font-size:13px; margin:10px 0 0}
+.settings-ptools {display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:30px 0 12px}
+.settings-ptools .settings-lb {font-family:var(--disp); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); font-weight:600}
+.settings-tbtn {font:inherit; font-size:13px; border:1px solid var(--line); background:var(--paper); color:var(--muted);
+  padding:6px 13px; border-radius:99px; cursor:pointer; display:inline-flex; align-items:center; gap:7px}
+.settings-tbtn:hover {color:var(--text); border-color:var(--amber)}
+.settings-tbtn[aria-pressed="true"] {background:var(--amber-dp); border-color:var(--amber); color:var(--gold); font-weight:600}
+.settings-tbtn:focus-visible {outline:2px solid var(--amber); outline-offset:2px}
+.settings-stage {background:transparent; border:0; border-radius:0; padding:0; box-shadow:none}
+.settings-dlg {display:grid; grid-template-columns:214px 1fr; min-height:min(720px, calc(100vh - 80px)); background:var(--paper); border:1px solid var(--line);
+  border-radius:12px; box-shadow:var(--elev-up); overflow:hidden; min-height:620px}
+@media(max-width:760px) {
+.settings-dlg {grid-template-columns:1fr}
+}
+.settings-rail {background:var(--surface); border-right:1px solid var(--line); padding:20px 12px 24px; overflow-y:auto}
+.settings-rail h4 {font-size:16px; font-weight:600; padding:0 10px 14px}
+.settings-rail .settings-grp {font-family:var(--disp); font-size:11px; letter-spacing:.13em; text-transform:uppercase; color:var(--faint); font-weight:600; padding:14px 10px 6px}
+.settings-nitem {display:flex; align-items:center; gap:8px; width:100%; height:32px; text-align:left; font:inherit; font-size:13px;
+  background:none; border:0; color:var(--rail-ink); padding:0 8px; border-radius:8px; cursor:pointer; position:relative}
+.settings-nitem:hover {background:var(--settings-nav-on); color:var(--rail-ink-on)}
+.settings-nitem[aria-current="true"] {background:var(--settings-nav-on); color:var(--rail-ink-on); font-weight:500}
+.settings-nitem svg {width:16px; height:16px; flex:0 0 16px; color:var(--settings-nav-ico)}
+.settings-nitem[aria-current="true"] svg, .settings-nitem:hover svg {color:currentColor}
+.settings-nitem.settings-soon {opacity:.55; cursor:default}
+.settings-nitem.settings-soon:hover {background:none; color:var(--muted)}
+.settings-nitem .settings-p2 {margin-left:auto; font-size:11px; font-family:var(--disp); font-weight:600; letter-spacing:.06em;
+  border:1px solid var(--line); border-radius:4px; padding:0 4px; color:var(--faint)}
+.settings-body {padding:24px 26px 30px; overflow-y:auto; max-height:calc(100vh - 130px)}
+.settings-bhead {display:flex; align-items:baseline; gap:10px; padding-bottom:16px; border-bottom:1px solid var(--line-soft); margin-bottom:20px}
+.settings-bhead h3 {font-size:21px; font-weight:600}
+.settings-bhead .settings-sub {color:var(--faint); font-size:13px}
+.settings-card {border:1px solid var(--line); border-radius:10px; background:var(--paper); margin-bottom:16px; overflow:hidden}
+.settings-card > .settings-ch {padding:12px 15px 10px; border-bottom:1px solid var(--line-soft)}
+.settings-card > .settings-ch .settings-t {font-family:var(--disp); font-size:14px; font-weight:600}
+.settings-card > .settings-ch .settings-d {color:var(--faint); font-size:13px; margin-top:2px}
+.settings-rows {display:flex; flex-direction:column}
+.settings-row {display:grid; grid-template-columns:1fr auto; gap:4px 14px; align-items:center; padding:11px 15px; border-bottom:1px solid var(--line-soft)}
+.settings-row:last-child {border-bottom:none}
+.settings-row .settings-k {font-size:14px; display:flex; flex-wrap:wrap; align-items:center; gap:6px}
+.settings-row .settings-hint {color:var(--faint); font-size:13px; grid-column:1/-1; margin-top:0}
+.settings-row.settings-stack {grid-template-columns:1fr}
+.settings-row.settings-stack .settings-ctl {margin-top:8px}
+.settings-row .settings-kk {font-family:var(--mono); font-size:11px; color:var(--faint)}
+.settings-swi {width:38px; height:22px; border-radius:99px; border:1px solid var(--line); background:var(--raised); position:relative; cursor:pointer; padding:0; flex:0 0 auto}
+.settings-swi::after {content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:99px; background:var(--paper); box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .16s}
+.settings-swi[aria-checked="true"] {background:var(--amber); border-color:var(--amber)}
+.settings-swi[aria-checked="true"]::after {transform:translateX(16px)}
+.settings-swi:focus-visible {outline:2px solid var(--amber); outline-offset:2px}
+/* Built in: the row is here so the tool is not invisible, and there is
+   nothing to set. `aria-disabled` alone says so only to a screen reader --
+   drawn like every other switch, with a pointer cursor, it reads as a
+   control that ignores clicks. */
+.settings-swi-fixed {opacity:.45; cursor:default; box-shadow:none}
+.settings-swi-fixed[aria-checked="true"] {background:var(--line); border-color:var(--line)}
+.settings-seg {display:inline-flex; border:1px solid var(--line); border-radius:var(--ctl-r); overflow:hidden; background:var(--surface); height: var(--ctl-h); box-sizing: border-box; padding: 2px; gap: 2px}
+.settings-seg button {font:inherit; font-size:13px; border:0; background:none; color:var(--muted); padding:0 12px; cursor:pointer; border-right:1px solid var(--line); border-radius: calc(var(--ctl-r) - 3px); white-space: nowrap}
+.settings-seg button:last-child {border-right:0}
+.settings-seg button[aria-pressed="true"] {background:var(--paper); color:var(--text); font-weight:500; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 0 0 1px rgba(0,0,0,.03)}
+.settings-stepper {display:inline-flex; align-items:center; gap:0; border:1px solid var(--line); border-radius:8px; overflow:hidden}
+.settings-stepper button {font:inherit; border:0; background:var(--raised); color:var(--muted); width:26px; height:28px; cursor:pointer}
+.settings-stepper button:hover {color:var(--text)}
+.settings-stepper .settings-v {min-width:58px; text-align:center; font-family:var(--mono); font-size:13px; font-variant-numeric:tabular-nums}
+.settings-tbox {font:inherit; font-family:var(--mono); font-size:13px; border:1px solid var(--line); border-radius:var(--ctl-r);
+  background:var(--paper); color:var(--text); padding:5px 10px; min-width:170px; height:var(--ctl-h); box-sizing:border-box}
+.settings-tbox:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
+textarea.settings-tbox {height:auto}
+/* The setup step bodies render in the onboarding wizard rather than in the
+   settings dialog, so they take the dialog's own button sizes here (page.css
+   says why 32 and 8). */
+.settings-setup .mini {
+  height: var(--ctl-h); min-width: 64px; border-radius: var(--ctl-r);
+  font-size: 13px; padding: 0 13px;
+}
+:root[data-lang="en"] .settings-setup .mini { min-width: 88px; }
+.settings-setup .mini:hover:not(:disabled) { border-color: var(--amber); background: var(--paper); }
+.settings-setup .mini.ghost { background: none; color: var(--muted); }
+.settings-setup .mini.danger { color: var(--clay); border-color: var(--clay); }
+
+.settings-rov {font-family:var(--mono); font-size:13px; color:var(--muted)}
+.settings-chip {display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:1px 7px; border-radius:99px; border:1px solid transparent}
+.settings-chip .settings-led {width:6px; height:6px; border-radius:99px; background:currentColor}
+.settings-chip.settings-on {color:var(--moss); background:color-mix(in srgb, var(--moss) 12%, transparent)}
+.settings-chip.settings-off {color:var(--faint); background:var(--raised)}
+.settings-chip.settings-warn {color:var(--clay); background:color-mix(in srgb, var(--clay) 12%, transparent)}
+.settings-chip.settings-act {cursor:pointer; font:inherit; font-size:11px; font-weight:600}
+.settings-chip.settings-act:hover {border-color:var(--clay)}
+.settings-taglist {display:flex; flex-wrap:wrap; gap:6px; align-items:center}
+.settings-tag2 {font-family:var(--mono); font-size:12px; background:var(--raised); border:1px solid var(--line); border-radius:6px; padding:2px 7px; color:var(--muted)}
+.settings-tag2 .settings-x {color:var(--faint); margin-left:5px; cursor:pointer}
+.settings-b {font-size:11px; font-family:var(--disp); font-weight:600; letter-spacing:.04em; padding:1px 6px; border-radius:4px; border:1px solid transparent; white-space:nowrap}
+.settings-b.settings-new {color:var(--sky); background:color-mix(in srgb, var(--sky) 12%, transparent); border-color:color-mix(in srgb, var(--sky) 30%, transparent)}
+.settings-b.settings-cfm {color:var(--clay); background:color-mix(in srgb, var(--clay) 12%, transparent); border-color:color-mix(in srgb, var(--clay) 32%, transparent)}
+.settings-b.settings-wr {color:var(--gold); background:var(--amber-dp); border-color:color-mix(in srgb, var(--amber) 40%, transparent)}
+.settings-b.settings-cl {color:var(--muted); background:var(--raised); border-color:var(--line)}
+.settings-b.settings-rs {color:var(--muted); background:var(--raised); border-color:var(--line)}
+.settings-b.settings-rm {color:var(--clay); background:none; border-color:color-mix(in srgb, var(--clay) 40%, transparent); text-decoration:line-through}
+.settings-ann {display:inline-grid; place-items:center; width:17px; height:17px; border-radius:99px; background:var(--sky); color:#fff;
+  font-family:var(--disp); font-size:11px; font-weight:600; flex:0 0 auto; cursor:pointer; border:0; padding:0}
+body:not(.settings-notes) .settings-ann {display:none}
+.settings-notecard {border:1px dashed var(--sky); border-radius:10px; background:color-mix(in srgb, var(--sky) 6%, transparent); padding:14px 16px; margin-bottom:16px}
+body:not(.settings-notes) .settings-notecard {display:none}
+.settings-notecard h5 {font-family:var(--disp); font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--sky); margin:0 0 8px; font-weight:600}
+.settings-notecard ol {margin:0; padding-left:0; list-style:none; counter-reset:nn}
+.settings-notecard li {counter-increment:nn; position:relative; padding-left:26px; margin:7px 0; font-size:14px; color:var(--muted)}
+.settings-notecard li::before {content:counter(nn); position:absolute; left:0; top:2px; width:17px; height:17px; border-radius:99px;
+  background:var(--sky); color:#fff; font-family:var(--disp); font-size:11px; font-weight:600; display:grid; place-items:center}
+.settings-notecard li b {color:var(--text); font-weight:600}
+.settings-filefoot {display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; padding:12px 15px; border:1px dashed var(--line);
+  border-radius:10px; color:var(--faint); font-size:13px; margin-top:4px}
+.settings-soonbox {border:1px dashed var(--line); border-radius:10px; padding:34px 24px; text-align:center; color:var(--faint)}
+.settings-soonbox .settings-t {font-family:var(--disp); font-size:16px; color:var(--muted); font-weight:600; margin-bottom:6px}
+.settings-scrim {position:fixed; inset:0; background:var(--scrim); display:grid; place-items:center; z-index:60; padding:20px}
+.settings-scrim[hidden] {display:none}
+.settings-modal {background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:var(--elev-up); max-width:430px; width:100%; padding:20px 22px}
+.settings-modal h4 {font-size:16px; font-weight:600; margin-bottom:8px}
+.settings-modal p {color:var(--muted); font-size:14px; margin:0 0 6px}
+.settings-modal .settings-impact {border-left:2px solid var(--clay); padding:8px 0 8px 12px; margin:12px 0; color:var(--text); font-size:14px}
+.settings-modal .settings-acts {display:flex; justify-content:flex-end; gap:8px; margin-top:16px}
+.settings-modal .settings-go {background:var(--clay); border-color:var(--clay); color:#fff}
+#toast {position:fixed; left:50%; bottom:26px; transform:translateX(-50%); background:var(--text); color:var(--paper);
+  padding:8px 15px; border-radius:99px; font-size:13px; z-index:70; box-shadow:var(--elev-up)}
+#toast[hidden] {display:none}
+section.settings-doc {margin:52px 0 0}
+section.settings-doc h2 {font-size:22px; font-weight:600; letter-spacing:-.01em; margin-bottom:6px}
+section.settings-doc > p {color:var(--muted); max-width:70ch; margin:0 0 18px}
+figure {margin:0 0 22px; border:1px solid var(--line); border-radius:10px; background:var(--paper); padding:20px 18px 14px; overflow-x:auto}
+figure svg {max-width:100%; height:auto; display:block; margin:0 auto; color:var(--text)}
+figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:center; text-wrap:balance}
+.settings-legend2 {display:flex; flex-wrap:wrap; gap:14px; font-size:13px; color:var(--muted); margin-bottom:18px}
+.settings-legend2 span {display:inline-flex; align-items:center; gap:6px}
+.settings-cut {border:1px solid var(--line); border-radius:10px; background:var(--paper); overflow:hidden}
+.settings-cut .settings-r {display:grid; grid-template-columns:180px 1fr; gap:16px; padding:13px 16px; border-bottom:1px solid var(--line-soft)}
+.settings-cut .settings-r:last-child {border-bottom:none}
+.settings-cut .settings-r .settings-n {font-family:var(--disp); font-weight:600; font-size:14px}
+.settings-cut .settings-r .settings-n small {display:block; font-family:var(--mono); font-size:11px; font-weight:400; color:var(--faint); margin-top:2px}
+.settings-cut .settings-r .settings-w {color:var(--muted); font-size:13px}
+.settings-cut .settings-r .settings-w b {color:var(--text); font-weight:600}
+@media(max-width:640px) {
+.settings-cut .settings-r {grid-template-columns:1fr; gap:4px}
+}
+.settings-tiles4 {display:grid; grid-template-columns:repeat(auto-fit,minmax(112px,1fr)); gap:1px; background:var(--line)}
+.settings-tl {background:var(--paper); padding:12px 14px}
+.settings-tl .settings-n {font-family:var(--disp); font-size:21px; font-weight:600; letter-spacing:-.02em; font-variant-numeric:tabular-nums; line-height:1.2}
+.settings-tl .settings-l {font-size:12px; color:var(--faint); margin-top:2px}
+.settings-tl.settings-good .settings-n {color:var(--moss)}
+.settings-bars {display:flex; align-items:flex-end; gap:3px; height:96px; padding:14px 15px 0}
+.settings-bars .settings-bb {flex:1; background:var(--amber); border-radius:2px 2px 0 0; min-height:2px; opacity:.85}
+.settings-bars .settings-bb.settings-dim {background:var(--line); opacity:1}
+.settings-bax {display:flex; justify-content:space-between; padding:6px 15px 12px; color:var(--faint); font-size:11px}
+.settings-utab {width:100%; border-collapse:collapse; font-size:13px}
+.settings-utab th {font-family:var(--disp); font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--faint);
+  font-weight:600; text-align:right; padding:8px 12px; border-bottom:1px solid var(--line-soft); white-space:nowrap}
+.settings-utab th:first-child {text-align:left}
+.settings-utab td {padding:8px 12px; border-bottom:1px solid var(--line-soft); text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+.settings-utab td:first-child {text-align:left; font-family:var(--mono); font-size:12px; white-space:normal}
+.settings-utab tr:last-child td {border-bottom:none}
+.settings-share {display:block; height:3px; border-radius:2px; background:var(--amber); margin-top:4px}
+.settings-gap {display:flex; gap:9px; padding:11px 15px; border-bottom:1px solid var(--line-soft); font-size:13px; color:var(--muted); align-items:flex-start}
+.settings-gap:last-child {border-bottom:none}
+.settings-gap .settings-dot {width:6px; height:6px; border-radius:99px; background:var(--clay); flex:0 0 6px; margin-top:7px}
+.settings-gap b {color:var(--text); font-weight:600}
+.settings-sa {padding:12px 15px; border-bottom:1px solid var(--line-soft)}
+.settings-sa:last-child {border-bottom:none}
+.settings-sa .settings-top {display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.settings-sa .settings-top .settings-nm {font-weight:600; font-size:14px}
+.settings-sa .settings-top .settings-kd {font-family:var(--mono); font-size:11px; color:var(--faint); border:1px solid var(--line); border-radius:4px; padding:0 5px}
+.settings-sa .settings-grid {display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:8px 16px; margin-top:9px}
+.settings-sa .settings-f {display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:13px}
+.settings-sa .settings-f .settings-fl {color:var(--muted); white-space:nowrap}
+.settings-sa .settings-owns {margin-top:8px; display:flex; align-items:center; gap:8px; font-size:13px}
+.settings-sa .settings-owns .settings-fl {color:var(--muted); white-space:nowrap}
+.settings-sa .settings-owns input {flex:1}
+.settings-plist {display:flex; flex-direction:column; gap:2px; max-height:min(56vh,420px); overflow-y:auto; margin-top:4px}
+.settings-plist .settings-pgrp {font-family:var(--disp); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); font-weight:600; padding:10px 4px 4px}
+.settings-plist .settings-pit {display:flex; align-items:center; gap:9px; width:100%; text-align:left; font:inherit; font-size:13px;
+  background:none; border:0; color:var(--text); padding:7px 9px; border-radius:7px; cursor:pointer}
+.settings-plist .settings-pit:hover {background:var(--raised)}
+.settings-plist .settings-pit[aria-current="true"] {background:var(--amber-dp); color:var(--gold); font-weight:600}
+.settings-plist .settings-pit .settings-mn {font-family:var(--mono); font-size:13px}
+.settings-plist .settings-pit .settings-sd {margin-left:auto; color:var(--faint); font-size:12px}
+.settings-plist .settings-pit[disabled] {opacity:.45; cursor:not-allowed}
+.settings-modal.settings-wide {max-width:520px}
+.settings-tkrow {display:flex; gap:8px; align-items:center; padding:10px 15px; background:var(--surface); border-bottom:1px solid var(--line-soft); flex-wrap:wrap}
+.settings-tkrow input {flex:1; min-width:150px; font:inherit; font-size:13px; font-family:var(--mono); border:1px solid var(--line);
+  border-radius:var(--ctl-r); background:var(--paper); color:var(--text); padding:0 9px;
+  height:var(--ctl-h); box-sizing:border-box}
+.settings-tkrow input:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
+.settings-ff {display:flex; flex-direction:column; gap:8px; padding:10px 0 2px}
+.settings-ff input,.settings-ff select {font:inherit; font-size:13px; border:1px solid var(--line); border-radius:var(--ctl-r);
+  background:var(--paper); color:var(--text); padding:0 9px; height:var(--ctl-h); box-sizing:border-box}
+.settings-ff input:focus,.settings-ff select:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
+.settings-ff input {font-family:var(--mono)}
+.settings-ff .settings-acts2 {display:flex; gap:8px}
+.settings-mnote {color:var(--faint); font-size:12px}
+.settings-inline-err {color:var(--clay); font-size:12px; padding:0 15px 9px}
+.settings-okmark {color:var(--moss); font-weight:600}
+.settings-fl2 {color:var(--muted); font-size:13px; white-space:nowrap}
+.settings-tkrow input[type="date"] {flex:0 0 auto; min-width:0}
+.settings-unpriced {padding:10px 15px; border-top:1px solid var(--line-soft); color:var(--muted); font-size:13px;
+  display:flex; align-items:center; gap:9px; flex-wrap:wrap}
+.settings-unpriced b {color:var(--text); font-weight:600}
+.settings-utab .settings-dim {color:var(--faint)}
+.settings-utab .settings-th2 {display:block; font-weight:400; text-transform:none; letter-spacing:0; color:var(--faint); font-size:11px; margin-top:1px}
+.settings-kvlist {display:flex; flex-direction:column; gap:1px; background:var(--line); border:1px solid var(--line);
+  border-radius:8px; overflow:hidden; margin-bottom:8px}
+.settings-kvrow {display:flex; align-items:center; gap:10px; background:var(--paper); padding:7px 10px}
+.settings-kvrow .settings-kvn {font-family:var(--mono); font-size:12px; font-weight:500; min-width:120px}
+.settings-kvrow .settings-kvv {font-family:var(--mono); font-size:12px; color:var(--faint); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-kvform {display:flex; gap:7px; flex-wrap:wrap; align-items:center}
+.settings-kvform input,.settings-kvform select {font:inherit; font-family:var(--mono); font-size:13px; border:1px solid var(--line);
+  border-radius:var(--ctl-r); background:var(--paper); color:var(--text); padding:0 9px; flex:1; min-width:110px;
+  height:var(--ctl-h); box-sizing:border-box}
+.settings-kvform input:focus,.settings-kvform select:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
+.settings-kvform select {font-family:var(--mono)}
+.settings-mlist {border-top:1px solid var(--line-soft); background:var(--paper)}
+.settings-mls {display:flex; align-items:center; gap:9px; padding:9px 15px; border-bottom:1px solid var(--line-soft)}
+.settings-mls svg {width:14px; height:14px; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
+.settings-mls input {flex:1; font:inherit; font-size:13.5px; font-family:var(--mono); border:0; background:none; color:var(--text); outline:none}
+.settings-mlb {height:260px; overflow-y:auto; padding:6px 8px}
+.settings-mli {display:flex; align-items:center; gap:10px; padding:6px 8px; border-radius:7px; cursor:pointer; font-family:var(--mono); font-size:12.5px}
+.settings-mli:hover {background:var(--surface)}
+.settings-mli input {accent-color:var(--amber); margin:0; width:14px; height:14px}
+.settings-mli .settings-id {flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-mli .settings-sd {font-family:var(--sans); font-size:11.5px; color:var(--faint)}
+.settings-mli.settings-has {color:var(--faint); cursor:default}
+.settings-mli.settings-add {color:var(--gold)}
+.settings-mli.settings-add .settings-sd {color:var(--gold)}
+.settings-mlempty {padding:26px 14px; color:var(--faint); font-size:13px; text-align:center}
+.settings-mlf {display:flex; align-items:center; gap:8px; padding:9px 15px; border-top:1px solid var(--line-soft)}
+.settings-ctl {position:relative}
+/* Placed by lib/popover.ts, which sets position, top, left and z-index: the
+   row it hangs off lives inside .spanels, whose overflow clips an absolutely
+   positioned child, so the panel resolves against .smodal instead and the
+   dialog is what bounds it. Only the size is CSS's to say. */
+.settings-tag2.settings-pick {cursor:pointer; font-family:var(--mono)}
+.settings-tag2.settings-pick:hover {border-color:var(--amber); color:var(--text)}
+.settings-spin {display:inline-block; width:11px; height:11px; margin-right:7px; vertical-align:-1px;
+  border:2px solid var(--line); border-top-color:var(--amber); border-radius:99px; animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce) {
+.settings-spin {animation:none; border-top-color:var(--amber)}
+}
+.settings-crumb {display:flex; align-items:center; gap:9px; padding:0 0 14px; flex-wrap:wrap}
+.settings-crumb .settings-nm {font-family:var(--disp); font-weight:600; font-size:16px}
+.settings-row .settings-sub2 {font-size:12px; color:var(--faint); margin-left:6px}
+.settings-pgrp2 {font-family:var(--disp); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint);
+  font-weight:600; padding:12px 15px 5px; background:var(--surface-2)}
+.settings-prow2 {display:flex; align-items:center; gap:9px; padding:10px 15px; border-bottom:1px solid var(--line-soft); flex-wrap:wrap}
+.settings-prow2:last-child {border-bottom:none}
+.settings-prow2 .settings-pn2 {font-size:14px; font-weight:600}
+.settings-crumb .settings-kd {font-family:var(--sans); font-size:13px; color:var(--faint); border:0; border-radius:4px; padding:0}
+.settings-arow {display:flex; align-items:center; gap:12px; padding:12px 15px; border-bottom:1px solid var(--line-soft)}
+.settings-arow:last-child {border-bottom:none}
+.settings-arow .settings-am {flex:1; min-width:0}
+.settings-arow .settings-at {font-size:14px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-arow .settings-ameta {display:flex; gap:10px; align-items:center; color:var(--faint); font-size:12px; margin-top:3px}
+.settings-arow .settings-ameta .settings-kd {font-family:var(--mono); border:1px solid var(--line); border-radius:4px; padding:0 5px}
+.settings-arow .settings-aacts {display:flex; gap:7px; flex:0 0 auto}
+.settings-pathv {display:inline-flex; align-items:center; gap:7px; min-width:0}
+.settings-pathv .settings-pp {font-family:var(--mono); font-size:13px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-iconbtn {display:inline-grid; place-items:center; width:24px; height:24px; flex:0 0 24px; padding:0; cursor:pointer;
+  background:none; border:1px solid transparent; border-radius:6px; color:var(--faint)}
+.settings-iconbtn:hover {color:var(--text); border-color:var(--line); background:var(--raised)}
+.settings-iconbtn:focus-visible {outline:2px solid var(--amber); outline-offset:1px}
+.settings-iconbtn svg {width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round}
+.settings-warnmark {color:var(--clay); font-weight:600}
+.settings-req {font-size:11px; font-family:var(--disp); font-weight:600; letter-spacing:.04em; color:var(--gold); background:var(--amber-dp); border-radius:4px; padding:0 5px}
+.settings-card > .settings-ch.settings-hasact {display:flex; align-items:center; justify-content:space-between; gap:10px; padding-top:9px; padding-bottom:8px}
+/* Settings that belong to the row above: not a card inside a card, but the same
+   table indented one step and tied back to that row by a rail. A boxed panel
+   reads as a second object with its own edges, which is what makes a list of
+   them look like stacked cards; the rail says "these belong to that line" and
+   spends no border doing it. The controls sit a notch under the page's own
+   (28px against 32px) and line up with the parent row's control edge rather
+   than starting a second column, so an open row keeps one alignment, not two.
+   .settings-padd opts back out to a box: it is a standalone form, not a row's
+   dependents. */
+.settings-cfg {position:relative; margin:0; padding:0 15px 12px 31px; background:transparent}
+.settings-cfg::before {content:""; position:absolute; left:15px; top:2px; bottom:14px; width:2px; border-radius:2px;
+  background:var(--faint); opacity:.45}
+.settings-cfg .settings-row {display:grid; grid-template-columns:minmax(0,1fr) auto; gap:0 14px; min-height:34px; padding:1px 0;
+  border:0; align-items:center}
+.settings-cfg .settings-row .settings-k {font-size:13px; color:var(--muted)}
+.settings-cfg .settings-row .settings-ctl {justify-self:end; margin:0}
+/* Three shapes, because a drawer holds three kinds of line.
+
+   A labelled control keeps the two columns above: it joins the column of
+   controls the page already has down its right edge.
+
+   A stacked field puts its label over a control that takes the whole width --
+   which is what `stack` means everywhere else on this page, and what the key
+   fields ask for. The drawer was overriding it back into two columns, so a
+   label two characters long sat a full panel-width away from its own input.
+
+   A sentence has no label at all. Left in the two-column grid it was pushed
+   against the right edge with nothing to pair with; prose reads from the left,
+   so the empty cell collapses and the line spans. */
+.settings-cfg .settings-row.settings-stack {grid-template-columns:minmax(0,1fr)}
+.settings-cfg .settings-row.settings-stack .settings-ctl {justify-self:stretch; margin-top:5px}
+/* The field takes the width the stack just gave the row, which puts its
+   buttons at the right end where the row's own controls are. */
+.settings-cfg .settings-row.settings-stack .settings-taglist {width:100%}
+.settings-cfg .settings-row.settings-stack .settings-tbox {flex:1; min-width:180px}
+.settings-cfg .settings-row .settings-k:empty {display:none}
+.settings-cfg .settings-row:has(> .settings-k:empty) {grid-template-columns:minmax(0,1fr)}
+.settings-cfg .settings-row:has(> .settings-k:empty) .settings-ctl {justify-self:stretch}
+/* A server's own facts.
+
+   Two type styles, and no third: 13px sans for anything written for a reader,
+   12px mono for anything written for a machine -- an address, a command, a
+   tool id, a handshake error. That pair is the drawer's own already (its row
+   labels are 13 sans, its boxes and readouts 12 mono), and mono set one step
+   under the sans it sits beside is what makes the two look the same size; at
+   equal px the mono reads larger. This block had grown four sizes in six
+   words -- 13.5, 12, 12, 11.5 -- which is what a jumble is made of.
+
+   Hierarchy is carried by colour instead: --faint for the label and for names
+   nobody has to read, --muted for the value, --clay for the failure. */
+.settings-pnote {font-size:13px; color:var(--muted)}
+.settings-pbad {font-family:var(--mono); font-size:12px; color:var(--clay); overflow-wrap:anywhere}
+/* The reason on the left, wrapping; the retry on the right at the reason's
+   first line, where the row's own controls stand. */
+.settings-pfail {display:flex; align-items:flex-start; gap:14px; padding:4px 0 8px}
+.settings-pfail .settings-pbad {flex:1; min-width:0; line-height:1.55; padding-top:5px}
+.settings-pfail .mini {flex:none}
+.settings-pfacts {display:grid; grid-template-columns:max-content minmax(0,1fr); gap:3px 14px; margin:3px 0 0;
+  align-items:baseline}
+.settings-pfacts dt {font-size:13px; color:var(--faint)}
+.settings-pfacts dd {margin:0; min-width:0; font-size:13px; color:var(--muted); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap}
+.settings-pmono {font-family:var(--mono); font-size:12px}
+.settings-ptnames {font-family:var(--mono); font-size:12px; color:var(--faint); margin-left:9px}
+.settings-cfg .settings-taglist {gap:10px}
+.settings-cfg .settings-cfnote {font-size:12px; color:var(--clay); text-align:right; padding:0 0 4px}
+/* One size for everything a drawer holds: 28px and 12px, against the dialog's
+   own 32px and 13px (page.css's `.smodal .mini` sets that scale). The sheet
+   already claimed the step down and did not keep it -- only the stepper was
+   28, while the segment, the select, the box and the button all stayed 32, and
+   the button's rule named `.settings-mini`, a class no markup carries. Reached
+   into from here because these are the page's controls embedded in this
+   domain's container; this sheet loads after page.css, which is what lets an
+   equal-specificity rule tune them. */
+.settings-cfg .mini,.settings-cfg .sel,.settings-cfg .settings-tbox,.settings-cfg .settings-seg {height:28px; font-size:12px}
+.settings-cfg .mini {padding:0 11px}
+.settings-cfg .sel {padding:0 24px 0 9px}
+.settings-cfg .settings-tbox {min-width:220px; padding:0 9px}
+.settings-cfg .settings-ctxbox {min-width:0; width:104px; text-align:right}
+.settings-cfg .settings-stepper {height:28px}
+.settings-cfg .settings-stepper button {height:26px; width:24px}
+.settings-cfg .settings-stepper .settings-v {font-size:12px; min-width:52px}
+.settings-cfg .settings-seg button {font-size:12px; padding:0 10px}
+.settings-cfg .settings-rov {font-size:12px}
+.settings-cfg .settings-fl2 {font-size:12px}
+.settings-cfg .settings-swi {width:34px; height:20px}
+.settings-cfg .settings-swi::after {width:14px; height:14px}
+.settings-cfg .settings-swi[aria-checked="true"]::after {transform:translateX(14px)}
+/* An open row gives up its own separator: a line between a row and the panel it
+   just opened reads as a third row, and on the role rows -- which carry no
+   separator at all -- one appeared out of nowhere on expand, because opening
+   the drawer is what stopped the row being its wrapper's :last-child. The tool
+   and plugin rows do carry one, and hand it to the drawer below. */
+.settings-row.settings-open,.settings-xrow.settings-open {border-bottom:0}
+.settings-xrow.settings-open + .settings-cfg {border-bottom:1px solid var(--line-soft)}
+.settings-xrow.settings-open + .settings-cfg:last-child {border-bottom:0}
+/* The add-a-provider block opts back out to a box: it is a standalone form with
+   its own edges, not a row's dependents, so it keeps the border, the ground and
+   the label column, and drops the rail. These outrank the rules above by
+   naming both classes -- they sit later in the sheet as well, because the
+   single-class ones would otherwise win every declaration the two share. */
+.settings-cfg.settings-padd {margin:10px 15px 6px; padding:6px 14px 8px; border:1px solid var(--line); border-radius:8px;
+  background:var(--paper)}
+.settings-cfg.settings-padd::before {display:none}
+.settings-cfg.settings-padd .settings-row {grid-template-columns:132px minmax(0,1fr); gap:6px 14px; padding:5px 0;
+  min-height:0}
+.settings-cfg.settings-padd .settings-row .settings-k:empty {display:none}
+.settings-cfg.settings-padd .settings-row .settings-ctl {justify-self:start}
+.settings-xrow {cursor:pointer}
+.settings-xrow:hover {background:var(--surface)}
+.settings-xrow .settings-k {gap:9px}
+/* The same chevron the role rows and the page's own folds show: a mark that
+   turns. In a bordered box it read as a second control beside the name, and
+   gave one list three looks at once -- a grey box, an amber-filled box, and
+   nothing at all on a row with no panel. The element IS the svg, so it carries
+   its own stroke; the `.settings-chev svg` rule matched nothing. The two
+   [aria-expanded] rules matched nothing either: the attribute is on the button
+   inside the row, not on the row. */
+.settings-xrow .settings-chev {flex:none; width:11px; height:11px; color:var(--faint); fill:none; stroke:currentColor;
+  stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; transition:transform .16s, color .16s}
+.settings-xrow:hover .settings-chev {color:var(--muted)}
+@media (prefers-reduced-motion:reduce) {.settings-xrow .settings-chev {transition:none}}
+.settings-row.settings-dim .settings-k {color:var(--faint)}
+.settings-xrow.settings-dim .settings-chev {opacity:.5}
+.settings-srch {display:flex; align-items:center; gap:9px; border:1px solid var(--line); border-radius:var(--ctl-r);
+  background:var(--paper); padding:0 11px; height:var(--ctl-h); box-sizing:border-box; margin-bottom:14px}
+.settings-srch:focus-within {border-color:var(--amber); box-shadow:var(--ctl-focus)}
+.settings-srch svg {width:15px; height:15px; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
+.settings-srch input {flex:1; font:inherit; font-size:14px; border:0; background:none; color:var(--text); outline:none}
+.settings-skrow {display:flex; align-items:center; gap:14px; border-bottom:1px solid var(--line-soft); padding:0 15px 0 0}
+.settings-skrow:last-child {border-bottom:none}
+.settings-skrow:hover {background:var(--surface)}
+.settings-skrow .settings-open {flex:1; min-width:0; display:grid; grid-template-columns:minmax(150px,230px) 1fr; gap:14px; align-items:center; text-align:left; font:inherit;
+  background:none; border:0; padding:10px 0 10px 15px; cursor:pointer; color:var(--text)}
+.settings-skrow .settings-nm {font-family:var(--mono); font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-skrow .settings-ds {color:var(--muted); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0}
+.settings-skrow.settings-off .settings-nm,.settings-skrow.settings-off .settings-ds {color:var(--faint)}
+@media(max-width:640px) {
+.settings-skrow .settings-open {grid-template-columns:1fr}
+.settings-skrow .settings-ds {display:none}
+}
+.settings-mdcard {margin-bottom:0}
+.settings-ftags {display:flex; flex-wrap:wrap; gap:6px; margin-top:12px}
+.settings-ftag {display:inline-flex; align-items:center; gap:2px; border:1px solid var(--line); border-radius:6px; background:var(--raised); padding:1px 2px 1px 8px}
+.settings-ftag .settings-fn {font-family:var(--mono); font-size:12px; color:var(--muted)}
+.settings-ftag.settings-cur {background:var(--amber-dp); border-color:color-mix(in srgb, var(--amber) 40%, transparent)}
+.settings-ftag.settings-cur .settings-fn {color:var(--gold); font-weight:600}
+.settings-ftag .settings-iconbtn {width:20px; height:20px; flex-basis:20px}
+.settings-ftag .settings-iconbtn svg {width:12px; height:12px}
+.settings-skmeta {font-size:12px; color:var(--faint); margin-top:10px}
+.settings-mdhead {padding:16px 20px 14px; border-bottom:1px solid var(--line-soft)}
+.settings-mdname {font-family:var(--mono); font-size:16px; font-weight:600; margin-bottom:4px}
+.settings-md {padding:6px 20px 20px; font-size:14px; line-height:1.65; overflow-wrap:anywhere; max-width:860px}
+.settings-md h2,.settings-md h3,.settings-md h4,.settings-md h5 {font-family:var(--disp); font-weight:600; margin:20px 0 8px; letter-spacing:-.01em}
+.settings-md h2 {font-size: 16px}
+.settings-md h3 {font-size: 16px}
+.settings-md h4,.settings-md h5 {font-size:14px}
+.settings-md p {margin:8px 0}
+.settings-md ul,.settings-md ol {margin:8px 0; padding-left:22px}
+.settings-md li {margin:3px 0}
+.settings-md code {font-family:var(--mono); font-size:13px; background:var(--raised); border-radius:4px; padding:1px 5px}
+.settings-md pre {background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:10px 12px; overflow-x:auto; margin:10px 0}
+.settings-md pre code {background:none; padding:0; font-size:12px; line-height:1.5}
+.settings-md blockquote {border-left:2px solid var(--amber); margin:10px 0; padding:2px 12px; color:var(--muted)}
+.settings-md hr {border:0; border-top:1px solid var(--line); margin:16px 0}
+.settings-md a {color:var(--link)}
+.settings-md table {border-collapse:collapse; font-size:13px; margin:10px 0; width:100%}
+.settings-md th,.settings-md td {border:1px solid var(--line); padding:5px 9px; text-align:left; vertical-align:top}
+.settings-md th {background:var(--surface); font-weight:600}
+.settings-crumb .settings-swi {margin-left:4px}
+.settings-desc {color:var(--muted); font-size:13px; line-height:1.55}
+.settings-swi[disabled] {opacity:.4; cursor:not-allowed}
+.settings-prow2 .settings-mono {font-family:var(--mono); font-size:13px; font-weight:600}
+.settings-row .settings-k b {font-family:var(--mono); font-size:13px; font-weight:600}
+.settings-ctl .settings-taglist b {font-family:var(--mono); font-size:13px; font-weight:600}
+.settings-mpill {position:relative; display:inline-flex; align-items:stretch; width:320px; max-width:100%; border:1px solid var(--line); border-radius:8px;
+  background:var(--paper); color:var(--text); overflow:hidden}
+.settings-mpill:hover {border-color:var(--amber)}
+.settings-mpill .settings-pm {flex:1; min-width:0; display:flex; align-items:center; gap:7px; font:inherit; color:inherit; background:none; border:0;
+  padding:5px 8px 5px 10px; cursor:pointer; text-align:left}
+.settings-mpill .settings-pm:focus-visible {outline:2px solid var(--amber); outline-offset:-2px}
+.settings-mpill .settings-px {position:absolute; top:0; right:0; bottom:0; width:30px; font:inherit; font-size:14px; line-height:1; border:0; background:var(--paper); color:var(--faint); cursor:pointer; display:none}
+.settings-mpill.settings-clearable:hover .settings-px,.settings-mpill.settings-clearable:focus-within .settings-px {display:block}
+/* The clear control lies over the pill's right edge, so on hover the chevron
+   leaves the row and the button's padding takes its exact place: gap 7 +
+   margin 2 + slot 14 + padding 8 = 31, one past the control's 30. The provider
+   then ellipsizes short of the control instead of running under it, and its
+   right edge does not move. */
+.settings-mpill.settings-clearable:hover .settings-ch,.settings-mpill.settings-clearable:focus-within .settings-ch {display:none}
+.settings-mpill.settings-clearable:hover .settings-pm,.settings-mpill.settings-clearable:focus-within .settings-pm {padding-right:31px}
+.settings-mpill .settings-px:hover {color:var(--clay)}
+.settings-mpill .settings-id {flex:1; min-width:0}
+.settings-mpill .settings-pv {overflow:hidden; text-overflow:ellipsis; max-width:45%}
+.settings-mpill .settings-id {font-family:var(--mono); font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-mpill .settings-pv {font-size:12px; color:var(--faint); white-space:nowrap}
+.settings-mpill .settings-ch {color:var(--faint); font-size:11px; margin-left:2px; width:14px; flex:none; text-align:center}
+.settings-mpill.settings-dim .settings-id {font-family:var(--sans); font-weight:400; color:var(--muted)}
+.settings-mpill.settings-dim {background:none}
+.settings-row .settings-rk {display:block}
+.settings-row .settings-rk .settings-rt {font-size:14px; display:flex; align-items:center; gap:7px}
+.settings-row .settings-rk .settings-rd {font-size:13px; color:var(--faint); margin-top:2px; line-height:1.45}
+/* A row's disclosure: the page's own fold (.foldcap -- chevron, word, chevron
+   turns when open), tuned to sit under a role's description and to carry the
+   values it hides while it is closed, so the row answers "what is this set to"
+   without being opened. The word alone was an 11px amber link: it read as
+   navigation, it was the size of one, and it said nothing about the three
+   values behind it. This sheet loads after page.css, which is what lets these
+   tune .foldcap's own declarations. */
+.settings-disc {font-size:12px; line-height:1.3; margin:5px 0 0 -4px; padding:3px 8px 3px 4px; border-radius:6px;
+  flex-wrap:wrap; gap:3px 6px; max-width:100%; text-align:left}
+.settings-disc:hover {background:var(--line-soft)}
+.settings-disc .settings-sl {white-space:nowrap}
+.settings-disc .settings-sv {color:var(--text); font-variant-numeric:tabular-nums; white-space:nowrap}
+/* The separator trails its own value rather than leading the next, so a
+   summary that wraps starts the new line on a label, not on a dot. */
+.settings-disc .settings-sv:not(:last-child)::after {content:"\00b7"; color:var(--faint); margin-left:6px}
+.settings-disc .settings-sn {color:var(--faint); margin-right:3px}
+.settings-opttag {font-size:11px; font-family:var(--disp); font-weight:600; letter-spacing:.04em; color:var(--muted); background:var(--raised); border-radius:4px; padding:0 5px}
+
+/* The expandable rows (tools, plugins): the name is the button, the switch
+   and the chip stay outside it. */
+/* --line-soft, the weight every other row on this page separates with; these
+   were a shade darker, so a list of tools read as ruled and a list of roles
+   did not. */
+.settings-xrow {display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line-soft)}
+.settings-xrow:last-child {border-bottom:0}
+.settings-xrow.settings-dim .settings-xn {color:var(--muted)}
+.settings-xname {display:inline-flex; align-items:center; gap:9px; flex:1; min-width:0; font:inherit; color:inherit; background:none; border:0; padding:0; text-align:left; cursor:pointer}
+.settings-xname .settings-xn {font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-xrow.settings-open .settings-chev {transform:rotate(90deg); color:var(--amber)}
+.settings-lnkico {margin-left:6px; vertical-align:middle}
+
+/* ---- Model providers: the catalogue in two columns ------------------------
+   The prototype's `tp-*` family, prefixed. Left: every provider the wire
+   returns, searchable and filtered; right: the selected one's connection.
+   The shape is one page's for now -- the prototype shares it with channels and
+   memory, which are not built here, so it is copied when they are rather than
+   abstracted for pages that do not exist. */
+/* A definite height, not a max: a grid's fr row resolves against the container
+   only when that is definite, so under max-height both columns grew to the
+   vendor list's 2000px and were clipped -- the list could not scroll and the
+   "pick one" placeholder, centred in a column that tall, sat below the fold.
+   Of the 220, the dialog's shell and body padding take 184. */
+.settings-tp {display:grid; grid-template-columns:286px minmax(0,1fr); grid-template-rows:minmax(0,1fr); border:1px solid var(--line); border-radius:12px; overflow:hidden; height:calc(100vh - 220px); min-height:420px}
+.settings-tp-side {border-right:1px solid var(--line-soft); padding:13px; display:flex; flex-direction:column; gap:9px; min-height:0; min-width: 0; overflow: hidden}
+.settings-tp-find {display:flex; gap:8px; align-items:center}
+.settings-tp-find input {flex:1; min-width:0; font:inherit; font-size:13px; padding:0 11px; border:1px solid var(--line);
+  border-radius:var(--ctl-r); background:var(--paper); color:var(--text); outline:none;
+  height:var(--ctl-h); box-sizing:border-box}
+.settings-tp-find input:focus {border-color:var(--amber); box-shadow:var(--ctl-focus)}
+.settings-tp-filt {flex:none; width:var(--ctl-h); height:var(--ctl-h); border-radius:var(--ctl-r);
+  display:grid; place-items:center; border:1px solid var(--line); background:var(--paper); color:var(--muted); cursor:pointer}
+.settings-tp-filt:hover {border-color:var(--amber); color:var(--text)}
+.settings-tp-filt svg {width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round}
+.settings-tp-foot {margin-top:24px; padding-top:16px; border-top:1px solid var(--line-soft)}
+.settings-tp-list {display:flex; flex-direction:column; gap:1px; flex:1; min-height:0; overflow-y:auto; margin:0 -5px; padding: 0 5px 2px}
+.settings-tp-row {display:flex; align-items:center; border-radius:8px}
+.settings-tp-row:hover {background:var(--surface)}
+.settings-tp-row[aria-current="true"] {background:var(--raised)}
+.settings-tp-hit {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; background:none; border:0; color:var(--text); padding:7px 9px; cursor:pointer}
+.settings-tp-nm {flex:1; min-width:0; font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-tp-row[aria-current="true"] .settings-tp-nm {font-weight:600}
+.settings-tp-def {flex:none; font-size:10.5px; color:var(--gold); border:1px solid var(--line); border-radius:99px; padding:0 6px}
+.settings-tp-dot {width:7px; height:7px; border-radius:50%; background:var(--moss); flex:none}
+.settings-tp-empty {padding:12px 9px; color:var(--faint); font-size:13px}
+.settings-tp-main {padding:17px 20px 20px; min-width:0; min-height:0; overflow-y:auto}
+/* Every one-line field on a provider's page is one width, and every button
+   beside one stands at the pane's right edge -- the edge "Add model" already
+   stands at. The field is the row less one button slot, whether or not that
+   row has its button: sized by their contents the boxes came out 186 and 208
+   wide, and filling their row instead made the one address box with no button
+   beside it wider than every other. The slot is the dialog's own button floor
+   (`.smodal .mini`, per language), so a two-character label fills it exactly. */
+.settings-tp-main {--tp-act:64px}
+:root[data-lang="en"] .settings-tp-main {--tp-act:88px}
+.settings-tp-main .settings-sec .settings-tbox,.settings-tp-main .settings-sec .keyfield,
+.settings-tp-main .settings-sec .selw {width:calc(100% - var(--tp-act) - 6px); max-width:none; min-width:0; flex:none;
+  box-sizing:border-box}
+.settings-tp-main .keyfield > .settings-tbox,.settings-tp-main .selw > .sel {width:100%}
+.settings-tp-main .settings-taglist:has(> .settings-tbox),.settings-tp-main .settings-taglist:has(> .keyfield),
+.settings-tp-main .settings-taglist:has(> .selw) {flex-wrap:nowrap; width:100%}
+.settings-tp-main .settings-taglist:has(> .settings-tbox) > .mini,.settings-tp-main .settings-taglist:has(> .keyfield) > .mini,
+.settings-tp-main .settings-taglist:has(> .selw) > .mini {min-width:var(--tp-act); margin-left:auto}
+/* The empty model list is a sentence under the heading, at the heading's edge;
+   the list page's empty state carries padding this one does not want. */
+.settings-tp-main .settings-taglist > .settings-tp-empty {padding:2px 0}
+.settings-tp-none {display:grid; place-items:center; padding:60px 20px; color:var(--faint); font-size:13px}
+.settings-tp-head {display:flex; align-items:flex-start; gap:10px}
+.settings-tp-head .provider-icon {width:30px; height:30px; border-radius:8px}
+.settings-tp-ttl {min-width:0; flex:1}
+.settings-tp-name {display:flex; align-items:center; gap:7px; font-family:var(--disp); font-size:16px; font-weight:600}
+/* One line of state under the name, with the dot the rest of the page states a
+   state with -- it was the only one on the page without it. */
+.settings-tp-state {display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--muted); margin-top:5px}
+.settings-tp-state::before {content:""; width:6px; height:6px; border-radius:50%; background:var(--faint); flex:none}
+.settings-tp-state.settings-tp-live {color:var(--moss)}
+.settings-tp-state.settings-tp-live::before {background:var(--moss)}
+
+/* A labelled block, the card's flat replacement (Fields.tsx's Sec says why). */
+.settings-sec {margin-top:19px}
+.settings-sec-tight {margin-top:14px}
+.settings-lab {display:flex; align-items:center; gap:10px; font-size:14px; font-weight:600; margin-bottom:8px}
+.settings-lab .settings-sub2 {margin-left:0}
+.settings-sp {flex:1}
+/* The get-a-key link is a named link, not a bare arrow: an icon alone beside
+   "API key" does not say that what it opens is where the key comes from. */
+.settings-lab .exlink {margin:0; font-size:13px; font-weight:400}
+/* The label is bold and every button on the page inherits its weight, so a
+   control sitting in the label -- "Add model" beside "Models" -- came out as
+   bold as the heading it is not. Same for the hint after it. */
+.settings-lab .mini,.settings-lab .settings-sub2,.settings-tp-name .exlink {font-weight:400}
+
+/* ---- Add model: a catalogue that hangs off its button ---------------------
+   The prototype's `apop` family, prefixed. Positioned in JS against the button
+   (AddModelPop.tsx) because its height follows the room, not the list. */
+/* At the body, so above the settings veil (--z-veil 40) like the picker. */
+.settings-apop {position:fixed; z-index:47; width:min(470px, calc(100vw - 32px)); display:flex; flex-direction:column; background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:var(--elev-up); overflow:hidden}
+.settings-apsearch {display:flex; align-items:center; gap:9px; padding:9px 13px; border-bottom:1px solid var(--line-soft)}
+.settings-apsearch svg {width:14px; height:14px; flex:none; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
+.settings-apsearch input {flex:1; min-width:0; font:inherit; font-size:13px; border:0; background:none; color:var(--text); outline:none}
+.settings-apkinds {display:flex; flex-wrap:wrap; gap:5px; padding:8px 10px 6px; border-bottom:1px solid var(--line-soft)}
+.settings-mkind {display:inline-flex; align-items:center; gap:5px; font:inherit; font-size:12px; color:var(--muted); background:none; border:1px solid transparent; border-radius:7px; padding:3px 8px; cursor:pointer}
+.settings-mkind:hover {background:var(--surface)}
+.settings-mkind[aria-pressed="true"] {border-color:var(--line); background:var(--surface); color:var(--text)}
+.settings-mkind .model-tag {width:12px; height:12px; color:inherit}
+.settings-mkind i {font-style:normal; font-family:var(--mono); font-size:11px; color:var(--faint)}
+.settings-apbody {flex:1; min-height:0; overflow-y:auto; padding:6px}
+.settings-apwait {display:flex; padding:18px 14px; color:var(--faint); font-size:13px; text-align:center; align-items: center; gap: 9px}
+/* A vendor's head is its select-all, the same box as its rows. The rows sit
+   one step in, their box under the head's name rather than under the head's
+   box: at one edge a head read as one more row, and the list lost the shape
+   that says which models the head's tick covers. */
+.settings-mgroup {display:flex; align-items:center; gap:9px; width:100%; margin-top:6px; padding:5px 8px; font:inherit;
+  background:none; border:0; border-radius:7px; color:var(--muted); text-align:left; cursor:pointer}
+.settings-gn {font-size:11px; font-weight:600; letter-spacing:.04em}
+.settings-gc {font-family:var(--mono); font-size:10px; color:var(--faint)}
+.settings-apgrp .settings-apm {padding-left:32px}
+/* The fold at the end of a provider's model chips: a word in the chips' own
+   line, not a button in a box, so it reads as the list's tail. */
+.settings-tagmore {font:inherit; font-size:12px; color:var(--muted); background:none; border:0; padding:3px 6px;
+  border-radius:6px; cursor:pointer}
+.settings-tagmore:hover {color:var(--text); background:var(--surface)}
+/* The footer's select-all: the rows' tick, at the rows' left edge. */
+.settings-apall {display:inline-flex; align-items:center; gap:9px; font:inherit; font-size:12px; color:var(--muted);
+  background:none; border:0; padding:4px 6px 4px 0; border-radius:6px; cursor:pointer}
+.settings-apall:hover {color:var(--text)}
+.settings-apall:hover .settings-aptick {border-color:var(--muted)}
+.settings-apall[aria-checked="true"] .settings-aptick,
+.settings-apall[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-accent)}
+.settings-apm {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; font-size:13px; background:none; border:0; color:var(--text); padding:6px 8px; border-radius:7px; cursor:pointer}
+.settings-apm:hover {background:var(--surface)}
+/* A tick box: the list is a selection, and the footer commits it. The glyph
+   inside is inked in the ground colour, so it only shows once the box fills. */
+.settings-aptick {width:15px; height:15px; flex:none; border-radius:4px; border:1.5px solid var(--line); display:grid;
+  place-items:center; font-size:10px; line-height:1; color:var(--ink)}
+/* A vendor head does not light up on hover: a filled band there read as a
+   selection of its own, a second state beside the box's. Only the box answers
+   the pointer, the way it does on a row. */
+.settings-apm:hover .settings-aptick,.settings-mgroup:hover .settings-aptick {border-color:var(--muted)}
+.settings-apm[aria-checked="true"] .settings-aptick,
+.settings-mgroup[aria-checked="true"] .settings-aptick,
+.settings-mgroup[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-accent)}
+.settings-apnm {flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono); font-size:12px}
+.settings-apsd {font-family:var(--sans); font-size:11.5px; color:var(--faint); flex:none}
+.settings-apadd {color:var(--gold)}
+/* The typed-id row's box is dashed and holds a plus: it is the one row that is
+   not a tick -- one press adds an id the list does not carry. */
+.settings-apadd .settings-aptick {border-style:dashed; border-color:var(--gold); color:var(--gold)}
+.settings-apadd .settings-apsd {color:var(--gold)}
+.settings-apkind {display:inline-flex; align-items:center; gap:4px; flex:none; font:inherit; font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:6px; padding:1px 7px; background:var(--paper); cursor:pointer}
+.settings-apkind:hover {border-color:var(--amber); color:var(--text)}
+.settings-apkind .model-tag {width:11px; height:11px; color:inherit}
+.settings-aphr {height:1px; background:var(--line-soft); margin:6px 4px}
+.settings-apfoot {font-variant-numeric:tabular-nums; display:flex; align-items:center; gap:10px; padding:7px 9px 7px 13px; border-top:1px solid var(--line-soft); font-size: 12px; color: var(--faint)}
+.settings-apnote {padding:7px 9px; margin:2px 2px 4px; border-radius:7px; background:var(--surface); color:var(--muted); font-size:12px}
+
+/* ---- what a section looks like before its values are in ------------------
+   Skeletons.tsx draws each section's own anatomy in the classes above; what
+   it adds is the bar, plus the three arrangements of bars that have no row of
+   their own to sit in (a stack, a pair side by side, a table's lines).
+
+   A translucent wash rather than a named surface: these bars sit on the card,
+   on the catalogue's rail and inside the model popover, and --surface/--raised
+   each read against only one of the three -- a bar drawn in the same grey as
+   the ground behind it is invisible until the shimmer's peak sweeps past. */
+.settings-wbar {
+  display:block; flex:none; border-radius:5px;
+  background:linear-gradient(90deg,
+    color-mix(in oklab, var(--text) 7%, transparent) 30%,
+    color-mix(in oklab, var(--text) 15%, transparent) 50%,
+    color-mix(in oklab, var(--text) 7%, transparent) 70%);
+  background-size:300% 100%; animation:settings-wshine 1.3s linear infinite;
+}
+@keyframes settings-wshine {from {background-position:100% 0} to {background-position:-100% 0}}
+@media (prefers-reduced-motion:reduce) {.settings-wbar {animation:none}}
+.settings-wstack {display:grid; gap:7px; align-content:start}
+.settings-wpair {display:flex; align-items:center; gap:7px}
+.settings-wtab {display:grid; gap:1px}
+.settings-wtr {display:grid; grid-template-columns:1fr auto auto; gap:14px; align-items:center; padding:9px 12px; border-bottom:1px solid var(--line-soft)}
+.settings-wtr:last-child {border-bottom:none}
+/* The chart's bars are the flex children `.settings-bb` would have been. */
+.settings-bars .settings-wbar {flex:1; border-radius:2px 2px 0 0}
+/* The catalogue's grid and the skill card are the wait itself, so the box
+   carrying `role="status"` is the one the section already draws. */
+.settings-wait.settings-tp {display:grid}
+.settings-wait .settings-tp-find .settings-wbar {border-radius:var(--ctl-r)}
+
+/* ── general: title + line on the left, control on the right ───── */
+
+.settings-genlist {display:flex; flex-direction:column; gap:26px; padding-top:4px}
+.settings-gen {display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px 20px}
+.settings-gen-below {grid-template-columns:minmax(0,1fr)}
+.settings-gen-k, .settings-gen-ctl {min-width:0}
+.settings-gen-t {font-size:15px; font-weight:500; color:var(--text)}
+.settings-gen-d {font-size:13px; color:var(--faint); margin-top:3px}
+
+/* The theme as three miniatures of the window. The palette is written as
+   properties because it is data: each card shows its theme's colours whatever
+   theme the page itself is in. */
+.settings-themes {display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px}
+.settings-theme {
+  font:inherit; color:inherit; text-align:left; cursor:pointer;
+  display:flex; flex-direction:column; gap:12px; padding:12px;
+  background:var(--paper); border:1px solid var(--line); border-radius:12px;
+  transition:border-color .15s ease, box-shadow .15s ease;
+}
+.settings-theme:hover {border-color:color-mix(in oklab, var(--line) 50%, var(--muted))}
+.settings-theme[aria-checked="true"] {border-color:var(--amber); box-shadow:0 0 0 1px var(--amber)}
+.settings-theme:focus-visible {outline:2px solid var(--amber); outline-offset:2px}
+.settings-theme-foot {display:flex; align-items:center; justify-content:space-between; font-size:13.5px; padding:0 2px}
+.settings-theme-dot {width:16px; height:16px; border-radius:50%; border:1.5px solid var(--line); box-sizing:border-box; flex:none}
+.settings-theme[aria-checked="true"] .settings-theme-dot {border:4.5px solid var(--amber)}
+
+.settings-shotbox {position:relative; display:block; height:96px; border-radius:7px; overflow:hidden; border:1px solid var(--line-soft)}
+.settings-shot {
+  --shot-bg:#ffffff; --shot-side:#efefef; --shot-bar:#e6e6e6; --shot-block:#e9e9e9;
+  position:absolute; inset:0; display:grid; grid-template-columns:24% 1fr; background:var(--shot-bg);
+}
+.settings-shot-dark {--shot-bg:#1d1d1d; --shot-side:#2a2a2a; --shot-bar:#555555; --shot-block:#4a4a4a}
+.settings-shot-side {background:var(--shot-side); padding:12px 10px}
+.settings-shot-side i {display:block; height:5px; width:60%; border-radius:3px; background:var(--shot-bar)}
+.settings-shot-main {padding:18px 14px; display:flex; flex-direction:column; gap:10px}
+.settings-shot-main i {display:block; height:6px; width:48%; border-radius:3px; background:var(--shot-bar)}
+.settings-shot-main b {display:block; height:22px; width:78%; border-radius:4px; background:var(--shot-block)}
+/* System: the dark window over the right-hand part of the light one. */
+.settings-shot-half {position:absolute; inset:0; clip-path:inset(0 0 0 62%)}
+@media (max-width: 640px) { .settings-themes {grid-template-columns:1fr} }

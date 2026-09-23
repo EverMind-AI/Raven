@@ -52,6 +52,20 @@ class FileChange:
     before: str | None = None
 
 
+@dataclass(frozen=True)
+class FileRemoval:
+    """One file a call removed, with the text it held when that is known.
+
+    ``before`` is ``None`` when the content could not be captured -- the file was
+    too large to hold, was not utf-8, or nothing had read it this turn. That is a
+    missing value rather than a distinction: a reader draws the deletion either
+    way, and only the body of the removed file is lost.
+    """
+
+    path: str
+    before: str | None = None
+
+
 #: What a call the model wrote beside a blocked one is told. Every loop that
 #: cancels siblings says this, and it has to be one string: it reaches the model,
 #: so two versions of it are two different instructions.
@@ -134,6 +148,11 @@ class ToolResult:
     400 lines entirely. Set beside ``diff`` by the same tools, from the same two
     strings they already hold; ``before`` is ``None`` only when the file did not
     exist, which is a distinction a client renders differently.
+
+    ``removed`` is the other half of that record: the files this call made
+    vanish. No tool deletes as its purpose, so it is the shell tool that reports
+    it, from what it saw on disk either side of the command; empty means nothing
+    vanished, which is what every other tool reports.
     """
 
     model_text: str
@@ -152,6 +171,7 @@ class ToolResult:
     blocks: list[ContentPart] | None = None
     diff: str | None = None
     file_change: "FileChange | None" = None
+    removed: tuple["FileRemoval", ...] = ()
 
 
 class ToolOutput(str):
@@ -176,6 +196,7 @@ class ToolOutput(str):
     blocks: list[ContentPart] | None
     diff: str | None
     file_change: "FileChange | None"
+    removed: tuple["FileRemoval", ...]
 
     def __new__(
         cls,
@@ -189,6 +210,7 @@ class ToolOutput(str):
         blocks: list[ContentPart] | None = None,
         diff: str | None = None,
         file_change: "FileChange | None" = None,
+        removed: tuple["FileRemoval", ...] = (),
     ) -> "ToolOutput":
         out = super().__new__(cls, model_text)
         out.display_text = display_text
@@ -199,6 +221,7 @@ class ToolOutput(str):
         out.blocks = blocks
         out.diff = diff
         out.file_change = file_change
+        out.removed = removed
         return out
 
 
@@ -229,6 +252,17 @@ class Tool(ABC):
     # only once called. Declaring the set withholds it from the schema instead,
     # per turn -- see ToolRegistry.set_channel.
     channels: frozenset[str] | None = None
+
+    # What an approval prompt shows for a call to this tool. ``approval_kind``
+    # picks the layout ("shell.exec", "file.write", "mcp.call"; empty reads as
+    # unknown) and ``approval_evidence`` fills it -- None means the arguments
+    # themselves are the evidence. The permission gate reads both only once a
+    # call has landed on a prompt, so a tool may do a little work here (read
+    # the file it is about to overwrite) without paying for it on every call.
+    approval_kind: str = ""
+
+    def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        return None
 
     def blocking_for(self, params: dict[str, Any]) -> bool:
         """This call's blocking verdict. Defaults to the class flag.
@@ -369,6 +403,7 @@ __all__ = [
     "ContentPart",
     "Continuation",
     "FileChange",
+    "FileRemoval",
     "ImagePart",
     "ImageURL",
     "RAW_ARGUMENTS_KEY",

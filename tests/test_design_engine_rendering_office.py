@@ -144,3 +144,35 @@ def test_libreoffice_timeout_is_retryable(
 
     assert raised.value.code == "render_timeout"
     assert raised.value.retryable is True
+
+
+def test_libreoffice_profile_carries_the_hosts_chinese_faces(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The design engine's preview runs LibreOffice with a profile of its own;
+    on a Mac that profile is the only place the Chinese faces reach it from."""
+    from raven.utils import office
+
+    songti = tmp_path / "Songti.ttc"
+    songti.write_bytes(b"ttcf")
+    monkeypatch.setattr(office.sys, "platform", "darwin")
+    monkeypatch.setattr(office, "MACOS_SYSTEM_HAN_FACES", (songti,))
+    monkeypatch.setattr(office, "MACOS_ASSET_FONTS", tmp_path / "no-assets")
+    source = tmp_path / "input.pptx"
+    source.write_bytes(b"not-used")
+    config = RenderConfig(chrome_path=None, libreoffice_path="/usr/bin/libreoffice")
+    seen: list[str] = []
+
+    def run(command, **kwargs):
+        uri = next(token for token in command if token.startswith("-env:UserInstallation="))
+        profile = Path(uri.split("file://", 1)[1])
+        seen.extend(p.name for p in (profile / "user" / "fonts").iterdir())
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    with pytest.raises(RenderError):
+        LibreOfficeBackend(config).render(source, tmp_path / "bundle", _detection("pptx"), _request(source, tmp_path))
+
+    assert seen == ["Songti.ttc"]

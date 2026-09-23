@@ -32,6 +32,17 @@
             },
             "description": "Session channels to include; defaults to tui."
           }
+        },
+        {
+          "name": "archived",
+          "required": false,
+          "schema": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "True lists only archived sessions; absent or false lists the live ones."
+          }
         }
       ],
       "result": {
@@ -703,6 +714,10 @@
           "properties": {
             "subscription_id": {
               "type": "string"
+            },
+            "running": {
+              "type": "boolean",
+              "description": "A turn is in flight on this session, and this subscription receives the rest of it."
             }
           }
         }
@@ -1249,6 +1264,14 @@
           }
         },
         {
+          "name": "description",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "One line about the model; an empty string clears it, as it does for label."
+          }
+        },
+        {
           "name": "capabilities",
           "required": false,
           "schema": {
@@ -1297,6 +1320,152 @@
           "properties": {
             "provider": {
               "$ref": "#/components/schemas/ModelOptionProvider"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "model.add_models",
+      "summary": "Append several model ids to a provider's curated list in one write; ids already present are skipped.",
+      "params": [
+        {
+          "name": "slug",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "models",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ModelAddModelsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider"
+          ],
+          "properties": {
+            "provider": {
+              "$ref": "#/components/schemas/ModelOptionProvider"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "model.set_fields",
+      "summary": "Patch a provider's non-credential fields (api_base, deployment, api_version, extra_headers as a patch of {name: value | null}); the key stays with model.save_key.",
+      "params": [
+        {
+          "name": "slug",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "fields",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "ModelSetFieldsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "previous"
+          ],
+          "properties": {
+            "previous": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "description": "Previous values, header values redacted."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "model.oauth_login",
+      "summary": "Start an OAuth provider's device-code sign-in for a page: answers with the verification URL, the user code and its lifetime at once, and keeps polling in the background until the token lands or the code expires; model.options then reports the provider authenticated.",
+      "params": [
+        {
+          "name": "slug",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ModelOauthLoginResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verification_uri",
+            "user_code",
+            "expires_in"
+          ],
+          "properties": {
+            "verification_uri": {
+              "type": "string"
+            },
+            "user_code": {
+              "type": "string"
+            },
+            "expires_in": {
+              "type": "integer",
+              "description": "Seconds the code stays valid; the gateway polls until then."
             }
           }
         }
@@ -1641,6 +1810,10 @@
             },
             "applies_to_session": {
               "type": "boolean"
+            },
+            "needs_restart": {
+              "type": "boolean",
+              "description": "True when the write landed in a process that has no agent loop: the config is right and this gateway still cannot run a turn on it."
             }
           }
         }
@@ -1863,7 +2036,7 @@
     },
     {
       "name": "subagents.add",
-      "summary": "Install a sub-agent from a preset into the running config. A cli or acp preset that would land enabled first has one real prompt sent through that agent, and the add is refused, reporting why, when it does not answer: that spends one call on the agent's own quota, can take up to 60s, and a refusal stores nothing at all. An openai preset and force: true are exempt.",
+      "summary": "Install a sub-agent from a preset into the running config. A preset that would land enabled first has one real prompt sent through that agent, and the add is refused, reporting why, when it does not answer: that spends one call on the agent's own quota, can take up to 60s, and a refusal stores nothing at all. Only a builtin preset and force: true are exempt.",
       "params": [
         {
           "name": "preset",
@@ -1951,7 +2124,7 @@
     },
     {
       "name": "subagents.update",
-      "summary": "Rename / redescribe / re-key an already-configured sub-agent.",
+      "summary": "Rename / redescribe / re-key an already-configured sub-agent. Changing the key or the model of a row that is already enabled first sends one real prompt through it, and the change is refused, reporting why, when it does not answer: that spends one call on the agent's own quota and can take up to 60s. A row that is off is exempt, as is every other field.",
       "params": [
         {
           "name": "name",
@@ -1997,6 +2170,29 @@
           "schema": {
             "type": "boolean"
           }
+        },
+        {
+          "name": "model",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "provider",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "The provider whose credential serves model, for the built-in row: the id is stored naming it, the way config.set model stores the host's. Ignored for an acp row, whose values are the agent's own."
+          }
+        },
+        {
+          "name": "clear_model",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Drop the row's own model, reverting to the agent's default. Wins over model when both are sent."
+          }
         }
       ],
       "result": {
@@ -2024,6 +2220,9 @@
         },
         {
           "$ref": "#/components/errors/ConfigValidationError"
+        },
+        {
+          "$ref": "#/components/errors/SubagentNotReady"
         }
       ]
     },
@@ -2105,7 +2304,7 @@
     },
     {
       "name": "subagents.toggle",
-      "summary": "Enable or disable a configured sub-agent. Switching a cli or acp sub-agent on first sends one real prompt through that agent and refuses the enable, reporting why, when it does not answer: that spends one call on the agent's own quota and can take up to 60s. Switching off, an openai row and force: true are exempt.",
+      "summary": "Enable or disable a configured sub-agent. Switching a sub-agent on first sends one real prompt through that agent and refuses the enable, reporting why, when it does not answer: that spends one call on the agent's own quota and can take up to 60s. Switching off, a builtin row and force: true are exempt.",
       "params": [
         {
           "name": "name",
@@ -2202,7 +2401,8 @@
             "type": "string",
             "enum": [
               "config",
-              "preset"
+              "preset",
+              "vendored"
             ]
           }
         }
@@ -3589,6 +3789,109 @@
       }
     },
     {
+      "name": "plug.retry",
+      "summary": "Connect one configured server again without opening a browser: the explicit retry for a server parked in error.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "PlugRetryResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "mcp": {
+              "$ref": "#/components/schemas/McpSnapshot"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "plug.revoke",
+      "summary": "Forget one server's OAuth credential and disconnect it.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "PlugRevokeResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "mcp": {
+              "$ref": "#/components/schemas/McpSnapshot"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "plug.configure",
+      "summary": "Rewrite the credential fields a catalog template put into one installed server; an empty value clears a field. Refused for a server no ledger names.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "form",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "PlugConfigureResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "mcp": {
+              "$ref": "#/components/schemas/McpSnapshot"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "skillhub.search",
       "summary": "Search the skill hub; installed skills are flagged.",
       "params": [
@@ -4382,6 +4685,13 @@
             },
             "previous": {
               "$ref": "#/components/schemas/JsonValue"
+            },
+            "warning": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted."
             }
           },
           "required": [
@@ -4413,6 +4723,28 @@
               "null"
             ]
           }
+        },
+        {
+          "name": "from",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First day (YYYY-MM-DD), inclusive; clamped to 90 days back."
+          }
+        },
+        {
+          "name": "to",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last day (YYYY-MM-DD), inclusive; today when absent."
+          }
         }
       ],
       "result": {
@@ -4422,6 +4754,19 @@
           "properties": {
             "days": {
               "type": "integer"
+            },
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            },
+            "daily": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/DailyUsage"
+              },
+              "description": "One entry per day of the range, zeros for days without a file."
             },
             "llm": {
               "$ref": "#/components/schemas/LlmUsage"
@@ -4450,6 +4795,9 @@
           },
           "required": [
             "days",
+            "from",
+            "to",
+            "daily",
             "llm",
             "tools"
           ],
@@ -4485,6 +4833,30 @@
                 "null"
               ],
               "description": "Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted."
+            },
+            "owned": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether raven manages this EverOS root. False makes the role slots read-only: raven neither writes that install's config nor starts or stops its server."
+            },
+            "supports": {
+              "type": "object",
+              "default": {},
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "description": "Which roles each vendor can serve, so a slot does not offer a provider that cannot do the job. Keyed by provider name."
+            },
+            "required": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "description": "Roles that cannot be cleared, so the page knows which slots get a clear control. Sent rather than mirrored: a mirrored copy drew one on a slot whose clear the write refuses."
             }
           },
           "required": [
@@ -4498,40 +4870,58 @@
     },
     {
       "name": "settings.everosSet",
-      "summary": "Merge fields into one EverOS section, or clear it. Deprecated spelling of settings.everos_set, kept for the shipped TUI.",
+      "summary": "Record which model and provider serve one EverOS role, or clear the role. Deprecated snake_case alias: settings.everos_set.",
       "params": [
         {
           "name": "section",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "description": "Which EverOS role: llm, embedding, rerank or multimodal."
           }
         },
         {
-          "name": "fields",
-          "required": false,
+          "name": "model",
           "schema": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "description": "Merged into the section; ignored when clearing."
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Model id, as the provider names it."
+          }
+        },
+        {
+          "name": "provider",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Which configured provider serves `model`. Its address and key are what the call goes out on, resolved at spawn time rather than copied -- so rotating a key is one edit in the provider and every role serving on it follows."
+          }
+        },
+        {
+          "name": "protocol",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Rerank only, and only for a self-hosted endpoint: which request shape EverOS must post (`deepinfra` / `vllm` / `dashscope`). A curated vendor's shape comes from the vendor table and this is ignored; somebody's own server is the one case nothing but the operator can answer."
           }
         },
         {
           "name": "clear",
-          "required": false,
           "schema": {
-            "type": "boolean",
-            "description": "Drop the section; refused for llm and embedding."
-          }
-        },
-        {
-          "name": "borrow_from",
-          "required": false,
-          "schema": {
-            "type": "string",
-            "description": "Take api_key and base_url from this connected provider, copied not referenced. Wins over the same keys in `fields`, which cannot carry a real key: the page only ever sees a redacted one."
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null,
+            "description": "Drop the role; refused for llm and embedding."
           }
         }
       ],
@@ -4542,6 +4932,13 @@
           "properties": {
             "applied": {
               "type": "boolean"
+            },
+            "warning": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted."
             }
           },
           "required": [
@@ -4560,34 +4957,52 @@
           "name": "section",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "description": "Which EverOS role: llm, embedding, rerank or multimodal."
           }
         },
         {
-          "name": "fields",
-          "required": false,
+          "name": "model",
           "schema": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "description": "Merged into the section; ignored when clearing."
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Model id, as the provider names it."
+          }
+        },
+        {
+          "name": "provider",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Which configured provider serves `model`. Its address and key are what the call goes out on, resolved at spawn time rather than copied -- so rotating a key is one edit in the provider and every role serving on it follows."
+          }
+        },
+        {
+          "name": "protocol",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Rerank only, and only for a self-hosted endpoint: which request shape EverOS must post (`deepinfra` / `vllm` / `dashscope`). A curated vendor's shape comes from the vendor table and this is ignored; somebody's own server is the one case nothing but the operator can answer."
           }
         },
         {
           "name": "clear",
-          "required": false,
           "schema": {
-            "type": "boolean",
-            "description": "Drop the section; refused for llm and embedding."
-          }
-        },
-        {
-          "name": "borrow_from",
-          "required": false,
-          "schema": {
-            "type": "string",
-            "description": "Take api_key and base_url from this connected provider, copied not referenced. Wins over the same keys in `fields`, which cannot carry a real key: the page only ever sees a redacted one."
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null,
+            "description": "Drop the role; refused for llm and embedding."
           }
         }
       ],
@@ -4598,6 +5013,13 @@
           "properties": {
             "applied": {
               "type": "boolean"
+            },
+            "warning": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted."
             }
           },
           "required": [
@@ -4672,6 +5094,14 @@
           "properties": {
             "applied": {
               "type": "boolean"
+            },
+            "outcome": {
+              "description": "What the gateway did with the switch: started | already | stopped | absent | disabled | deny_all | missing_dep | bad_config | unknown | no_manager, or 'unreachable' when no gateway answered. Null when the write carried no switch.",
+              "type": "string"
+            },
+            "detail": {
+              "description": "What to do about an outcome that is not a start, when there is something to say.",
+              "type": "string"
             }
           },
           "required": [
@@ -4825,6 +5255,31 @@
       }
     },
     {
+      "name": "fs.pick_dir",
+      "summary": "Ask the gateway host's desktop for a folder through its native folder dialog, for pinning a session's working directory.",
+      "params": [],
+      "result": {
+        "name": "FsPickDirResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "The folder chosen, absolute and resolved; absent when the dialog was dismissed."
+            },
+            "ok": {
+              "type": "boolean",
+              "description": "Whether a session may be pinned to the chosen folder (see raven.agent.workdir); false with no path."
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "fs.read",
       "summary": "Read one working-directory file, capped.",
       "params": [
@@ -4928,15 +5383,139 @@
       }
     },
     {
-      "name": "fs.reveal",
-      "summary": "Show one file in the gateway host's file manager, selected.",
+      "name": "deck.templates.list",
+      "summary": "The bundled deck templates, with a cover each where this host can render one.",
       "params": [
         {
-          "name": "path",
+          "name": "covers",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "False lists the names alone, without rendering a cover for each."
+          }
+        }
+      ],
+      "result": {
+        "name": "DeckTemplatesListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "templates": {
+              "items": {
+                "$ref": "#/components/schemas/DeckTemplateRow"
+              },
+              "type": "array"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when the deck engine is not installed here; the picker then stays hidden."
+            },
+            "pending": {
+              "type": "boolean",
+              "description": "True while a cover is still being drawn in the background; ask again for it."
+            }
+          },
+          "required": [
+            "templates",
+            "available"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "deck.templates.pages",
+      "summary": "Every page of one bundled deck template as JPEG data URLs, for the picker's page viewer.",
+      "params": [
+        {
+          "name": "name",
           "required": true,
           "schema": {
             "type": "string",
-            "description": "Absolute, or relative to the session's working directory."
+            "description": "A row's name from deck.templates.list."
+          }
+        }
+      ],
+      "result": {
+        "name": "DeckTemplatesPagesResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "pages": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "description": "Every page as a JPEG data URL, in order; empty where this host cannot render."
+            }
+          },
+          "required": [
+            "pages"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "deck.templates.pick",
+      "summary": "Deposit a bundled deck template under agent home's uploads and answer as fs.upload does.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "A row's name from deck.templates.list."
+          }
+        }
+      ],
+      "result": {
+        "name": "FsUploadResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "Workspace-relative path to hand the agent; uploads never return bytes.",
+              "type": "string"
+            },
+            "abs_path": {
+              "type": "string"
+            },
+            "size": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path",
+            "abs_path",
+            "size"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "fs.reveal",
+      "summary": "Show one file in the gateway host's file manager, selected, or one of raven's own locations.",
+      "params": [
+        {
+          "name": "path",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Absolute, or relative to the session's working directory. Give this or `place`."
+          }
+        },
+        {
+          "name": "place",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "config",
+              "workspace"
+            ],
+            "description": "One of raven's own locations, resolved by the gateway rather than sent: the config file (shown selected) or agent home (opened). Give this or `path`."
           }
         },
         {
@@ -5212,52 +5791,6 @@
             "total",
             "page",
             "page_size"
-          ],
-          "type": "object"
-        }
-      }
-    },
-    {
-      "name": "memory.delete",
-      "summary": "Delete one memory; an episode takes its derived rows with it.",
-      "params": [
-        {
-          "name": "kind",
-          "required": true,
-          "schema": {
-            "enum": [
-              "episode",
-              "profile",
-              "agent_case",
-              "agent_skill"
-            ],
-            "type": "string"
-          }
-        },
-        {
-          "name": "id",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "result": {
-        "name": "MemoryDeleteResult",
-        "schema": {
-          "additionalProperties": false,
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            },
-            "removed": {
-              "description": "Deleting an episode also drops its derived facts and foresight.",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "ok",
-            "removed"
           ],
           "type": "object"
         }
@@ -5924,6 +6457,76 @@
       }
     },
     {
+      "name": "approval.revoke",
+      "summary": "Take back the exec allow rule one approval answer wrote.",
+      "params": [
+        {
+          "name": "approval_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "The answered request whose grant to take back."
+          }
+        }
+      ],
+      "result": {
+        "name": "ApprovalRevokeResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "description": "False when that answer wrote no rule of its own, the undo came twice, or the file could not be written.",
+              "type": "boolean"
+            }
+          },
+          "required": ["ok"],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "approval.pending",
+      "summary": "The approval requests still waiting for an answer, for a page that lost its sheets.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "One conversation's requests; every conversation's when absent."
+          }
+        },
+        {
+          "name": "conversation_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Compatibility spelling of session_id."
+          }
+        }
+      ],
+      "result": {
+        "name": "ApprovalPendingResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "requests": {
+              "description": "Each open request's approval.request params, exactly as they were first sent.",
+              "items": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": ["requests"],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "clarify.respond",
       "summary": "Answer a pending ask-user question.",
       "params": [
@@ -5947,6 +6550,17 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "name": "answers",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "The whole batch's answers, aligned with the request's `batch`, from a surface that collected them as one form. The entry at the pending question's index repeats `answer`; entries before it are ignored; entries after it answer the batch's later questions without another round trip. Omitted by a surface that answers one question at a time."
         }
       ],
       "result": {
@@ -6279,25 +6893,108 @@
     },
     {
       "name": "session.usage",
-      "summary": "Not supported in Raven v0.1.",
+      "summary": "What this conversation has spent, its delegations included.",
+      "description": "Read from the recorder's telemetry, over the days this session has existed: every call recorded under the session's root key is summed, so the calls a sub-agent made for it count here while a worker asking about itself sees zeros. Token counters are a flow over the whole session; context_* is a gauge, how full the window is now. cost_usd is null when no call reported a price (a plan-billed model), and cost_status says whether the sum is the whole bill (exact) or part of it (estimated).",
       "params": [
         {
           "name": "session_id",
-          "required": false,
+          "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "description": "Full session_key to report on."
           }
         }
       ],
       "result": {
-        "name": "StubResult",
+        "name": "SessionUsageResult",
         "schema": {
-          "$ref": "#/components/schemas/StubResult"
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "calls",
+            "model",
+            "input",
+            "output",
+            "cache_read",
+            "cache_write",
+            "total",
+            "cost_status",
+            "cost_missing_calls",
+            "context_max",
+            "context_used",
+            "context_percent",
+            "context_estimated"
+          ],
+          "properties": {
+            "calls": {
+              "type": "integer",
+              "description": "Recorded calls under this session's root."
+            },
+            "model": {
+              "type": "string",
+              "description": "The model this session runs on now."
+            },
+            "input": {
+              "type": "integer",
+              "description": "Fresh input tokens; cache excluded."
+            },
+            "output": {
+              "type": "integer",
+              "description": "Output tokens."
+            },
+            "cache_read": {
+              "type": "integer",
+              "description": "Cache-read tokens."
+            },
+            "cache_write": {
+              "type": "integer",
+              "description": "Cache-write tokens."
+            },
+            "total": {
+              "type": "integer",
+              "description": "input + output + cache_read + cache_write."
+            },
+            "cost_usd": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "description": "Sum of provider-reported USD; null when no call reported a price."
+            },
+            "cost_status": {
+              "type": "string",
+              "enum": [
+                "estimated",
+                "exact"
+              ],
+              "description": "exact when every call reported a price; estimated when some did not."
+            },
+            "cost_missing_calls": {
+              "type": "integer",
+              "description": "Calls with no reported price, left out of cost_usd."
+            },
+            "context_max": {
+              "type": "integer",
+              "description": "Context window of the session's model; 0 when unknown."
+            },
+            "context_used": {
+              "type": "integer",
+              "description": "Estimated tokens the next call would send."
+            },
+            "context_percent": {
+              "type": "integer",
+              "description": "context_used as a percentage of context_max."
+            },
+            "context_estimated": {
+              "type": "boolean",
+              "description": "True when context_used is a tiktoken estimate."
+            }
+          }
         }
       },
       "errors": [
         {
-          "$ref": "#/components/errors/NotSupportedInV01"
+          "$ref": "#/components/errors/ConfigValidationError"
         }
       ]
     },
@@ -7973,7 +8670,7 @@
           "required": true,
           "schema": {
             "type": "string",
-            "description": "One of list, inspect, search, browse, install."
+            "description": "One of list, inspect, search, browse, install, open."
           }
         },
         {
@@ -7988,6 +8685,17 @@
           "required": false,
           "schema": {
             "type": "integer"
+          }
+        },
+        {
+          "name": "file",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`open`: a file name relative to the skill's directory."
           }
         }
       ],
@@ -8010,7 +8718,7 @@
               "additionalProperties": {
                 "$ref": "#/components/schemas/JsonValue"
               },
-              "description": "`inspect`: one skill's metadata, {} when unknown.",
+              "description": "`inspect`: one skill's metadata (name, description, category, path, body, files, always, hub, hub_id, install), {} when unknown.",
               "type": "object"
             },
             "results": {
@@ -8048,6 +8756,13 @@
             },
             "name": {
               "type": "string"
+            },
+            "opened": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "`open`."
             }
           },
           "required": [],
@@ -8170,6 +8885,526 @@
             "handle"
           ],
           "type": "object"
+        }
+      }
+    },
+    {
+      "name": "tasks.list",
+      "summary": "Every unit of delegated work one conversation started, as run-level rows with their nodes inline.",
+      "description": "A spawn is one row with one node; a run_subagent_dag run (a playbook run included) is one row carrying its graph. Built off disk from the run dir, the session node registry and the instance registry, so no live graph tool is needed and a reload answers the same as a live page. Bodies -- a node's messages, output and rendered prompt -- stay on dag.node and subagent.context. Newest first.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Whose tasks to list. An empty or unknown key answers with an empty list, not an error."
+          }
+        },
+        {
+          "name": "kind",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/TaskKind"
+          },
+          "description": "With id, narrows the answer to one task. Ids are unique within a kind, not across kinds."
+        },
+        {
+          "name": "id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "description": "A run id for kind=dag, the record (node) id for kind=spawn. Ignored without kind."
+        }
+      ],
+      "result": {
+        "name": "TasksListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tasks"
+          ],
+          "properties": {
+            "tasks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/TaskRow"
+              }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "import.scan",
+      "summary": "Scan the other AI tools on this machine for importable memory files and conversations, per platform, and say whether an import can run at all.",
+      "description": "Runs the cold-start scanners (raven.importer.scanners.scan_all) and aggregates the ScanResult counts per platform. Every platform the importer knows is listed; `scannable` is false for one that ships no scanner yet. `ready` is false when no memory backend is configured for the import to feed -- the same gate the CLI wizard's import step applies -- and `reason` then says why.",
+      "params": [],
+      "result": {
+        "name": "ImportScanResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ready",
+            "reason",
+            "platforms"
+          ],
+          "properties": {
+            "ready": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "platforms": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "platform",
+                  "scannable",
+                  "memory_files",
+                  "conversations",
+                  "estimated_size",
+                  "skills"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string"
+                  },
+                  "scannable": {
+                    "type": "boolean"
+                  },
+                  "memory_files": {
+                    "type": "integer"
+                  },
+                  "conversations": {
+                    "type": "integer"
+                  },
+                  "estimated_size": {
+                    "type": "integer"
+                  },
+                  "skills": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "import.run",
+      "summary": "Start a cold-start import of the chosen platforms in the background and return at once.",
+      "description": "One import runs at a time inside the gateway process. `started` is false when one is already running or when no memory backend is configured and healthy, and `detail` says which. Progress is read through import.status; the run is cancelled through import.stop.",
+      "params": [
+        {
+          "name": "platforms",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "name": "tier",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "memory_files",
+              "full"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "ImportRunResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "started",
+            "total",
+            "detail"
+          ],
+          "properties": {
+            "started": {
+              "type": "boolean"
+            },
+            "total": {
+              "type": "integer"
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "import.status",
+      "summary": "Progress of the cold-start import: whether one is running in this gateway, and the counts recorded on disk.",
+      "description": "The counts come from the importer's state file (the one `raven import status` reads), scoped to the sources the last import.run recorded -- a run the CLI started records none, and then every entry counts; `running` is this process's own knowledge of a task import.run started.",
+      "params": [],
+      "result": {
+        "name": "ImportStatusResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "running",
+            "total",
+            "submitted",
+            "failed",
+            "by_platform"
+          ],
+          "properties": {
+            "running": {
+              "type": "boolean"
+            },
+            "total": {
+              "type": "integer"
+            },
+            "submitted": {
+              "type": "integer"
+            },
+            "failed": {
+              "type": "integer"
+            },
+            "by_platform": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "total",
+                  "submitted",
+                  "failed"
+                ],
+                "properties": {
+                  "total": {
+                    "type": "integer"
+                  },
+                  "submitted": {
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "type": "integer"
+                  }
+                }
+              }
+            },
+            "current": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "platform",
+                "source_key",
+                "sent",
+                "total"
+              ],
+              "properties": {
+                "platform": {
+                  "type": "string"
+                },
+                "source_key": {
+                  "type": "string"
+                },
+                "sent": {
+                  "type": "integer"
+                },
+                "total": {
+                  "type": "integer"
+                }
+              }
+            },
+            "phase": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "current",
+                "total"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "profile",
+                    "skills"
+                  ]
+                },
+                "current": {
+                  "type": "integer"
+                },
+                "total": {
+                  "type": "integer"
+                }
+              }
+            },
+            "phases": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "errors"
+              ],
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "done",
+                    "failed",
+                    "cancelled"
+                  ]
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "tier": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "memory_files",
+                "full",
+                null
+              ]
+            },
+            "platforms": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "import.stop",
+      "summary": "Ask the running import to stop after the current item.",
+      "description": "Touches the importer's cancel file, which run_import checks before every item -- what `raven import stop` does. `stopped` is false when nothing was running.",
+      "params": [],
+      "result": {
+        "name": "ImportStopResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stopped"
+          ],
+          "properties": {
+            "stopped": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "playbooks.stints.list",
+      "summary": "Every multi-round run this machine has started, newest first.",
+      "params": [],
+      "errors": [],
+      "result": {
+        "name": "PlaybooksStintsListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "stints": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/StintRow"
+              }
+            }
+          },
+          "required": [
+            "stints"
+          ]
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.get",
+      "summary": "One plan in full: its rounds, what was undone, and what it is waiting on.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintDetail",
+        "schema": {
+          "$ref": "#/components/schemas/StintDetail"
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.stop",
+      "summary": "Open no further rounds. A round already running finishes and reports first, unless now is set.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "now",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Cut the round in flight short instead of letting it finish. Reaches only a round this process is running."
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintDetail",
+        "schema": {
+          "$ref": "#/components/schemas/StintDetail"
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.answer",
+      "summary": "Answer a question a round left; it reaches the round after this one.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "question",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintDetail",
+        "schema": {
+          "$ref": "#/components/schemas/StintDetail"
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.pause",
+      "summary": "Open no further rounds, and keep the stint so resume can take it up. A round already running finishes and reports first.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintDetail",
+        "schema": {
+          "$ref": "#/components/schemas/StintDetail"
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.resume",
+      "summary": "Take a stint up again in this engine, from the node it stopped at; finished roles are named, not re-run.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintTakeUp",
+        "schema": {
+          "$ref": "#/components/schemas/StintTakeUp"
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.extend",
+      "summary": "Give a stint more rounds; a stint that is over opens its next round in this engine.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "rounds",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintTakeUp",
+        "schema": {
+          "$ref": "#/components/schemas/StintTakeUp"
         }
       }
     }
@@ -8357,6 +9592,17 @@
           "title": {
             "type": "string",
             "description": "The resumed session's name, when it has one. Absent on a fresh session, which has nothing to name yet. Carried on the bundle rather than fetched separately because a client resuming a session is already being told what it is resuming."
+          },
+          "running": {
+            "type": "boolean",
+            "description": "A turn is in flight on this session right now."
+          },
+          "running_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How long the turn in flight has been running, in milliseconds, measured on the server; null when nothing is running or the question carries no readable stamp. The elapsed rather than the stamp it was measured from: that stamp is a server wall clock, and a client in another timezone reading it against its own clock gets the offset between the two back as the turn's age."
           }
         },
         "required": [
@@ -8466,6 +9712,20 @@
             "description": "A file tool's unified diff of the change it made, on its role='tool' entry.",
             "type": "string"
           },
+          "file_removed": {
+            "description": "The files that call made vanish, on its role='tool' entry. Absent when it removed none.",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptFileRemoval"
+            },
+            "type": "array"
+          },
+          "file_written": {
+            "description": "The files a stored command left behind, on its role='tool' entry. The same shape the live event carried: a size and a line count are what a reloaded page needs, so unlike a removal there is nothing to reduce.",
+            "items": {
+              "$ref": "#/components/schemas/FileWritten"
+            },
+            "type": "array"
+          },
           "turn_ended": {
             "$ref": "#/components/schemas/TranscriptTurnEnded"
           },
@@ -8478,6 +9738,10 @@
           },
           "delegated": {
             "$ref": "#/components/schemas/TranscriptDelegated"
+          },
+          "mid_turn": {
+            "description": "Set on a user entry merged into a turn already running, not the prompt that opened one. A reader draws it INSIDE the turn: no new turn number, no fold closed over the narration above it, and the text before it is still that turn's narration rather than its answer.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -8504,7 +9768,8 @@
               "ok",
               "error",
               "exception",
-              "notice"
+              "notice",
+              "cancelled"
             ],
             "type": "string"
           },
@@ -8555,6 +9820,24 @@
         },
         "required": [
           "status"
+        ],
+        "type": "object"
+      },
+      "TranscriptFileRemoval": {
+        "additionalProperties": false,
+        "description": "One file a stored tool call made vanish, on its role='tool' entry. The line count and not the body: the text of a removed file is what the live event carries, while a reloaded page needs to know the file went and how big the hole is.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "del": {
+            "description": "Lines the file held when it went; 0 when unknown.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "del"
         ],
         "type": "object"
       },
@@ -8659,6 +9942,10 @@
           "needs": {
             "description": "Set when the tool exists but is withheld for want of a key. The model cannot call it; the row is here so the page can offer the field instead of the tool simply being absent.",
             "$ref": "#/components/schemas/ToolSetupNeed"
+          },
+          "builtin": {
+            "type": "boolean",
+            "description": "True for a tool whose off switch the loop would not honour: the two tool-search meta-tools, and the MCP resource and prompt meta-tools the loop registers and withdraws on its own. The page draws these without a switch."
           }
         },
         "required": [
@@ -8902,6 +10189,76 @@
         ],
         "type": "object"
       },
+      "DailyUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "calls": {
+            "type": "integer"
+          },
+          "input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cache_read_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cache_write_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cost_missing_calls": {
+            "type": "integer"
+          },
+          "cache_read_missing_calls": {
+            "type": "integer"
+          },
+          "cache_write_missing_calls": {
+            "type": "integer"
+          },
+          "legacy_cost_calls": {
+            "type": "integer"
+          },
+          "input_missing_calls": {
+            "type": "integer",
+            "default": 0
+          },
+          "output_missing_calls": {
+            "type": "integer",
+            "default": 0
+          }
+        },
+        "required": [
+          "date",
+          "calls",
+          "cost_missing_calls",
+          "cache_read_missing_calls",
+          "cache_write_missing_calls",
+          "legacy_cost_calls"
+        ],
+        "type": "object"
+      },
       "LlmUsage": {
         "additionalProperties": false,
         "properties": {
@@ -8962,23 +10319,25 @@
         "additionalProperties": false,
         "properties": {
           "model": {
-            "description": "Empty when the shipped placeholder is still in place.",
-            "type": "string"
-          },
-          "base_url": {
+            "description": "Empty when nothing is pinned for this role.",
             "type": "string"
           },
           "provider": {
-            "type": "string"
+            "type": "string",
+            "description": "The vendor serving `model`. Empty when nothing is pinned."
           },
           "api_key_set": {
-            "description": "Whether a key is stored; the value never goes on the wire.",
+            "description": "Whether that provider has a usable credential -- the same question the memory gate answers, so the card and the gate cannot disagree. No key ever goes on the wire.",
             "type": "boolean"
+          },
+          "env_managed": {
+            "type": "boolean",
+            "default": false,
+            "description": "The endpoint came from exported EVEROS_<ROLE>__* variables, which outrank raven. The slot is read-only: raven cannot edit a shell."
           }
         },
         "required": [
           "model",
-          "base_url",
           "provider",
           "api_key_set"
         ],
@@ -9057,6 +10416,35 @@
           "enabled",
           "configured",
           "missing"
+        ],
+        "type": "object"
+      },
+      "DeckTemplateRow": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The template's stem, which deck.templates.pick takes."
+          },
+          "label": {
+            "type": "string",
+            "description": "The stem as words, for the picker's caption."
+          },
+          "size": {
+            "type": "integer"
+          },
+          "cover": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first page as a JPEG data URL, or null where this host cannot render one."
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "size"
         ],
         "type": "object"
       },
@@ -9272,6 +10660,25 @@
           "auth_url": {
             "description": "The authorization URL this server is parked on, when it is. Carried on the pull because the `oauth.pending` notification that also carries it is dropped when no client is attached, which is every connect started at assembly time.",
             "type": "string"
+          },
+          "auth": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "none",
+              "apikey",
+              "oauth"
+            ],
+            "description": "How the server authenticates (ext.list rows only)."
+          },
+          "credentialed": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether it holds the credential that mode needs (ext.list rows only)."
           }
         },
         "required": [
@@ -9507,6 +10914,10 @@
           "pinned": {
             "type": "boolean",
             "description": "User pinned this session to the top of the picker."
+          },
+          "running": {
+            "type": "boolean",
+            "description": "A turn is in flight on this session right now."
           },
           "workdir": {
             "type": "string",
@@ -9763,6 +11174,10 @@
             "type": "boolean",
             "description": "A built-in agent: raven's own in-process loop, on the agent table whether or not config mentions it. Distinct from `configured`, which stays false for one -- not writing a row is how 'use the package's default' is spelled, so there is nothing to delete and no transport to connect. It takes no action at all: `subagents.toggle` answers `config_field_readonly` for it, because an unnamed spawn and a dag node with no sub-agent both dispatch to this row, so it cannot leave the roster. A client must not offer a switch, a test or a delete for it."
           },
+          "own": {
+            "type": "boolean",
+            "description": "One of raven's own agents, whichever way this install registered it: the built-in row, a product discovered under `agents/`, or a config row whose acp handshake named raven (the shipped installer writes a product as a plain config row). The row a client draws with raven's own mark, and whose unset model reads as following the main Raven. Absent from a server that predates it, which reads as 'not raven's'."
+          },
           "upgrade_to": {
             "type": "string",
             "description": "The transport this entry's preset has since moved to, or null when it is current. A configured entry is never rewritten underneath the user, so the mismatch is shown instead."
@@ -9809,11 +11224,75 @@
           "last_test_detail": {
             "type": "string"
           },
+          "last_test_remedy": {
+            "type": "object",
+            "description": "What the reader has to do before the last failed test can pass, as data a page renders in its own language. Absent when the failure was not about a credential; last_test_detail stays the English record either way.",
+            "additionalProperties": false,
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "sign_in",
+                  "setup",
+                  "api_key"
+                ],
+                "description": "sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page."
+              },
+              "command": {
+                "type": "string",
+                "description": "The command that makes the fix on this machine, when one is known."
+              }
+            }
+          },
           "last_test_at_ms": {
             "type": "integer"
           },
           "test_running": {
             "type": "boolean"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model this row sends, or null to use the agent's own default."
+          },
+          "model_choices": {
+            "type": "array",
+            "description": "The models this row's agent advertised, empty when it advertised none.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "value"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "description": "The id the agent takes back."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "What the agent asked to be shown, usually far shorter than the value."
+                },
+                "group": {
+                  "type": "string",
+                  "description": "The agent's own bucketing, a provider typically. Empty when it offered none."
+                }
+              }
+            }
+          },
+          "model_source": {
+            "type": "string",
+            "enum": [
+              "raven",
+              "agent",
+              "fixed"
+            ],
+            "description": "What subagents.update accepts for model on this row, by rule rather than by kind, and not ownership, which is own: raven for the built-in row and for one of raven's own acp rows whose handshake advertised no menu -- both pick from raven's own provider catalogue; agent for an acp row picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all. The menu, not the whole vocabulary: one of raven's own acp rows also accepts a host-qualified id under either rule, since it runs on raven's providers whatever it advertised."
           }
         }
       },
@@ -9840,6 +11319,13 @@
           },
           "homepage": {
             "type": "string"
+          },
+          "key_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the vendor hands out API keys; null when the registry has no console link."
           },
           "docs": {
             "type": "string",
@@ -9894,11 +11380,27 @@
               "type": "string"
             }
           },
+          "extra_headers": {
+            "type": "object",
+            "description": "Custom request headers by name, each value redacted.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
           "total_models": {
             "type": "integer"
           },
           "needs_api_base": {
             "type": "boolean"
+          },
+          "gateway": {
+            "type": "boolean",
+            "description": "The registry's is_gateway: resells other vendors' models under vendor/model ids. The catalogue's gateway filter reads this; absent means false."
+          },
+          "route_names": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Every model-id prefix that names this provider: its own name plus the ones it used to answer to (ProviderSpec.route_names). A client comparing two spellings of one model strips any of them, the way providers/wire.py's merge_key does. Absent means the provider's own name alone."
           },
           "platforms": {
             "type": "array",
@@ -9993,7 +11495,8 @@
         "additionalProperties": false,
         "description": "How a model reads to a person, and what it can do. Absent for a model the registry knows nothing about -- one released since the bundled files, or served by a local deployment -- in which case the id is all there is to show. An empty tag list means nothing is published, not that the model cannot: a surface renders absence as no icon, never as a denial.",
         "required": [
-          "label"
+          "label",
+          "kind"
         ],
         "properties": {
           "label": {
@@ -10022,6 +11525,18 @@
             "items": {
               "type": "string"
             }
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "embedding",
+              "reranker"
+            ],
+            "description": "The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text."
           },
           "context_window": {
             "type": "integer",
@@ -10392,7 +11907,8 @@
                       "ok",
                       "error",
                       "exception",
-                      "notice"
+                      "notice",
+                      "cancelled"
                     ]
                   },
                   "node_id": {
@@ -10442,6 +11958,41 @@
                 "type": "string",
                 "default": "",
                 "description": "The message that started the turn. Present so a client that did not send it can draw the question: the user entry reaches the transcript only at turn end."
+              },
+              "target": {
+                "$ref": "#/components/schemas/DirectTarget"
+              }
+            }
+          }
+        }
+      },
+      "MessageInjectedEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "payload"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "message.injected"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "A message merged into the turn already running on this conversation. `message.start` cannot say this: that event opens a turn, and an inject joins one. `target` names the conversation this event belongs to; absent is the main agent.",
+            "required": [
+              "turn_id",
+              "content"
+            ],
+            "properties": {
+              "turn_id": {
+                "type": "string",
+                "description": "The id minted for this text, not the running turn's. It is what the fallback turn's events carry if the host ends before draining it, which is how a client tells the two views of one message apart."
+              },
+              "content": {
+                "type": "string"
               },
               "target": {
                 "$ref": "#/components/schemas/DirectTarget"
@@ -10531,12 +12082,20 @@
             "properties": {
               "kind": {
                 "type": "string",
-                "description": "Which runtime decision this reports; `action_blocked` today."
+                "description": "Which runtime decision this reports: `action_blocked`, `llm_retry` or `organ_degraded`."
               },
               "detail": {
                 "type": "string",
                 "default": "",
-                "description": "The blocking tool's own first line, when it gave one."
+                "description": "What `kind` says it is: the blocking tool's own first line, the failed call's error category, or the organ that dropped out."
+              },
+              "transient": {
+                "type": "boolean",
+                "default": false,
+                "description": "True when the turn is still running and the next frame of output replaces this: draw it as a status, not as a row. False means it stands in for the answer."
+              },
+              "target": {
+                "$ref": "#/components/schemas/DirectTarget"
               }
             }
           }
@@ -10697,6 +12256,55 @@
           }
         }
       },
+      "FileRemoval": {
+        "description": "One file a tool call made vanish, with the text it held when known. The counterpart of FileChange and not one of them: a removal has no after, and its before is a best effort -- absent means unknown, not that the file was empty.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute path of the file that is gone."
+          },
+          "before": {
+            "type": "string",
+            "description": "The contents the file held before it went, when they could be captured. Absent means unknown -- not that the file was empty -- so a client draws the deletion with whatever it already knew of the file."
+          }
+        }
+      },
+      "FileWritten": {
+        "description": "One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "created",
+          "size"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute path of the file the command wrote."
+          },
+          "created": {
+            "type": "boolean",
+            "description": "Whether the file was new. False means it was there before the command and is different after, which a client draws as a rewrite rather than an addition."
+          },
+          "size": {
+            "type": "integer",
+            "description": "The file's size in bytes after the command."
+          },
+          "lines": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Lines in a created file, when it could be counted. Null, not absent: the key is always sent, and null says the count is unknown. Too large to read, not text, or a file that already existed, whose change therefore has no number."
+          }
+        }
+      },
       "ToolCompleteEvent": {
         "type": "object",
         "additionalProperties": false,
@@ -10743,6 +12351,20 @@
               },
               "file_change": {
                 "$ref": "#/components/schemas/FileChange"
+              },
+              "file_removed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FileRemoval"
+                },
+                "description": "The files this call made vanish. Absent on every call that removed nothing, which is nearly all of them."
+              },
+              "file_written": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FileWritten"
+                },
+                "description": "The files a command left behind, which no tool result names. Absent on every call that is not a command, and on a command that changed no file."
               }
             }
           }
@@ -11027,7 +12649,8 @@
                   "ok",
                   "error",
                   "exception",
-                  "notice"
+                  "notice",
+                  "cancelled"
                 ]
               },
               "run_id": {
@@ -11340,6 +12963,18 @@
               "nodes"
             ],
             "properties": {
+              "stint_id": {
+                "description": "The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.",
+                "type": "string"
+              },
+              "round_index": {
+                "description": "Which round of that run this graph is, counting from one.",
+                "type": "integer"
+              },
+              "round_budget": {
+                "description": "Rounds the run may open in all, so a reader can draw \"round 3 of 30\" without opening the run. Absent when the dispatcher did not say.",
+                "type": "integer"
+              },
               "run_id": {
                 "type": "string"
               },
@@ -11411,6 +13046,18 @@
               "status"
             ],
             "properties": {
+              "stint_id": {
+                "description": "The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.",
+                "type": "string"
+              },
+              "round_index": {
+                "description": "Which round of that run this graph is, counting from one.",
+                "type": "integer"
+              },
+              "round_budget": {
+                "description": "Rounds the run may open in all, so a reader can draw \"round 3 of 30\" without opening the run. Absent when the dispatcher did not say.",
+                "type": "integer"
+              },
               "run_id": {
                 "type": "string"
               },
@@ -11536,6 +13183,18 @@
               "files"
             ],
             "properties": {
+              "stint_id": {
+                "description": "The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.",
+                "type": "string"
+              },
+              "round_index": {
+                "description": "Which round of that run this graph is, counting from one.",
+                "type": "integer"
+              },
+              "round_budget": {
+                "description": "Rounds the run may open in all, so a reader can draw \"round 3 of 30\" without opening the run. Absent when the dispatcher did not say.",
+                "type": "integer"
+              },
               "run_id": {
                 "type": "string"
               },
@@ -11656,6 +13315,9 @@
             "$ref": "#/components/schemas/MessageStartEvent"
           },
           {
+            "$ref": "#/components/schemas/MessageInjectedEvent"
+          },
+          {
             "$ref": "#/components/schemas/TurnStartedEvent"
           },
           {
@@ -11729,6 +13391,7 @@
           "propertyName": "type",
           "mapping": {
             "message.start": "#/components/schemas/MessageStartEvent",
+            "message.injected": "#/components/schemas/MessageInjectedEvent",
             "turn.started": "#/components/schemas/TurnStartedEvent",
             "episode.start": "#/components/schemas/EpisodeStartEvent",
             "notice": "#/components/schemas/NoticeEvent",
@@ -11934,7 +13597,8 @@
           "mode": {
             "enum": [
               "dag",
-              "prompt"
+              "prompt",
+              "stint"
             ],
             "type": "string"
           },
@@ -12074,7 +13738,8 @@
           "mode": {
             "enum": [
               "dag",
-              "prompt"
+              "prompt",
+              "stint"
             ],
             "type": "string"
           },
@@ -12116,6 +13781,9 @@
               "$ref": "#/components/schemas/PlaybookMcpServer"
             },
             "type": "object"
+          },
+          "stint": {
+            "$ref": "#/components/schemas/PlaybookStint"
           }
         },
         "required": [
@@ -12134,7 +13802,7 @@
           "prompts"
         ],
         "type": "object",
-        "description": "One whole playbook: its identity, its runtime inputs, and either the graph\n(``mode: dag``) or the assembly guidance a model turns into one\n(``mode: prompt``). ``path`` is the file this was read from.\n\n``version`` is the spec format version the file declares, not a revision of\nthe playbook's content."
+        "description": "One whole playbook: its identity, its runtime inputs, and the shape it runs as -- the graph (``mode: dag``), the assembly guidance a model turns into one (``mode: prompt``), or the roles and stopping rules of a multi-round run (``mode: stint``, under ``rounds``). ``path`` is the file this was read from.\n\n``version`` is the spec format version the file declares, not a revision of\nthe playbook's content."
       },
       "PlaybookMcpServer": {
         "additionalProperties": false,
@@ -12257,6 +13925,715 @@
         },
         "required": [
           "ok"
+        ]
+      },
+      "TaskKind": {
+        "description": "Which delegation path made a task: a spawn call, or a run_subagent_dag run (a playbook run is one).",
+        "type": "string",
+        "enum": [
+          "spawn",
+          "dag"
+        ]
+      },
+      "TaskStatus": {
+        "description": "A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state.",
+        "type": "string",
+        "enum": [
+          "running",
+          "completed",
+          "failed",
+          "interrupted",
+          "cancelled"
+        ]
+      },
+      "TaskCounts": {
+        "description": "How many of the task's nodes sit in each state. Counted from graph.json, so skipped nodes are counted too.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "total",
+          "pending",
+          "running",
+          "completed",
+          "failed",
+          "skipped",
+          "cancelled",
+          "interrupted",
+          "exception"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer"
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "running": {
+            "type": "integer"
+          },
+          "completed": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "skipped": {
+            "type": "integer"
+          },
+          "cancelled": {
+            "type": "integer"
+          },
+          "interrupted": {
+            "type": "integer"
+          },
+          "exception": {
+            "type": "integer",
+            "description": "Nodes suspended on a verdict, waiting for resolve_dag_node. A running row with one of these is waiting on a decision, not working."
+          }
+        }
+      },
+      "TaskReplan": {
+        "description": "Present only on a run a replan superseded, read from graph.json's top-level replan entry. started=false means the successor never began; error says why.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run_id",
+          "started"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "description": "The successor run."
+          },
+          "from_node": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TaskFile": {
+        "description": "One file a node wrote, as the lane that ran it recorded the tool result. The in-process lane records these; the acp and cli lanes record none yet. The diff body is not here: a client builds it from the node's messages.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "op",
+          "add",
+          "del"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "add",
+              "write",
+              "edit",
+              "delete"
+            ]
+          },
+          "add": {
+            "type": "integer"
+          },
+          "del": {
+            "type": "integer"
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Bytes after the write, when the lane could measure it."
+          }
+        }
+      },
+      "TaskNode": {
+        "description": "One step of a task: a graph node, or a spawn's single node.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "node_id",
+          "agent",
+          "status",
+          "depends_on",
+          "files"
+        ],
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The model's own id for the step, unique across the session."
+          },
+          "node_summary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The step's one-line title. Null on a run written before the field existed."
+          },
+          "agent": {
+            "type": "string",
+            "description": "The roster name of the agent that runs it."
+          },
+          "instance": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stateful handle, named or minted. Null for a node of an agent that keeps no session."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DagSnapshotNodeStatus"
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "May name a node outside this task: node ids are the session's, and a later graph may depend on an earlier run's completed node."
+          },
+          "started_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Epoch milliseconds."
+          },
+          "ended_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Epoch milliseconds; null while running, and for an interrupted node nothing recorded an end for."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed, capped at 500 characters."
+          },
+          "tokens_in": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Null when the lane cannot report usage -- never zero for that."
+          },
+          "tokens_out": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tool_call_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Null means zero calls or an unreporting lane; the record cannot tell the two apart."
+          },
+          "tool_failure_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many of those calls reported failure. A completed node with all its calls failed is not a clean run."
+          },
+          "has_output": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the node wrote an output at all. A completed node without one is why a downstream reference of it fails."
+          },
+          "prompt_template": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The template as dispatched, placeholders unexpanded. Null for a spawn."
+          },
+          "inputs": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "The node's declared inputs, per key: a literal, {file: path} or {node: id}."
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Absent means the agent's own menu; an empty list means none."
+          },
+          "mcps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Same three-valued reading as skills."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskFile"
+            }
+          }
+        }
+      },
+      "TaskRow": {
+        "description": "One unit of delegated work a conversation started, with its nodes inline.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "counts",
+          "nodes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The run id for a dag; the record (node) id for a spawn."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TaskKind"
+          },
+          "task_summary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the whole task was dispatched for. Null on a run written before the field existed."
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "replan": {
+            "$ref": "#/components/schemas/TaskReplan"
+          },
+          "started_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Epoch milliseconds; the earliest node start."
+          },
+          "ended_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Epoch milliseconds; the latest node end, null while running."
+          },
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A spawn's agent. Null for a dag, whose nodes name their own."
+          },
+          "handle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A spawn's instance handle -- what subagent.cancel_instance takes. Null for a dag; a dag is stopped through subagent.interrupt on its run id."
+          },
+          "counts": {
+            "$ref": "#/components/schemas/TaskCounts"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskNode"
+            }
+          }
+        }
+      },
+      "StintRoundRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One round of a plan, as the list needs it.",
+        "properties": {
+          "index": {
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "index",
+          "run_id",
+          "attempt",
+          "status",
+          "checks",
+          "violations"
+        ]
+      },
+      "StintQuestionRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Something a round asked a person, and what came back.",
+        "properties": {
+          "round": {
+            "type": "integer"
+          },
+          "role": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "round",
+          "role",
+          "text",
+          "answer"
+        ]
+      },
+      "StintRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One multi-round run a rounds playbook started.",
+        "properties": {
+          "stint_id": {
+            "type": "string"
+          },
+          "playbook": {
+            "type": "string"
+          },
+          "round_index": {
+            "type": "integer"
+          },
+          "max_rounds": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "unfinished": {
+            "type": "boolean",
+            "description": "Not over: running, interrupted or paused. What `stop` acts on."
+          },
+          "stop_reason": {
+            "type": "string"
+          },
+          "workdir": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "started_at_ms": {
+            "type": "integer"
+          },
+          "ended_at_ms": {
+            "type": "integer"
+          },
+          "open_questions": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stint_id",
+          "playbook",
+          "round_index",
+          "max_rounds",
+          "status",
+          "live",
+          "unfinished",
+          "stop_reason",
+          "workdir",
+          "branch",
+          "started_at_ms",
+          "ended_at_ms",
+          "open_questions"
+        ]
+      },
+      "StintDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One plan, whole: every round it ran and everything it is waiting on.",
+        "properties": {
+          "stint": {
+            "$ref": "#/components/schemas/StintRow"
+          },
+          "rounds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StintRoundRow"
+            }
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StintQuestionRow"
+            }
+          }
+        },
+        "required": [
+          "stint",
+          "rounds",
+          "questions"
+        ]
+      },
+      "PlaybookRole": {
+        "additionalProperties": false,
+        "type": "object",
+        "description": "One role of a `mode: stint` playbook: who plays it, what it waits on, and the paths it is judged against. `terminal` marks a role nothing else waits on -- the only kind whose output the plan reads when deciding whether to open another round, and so the only kind that can end one early.",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "node_summary": {
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "owns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "appends": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reads": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enforce_read": {
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "type": "string"
+          },
+          "enforce_write": {
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "type": "string"
+          },
+          "journal_section": {
+            "type": "string"
+          },
+          "verify_after": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "max_handbacks": {
+            "type": "integer"
+          },
+          "terminal": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "label",
+          "agent",
+          "node_summary",
+          "depends_on",
+          "owns",
+          "appends",
+          "reads",
+          "enforce_read",
+          "enforce_write",
+          "journal_section",
+          "verify_after",
+          "max_handbacks",
+          "terminal"
+        ]
+      },
+      "PlaybookCheck": {
+        "additionalProperties": false,
+        "type": "object",
+        "description": "One objective check a round may run. `run` is a real shell command, which is why a playbook that declares any must be approved before it starts.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          },
+          "timeout_sec": {
+            "type": "number"
+          },
+          "needs_display": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "run",
+          "timeout_sec",
+          "needs_display"
+        ]
+      },
+      "PlaybookCarried": {
+        "additionalProperties": false,
+        "type": "object",
+        "description": "A file rounds hand to each other. `append` marks the journal: the one that may only grow, and the one a window of `recent_rounds` is read back from.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "append": {
+            "type": "boolean"
+          },
+          "recent_rounds": {
+            "type": "integer"
+          },
+          "max_chars": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "append",
+          "recent_rounds",
+          "max_chars"
+        ]
+      },
+      "PlaybookStint": {
+        "additionalProperties": false,
+        "type": "object",
+        "description": "What `mode: stint` adds to a playbook, and what a person approving one has to be able to read: who runs, what each may write, which commands run, and when it stops. Absent on every other mode.",
+        "properties": {
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/PlaybookRole"
+            },
+            "type": "array"
+          },
+          "carried": {
+            "items": {
+              "$ref": "#/components/schemas/PlaybookCarried"
+            },
+            "type": "array"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/PlaybookCheck"
+            },
+            "type": "array"
+          },
+          "max_rounds": {
+            "type": "integer"
+          },
+          "until": {
+            "type": "string"
+          },
+          "report": {
+            "enum": [
+              "round",
+              "end"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "roles",
+          "carried",
+          "checks",
+          "max_rounds",
+          "until",
+          "report"
+        ]
+      },
+      "StintTakeUp": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "A stint after a verb opened a round in this engine, with what the driver said about it.",
+        "properties": {
+          "stint": {
+            "$ref": "#/components/schemas/StintRow"
+          },
+          "rounds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StintRoundRow"
+            }
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StintQuestionRow"
+            }
+          },
+          "reply": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stint",
+          "rounds",
+          "questions",
+          "reply"
         ]
       }
     },

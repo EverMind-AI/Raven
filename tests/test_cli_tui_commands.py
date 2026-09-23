@@ -100,7 +100,7 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
 
     monkeypatch.setattr(
         "raven.core.plugin_stack.build_plugin_registry",
-        lambda cfg: fake_registry,
+        lambda cfg, *, notify=None: fake_registry,
     )
     monkeypatch.setattr(
         "raven.core.plugin_stack.maybe_build_memory_backend",
@@ -333,7 +333,7 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
     call_count = {"build": 0}
     passed_registries: list[Any] = []
 
-    def _spy_registry(cfg):
+    def _spy_registry(cfg, *, notify=None):
         call_count["build"] += 1
         return sentinel.shared_registry
 
@@ -397,7 +397,7 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     fake_agent_loop.cron_service = None
     fake_agent_loop.tools.get.return_value = None
     fake_agent_loop.subagents.set_submit = MagicMock()
-    fake_agent_loop.subagents.cancel_all = AsyncMock(side_effect=lambda: ctx["order"].append("cancel_all"))
+    fake_agent_loop.subagents.cancel_all = AsyncMock(side_effect=lambda **_: ctx["order"].append("cancel_all"))
     ctx["agent_loop"] = fake_agent_loop
 
     monkeypatch.setattr(
@@ -965,7 +965,7 @@ def test_the_tui_shutdown_stops_subagents_before_it_drains_memory() -> None:
     closing the adapter under such a write fails it for a reason that has
     nothing to do with the memory service."""
     src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "tui_commands.py").read_text(encoding="utf-8")
-    cancel = src.index("await agent_loop.subagents.cancel_all()")
+    cancel = src.index("await agent_loop.subagents.cancel_all(reason=")
     pool = src.index("await close_pool()")
     drain = src.index("await agent_loop.drain_backend_stores()")
     stop = src.index("await agent_loop.backend.stop()")

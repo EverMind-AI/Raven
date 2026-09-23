@@ -1,0 +1,18 @@
+div#setVeil.veil.setveil[data-open=false][data-section=usage]
+  div#setModal.smodal
+    nav#snav.snav
+      div.brandrow
+        span.wm
+      div#snavList.snavlist
+    div.sbody
+      header.shd
+        div.ttl
+          h3#setTitle
+          p#setSub.sub
+        button#setClose.icb
+          svg
+            path
+      div#spanels.spanels
+      div#connectionsBody.spanels[data-for=channels]
+      div#cronBody.spanels[data-for=cron]
+      div#memoryBody.spanels[data-for=memory]

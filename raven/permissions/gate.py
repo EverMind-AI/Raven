@@ -12,9 +12,10 @@ on the conversation (``raven.permissions.session``), and a later call whose
 every still-asking part was granted runs without a prompt. "Don't ask again"
 writes the prefix rule the human confirmed into ``permissions.tools.exec``,
 after the same validation the prompt's suggestion went through; the gate reads
-config live, so the rule holds from the next call. A pattern that fails
-validation still grants this once and this session -- the human did say yes --
-and the reason it was not written is logged.
+config live, so the rule holds from the next call, and no session grant is
+kept beside it -- taking the rule back means being asked again. A pattern that
+fails validation still grants this once and this session -- the human did say
+yes -- and the reason it was not written is logged.
 
 ``allow_ask`` is fixed per gate, not read from the turn: a sub-agent's task
 inherits the parent turn's context by asyncio's own rule, so a gate built for
@@ -41,13 +42,45 @@ from raven.contracts.permissions import (
     PermissionMode,
     Tier,
 )
-from raven.contracts.tool import PARSE_RETRY_INSTRUCTION, STOP_RETRY_INSTRUCTION, Continuation, ToolResult
+from raven.contracts.tool import PARSE_RETRY_INSTRUCTION, STOP_RETRY_INSTRUCTION, Continuation, Tool, ToolResult
 from raven.permissions.builtin import BuiltinRulings, action_digest, action_line, session_keys
 from raven.permissions.judge import review
 from raven.permissions.rules import default_tier, exec_approval_shape, user_tier, validate_exec_pattern
 from raven.permissions.session import remember_allowed, session_allows, session_mode
-from raven.permissions.turn import current_tool_call_id, current_turn
+from raven.permissions.turn import current_tool_call_id, current_turn, note_refusal
 from raven.tracing import trace
+
+#: What one evidence value may carry to a prompt. A person reads a prompt; past
+#: a few screens nothing more is read, and the frame is built, serialised and
+#: drawn on the event loop. The filesystem tools cap what they read off disk,
+#: but a brand-new file's whole text, an MCP call's arguments and the fallback's
+#: raw params reach here uncapped, and an approval now waits a day rather than
+#: half a minute -- so the ceiling belongs where every tool's account passes,
+#: not in each tool that remembers to have one.
+_EVIDENCE_MAX_CHARS = 16 * 1024
+
+
+def _clamped(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Cut every oversized string in one tool's account down to what is read.
+
+    Marks what it cut rather than dropping it silently: a prompt showing half a
+    diff has to say so, or the person answers about a change they cannot see.
+    """
+    out: dict[str, Any] = {}
+    for key, value in evidence.items():
+        if isinstance(value, str) and len(value) > _EVIDENCE_MAX_CHARS:
+            out[key] = value[:_EVIDENCE_MAX_CHARS]
+            out["truncated"] = True
+        elif isinstance(value, dict | list | tuple):
+            text = repr(value)
+            if len(text) > _EVIDENCE_MAX_CHARS:
+                out[key] = text[:_EVIDENCE_MAX_CHARS]
+                out["truncated"] = True
+            else:
+                out[key] = value
+        else:
+            out[key] = value
+    return out
 
 
 class PermissionGate:
@@ -155,20 +188,33 @@ class PermissionGate:
             suggested_pattern=suggested_pattern,
         )
 
-    async def enforce(self, tool_name: str, params: dict[str, Any]) -> ToolResult | None:
-        """None waves the call through; a ``ToolResult`` replaces it."""
+    async def enforce(self, tool_name: str, params: dict[str, Any], tool: Tool | None = None) -> ToolResult | None:
+        """None waves the call through; a ``ToolResult`` replaces it.
+
+        ``tool`` is the registered object behind ``tool_name``, consulted only
+        for what a prompt should show (``Tool.approval_kind`` and
+        ``approval_evidence``); the decision never reads it.
+        """
         turn = current_turn()
         digest = action_digest(tool_name, params)
         if digest in turn.lapsed_digests:
             self._annotate({"permission.decision": "deny", "permission.source": "lapsed_earlier"})
-            return self._refusal(
-                "Error: This action was already sent for approval in this turn and the request "
-                "expired with no answer. Asking again would expire the same way. Tell the user the "
-                "approval lapsed and let them decide."
+            return self._refuse(
+                tool_name,
+                params,
+                "This action was already sent for approval in this turn and the request expired "
+                "with no answer. Asking again would expire the same way. Tell the user the "
+                "approval lapsed and let them decide.",
+                source="lapsed_earlier",
             )
         if digest in turn.denied_digests:
             self._annotate({"permission.decision": "deny", "permission.source": "denied_earlier"})
-            return self._refusal("Error: User denied this action earlier in the current turn")
+            return self._refuse(
+                tool_name,
+                params,
+                "User denied this action earlier in the current turn",
+                source="denied_earlier",
+            )
         decision = await self.check(tool_name, params)
         if isinstance(decision, Allow):
             self._annotate({"permission.decision": "allow", "permission.source": decision.source.value})
@@ -186,10 +232,16 @@ class PermissionGate:
                     continuation=Continuation.CONTINUE,
                     ok=False,
                 )
-            return self._refusal(f"Error: {decision.reason}")
+            return self._refuse(tool_name, params, decision.reason, source=decision.source.value)
         if not self._allow_ask or turn.responder is None or not turn.conversation_id:
             self._annotate({"permission.decision": "deny", "permission.source": DecisionSource.UNATTENDED.value})
-            return self._refusal(f"Error: {decision.reason}, but this turn is not interactive")
+            return self._refuse(
+                tool_name,
+                params,
+                f"{decision.reason}, but this turn is not interactive",
+                source=DecisionSource.UNATTENDED.value,
+            )
+        kind, evidence = self._prompt_view(tool, params)
         try:
             outcome = await turn.responder.await_approval(
                 conversation_id=turn.conversation_id,
@@ -198,11 +250,21 @@ class PermissionGate:
                 command=action_line(tool_name, params),
                 description=decision.description,
                 suggested_pattern=decision.suggested_pattern,
+                kind=kind,
+                family=decision.family,
+                origin=turn.origin,
+                origin_name=turn.origin_name,
+                evidence=evidence,
             )
         except Exception as exc:  # noqa: BLE001 - a broken transport must refuse, not execute
             logger.exception("permissions: approval transport failed for {}", tool_name)
             self._annotate({"permission.decision": "deny", "permission.source": "approval_transport_error"})
-            return self._refusal(f"Error: The approval request could not be delivered ({exc})")
+            return self._refuse(
+                tool_name,
+                params,
+                f"The approval request could not be delivered ({exc})",
+                source="approval_transport_error",
+            )
         self._annotate(
             {
                 "permission.decision": "allow" if outcome.approved else "deny",
@@ -212,55 +274,135 @@ class PermissionGate:
             }
         )
         if outcome.approved:
-            if outcome.choice is not ApprovalChoice.ALLOW:
-                remember_allowed(turn.conversation_id, decision.session_keys)
+            # A rule that reached the config file is read live from the next
+            # call on, so it needs no session grant beside it -- and taking the
+            # rule back then really does mean being asked again. The session
+            # grant stays as the fallback whenever the rule does not carry this
+            # call on its own: a pattern that could not be written, or one the
+            # user's own stricter rule outranks (``git *: ask`` over the
+            # ``git push *`` just saved -- the strictest matching rule wins).
+            on_disk = added = False
             if outcome.choice is ApprovalChoice.ALLOW_ALWAYS:
-                self._persist(tool_name, outcome.pattern)
+                on_disk, added = self._persist(tool_name, outcome.pattern)
+                # What the write actually did, back to whoever asked, so a later
+                # undo is about this rule rather than about any rule wearing the
+                # same text. The answer reached the client before this line ran,
+                # so the transport is holding an undo open on it; a transport
+                # with no undo (the ACP wire) has no such method and is skipped.
+                report = getattr(turn.responder, "record_grant", None)
+                if callable(report) and outcome.approval_id:
+                    report(outcome.approval_id, outcome.pattern.strip(), added)
+            covered = on_disk and user_tier(tool_name, params, self._config_source().tools) is Tier.ALLOW
+            if outcome.choice is ApprovalChoice.ALLOW_SESSION or (
+                outcome.choice is ApprovalChoice.ALLOW_ALWAYS and not covered
+            ):
+                remember_allowed(turn.conversation_id, decision.session_keys)
             return None
         turn.denied_digests.add(digest)
         if not outcome.answered:
             turn.lapsed_digests.add(digest)
         feedback = f' The user said: "{outcome.feedback}"' if outcome.feedback else ""
         if outcome.choice is ApprovalChoice.DENY_STOP:
-            return self._refusal(
-                "Error: User denied this action and asked to stop here." + feedback,
+            return self._refuse(
+                tool_name,
+                params,
+                "User denied this action and asked to stop here." + feedback,
+                source="approval_deny_stop",
                 continuation=Continuation.ABORT_TURN,
             )
         if not outcome.answered:
-            # Not a refusal. The request went out and the deadline passed with
-            # nobody having answered it, and the two shared one sentence: a model
-            # told it had been denied stops asking and goes around, which is how a
-            # run whose approvals had merely lapsed reported a system error and
-            # delivered something else instead. Said plainly, the next move is to
-            # tell the reader, not to find another way.
-            return self._refusal(
-                "Error: This action needed the user's approval, and the request expired with no "
+            # Not a refusal. The request went out and nobody answered it -- the
+            # connection went, the turn was torn down, a host's ceiling fired --
+            # and the two shared one sentence: a model told it had been denied
+            # stops asking and goes around, which is how a run whose approvals had
+            # merely lapsed reported a system error and delivered something else
+            # instead. Said plainly, the next move is to tell the reader, not to
+            # find another way.
+            return self._refuse(
+                tool_name,
+                params,
+                "This action needed the user's approval, and the request expired with no "
                 "answer. Nobody refused it. Tell the user the approval lapsed and ask whether to "
                 "retry; do not repeat this call in this turn, and do not look for another way "
-                "around it."
+                "around it.",
+                source="approval_lapsed",
             )
-        return self._refusal("Error: User denied this action." + feedback)
+        return self._refuse(
+            tool_name,
+            params,
+            "User denied this action." + feedback,
+            source="approval_denied",
+        )
 
-    def _persist(self, tool_name: str, pattern: str) -> None:
-        """Write the confirmed prefix as an allow rule; the grant already stands."""
+    def _refuse(
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        reason: str,
+        *,
+        source: str = "",
+        continuation: Continuation = Continuation.CONTINUE,
+    ) -> ToolResult:
+        """Answer the call with a refusal, and leave the turn a record of it.
+
+        Every refusal goes through here so the record cannot miss a path: the
+        one-shot ``-m`` surface has no human watching the run, and its summary
+        is the only place a caller learns that the mutations it asked for were
+        turned down.
+        """
+        note_refusal(tool_name, action_line(tool_name, params), reason, source)
+        return self._refusal(f"Error: {reason}", continuation=continuation)
+
+    def _persist(self, tool_name: str, pattern: str) -> tuple[bool, bool]:
+        """Write the confirmed prefix as an allow rule; the grant already stands.
+
+        Two answers, and they are not the same question: whether the rule is on
+        disk (which decides if a session grant is still needed), and whether
+        THIS call is the reason it is there (which decides whether an undo may
+        take it away -- a rule the person already had is not this prompt's).
+        """
         pattern = pattern.strip()
         why = "only exec patterns can be persisted" if tool_name != "exec" else validate_exec_pattern(pattern)
         if why is not None:
             logger.warning("permissions: not persisting {!r}: {}", pattern, why)
             self._annotate({"permission.persisted": False, "permission.persist.refused": why})
-            return
+            return False, False
         try:
             added = allow_exec_pattern(pattern)
         except ValueError as exc:
             logger.warning("permissions: not persisting {!r}: {}", pattern, exc)
             self._annotate({"permission.persisted": False, "permission.persist.refused": str(exc)})
-            return
+            return False, False
         except Exception:  # noqa: BLE001 - the config file is the user's; a failed write is theirs to hear about
             logger.exception("permissions: could not write allow rule {!r}", pattern)
             self._annotate({"permission.persisted": False})
-            return
+            return False, False
         logger.info("permissions: {} exec allow rule {!r}", "added" if added else "kept", pattern)
-        self._annotate({"permission.persisted": True, "permission.persist.pattern": pattern})
+        self._annotate(
+            {"permission.persisted": True, "permission.persist.added": added, "permission.persist.pattern": pattern}
+        )
+        return True, added
+
+    @staticmethod
+    def _prompt_view(tool: Tool | None, params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """What the prompt shows: the tool's own account of the call, or its arguments.
+
+        A failing evidence hook falls back to the arguments rather than refusing
+        or running the call -- it only decides what a person sees, never
+        whether they are asked."""
+        kind = str(getattr(tool, "approval_kind", "") or "") or "unknown"
+        evidence: Any = None
+        if tool is not None:
+            try:
+                evidence = tool.approval_evidence(params)
+            except Exception:  # noqa: BLE001 - display only; the decision is made regardless
+                logger.debug("permissions: approval evidence failed for {}", kind, exc_info=True)
+        if not isinstance(evidence, dict):
+            # The arguments are the evidence now, and a layout keyed to the
+            # kind would draw them as blanks -- a file write with no path -- so
+            # the kind follows them.
+            return "unknown", _clamped({"input": params})
+        return kind, _clamped(evidence)
 
     @staticmethod
     def _annotate(attributes: dict) -> None:

@@ -177,6 +177,35 @@ const syntheticRun = (runId: string, insts: readonly InstanceRow[]): LiveDagRun 
  * active target rides along whatever its `resumable` says -- the conversation
  * on screen must never fall off the strip.
  */
+/**
+ * One graph line per stint, not one per round.
+ *
+ * A stint submits a graph a round into the same conversation, so a run of
+ * thirty rounds put thirty graph lines on a strip that draws a handful --
+ * pushing off every ordinary graph, and leaving a reader to find the round
+ * that is actually running by reading summaries. The rounds before this one
+ * are on the stint's own record, and what the strip is for is what is
+ * happening now.
+ *
+ * The round in flight is the one kept: highest `roundIndex`, and the later
+ * arrival where two share it, which is the attempt a resumed round is on.
+ * A graph with no stint is untouched, and that is every graph a tool call
+ * dispatched.
+ */
+export const currentRounds = (runs: LiveDagRun[]): LiveDagRun[] => {
+  const latest = new Map<string, LiveDagRun>()
+  for (const run of runs) {
+    if (!run.stintId) {
+      continue
+    }
+    const held = latest.get(run.stintId)
+    if (!held || (run.roundIndex ?? 0) >= (held.roundIndex ?? 0)) {
+      latest.set(run.stintId, run)
+    }
+  }
+  return runs.filter(run => !run.stintId || latest.get(run.stintId) === run)
+}
+
 export const stripLines = (
   rows: LiveAgentRow[],
   runs: LiveDagRun[],
@@ -190,7 +219,8 @@ export const stripLines = (
   maxIdlePerRun = MAX_IDLE_RUN_INSTANCE_ROWS
 ): { lines: StripLine[]; overflow: number } => {
   const { overflow: liveOverflow, visible } = stripRows(rows, max, now, lingerMs)
-  const shownRuns = runs.slice(Math.max(0, runs.length - maxDagLines))
+  const current = currentRounds(runs)
+  const shownRuns = current.slice(Math.max(0, current.length - maxDagLines))
   const visibleIds = new Set(visible.map(r => r.id))
 
   const switchable = instances
