@@ -489,14 +489,19 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-mpill .settings-pm:focus-visible {outline:2px solid var(--amber); outline-offset:-2px}
 .settings-mpill .settings-px {position:absolute; top:0; right:0; bottom:0; width:30px; font:inherit; font-size:14px; line-height:1; border:0; background:var(--paper); color:var(--faint); cursor:pointer; display:none}
 .settings-mpill.settings-clearable:hover .settings-px,.settings-mpill.settings-clearable:focus-within .settings-px {display:block}
-.settings-mpill.settings-clearable:hover .settings-ch,.settings-mpill.settings-clearable:focus-within .settings-ch {visibility:hidden}
+/* The clear control lies over the pill's right edge, so on hover the chevron
+   leaves the row and the button's padding takes its exact place: gap 7 +
+   margin 2 + slot 14 + padding 8 = 31, one past the control's 30. The provider
+   then ellipsizes short of the control instead of running under it, and its
+   right edge does not move. */
+.settings-mpill.settings-clearable:hover .settings-ch,.settings-mpill.settings-clearable:focus-within .settings-ch {display:none}
+.settings-mpill.settings-clearable:hover .settings-pm,.settings-mpill.settings-clearable:focus-within .settings-pm {padding-right:31px}
 .settings-mpill .settings-px:hover {color:var(--clay)}
-.settings-mpill .settings-ch {color:var(--faint); font-size:11px; margin-left:2px}
 .settings-mpill .settings-id {flex:1; min-width:0}
 .settings-mpill .settings-pv {overflow:hidden; text-overflow:ellipsis; max-width:45%}
 .settings-mpill .settings-id {font-family:var(--mono); font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .settings-mpill .settings-pv {font-size:12px; color:var(--faint); white-space:nowrap}
-.settings-mpill .settings-ch {color:var(--faint); font-size:11px; margin-left:2px}
+.settings-mpill .settings-ch {color:var(--faint); font-size:11px; margin-left:2px; width:14px; flex:none; text-align:center}
 .settings-mpill.settings-dim .settings-id {font-family:var(--sans); font-weight:400; color:var(--muted)}
 .settings-mpill.settings-dim {background:none}
 .settings-row .settings-rk {display:block}

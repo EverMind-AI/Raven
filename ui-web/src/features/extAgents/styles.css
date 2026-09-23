@@ -227,17 +227,19 @@
 }
 .extAgents-pill-dim .extAgents-mid { font-family: var(--sans); font-weight: 400; color: var(--muted); }
 .extAgents-mpv { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
-.extAgents-mch { color: var(--faint); font-size: 11px; margin-left: 2px; }
+.extAgents-mch { color: var(--faint); font-size: 11px; margin-left: 2px; width: 14px; flex: none; text-align: center; }
 .extAgents-mx {
   position: absolute; top: 0; right: 0; bottom: 0; width: 30px;
   font: inherit; font-size: 15px; line-height: 1; border: 0;
   background: var(--paper); color: var(--faint); cursor: pointer; display: none;
 }
 .extAgents-pill-clearable:hover .extAgents-mx, .extAgents-pill-clearable:focus-within .extAgents-mx { display: block; }
-.extAgents-pill-clearable:hover .extAgents-mch, .extAgents-pill-clearable:focus-within .extAgents-mch { visibility: hidden; }
-/* The clear control sits over the pill's right edge; the provider steps back
-   from under it while it is showing. */
-.extAgents-pill-clearable:hover .extAgents-mpv, .extAgents-pill-clearable:focus-within .extAgents-mpv { margin-right: 18px; }
+/* The clear control sits over the pill's right edge: on hover the chevron
+   leaves the row and the button's padding takes its exact place (gap 7 +
+   margin 2 + slot 14 + padding 8 = 31, one past the control's 30), so the
+   provider ellipsizes short of it and its right edge does not move. */
+.extAgents-pill-clearable:hover .extAgents-mch, .extAgents-pill-clearable:focus-within .extAgents-mch { display: none; }
+.extAgents-pill-clearable:hover .extAgents-pm, .extAgents-pill-clearable:focus-within .extAgents-pm { padding-right: 31px; }
 .extAgents-mx:hover { color: var(--clay); }
 
 /* The shared picker, sized to hang under the pill inside the 520px sheet: the
