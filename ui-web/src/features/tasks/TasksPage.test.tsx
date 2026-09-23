@@ -1184,6 +1184,22 @@ describe('a node record still being written', () => {
   }
   const body = (): HTMLElement => document.querySelector('.tkbody') as HTMLElement
 
+  /* A reader moving the box: the press that did it, the scroll it caused, and
+     letting go. All three, because only a gesture makes the scroll theirs and
+     a press is theirs until it is released. */
+  const reader = (top: number): void => {
+    body().dispatchEvent(new Event('pointerdown'))
+    body().scrollTop = top
+    body().dispatchEvent(new Event('scroll'))
+    window.dispatchEvent(new Event('pointerup'))
+  }
+
+  /* What the browser does on its own: a scroll with no gesture behind it. */
+  const browser = (top: number): void => {
+    body().scrollTop = top
+    body().dispatchEvent(new Event('scroll'))
+  }
+
   /* A running node open on its context tab, with its first read already in. */
   const opened = async (over: Partial<NodeRecord> = {}): Promise<void> => {
     const running = task({
@@ -1210,8 +1226,7 @@ describe('a node record still being written', () => {
        above it and had to drag back down, every single time. */
     await opened()
     sized(body(), 5090, 687)
-    body().scrollTop = 4403
-    act(() => { body().dispatchEvent(new Event('scroll')) })
+    act(() => { reader(4403) })
 
     await readAgain('second')
     expect(body().scrollTop).toBe(5090)
@@ -1221,13 +1236,174 @@ describe('a node record still being written', () => {
     expect(body().scrollTop).toBe(6200)
   })
 
+  it('is not talked out of following by a scroll the reader did not make', async () => {
+    /* Measured in Safari against a running node: the browser moved the offset
+       up by itself -- 48px, 146px, and once 1,025px -- with the content the
+       same height on both sides of the move and nothing in this code writing
+       to it. Each of those fired a `scroll`, and reading one as the reader
+       walking away ended the follow for good: the pane sat 152px short of the
+       end and stayed there. A reader who has not touched the box has not
+       changed their mind about where they want to be. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    /* Their hand is off the box -- the nudges landed seconds after the drag. */
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(3378) })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(5090)
+  })
+
+  it('is not talked out of following by a press that scrolled nothing', async () => {
+    /* A gesture arms the scrolls that follow it, and only the scrolling
+       stopping disarms it again -- so a gesture that never scrolls has to
+       disarm on its own. A press on a fold inside the box, or a key the page
+       handles, is a gesture with no scroll after it; left armed, the next
+       move the browser makes by itself reads as the reader walking away, and
+       the follow ends for good, the defect this whole hook exists for. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => {
+      body().dispatchEvent(new Event('pointerdown'))
+      window.dispatchEvent(new Event('pointerup'))
+    })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(3378) })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(5090)
+  })
+
+  it('is not talked out of following by a long press that scrolled nothing', async () => {
+    /* Held past the settle, the press's own deadline has already come and
+       gone while it was held, so it is letting go that has to start the
+       count -- or the gesture stays armed for good. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { body().dispatchEvent(new Event('pointerdown')) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 400)) })
+    act(() => { window.dispatchEvent(new Event('pointerup')) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(3378) })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(5090)
+  })
+
+  it('is not talked out of following by a key that scrolled nothing', async () => {
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { body().dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(3378) })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(5090)
+  })
+
+  it('still lets a reader scroll away with a gesture that does scroll', async () => {
+    /* The other half: disarming a gesture that scrolled nothing must not
+       disarm one that is scrolling. A wheel starts, its scroll follows inside
+       the settle window, and that is the reader leaving. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => {
+      body().dispatchEvent(new Event('wheel'))
+      body().scrollTop = 900
+      body().dispatchEvent(new Event('scroll'))
+    })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(900)
+  })
+
+  it('lets a reader drag away after holding the bar still', async () => {
+    /* The press is what makes a drag the reader's. Timed from the press
+       alone, a bar held still for longer than the settle would disarm before
+       the drag began, and every scroll of the drag would then be answered as
+       the browser's -- the reader pinned to the end, unable to leave it. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { body().dispatchEvent(new Event('pointerdown')) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 400)) })
+    act(() => {
+      body().scrollTop = 900
+      body().dispatchEvent(new Event('scroll'))
+      window.dispatchEvent(new Event('pointerup'))
+    })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(900)
+  })
+
+  it('puts a reader back the moment the browser moves them', async () => {
+    /* Measured in Safari against a running node: the content is 172px shorter
+       for an instant inside a paint, the browser clamps `scrollTop` to the end
+       that implies -- 2,728 where the end is 2,900 -- and the height coming
+       back leaves the offset there. Both heights read the same on either side
+       of the move, so nothing reports a resize; the move is the only evidence
+       there is. It repeated every few seconds, which on screen is a pane that
+       will not stay at the end. Answered without waiting for the next read,
+       because the next read can be seconds away. */
+    await opened()
+    sized(body(), 4077, 1177)
+    act(() => { reader(2900) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(2728) })
+
+    expect(body().scrollTop).toBe(4077)
+  })
+
+  it('holds the end through a paint that empties the box', async () => {
+    /* What Safari actually does, measured: a paint takes the content down to
+       the height of the viewport -- the record gone for an instant -- and the
+       browser clamps the offset to 0 against it. The content comes back and
+       the offset does not: nothing scrolled, so no event fires, and both
+       heights read the same either side of it, so no observer reports
+       anything. The reader ended up at the top of a record whose end they had
+       been reading, and every few seconds it happened again. */
+    await opened()
+    sized(body(), 3711, 1177)
+    act(() => { reader(2534) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    /* The collapse, the clamp it implies, and the content coming back --
+       none of it announced. */
+    sized(body(), 1177, 1177)
+    act(() => { body().scrollTop = 0 })
+    sized(body(), 3711, 1177)
+    await act(async () => { await new Promise((done) => requestAnimationFrame(() => done(undefined))) })
+
+    expect(body().scrollTop).toBe(3711)
+  })
+
   it('leaves a reader who scrolled up where they are', async () => {
     /* The thing a naive fix breaks: they are reading the step above, and the
        next read is not an invitation to go anywhere. */
     await opened()
     sized(body(), 5090, 687)
-    body().scrollTop = 900
-    act(() => { body().dispatchEvent(new Event('scroll')) })
+    act(() => { reader(900) })
 
     await readAgain('second')
     expect(body().scrollTop).toBe(900)
@@ -1251,8 +1427,7 @@ describe('a node record still being written', () => {
        reading what they opened, rather than sent to the end of it. */
     await opened({ steps: [{ kind: 'think', text: 'first, check the dates' }] })
     sized(body(), 5090, 687)
-    body().scrollTop = 4403
-    act(() => { body().dispatchEvent(new Event('scroll')) })
+    act(() => { reader(4403) })
 
     fireEvent.click(document.querySelector('.tkprock') as Element)
     expect(body().scrollTop).toBe(4403)
@@ -1263,8 +1438,7 @@ describe('a node record still being written', () => {
        the end over would open the order somewhere down its middle. */
     await opened()
     sized(body(), 5090, 687)
-    body().scrollTop = 4403
-    act(() => { body().dispatchEvent(new Event('scroll')) })
+    act(() => { reader(4403) })
 
     fireEvent.click(document.querySelectorAll('.tktabs button')[1] as Element)
     await readAgain('second')
