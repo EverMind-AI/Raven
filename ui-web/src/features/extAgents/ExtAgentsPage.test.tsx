@@ -25,7 +25,7 @@ vi.mock('../../state/toast', () => ({
 
 /* The host's provider list, which the built-in row's pill picks from. */
 const hostModels = vi.hoisted(() => ({
-  providers: [] as Array<{ id: string; name: string; models: string[]; on: boolean }>,
+  providers: [] as Array<{ id: string; name: string; models: string[]; configured?: string[]; on: boolean }>,
   loads: 0,
 }))
 vi.mock('../model/source', () => ({
@@ -830,6 +830,30 @@ describe('the model pill', () => {
     expect(picker()!.textContent).toContain('OpenRouter')
     await click(modelButton('z-ai/glm-5.3-flash'))
     expect(acts).toEqual([['model', 'Raven-Code', { model: 'z-ai/glm-5.3-flash', provider: 'openrouter' }]])
+  })
+
+  it("offers one of raven's own the column the composer offers, shortlist and all", async () => {
+    /* A connected vendor with nothing added yet: the composer's column falls
+       back to the registry's shortlist, and this picker read the added list
+       alone -- a vendor with four models on one and none on the other. */
+    hostModels.providers = [
+      { id: 'gemini', name: 'Gemini', models: ['gemini-2.5-pro', 'gemini-2.5-flash'], configured: [], on: true },
+      { id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4-pro', 'deepseek-v4-flash'], configured: ['deepseek-v4-pro'], on: true },
+    ]
+    const { acts } = install([
+      row({ name: 'Raven-Code', preset: undefined, kind: 'acp', own: true, model_source: 'raven', model_choices: [] }),
+    ])
+    await mount()
+    await openSheet('Raven-Code')
+    await click(pill())
+    expect(picker()!.textContent).toContain('Gemini')
+    expect(modelButton('gemini-2.5-pro')).toBeDefined()
+    expect(modelButton('gemini-2.5-flash')).toBeDefined()
+    await click([...picker()!.querySelectorAll('.model-picker-prov')].find((b) => b.textContent!.includes('DeepSeek')))
+    expect(modelButton('deepseek-v4-pro')).toBeDefined()
+    expect(modelButton('deepseek-v4-flash')).toBeUndefined()
+    await click(modelButton('deepseek-v4-pro'))
+    expect(acts).toEqual([['model', 'Raven-Code', { model: 'deepseek-v4-pro', provider: 'deepseek' }]])
   })
 
   it("draws a host id one of raven's own kept across a re-measure under the provider it is stored on", async () => {

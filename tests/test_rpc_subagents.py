@@ -2587,13 +2587,16 @@ async def test_list_marks_a_config_row_whose_handshake_named_raven_as_ravens_own
 
     rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
 
-    # Raven's own, and still an acp row: its menu is what its handshake
-    # advertised, which under the products' inherited catalogue is raven's own.
-    assert rows["Raven-Code"]["own"] is True and rows["Raven-Code"]["model_source"] == "agent"
+    # Raven's own, and still an acp row: it picks from raven's live catalogue,
+    # not from the launch-time capture its handshake advertised -- the menu the
+    # composer draws, so the two never disagree. The capture still travels, for
+    # a reader that wants to know what the probe saw.
+    assert rows["Raven-Code"]["own"] is True and rows["Raven-Code"]["model_source"] == "raven"
+    assert rows["Raven-Code"]["model_choices"] == [{"value": "v/m", "name": "M", "group": "V"}]
     assert rows["Other"]["own"] is False and rows["Other"]["model_source"] == "agent"
     assert rows["Other"]["model_choices"] == [{"value": "v/m", "name": "M", "group": "V"}]
-    # The same agent with nothing to advertise: raven's own falls back to
-    # raven's own catalogue, a third party is taken at its word.
+    # The same agent with nothing to advertise: raven's own is on the same
+    # catalogue either way, a third party is taken at its word.
     assert rows["Raven-PPT"]["own"] is True and rows["Raven-PPT"]["model_source"] == "raven"
     assert rows["Raven-PPT"]["model_choices"] == []
     assert rows["Other-Quiet"]["own"] is False and rows["Other-Quiet"]["model_source"] == "agent"

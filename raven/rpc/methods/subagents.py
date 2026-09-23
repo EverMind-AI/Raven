@@ -513,22 +513,22 @@ def _model_rule(cfg: Any, snapshot: Any, meta: Any) -> str:
     vocabulary: one of raven's own also takes a host-qualified id under either
     rule, since it runs on raven's providers whatever it advertised.
 
-    The rule is the row's, not its kind's: an acp row picks from the choices its
-    handshake advertised, except when it is one of raven's own and advertised
-    none. Those run on raven's own provider catalogue -- a product installed
-    beside this raven inherits its providers -- so an empty menu there is a
-    handshake that predates the catalogue rather than an agent with nothing to
-    offer, and falling back to raven's own ids gives the reader the same menu
-    the built-in row gets. A third party that advertised none is taken at its
-    word: its own credentials decide what it can run, and raven's ids would be
-    refused by the agent itself.
+    The rule is the row's, not its kind's: a third-party acp row picks from the
+    choices its handshake advertised, and one of raven's own picks from raven's
+    own provider catalogue whatever it advertised. An own row runs on this
+    host's providers -- a product installed beside this raven inherits them --
+    so the catalogue is the live list of what it can serve, while its handshake
+    is a launch-time capture of the same list: measured once on a probe
+    session, capped per provider, and stale from the first credential edit
+    after it. Drawing that capture beside the composer's live picker put two
+    different menus on one catalogue. A third party that advertised none is
+    taken at its word: its own credentials decide what it can run, and raven's
+    ids would be refused by the agent itself.
     """
     if cfg.kind == "builtin":
         return "raven"
     if cfg.kind != "acp":
         return "fixed"
-    if meta.model_choices:
-        return "agent"
     return "raven" if getattr(snapshot, "agent_name", "") == "raven" else "agent"
 
 
