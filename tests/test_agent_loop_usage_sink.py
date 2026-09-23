@@ -24,7 +24,7 @@ from raven.config.raven import ContextConfig
 from raven.contracts.llm_provider import ToolCallRequest
 from raven.contracts.token_strategy import UsageSnapshot
 from raven.contracts.tool import Tool
-from raven.providers import rates
+from raven.providers import rates, usage_record
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding, use_binding
 from raven.spine.message import ChatType, Source
@@ -557,8 +557,9 @@ def _costing_agent(
 
     The Curator is dropped because its Slow Path is a bounded agent loop of its
     own on the same provider, and a scripted provider cannot tell its calls from
-    the turn's. Neither its calls nor the watch-work judgement's reach the usage
-    recorder at all, so neither is part of what this file pins.
+    the turn's. Its calls, like the watch-work judgement's, reach the usage
+    recorder only through the provider seam (``raven.providers.usage_record``),
+    which a test here installs only when the seam is what it pins.
     """
     return _make_agent(
         workspace,
@@ -619,6 +620,31 @@ async def test_a_delegating_turn_costs_what_it_delegated(workspace):
 
     assert sink["cost_usd"] == pytest.approx(0.025), "0.002 + 0.003 of its own, plus the 0.02 it delegated"
     assert sink["cost_missing_calls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_turn_is_billed_once_while_the_provider_seam_listens_too(workspace):
+    """Production installs the loop's own registry at the provider seam, so the
+    seam and the loop hear the same call. The loop's row is the one kept -- it
+    carries the turn's session and spend -- and the seam stays out of it."""
+    tracker = UsageTracker(persist=False)
+    registry = StrategyRegistry([tracker])
+    usage_record.install(registry.after_llm_call)
+    agent = _costing_agent(
+        workspace,
+        [_asks_for("list_dir", 0.002, path="."), _says("done", 0.003)],
+        strategies=registry,
+    )
+    sink: dict = {}
+
+    await _turn(agent, sink)
+
+    assert agent.provider.calls == 2
+    billed = tracker.snapshot("s1")
+    assert billed.calls == 2, "one row per model call, not one from the loop and one from the seam"
+    assert billed.cost_usd == pytest.approx(0.005)
+    assert tracker.total.calls == 2
+    assert sink["cost_usd"] == pytest.approx(0.005)
 
 
 @pytest.mark.asyncio

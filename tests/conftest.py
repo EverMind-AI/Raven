@@ -726,6 +726,22 @@ def _isolate_tracing_state_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_leaked_usage_sink():
+    """Clear the provider seam's usage sink around each test.
+
+    ``install_from_config`` hands its registry to ``raven.providers.usage_record``
+    process-wide, so a test that assembles a runtime would leave every later
+    test's provider calls reporting to a tracker built under that test's
+    temporary home. Tests that want the seam install their own sink.
+    """
+    from raven.providers import usage_record
+
+    usage_record.install(None)
+    yield
+    usage_record.install(None)
+
+
+@pytest.fixture(autouse=True)
 def _no_openrouter_network(tmp_path):
     """Keep the OpenRouter catalog fetch off the network and off the real disk.
 

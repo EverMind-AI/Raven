@@ -30,7 +30,7 @@ from raven.contracts.llm_provider import (  # noqa: F401
 )
 from raven.contracts.llm_provider import LLMProvider as _LLMProviderPaper
 from raven.observability import semconv
-from raven.providers import call_record
+from raven.providers import call_record, usage_record
 from raven.providers.first_byte import FirstByteTimeoutError, StreamIdleTimeoutError
 from raven.tracing import trace
 
@@ -300,6 +300,12 @@ class LLMProvider(_LLMProviderPaper):
 
     _CHAT_RETRY_DELAYS = (1, 2, 4)
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        # Every adapter and wrapper is billed where it is called, however it is
+        # reached; see raven.providers.usage_record.
+        super().__init_subclass__(**kwargs)
+        usage_record.instrument(cls)
+
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Replace empty text content that causes provider 400 errors.
@@ -397,15 +403,18 @@ class LLMProvider(_LLMProviderPaper):
             temperature = gen.temperature
         if reasoning_effort is self._SENTINEL:
             reasoning_effort = gen.reasoning_effort
-        response = await self.chat(
-            messages=messages,
-            tools=tools,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            reasoning_effort=reasoning_effort,
-            tool_choice=tool_choice,
-        )
+        # The stream records this call from the delta built below; owned here so
+        # the ``chat`` it rides on is not recorded as a second one.
+        with usage_record.recorded_by_caller():
+            response = await self.chat(
+                messages=messages,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
+                tool_choice=tool_choice,
+            )
         tool_call_delta: dict[str, Any] | None = None
         if response.tool_calls:
             tool_call_delta = {
@@ -1003,6 +1012,10 @@ class LLMProvider(_LLMProviderPaper):
         assert response is not None  # noqa: S101 - the chain is never empty, so the loop above always ran
         return response
 
+
+# The base defines two of the three entry points itself; __init_subclass__ only
+# sees subclasses, so it is instrumented here.
+usage_record.instrument(LLMProvider)
 
 __all__ = [
     "ErrorClassification",

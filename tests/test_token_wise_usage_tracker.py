@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 
+from raven.contracts.llm_provider import ChatDelta, GenerationSettings
 from raven.contracts.token_strategy import UsageSnapshot
+from raven.providers import usage_record
+from raven.providers.base import LLMProvider, LLMResponse
+from raven.providers.lazy import LazyProvider
+from raven.token_wise import usage_context
+from raven.token_wise.registry import StrategyRegistry
 from raven.token_wise.usage_tracker import UsageTracker
 
 
@@ -436,3 +442,154 @@ def test_delegated_usage_keeps_to_its_window_and_to_reported_prices(tmp_path: Pa
     assert got.calls == 2
     assert got.cost_usd == pytest.approx(0.5)
     assert got.cost_missing_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# The provider seam: a call made outside the turn loop is billed, once.
+# ---------------------------------------------------------------------------
+
+
+_REPORTED = {"prompt_tokens": 120, "completion_tokens": 30}
+
+
+class _DirectProvider(LLMProvider):
+    """A provider called the way the heartbeat and the sentinel call one."""
+
+    def __init__(self, reply: LLMResponse | None = None):
+        super().__init__(api_key="test")
+        self.reply = reply or LLMResponse(content="ok", usage=dict(_REPORTED))
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, model=None, max_tokens=None, temperature=0.7, **_kwargs):
+        self.calls += 1
+        return self.reply
+
+    def get_default_model(self) -> str:
+        return "direct/model"
+
+
+class _SplitStreamProvider(_DirectProvider):
+    """Streams usage and the finish reason on separate deltas, as some wires do."""
+
+    async def chat_stream(self, messages, tools=None, model=None, **_kwargs):
+        yield ChatDelta(content="hel")
+        yield ChatDelta(content="lo", usage=dict(_REPORTED))
+        yield ChatDelta(content=None, finish_reason="stop")
+
+
+def _listening() -> UsageTracker:
+    tracker = UsageTracker(persist=False)
+    usage_record.install(StrategyRegistry([tracker]).after_llm_call)
+    return tracker
+
+
+async def test_a_direct_provider_call_is_billed_once_to_the_bound_session():
+    """The retry ladder calls ``chat`` inside ``chat_with_retry``; the caller got
+    one answer, so the usage file gets one row, carrying what the vendor
+    reported, under the session the caller bound."""
+    tracker = _listening()
+    provider = _DirectProvider()
+
+    with usage_context.bind("heartbeat"):
+        await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}], model="direct/model")
+
+    assert provider.calls == 1
+    assert tracker.total.calls == 1
+    row = tracker.snapshot("heartbeat")
+    assert (row.calls, row.input_tokens, row.output_tokens) == (1, 120, 30)
+
+
+async def test_a_wrapped_provider_is_billed_at_the_outer_call_only():
+    """``LazyProvider`` (and the resolving and per-model wrappers) delegate to an
+    inner provider whose own entry points are instrumented too."""
+    tracker = _listening()
+    inner = _DirectProvider()
+    lazy = LazyProvider(lambda: inner, "direct/model", GenerationSettings())
+
+    await lazy.chat_with_retry(messages=[{"role": "user", "content": "hi"}])
+
+    assert inner.calls == 1
+    assert tracker.total.calls == 1
+
+
+async def test_a_call_its_caller_records_is_not_billed_twice():
+    """The turn loop records its own calls with the turn's session and spend;
+    inside ``recorded_by_caller`` the seam stays out of it."""
+    tracker = _listening()
+    provider = _DirectProvider()
+
+    with usage_record.recorded_by_caller():
+        await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}])
+    await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}])
+
+    assert provider.calls == 2
+    assert tracker.total.calls == 1, "only the call made outside the claim"
+
+
+async def test_a_stream_over_the_non_streaming_fallback_is_one_row_not_two():
+    """The base ``chat_stream`` answers through ``chat``; both are instrumented,
+    and the call they make is still one call."""
+    tracker = _listening()
+    provider = _DirectProvider()
+
+    deltas = [d async for d in provider.chat_stream(messages=[{"role": "user", "content": "hi"}])]
+
+    assert deltas and provider.calls == 1
+    assert tracker.total.calls == 1
+    assert tracker.total.input_tokens == 120
+
+
+async def test_a_stream_whose_usage_and_finish_arrive_apart_is_one_row():
+    """Neither delta alone is the end of the call. Wrapped, the stream passes
+    the inner provider's deltas through, and is still recorded once."""
+    tracker = _listening()
+    lazy = LazyProvider(lambda: _SplitStreamProvider(), "direct/model", GenerationSettings())
+
+    text = "".join([d.content or "" async for d in lazy.chat_stream(messages=[{"role": "user", "content": "hi"}])])
+
+    assert text == "hello"
+    assert tracker.total.calls == 1
+    assert (tracker.total.input_tokens, tracker.total.output_tokens) == (120, 30)
+
+
+async def test_an_error_that_reached_no_model_is_not_a_row():
+    """Nothing was spent, and a row of zeros would read as a cheap call."""
+    tracker = _listening()
+    provider = _DirectProvider(LLMResponse(content="Error: connection refused", finish_reason="error"))
+
+    await provider.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert tracker.total.calls == 0
+
+
+async def test_a_sink_that_fails_does_not_fail_the_call():
+    async def _broken(_response, _usage):
+        raise RuntimeError("disk full")
+
+    usage_record.install(_broken)
+    provider = _DirectProvider()
+
+    response = await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}])
+
+    assert response.content == "ok"
+
+
+async def test_the_assembly_installs_its_registry_at_the_seam(tmp_path: Path):
+    """``install_from_config`` is where production learns which registry hears
+    the calls the loop never sees; without it the seam records nothing."""
+    from raven.config.raven import TokenWiseConfig
+    from raven.core.token_wise_stack import install_from_config
+
+    provider = _DirectProvider()
+    await provider.chat(messages=[{"role": "user", "content": "hi"}])
+
+    registry = install_from_config(TokenWiseConfig(), telemetry_dir=tmp_path)
+    await provider.chat(messages=[{"role": "user", "content": "hi"}])
+
+    tracker = registry.get("usage_tracker")
+    assert tracker is not None
+    assert tracker.total.calls == 1, "the call before assembly went nowhere; the one after is billed"
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [r["model"] for r in rows] == ["direct/model"]

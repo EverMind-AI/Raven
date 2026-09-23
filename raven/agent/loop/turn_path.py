@@ -89,6 +89,7 @@ from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, fil
 from raven.contracts.harness import ActionRequest, CapabilityRequest, PlanningRequest, WindowPressure, WindowState
 from raven.contracts.loop_hooks import HookDecision
 from raven.permissions.turn import set_current_tool_call_id
+from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
@@ -976,27 +977,30 @@ class TurnPathMixin:
                 if draft is None and cut_continuation and on_token_delta is not None
                 else None
             )
-            response = await self.harness.action.decide(
-                ActionRequest(
-                    provider=self.provider,
-                    messages=call_messages,
-                    tools=call_tools,
-                    model=call_model,
-                    fallback_models=fallback_models,
-                    stream_call=self._llm_call_stream,
-                    # Spliced here rather than inside the module: both gates are
-                    # the shell's own, and which sink a delta reaches is not a
-                    # strategy decision. The module reads the field it is handed,
-                    # so the stream/retry branch stays exactly the one the loop
-                    # took -- neither gate is built unless ``on_token_delta``
-                    # already is, so the spliced value is None on exactly the
-                    # turns the raw sink was, and a reasoning sink alone still
-                    # streams.
-                    on_token_delta=draft or gate or on_token_delta,
-                    on_reasoning_delta=on_reasoning_delta,
-                    generation_overrides=gen_overrides,
+            # Recorded below with the turn's own session and spend, so the
+            # provider seam must not record it as a call of its own.
+            with usage_record.recorded_by_caller():
+                response = await self.harness.action.decide(
+                    ActionRequest(
+                        provider=self.provider,
+                        messages=call_messages,
+                        tools=call_tools,
+                        model=call_model,
+                        fallback_models=fallback_models,
+                        stream_call=self._llm_call_stream,
+                        # Spliced here rather than inside the module: both gates are
+                        # the shell's own, and which sink a delta reaches is not a
+                        # strategy decision. The module reads the field it is handed,
+                        # so the stream/retry branch stays exactly the one the loop
+                        # took -- neither gate is built unless ``on_token_delta``
+                        # already is, so the spliced value is None on exactly the
+                        # turns the raw sink was, and a reasoning sink alone still
+                        # streams.
+                        on_token_delta=draft or gate or on_token_delta,
+                        on_reasoning_delta=on_reasoning_delta,
+                        generation_overrides=gen_overrides,
+                    )
                 )
-            )
             # Assigned, not latched: the fact this carries is that the turn's
             # own last word was cut, so a call that recovers clears it. Latching
             # would report a cut to a reader whose question is what the turn
