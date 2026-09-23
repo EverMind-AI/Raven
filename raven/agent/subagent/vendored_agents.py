@@ -145,8 +145,25 @@ def _holds_products(tree: Path) -> bool:
     every product under one raven version keeps that decision: the stamp is
     what :func:`_install_packaged_tree` keys its "stays deleted" rule on, and a
     fall-through here would bring the products back through the checkout.
+
+    The manifests are the ones the scanner will read, through the same
+    enumerator, so a tree this calls populated is one discovery finds products
+    in -- a hidden staging directory counts for neither.
     """
-    return (tree / _VERSION_STAMP).is_file() or any(tree.glob("*/subagent.json"))
+    return (tree / _VERSION_STAMP).is_file() or bool(_product_manifests(tree))
+
+
+def _product_manifests(root: Path) -> list[Path]:
+    """Every ``<folder>/subagent.json`` under ``root`` that names a product, sorted.
+
+    pathlib's glob matches dot-directories, and a hidden folder here is never
+    a legitimate agent (every real folder name starts with a letter) -- it is
+    crash residue, most likely a scaffold staging directory
+    (``.<name>.partial-*``) a SIGKILL orphaned mid-write. Advertising one puts
+    an invisible-to-ls row on the roster, and counting one as a product makes
+    :func:`agents_root` choose a tree the scanner then finds empty.
+    """
+    return [manifest for manifest in sorted(root.glob("*/subagent.json")) if not manifest.parent.name.startswith(".")]
 
 
 def _install_packaged_tree(packaged: Path, installed: Path) -> None:
@@ -589,15 +606,8 @@ def _scan_folders(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
         return
 
     python = _resolved_python()
-    for manifest in sorted(root.glob("*/subagent.json")):
+    for manifest in _product_manifests(root):
         folder = manifest.parent
-        # pathlib's glob matches dot-directories, and a hidden folder here is
-        # never a legitimate agent (every real folder name starts with a
-        # letter) -- it is crash residue, most likely a scaffold staging
-        # directory a SIGKILL orphaned mid-write. Advertising one puts an
-        # invisible-to-ls row on the roster.
-        if folder.name.startswith("."):
-            continue
         try:
             entry = json.loads(manifest.read_text(encoding="utf-8"))
             if not isinstance(entry, dict):

@@ -137,22 +137,6 @@ class InstallInfo:
 
 
 @dataclass
-class AgentProductsInfo:
-    """Where the ``agents/`` product tree resolved and what it holds.
-
-    Answered without a config, like ``InstallInfo``: the tree is found from the
-    raven home and the package alone, and the one failure this exists to show
-    -- a home directory that exists but holds no product, so nothing is
-    discovered and no error says so -- is invisible from every other row.
-    """
-
-    root: Optional[str] = None
-    names: list[str] = field(default_factory=list)
-    hidden: list[str] = field(default_factory=list)
-    unready: dict[str, str] = field(default_factory=dict)
-
-
-@dataclass
 class LlmProbeResult:
     ok: bool
     text: Optional[str] = None
@@ -234,7 +218,6 @@ class DoctorReport:
     version: int = 1
     config_loaded: bool = False
     install: Optional[InstallInfo] = None
-    agent_products: Optional[AgentProductsInfo] = None
     paths: Optional[PathsInfo] = None
     routing: Optional[RoutingInfo] = None
     features: Optional[FeaturesInfo] = None
@@ -583,22 +566,6 @@ def _gather_external_tools() -> ExternalToolsInfo:
     return info
 
 
-def _gather_agent_products() -> AgentProductsInfo:
-    """One scan of the product tree, the same one the roster is built from."""
-    from raven.agent.subagent.vendored_agents import agents_root, discover_product_rows, product_state
-
-    root = agents_root()
-    if root is None:
-        return AgentProductsInfo()
-    rows = discover_product_rows(root)
-    return AgentProductsInfo(
-        root=str(root),
-        names=[row.name for row in rows],
-        hidden=[row.name for row in rows if getattr(row, "hidden", False)],
-        unready={name: state.detail for name, state in product_state(root).items() if not state.ready},
-    )
-
-
 def _gather_static_checks() -> DoctorReport:
     """Inspect config / routing / features. Strictly zero-network."""
     from raven.config.loader import get_config_path, load_config
@@ -608,7 +575,7 @@ def _gather_static_checks() -> DoctorReport:
         config_path=str(config_path),
         config_exists=config_path.exists(),
     )
-    report = DoctorReport(paths=paths, install=_gather_install(), agent_products=_gather_agent_products())
+    report = DoctorReport(paths=paths, install=_gather_install())
 
     if not paths.config_exists:
         return report
@@ -856,25 +823,6 @@ def _describe_window(routing) -> str:
     return f"auto -> {DEFAULT_CONTEXT_WINDOW_TOKENS:,} default [yellow](no catalogue knows this model)[/yellow]"
 
 
-def _render_agent_products(products: AgentProductsInfo) -> None:
-    console.print("\n[bold]Agent products[/bold]")
-    if products.root is None:
-        console.print(
-            "  Tree: [yellow]none found[/yellow]  "
-            "[dim]no agents/ under the raven home, beside the package, or inside it[/dim]"
-        )
-    elif not products.names:
-        console.print(
-            f"  Tree: [yellow]{products.root}[/yellow]  "
-            "[dim]holds no product folder; the shipped products return on the next upgrade[/dim]"
-        )
-    else:
-        listed = ", ".join(f"{name} (hidden)" if name in products.hidden else name for name in products.names)
-        console.print(f"  Tree: [green]{products.root}[/green]  [dim]{len(products.names)} products: {listed}[/dim]")
-    for name, why in products.unready.items():
-        console.print(f"  [yellow]![/yellow] {name}: [dim]{why}[/dim]")
-
-
 def _render_human_output(report: DoctorReport) -> None:
     console.print(f"\n{__logo__} Raven Doctor\n")
 
@@ -974,9 +922,6 @@ def _render_human_output(report: DoctorReport) -> None:
         found = "chromium found" if (external.system_chrome or external.chromium) else "no chromium found"
         console.print(f"  Design render: [dim]{engine}, {found}[/dim]")
 
-    if report.agent_products is not None:
-        _render_agent_products(report.agent_products)
-
     gateway = report.gateway
     if gateway is not None:
         console.print("\n[bold]Gateway[/bold]")
@@ -1049,7 +994,7 @@ def _render_human_output(report: DoctorReport) -> None:
 
 
 def _render_install_summary() -> None:
-    """Six rows, one per optional capability the installer carries.
+    """Five rows, one per optional capability the installer carries.
 
     Runs instead of the report, not in front of it: the question it answers is
     "did the install finish its optional halves", which must have an answer on
@@ -1066,13 +1011,6 @@ def _render_install_summary() -> None:
     row("Long-term memory", ok if everos_plugin_installed() else reinstall)
     row("Design engine", ok if external.design_engine else reinstall)
     row("PPT engine", ok if find_spec("raven_ppt") is not None else reinstall)
-    products = _gather_agent_products()
-    if products.names:
-        row("Agent products", f"{ok}  [dim]{len(products.names)} discovered at {products.root}[/dim]")
-    elif products.root:
-        row("Agent products", f"[yellow]✗[/yellow]  [dim]{products.root} holds no product folder[/dim]")
-    else:
-        row("Agent products", f"[yellow]✗[/yellow]  [dim]no agents/ tree found; {reinstall.split('  ', 1)[1]}[/dim]")
     if external.soffice:
         row("Deck preview", f"{ok}  {external.soffice}")
     else:
