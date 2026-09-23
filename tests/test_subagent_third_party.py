@@ -2299,8 +2299,9 @@ async def test_cli_backend_create_after_failed_resume_also_fails_leaves_no_recor
 def test_only_the_measured_non_isolating_preset_withholds_session_mcp() -> None:
     """``sessionMcp`` is declared per agent because no handshake reports it.
 
-    Measured: claude-agent-acp 0.66.0 and codex-acp 1.1.14 keep one session's MCP
-    servers to that session, opencode-ai 1.18.16 does not, and all three report
+    Measured: claude-agent-acp 0.66.0 and codex-acp 1.1.14 (and 0.81.1 and 1.13.1,
+    the pins they moved to) keep one session's MCP servers to that session,
+    opencode-ai 1.18.16 does not, and all three report
     the same ``mcpCapabilities``. Pinned as a table because getting it backwards
     is silent both ways -- a wrong ``false`` turns an agent's MCP off, a wrong
     ``true`` offers one dispatch's servers to every concurrent sibling, since

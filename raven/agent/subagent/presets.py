@@ -23,7 +23,8 @@ Measured on 2026-08-11, which is what fixed each transport below:
   these as *external* agents, so an adapter demanding its own credential would
   not be acceptable.
 - ``Codex`` - ACP through the ACP project's adapter. resume + load but **no
-  fork**, which is exactly why capabilities are negotiated rather than declared.
+  fork** in the build measured then (1.13.1 adds it), which is exactly why
+  capabilities are negotiated rather than declared.
 - ``OpenCode`` - ACP, native (``opencode acp``). resume + fork + load.
 - ``OpenClaw`` - ACP, native (``openclaw acp``). This one is a bridge backed by
   the OpenClaw Gateway rather than a self-contained server: with no reachable
@@ -118,9 +119,12 @@ from raven.agent.subagent.acp_registry_presets import (
 #             (chat -Q joins a session and keeps stdout to the answer; the id is
 #             printed on stderr, matched by sessionIdPattern)
 
-# Pinned deliberately; see the module docstring.
-_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.79.0"
-_CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@1.1.14"
+# Pinned deliberately; see the module docstring. A bump reaches rows already
+# configured only through the config migration that carries the previous stock
+# command forward (``_RETIRED_SHIM_COMMANDS`` in raven/config/loader.py), since
+# ``subagents.add`` copies this string into the row.
+_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.81.1"
+_CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@1.13.1"
 
 SHIM_LAUNCHED_PRESETS = frozenset({"claude_code", "codex"}) | ACP_REGISTRY_SHIM_PRESETS
 """Presets whose command fetches an ACP shim rather than naming a local agent.
@@ -147,13 +151,18 @@ really does reach for a local install: ``pi-acp`` launches ``pi`` and fails
 with "executable not found" without it. The other two shims bring their agent
 along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
 runs the CLI its ``@anthropic-ai/claude-agent-sdk`` pin carries as a
-per-platform optional dependency (read from the 0.66.0 and 0.79.0 packages on
-2026-09-20/21), so a ``claude`` on PATH is neither needed nor the one that
-answers -- and what either wants is a login, not an install. The pin is also
-what decides which Claude models the row can reach: 0.66.0 bundled CLI 2.1.220,
-which refuses a model newer than it knows ("version 2.1.251 or newer is
+per-platform optional dependency (read from the 0.66.0, 0.79.0 and 0.81.1
+packages on 2026-09-20/21/23), so a ``claude`` on PATH is neither needed nor the
+one that answers -- and what either wants is a login, not an install. The pin is
+also what decides which Claude models the row can reach: 0.66.0 bundled CLI
+2.1.220, which refuses a model newer than it knows ("version 2.1.251 or newer is
 required"), so an account whose Claude settings name a recent model could not
-connect at all; 0.79.0 bundles 2.1.274.
+connect at all, and its menu offers ``claude-fable-5[1m]`` where 0.79.0 and
+0.81.1 offer ``claude-fable-5-1[1m]``; 0.79.0 bundles 2.1.274 and 0.81.1
+bundles 2.1.280. The codex pin decides its menu the same
+way, because ``codex-acp`` builds the model choices from its bundled codex's
+``model/list``: 1.1.14 bundles codex 0.147.0, whose list stops at GPT-5.6, and
+1.13.1 bundles 0.156.1, which lists the GPT-6 family (measured 2026-09-23).
 """
 
 
@@ -184,8 +193,8 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         # an ACP agent asks for anyway (raven/acp_client/permissions.py), so
         # asking buys nothing but a round trip per tool call -- and the mode is
         # also what restores network access, which no per-call approval does.
-        # Measured in codex-acp 1.1.14: AgentMode.AgentFullAccess is approval
-        # policy "never".
+        # Measured in codex-acp 1.1.14 and re-read in 1.13.1: AgentMode.AgentFullAccess
+        # is approval policy "never", and INITIAL_AGENT_MODE still selects it.
         "env": {"INITIAL_AGENT_MODE": "agent-full-access"},
     },
     "opencode": {
