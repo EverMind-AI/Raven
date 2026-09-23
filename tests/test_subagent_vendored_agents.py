@@ -273,6 +273,85 @@ class TestWhereTheTreeIs:
 
         assert _REAL_AGENTS_ROOT() == clone / "agents"
 
+    def test_an_empty_unstamped_home_tree_does_not_shadow_the_checkout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare directory is not an installed tree.
+
+        Nothing raven writes leaves ``agents/`` both empty and unstamped: the
+        copy-out stamps it and a scaffold lands a folder in it. Preferring such
+        a directory over the checkout beside the package discovered nothing at
+        all on an editable install, with no error to say why -- so it falls
+        through to the tree that has the products.
+        """
+        home = tmp_path / "home"
+        (home / "agents").mkdir(parents=True)
+        clone = tmp_path / "clone"
+        (clone / "agents").mkdir(parents=True)
+        (clone / "raven").mkdir()
+        monkeypatch.setenv("RAVEN_HOME", str(home))
+        monkeypatch.setattr("raven.__file__", str(clone / "raven" / "__init__.py"))
+
+        assert _REAL_AGENTS_ROOT() == clone / "agents"
+
+    def test_a_hand_assembled_home_tree_wins_without_a_stamp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One manifest is enough: a tree a person put together by hand was
+        never stamped, and it is theirs to use."""
+        home = tmp_path / "home"
+        _product(home / "agents", "raven-probe")
+        clone = tmp_path / "clone"
+        (clone / "agents").mkdir(parents=True)
+        (clone / "raven").mkdir()
+        monkeypatch.setenv("RAVEN_HOME", str(home))
+        monkeypatch.setattr("raven.__file__", str(clone / "raven" / "__init__.py"))
+
+        assert _REAL_AGENTS_ROOT() == home / "agents"
+
+    def test_a_killed_scaffolds_hidden_partial_does_not_make_the_home_tree_win(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Crash residue is not a product, for the chooser and the scanner alike.
+
+        ``raven agents new`` assembles under ``.<name>.partial-*`` and a SIGKILL
+        can orphan that directory with a finished manifest inside. The scanner
+        skips dot-directories, so a chooser that counted one would pick a home
+        tree discovery then finds empty -- the shadowing this guard exists to
+        end, back through the side door.
+        """
+        home = tmp_path / "home"
+        _product(home / "agents", ".raven-probe.partial-k1ll3d")
+        clone = tmp_path / "clone"
+        _product(clone / "agents", "raven-probe")
+        (clone / "raven").mkdir()
+        monkeypatch.setenv("RAVEN_HOME", str(home))
+        monkeypatch.setattr("raven.__file__", str(clone / "raven" / "__init__.py"))
+
+        assert _REAL_AGENTS_ROOT() == clone / "agents"
+        assert va.discover_product_rows(home / "agents") == [], "the residue is not a row either"
+
+    def test_a_stamped_home_tree_with_every_folder_removed_still_wins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The stamp is what tells a deliberate deletion from a bare directory.
+
+        A user who removed every product under the same raven version keeps
+        that decision (``_install_packaged_tree`` documents it); the checkout
+        beside the package must not bring the products back through the side
+        door.
+        """
+        home = tmp_path / "home"
+        (home / "agents").mkdir(parents=True)
+        (home / "agents" / ".raven-version").write_text("0.0.0-test", encoding="utf-8")
+        clone = tmp_path / "clone"
+        (clone / "agents").mkdir(parents=True)
+        (clone / "raven").mkdir()
+        monkeypatch.setenv("RAVEN_HOME", str(home))
+        monkeypatch.setattr("raven.__file__", str(clone / "raven" / "__init__.py"))
+
+        assert _REAL_AGENTS_ROOT() == home / "agents"
+
     def test_a_wheel_with_the_tree_gets_it_installed_out_to_the_home(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
