@@ -956,6 +956,16 @@ class AcpAgentBackend:
         self._unprompted_announce: Any = None
 
     @property
+    def _follows_parent(self) -> bool:
+        """Whether this agent is raven's own, and so runs on the parent's providers.
+
+        The handshake's answer, the same one the roster reads for ``own`` and
+        the listing for its model rule: a product built on ``raven acp`` names
+        itself ``raven`` there whatever its row is called here.
+        """
+        return getattr(self._snapshot, "agent_name", "") == "raven"
+
+    @property
     def pool(self) -> Any:
         """The connection pool this backend's turns are served from.
 
@@ -1415,6 +1425,20 @@ class AcpAgentBackend:
                 parent_protocol = str(getattr(provider, "api_protocol", "") or "")
                 if parent_protocol:
                     binding["RAVEN_PARENT_PROTOCOL"] = parent_protocol
+                # One of raven's own with no pin of its own follows the parent.
+                # The binding above puts a fresh worker on the parent's model at
+                # launch; this says the same to the session on every route in,
+                # because a resumed session keeps whatever it was last put on --
+                # a pin since cleared, kept in the agent's own session record
+                # across a host restart that forgot it ever pushed one -- and the
+                # page then reads "follows the main Raven" over a session that
+                # answers on something else. The value is the child's own
+                # spelling, `<slug>/<id>`; a parent whose provider names no slug
+                # gives it nothing to route by, so nothing is pushed and the
+                # launch binding stands. A third party is left alone: the
+                # parent's model is not one of its choices.
+                if not session_model and model and parent_provider and self._follows_parent:
+                    session_model = model if model.startswith(f"{parent_provider}/") else f"{parent_provider}/{model}"
                 connection = await self.pool.acquire(
                     name=self.name,
                     command=self.command,

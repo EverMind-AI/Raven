@@ -71,6 +71,16 @@ class PerModelProvider(LLMProvider):
     def _pick(self, model: str | None) -> LLMProvider:
         return self._by_model.get(model or "", self._fallback)
 
+    @property
+    def provider_name(self) -> str:
+        """The fallback's section, read through the wrapper the way ``EndpointRotorProvider`` does.
+
+        Without it the parent binding a sub-agent launch carries names a model
+        and no provider, and the child derives one from the id -- another
+        section's credential when the id's head matches a configured vendor.
+        """
+        return getattr(self._fallback, "provider_name", "") or ""
+
     def get_default_model(self) -> str:
         return self._default
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -48,6 +49,16 @@ def test_get_default_model_is_first_configured():
 def test_default_falls_back_when_no_models():
     p = PerModelProvider([], fallback=_fallback())
     assert p.get_default_model() == "fallback-model"
+
+
+def test_provider_name_is_the_fallbacks():
+    # The parent binding a sub-agent launch carries reads this; a wrapper that
+    # hid it sent the child a model with no provider to route it by.
+    fb = _fallback()
+    fb.provider_name = "openrouter"
+    assert PerModelProvider([], fallback=fb).provider_name == "openrouter"
+    bare = SimpleNamespace(get_default_model=lambda: "m", generation=GenerationSettings())
+    assert PerModelProvider([], fallback=bare).provider_name == ""
 
 
 def test_generation_propagates_to_sub_providers():
