@@ -7,7 +7,7 @@ import { ModelPicker } from '../../components/ModelPicker'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
-import { offered } from '../model/types'
+import { offered, withCurrent } from '../model/types'
 import { byOf, installOf, isOwnRow } from './catalogue'
 import { CardGrid, Spin, Tile, connect, ordered, pendingLabel, shownOf } from './Rows'
 import { sectionOf, stageOf } from './source'
@@ -135,9 +135,18 @@ function pickerProvidersFor(row: ExtAgentRow): PickerProvider[] {
        reads: a provider with nothing added yet offers the registry's shortlist
        here too. Reading the added list alone drew a connected vendor with zero
        models beside a composer listing four. No pin -- the tick is the row's. */
+    /* Plus whatever this row already holds, where its own provider's column
+       does not carry it: a model added by hand, or one the provider has since
+       stopped listing, would otherwise open a picker with nothing marked. */
+    const held = shownModel(row)
     return hostProviders()
       .filter((p) => p.on)
-      .map((p) => ({ id: p.id, name: p.name, models: offered(p, 'text'), labels: p.labels }))
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        models: withCurrent(p, offered(p, 'text'), held && held.provider === p.id ? held.id : null),
+        labels: p.labels,
+      }))
   }
   if (row.model_source !== 'agent') return []
   const groups = new Map<string, PickerProvider>()

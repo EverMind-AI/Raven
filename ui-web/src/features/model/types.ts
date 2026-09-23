@@ -224,6 +224,21 @@ export const offered = (p: Provider, kind?: Kind): string[] => {
   return source.filter((m) => modelKind(p.labels?.[m]) === kind)
 }
 
+/* The column, with the value a slot currently holds kept in it.
+
+   A picker whose current value is absent from its rows renders with nothing
+   marked, and a reader then has to trust the control beside it to know what
+   the slot is on. The value can be absent for ordinary reasons -- a model
+   added by hand, one this provider no longer lists, one from a credential
+   since removed -- so it is put back rather than hidden. The ACP option
+   builder does the same thing for the same reason, under the name `Current`;
+   this is that rule for the pickers raven draws itself.
+
+   `held` is compared by the backend's identity rule, not by string, so a
+   provider-qualified spelling and a bare one do not list one model twice. */
+export const withCurrent = (host: ModelHost, rows: string[], held: string | null | undefined): string[] =>
+  held && !rows.some((m) => sameModel(host, m, held)) ? [held, ...rows] : rows
+
 export interface ModelSource {
   providers(): Provider[]
   /* Send it. The provider is required: a model id does not name whose

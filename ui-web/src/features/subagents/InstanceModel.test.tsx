@@ -30,11 +30,21 @@ vi.mock('../model/source', () => ({
   },
 }))
 
+/* Every wiring carries a roster, because the chip needs one to know which
+   vocabulary its agent takes and draws nothing until it has an answer. The
+   default says `hermes` is a third party, which is what the rest of this file
+   is about; a test with something else to say passes its own. */
 function wire(over: Partial<SubagentsSource> = {}): void {
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
-  setSources({ subagents: { list: async () => [], ...over } as SubagentsSource })
+  setSources({
+    subagents: {
+      list: async () => [],
+      roster: async () => [{ name: 'hermes', model_source: 'agent' }] as never,
+      ...over,
+    } as SubagentsSource,
+  })
   document.body.innerHTML = '<div id="menu" data-open="false"></div><div id="toast"></div>'
 }
 
@@ -45,10 +55,8 @@ const row = (agent = 'hermes'): InstanceRow =>
    the same `model_source` the agents page reads, so the two cannot disagree.
    Loaded through the source, the way the panel loads it, rather than written
    into the store: the read under test is of whatever a real load left there. */
-async function roster(name: string, source: string, over: Partial<SubagentsSource> = {}): Promise<void> {
+function roster(name: string, source: string, over: Partial<SubagentsSource> = {}): void {
   wire({ ...over, roster: async () => [{ name, model_source: source }] as never } as Partial<SubagentsSource>)
-  store.refreshRoster(true)
-  await act(async () => { await Promise.resolve() })
 }
 
 const chip = (): HTMLButtonElement | null => document.querySelector('.pane-imodel')
@@ -57,6 +65,9 @@ const menuRows = (): string[] =>
 
 async function mount(agent = 'hermes') {
   const view = render(<InstanceModel row={row(agent)} />)
+  /* Two flushes: the roster the control asks for on mount, then the read its
+     answer sets off. */
+  await act(async () => { await Promise.resolve() })
   await act(async () => { await Promise.resolve() })
   return view
 }
@@ -83,6 +94,53 @@ afterEach(() => {
 })
 
 describe('the model chip on an instance pane', () => {
+  it('draws nothing until the roster says which vocabulary the agent takes', async () => {
+    /* A pane can be open before anything has asked for a roster: desk
+       restoration opens panes straight off the instance list, and the agents
+       list is the only thing in the product that fetches one. Reading a missing
+       roster as "third party" is how the capture gets drawn for one of raven's
+       own, so the control sits the moment out and comes back when the answer
+       does. */
+    hostModels.providers = [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4-pro'], configured: ['deepseek-v4-pro'], on: true }]
+    let answer: (rows: never) => void = () => {}
+    const held = new Promise<never>((resolve) => { answer = resolve })
+    wire({
+      instanceModel: async () => ({ model: null, availableModels: OFFERED }),
+      roster: (() => held) as never,
+    })
+    await mount('ours')
+
+    expect(chip()).toBeNull()
+
+    await act(async () => {
+      answer([{ name: 'ours', model_source: 'raven' }] as never)
+      await Promise.resolve()
+    })
+    await act(async () => { await Promise.resolve() })
+
+    expect(chip()).not.toBeNull()
+    await act(async () => { chip()!.click() })
+    const rows = menuRows()
+    expect(rows.some((r) => r.includes('deepseek-v4-pro'))).toBe(true)
+    expect(rows.some((r) => r.includes('claude-opus-5'))).toBe(false)
+  })
+
+  it("keeps a held model in view when the catalogue no longer lists it", async () => {
+    /* The reason the ACP option builder prepends a `Current` group: a picker
+       whose value is absent renders with nothing marked. The value goes absent
+       for ordinary reasons -- the provider stopped listing it, someone typed
+       it -- so it is put back rather than hidden. */
+    hostModels.providers = [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4-pro'], configured: ['deepseek-v4-pro'], on: true }]
+    roster('ours', 'raven', { instanceModel: async () => ({ model: 'deepseek/retired-v3', availableModels: [] }) })
+    await mount('ours')
+
+    await act(async () => { chip()!.click() })
+
+    const rows = menuRows()
+    expect(rows.some((r) => r.includes('retired-v3'))).toBe(true)
+    expect(rows.filter((r) => r.includes('retired-v3')).length).toBe(1)
+  })
+
   it("draws one of raven's own from the host catalogue, not from its handshake", async () => {
     /* For an agent of raven's own the menu it advertised IS this host's
        catalogue, captured on a probe session and capped at forty per provider.
@@ -94,7 +152,7 @@ describe('the model chip on an instance pane', () => {
       { id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4-pro', 'deepseek-v4-flash'], configured: ['deepseek-v4-pro'], on: true },
       { id: 'off', name: 'Off', models: ['never'], configured: ['never'], on: false },
     ]
-    await roster('ours', 'raven', { instanceModel: async () => ({ model: null, availableModels: OFFERED }) })
+    roster('ours', 'raven', { instanceModel: async () => ({ model: null, availableModels: OFFERED }) })
     await mount('ours')
 
     await act(async () => { chip()!.click() })
@@ -113,7 +171,7 @@ describe('the model chip on an instance pane', () => {
     /* Its credentials decide what it can run, and raven's ids would be refused
        by the agent itself. */
     hostModels.providers = [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4-pro'], configured: ['deepseek-v4-pro'], on: true }]
-    await roster('hermes', 'agent', { instanceModel: async () => ({ model: null, availableModels: OFFERED }) })
+    roster('hermes', 'agent', { instanceModel: async () => ({ model: null, availableModels: OFFERED }) })
     await mount()
 
     await act(async () => { chip()!.click() })
@@ -127,7 +185,7 @@ describe('the model chip on an instance pane', () => {
     /* The agents page draws such a row as managed by itself; a chip offering a
        pick would be the page saying two things about one agent. */
     hostModels.providers = [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4-pro'], configured: ['deepseek-v4-pro'], on: true }]
-    await roster('ownkey', 'fixed', { instanceModel: async () => ({ model: null, availableModels: OFFERED }) })
+    roster('ownkey', 'fixed', { instanceModel: async () => ({ model: null, availableModels: OFFERED }) })
     await mount('ownkey')
 
     expect(chip()).toBeNull()

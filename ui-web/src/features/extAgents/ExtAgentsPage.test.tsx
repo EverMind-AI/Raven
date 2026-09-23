@@ -867,6 +867,32 @@ describe('the model pill', () => {
     expect(acts).toEqual([['model', 'Raven-Code', { model: 'z-ai/glm-5.3-flash', provider: 'openrouter' }]])
   })
 
+  it("keeps a row's own model in its column when the catalogue no longer lists it", async () => {
+    /* The reason the ACP option builder prepends a `Current` group, and the
+       reason this picker needs the same: the stored id can leave the catalogue
+       -- the provider stopped listing it, a key was removed and re-added with a
+       shorter list -- and a picker that dropped it would open with nothing
+       marked while the pill beside it still names it. */
+    hostModels.providers = [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4-pro'], configured: ['deepseek-v4-pro'], on: true }]
+    install([
+      row({
+        name: 'Raven-Code',
+        preset: undefined,
+        kind: 'acp',
+        own: true,
+        model_source: 'raven',
+        model_choices: [],
+        model: 'deepseek/retired-v3',
+      }),
+    ])
+    await mount()
+    await openSheet('Raven-Code')
+    await click(pill())
+
+    expect(modelButton('retired-v3')).toBeDefined()
+    expect(modelButton('deepseek-v4-pro')).toBeDefined()
+  })
+
   it("offers one of raven's own the column the composer offers, shortlist and all", async () => {
     /* A connected vendor with nothing added yet: the composer's column falls
        back to the registry's shortlist, and this picker read the added list

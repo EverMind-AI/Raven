@@ -12,7 +12,7 @@ import { ds } from '../../state/sources'
 import { sources } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { remember } from './recent'
-import { KIND_ORDER, offered, sameModel, statedTags } from './types'
+import { KIND_ORDER, offered, sameModel, statedTags, withCurrent } from './types'
 
 import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
 
@@ -172,7 +172,7 @@ export const column = (p: Provider, offer: Offer = at.offer): string[] => {
   /* By the backend's identity, not by string: a role stores the spelling it was
      handed while `model.add_model` stores the one it derived, so comparing the
      strings put the same model in the column twice, under one visible name. */
-  return cur && !rows.some((m) => sameModel(p, m, cur)) ? [cur, ...rows] : rows
+  return withCurrent(p, rows, cur)
 }
 
 /* Whether any connected account lists this model as its own. The wire's
