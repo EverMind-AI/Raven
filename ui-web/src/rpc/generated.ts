@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 202 methods, 118 component schemas.
+// 202 methods, 119 component schemas.
 
 /* eslint-disable */
 /**
@@ -211,6 +211,10 @@ export interface TranscriptMessage {
    * The files that call made vanish, on its role='tool' entry. Absent when it removed none.
    */
   file_removed?: TranscriptFileRemoval[];
+  /**
+   * The files a stored command left behind, on its role='tool' entry. The same shape the live event carried: a size and a line count are what a reloaded page needs, so unlike a removal there is nothing to reduce.
+   */
+  file_written?: FileWritten[];
   turn_ended?: TranscriptTurnEnded;
   notice?: TranscriptNotice;
   /**
@@ -240,6 +244,27 @@ export interface TranscriptFileRemoval {
    * Lines the file held when it went; 0 when unknown.
    */
   del: number;
+}
+/**
+ * One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before.
+ */
+export interface FileWritten {
+  /**
+   * Absolute path of the file the command wrote.
+   */
+  path: string;
+  /**
+   * Whether the file was new. False means it was there before the command and is different after, which a client draws as a rewrite rather than an addition.
+   */
+  created: boolean;
+  /**
+   * The file's size in bytes after the command.
+   */
+  size: number;
+  /**
+   * Lines in a created file, when it could be counted. Null, not absent: the key is always sent, and null says the count is unknown. Too large to read, not text, or a file that already existed, whose change therefore has no number.
+   */
+  lines?: number | null;
 }
 /**
  * Why a turn's transcript stops where it does.
@@ -1298,6 +1323,10 @@ export interface ToolCompleteEvent {
      * The files this call made vanish. Absent on every call that removed nothing, which is nearly all of them.
      */
     file_removed?: FileRemoval[];
+    /**
+     * The files a command left behind, which no tool result names. Absent on every call that is not a command, and on a command that changed no file.
+     */
+    file_written?: FileWritten[];
   };
 }
 export interface MessageCompleteEvent {

@@ -1865,6 +1865,26 @@ describe("the turn's delivered files and file changes", () => {
     expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.edit'])
   })
 
+  /* A file a command left behind rather than a tool: the runtime listed the
+     directory around the command, so the row has a verdict and a count and no
+     contents at all. The card draws it like any other creation, and the head it
+     would preview is simply absent rather than an error. */
+  it('calls a file a command created new, with its count and nothing to preview', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    PRODUCED.set(1, [{ key: '/w/tally.txt', dir: '/w/', name: 'tally.txt', kind: 'add',
+      add: 4, del: 0, hunks: [], turn: 0 }])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'run it', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.new'])
+    expect($('.achange .ca')?.textContent).toBe('+4')
+    expect($('.achange .cd')?.textContent).toBe('\u22120')
+  })
+
   /* The third verdict a change row can carry, and the one no tool argument can
      state: the file is gone, so the card says so rather than calling the lines
      it held an edit. */

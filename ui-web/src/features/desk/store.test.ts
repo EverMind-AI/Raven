@@ -18,6 +18,7 @@ import * as desk from './store'
 
 import type { InstanceRow } from '../subagents/types'
 import type { TaskFile, TaskRow } from '../tasks/types'
+import type { WsChange } from '../workspace/types'
 
 /* Recorded rather than ignored: the pane the desk lives in is page chrome
    (state/ws.ts), so telling it to open and to shut is the desk's only way to
@@ -346,7 +347,10 @@ describe('what a reload finds on the desk', () => {
     /* Its hunks are the turn's own live tool events and the gateway cannot
        answer for them afterwards, so there is no open to replay -- and storing
        the hunks would be the one place this kept content instead of a pointer. */
-    desk.openDeskDiff({ key: '/workspace/a.ts', turn: 3 } as never)
+    desk.openDeskDiff({
+      key: '/workspace/a.ts', dir: '', name: 'a.ts', kind: 'edit', add: 1, del: 0, turn: 3, open: false,
+      hunks: [{ add: 1, del: 1, rows: [['add', 'x']] }],
+    })
     desk.openDeskFile('/workspace/a.ts')
 
     expect(desk.saved('s1')!.open).toEqual([{ k: 'file', path: '/workspace/a.ts' }])
@@ -1264,5 +1268,63 @@ describe('Escape retreats through the desk one layer at a time', () => {
     expect(desk.get().paletteOpen).toBe(false)
     expect(desk.get().panes).toEqual([])
     expect(escapeOrder.dispatch()).toBe(false)
+  })
+})
+
+/* Which pane a changed file's row opens onto.
+ *
+ * A row the runtime built from listing a directory -- the only account there is
+ * of what a command wrote -- carries a count and no patch, and a patch pane
+ * over no hunks is a blank rectangle where the reader asked to see a file. */
+describe('opening a change that has no patch to show', () => {
+  const row = (over: Partial<WsChange>): WsChange => ({
+    key: '/w/tally.txt', dir: '', name: 'tally.txt', kind: 'add', add: 4, del: 0,
+    hunks: [], turn: 2, open: false, ...over,
+  })
+
+  it('shows the file itself for a row a listing made', () => {
+    desk.openDeskDiff(row({}))
+
+    expect(desk.get().panes.map((p) => p.id)).toEqual(['file:/w/tally.txt'])
+    expect(desk.get().panes[0]?.kind).toBe('file')
+  })
+
+  it('still says the reader has read that change', () => {
+    workspace.restore({
+      changes: [row({}), row({ key: '/w/other.txt', name: 'other.txt' })],
+      urls: [], file: null, turn: 2, unseen: 0, deliveries: [],
+    })
+    expect(desk.unseen('diff')).toBe(2)
+
+    desk.openDeskDiff(row({}))
+
+    expect(desk.unseen('diff')).toBe(1)
+  })
+
+  /* A removal's missing hunk IS the answer -- the runtime caught nothing of
+     what was lost -- and there is no file left on disk to open instead. */
+  it('keeps the patch pane for a file that is gone', () => {
+    desk.openDeskDiff(row({ key: '/w/dead.py', name: 'dead.py', kind: 'delete', add: 0, del: 46 }))
+
+    expect(desk.get().panes.map((p) => p.id)).toEqual(['diff:/w/dead.py:2'])
+  })
+
+  it('keeps the patch pane for a row that has one', () => {
+    desk.openDeskDiff(row({ hunks: [{ add: 1, del: 0, rows: [['add', 'x']] }] }))
+
+    expect(desk.get().panes.map((p) => p.id)).toEqual(['diff:/w/tally.txt:2'])
+  })
+
+  /* A task file's row is keyed by the node that wrote it, not by a path, so
+     there is no file behind that key to open -- and a node record that failed
+     to load leaves exactly such a row with no hunks. */
+  it('keeps the patch pane for a task file whose record answered nothing', async () => {
+    taskRows = [taskWithFiles('t1', [{ path: '/w/out.md', op: 'write', add: 5, del: 0 }])]
+    await tasksStore.refresh()
+    const task = tasksStore.rows()[0]!
+
+    desk.openDeskDiff(await tasksStore.fileDiffChange(task, task.nodes[0]!, task.nodes[0]!.files[0]!))
+
+    expect(desk.get().panes.map((p) => p.id)).toEqual(['diff:task:spawn:t1:n1:/w/out.md:0'])
   })
 })

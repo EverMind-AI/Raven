@@ -9699,6 +9699,13 @@
             },
             "type": "array"
           },
+          "file_written": {
+            "description": "The files a stored command left behind, on its role='tool' entry. The same shape the live event carried: a size and a line count are what a reloaded page needs, so unlike a removal there is nothing to reduce.",
+            "items": {
+              "$ref": "#/components/schemas/FileWritten"
+            },
+            "type": "array"
+          },
           "turn_ended": {
             "$ref": "#/components/schemas/TranscriptTurnEnded"
           },
@@ -12216,6 +12223,37 @@
           }
         }
       },
+      "FileWritten": {
+        "description": "One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "created",
+          "size"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute path of the file the command wrote."
+          },
+          "created": {
+            "type": "boolean",
+            "description": "Whether the file was new. False means it was there before the command and is different after, which a client draws as a rewrite rather than an addition."
+          },
+          "size": {
+            "type": "integer",
+            "description": "The file's size in bytes after the command."
+          },
+          "lines": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Lines in a created file, when it could be counted. Null, not absent: the key is always sent, and null says the count is unknown. Too large to read, not text, or a file that already existed, whose change therefore has no number."
+          }
+        }
+      },
       "ToolCompleteEvent": {
         "type": "object",
         "additionalProperties": false,
@@ -12269,6 +12307,13 @@
                   "$ref": "#/components/schemas/FileRemoval"
                 },
                 "description": "The files this call made vanish. Absent on every call that removed nothing, which is nearly all of them."
+              },
+              "file_written": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FileWritten"
+                },
+                "description": "The files a command left behind, which no tool result names. Absent on every call that is not a command, and on a command that changed no file."
               }
             }
           }

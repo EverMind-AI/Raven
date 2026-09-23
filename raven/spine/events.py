@@ -130,6 +130,11 @@ class ToolEvent:
     # purpose, so this is reported from what was on disk either side of the call
     # rather than from a tool's own result. Empty and None both mean none went.
     file_removed: list[dict[str, Any]] | None = None
+    # COMPLETE only, and the third of that set: the files a command left behind,
+    # one ``{path, created, size, lines}`` mapping each. A file tool names what it
+    # wrote and a command names nothing, so these are read off a listing of the
+    # working directory either side of the call. Empty and None both mean none.
+    file_written: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)

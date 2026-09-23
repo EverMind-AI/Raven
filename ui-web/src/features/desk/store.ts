@@ -491,6 +491,17 @@ export function openDeskFile(path: string): void {
 
 export function openDeskDiff(change: WsChange): void {
   readItem('diff', `${change.key}:${change.turn}`)
+  /* A row with no hunks has no patch to draw: a command reports the files it
+     left behind and never how it changed them, so the listing that made the row
+     knows a count and nothing else. The file as it stands is the nearest thing
+     to the change and is what the reader clicked for -- an empty patch pane is
+     not. A removal keeps its pane: there the missing hunk IS the answer, and
+     there is no file left to open. */
+  const bare = !(change.hunks || []).length && change.kind !== 'delete'
+  if (bare && !tasks.isTaskChangeKey(change.key)) {
+    openDeskFile(change.key)
+    return
+  }
   addPane({ id: `diff:${change.key}:${change.turn}`, kind: 'diff', change })
 }
 

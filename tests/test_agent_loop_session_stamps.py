@@ -17,9 +17,10 @@ from typing import Any
 
 import pytest
 
+from raven.agent import workdir
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
-from raven.contracts.tool import FileRemoval, Tool, ToolResult
+from raven.contracts.tool import FileChange, FileRemoval, Tool, ToolResult
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -498,3 +499,227 @@ async def test_a_call_that_removed_nothing_carries_no_removal_at_all(workspace):
     assert completes[0]["file_removed"] is None
     tool_entry = next(m for m in _persisted_messages(workspace) if m.get("role") == "tool")
     assert "file_removed" not in tool_entry and "_file_removed" not in tool_entry
+
+
+class _CommandTool(Tool):
+    """Stands in for ``exec``: it changes files and reports only that it ran.
+
+    Registered under that name because the name is the decision under test --
+    the loop lists the working directory around a command and around nothing
+    else. What it runs is Python rather than a shell so each test states the
+    change it wants instead of depending on a shell's own behaviour.
+    """
+
+    def __init__(self, action: Any, *, removed: Any = (), change: Any = None) -> None:
+        self._action = action
+        self._removed = removed
+        self._change = change
+
+    @property
+    def name(self) -> str:
+        return "exec"
+
+    @property
+    def description(self) -> str:
+        return "runs a command"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}
+
+    async def execute(self, command: str = "", **kwargs: Any) -> Any:
+        self._action()
+        if self._removed or self._change is not None:
+            return ToolResult(model_text="ran", removed=tuple(self._removed), file_change=self._change)
+        return "ran"
+
+
+async def _run_command_turn(workspace: Path, work: Path, script: list[LLMResponse], *extra_tools: Tool):
+    """One real turn whose working directory is ``work``, as a served turn has.
+
+    Bound rather than defaulted so the listing covers the directory the command
+    ran in and not the session store beside it. The checkpoint is off because
+    its shadow repo is a second tree inside that same directory, built for a
+    recovery nothing here tests.
+    """
+    agent = AgentLoop(
+        provider=ScriptedProvider(script),
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=4, interactive=False),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    for tool in extra_tools:
+        agent.tools.register(tool)
+    completes: list[dict[str, Any]] = []
+
+    async def on_tool_event(phase: str, info: dict[str, Any]) -> None:
+        if phase == "complete":
+            completes.append(info)
+
+    with workdir.bind(work):
+        out = await agent._process_message(_make_msg("run it"), on_tool_event=on_tool_event)
+    assert out is not None
+    return completes
+
+
+def _command_script(command: str = "do it") -> list[LLMResponse]:
+    return [_tool_call("c1", "exec", {"command": command}), LLMResponse(content="done", finish_reason="stop")]
+
+
+@pytest.mark.asyncio
+async def test_a_file_a_command_created_reaches_the_event_and_the_stored_entry(workspace):
+    """A command reports its output and nothing else, so the file it wrote has
+    no record at all unless the directory is read either side of the call.
+
+    The line count is the created file's own: a client draws an added file with
+    how much arrived, and the command's output never says."""
+    work = workspace / "work"
+    work.mkdir()
+    made = work / "made.txt"
+
+    completes = await _run_command_turn(
+        workspace, work, _command_script(), _CommandTool(lambda: made.write_text("one\ntwo\n", encoding="utf-8"))
+    )
+
+    written = completes[0]["file_written"]
+    assert len(written) == 1, written
+    assert Path(written[0]["path"]).resolve() == made.resolve()
+    assert written[0]["created"] is True
+    assert written[0]["lines"] == 2
+    assert written[0]["size"] == len("one\ntwo\n")
+    tool_entry = next(m for m in _persisted_messages(workspace) if m.get("role") == "tool")
+    assert "_file_written" not in tool_entry, "the in-flight key must be renamed at save time"
+    assert tool_entry["file_written"] == written
+
+
+@pytest.mark.asyncio
+async def test_a_file_a_command_rewrote_is_not_reported_as_a_new_one(workspace):
+    """A rewrite carries no count. The listing holds sizes, never contents, so
+    the old text was never known and a number against it would be invented --
+    and a client that drew this as a creation would claim the whole file is new."""
+    work = workspace / "work"
+    work.mkdir()
+    kept = work / "kept.txt"
+    kept.write_text("one\n", encoding="utf-8")
+
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        _command_script(),
+        _CommandTool(lambda: kept.write_text("three\nfour\nfive\n", encoding="utf-8")),
+    )
+
+    written = completes[0]["file_written"]
+    assert len(written) == 1, written
+    assert Path(written[0]["path"]).resolve() == kept.resolve()
+    assert written[0]["created"] is False
+    assert written[0]["lines"] is None
+    assert written[0]["size"] == len("three\nfour\nfive\n")
+
+
+@pytest.mark.asyncio
+async def test_a_file_a_command_removed_without_naming_it_is_still_reported(workspace):
+    """The turn never wrote this file, so the watch on its own writes cannot see
+    it go and the command named nothing the fence could resolve. The listing is
+    the only witness, and it has no body to offer: the file was gone before
+    anything read it."""
+    work = workspace / "work"
+    work.mkdir()
+    doomed = work / "doomed.txt"
+    doomed.write_text("one\ntwo\n", encoding="utf-8")
+
+    completes = await _run_command_turn(
+        workspace, work, _command_script("find . -name '*.txt' -delete"), _CommandTool(doomed.unlink)
+    )
+
+    removed = completes[0]["file_removed"]
+    assert len(removed) == 1, removed
+    assert Path(removed[0]["path"]).resolve() == doomed.resolve()
+    assert "before" not in removed[0]
+    assert completes[0]["file_written"] is None
+    tool_entry = next(m for m in _persisted_messages(workspace) if m.get("role") == "tool")
+    assert tool_entry["file_removed"] == [{"path": removed[0]["path"], "del": 0}]
+
+
+@pytest.mark.asyncio
+async def test_a_removal_the_command_reported_is_not_reported_twice(workspace):
+    """The listing sees the same deletion the tool named. Reported once: two
+    rows for one file read as two files, and the row that carries the file's
+    last contents is the one worth keeping."""
+    work = workspace / "work"
+    work.mkdir()
+    doomed = work / "doomed.txt"
+    doomed.write_text("one\ntwo\n", encoding="utf-8")
+
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        _command_script(f"rm {doomed}"),
+        _CommandTool(doomed.unlink, removed=(FileRemoval(path=str(doomed), before="one\ntwo\n"),)),
+    )
+
+    assert completes[0]["file_removed"] == [{"path": str(doomed), "before": "one\ntwo\n"}]
+
+
+@pytest.mark.asyncio
+async def test_a_file_the_call_already_named_is_not_reported_a_second_time(workspace):
+    """A call that reports its own write is believed over the listing: the
+    result carries the contents, which a listing of sizes never can."""
+    work = workspace / "work"
+    work.mkdir()
+    made = work / "made.txt"
+
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        _command_script(),
+        _CommandTool(
+            lambda: made.write_text("one\ntwo\n", encoding="utf-8"),
+            change=FileChange(path=str(made), before=None, after="one\ntwo\n"),
+        ),
+    )
+
+    assert completes[0]["file_change"] == {"path": str(made), "after": "one\ntwo\n"}
+    assert completes[0]["file_written"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_command_that_changed_nothing_carries_neither_key(workspace):
+    """Most commands read rather than write, and a payload that grew a null key
+    under every one of them would change the shape the wire already had."""
+    work = workspace / "work"
+    work.mkdir()
+    (work / "kept.txt").write_text("one\n", encoding="utf-8")
+
+    completes = await _run_command_turn(workspace, work, _command_script("ls"), _CommandTool(lambda: None))
+
+    assert completes[0]["file_written"] is None
+    assert completes[0]["file_removed"] is None
+    tool_entry = next(m for m in _persisted_messages(workspace) if m.get("role") == "tool")
+    assert "file_written" not in tool_entry and "_file_written" not in tool_entry
+
+
+@pytest.mark.asyncio
+async def test_a_tool_that_is_not_a_command_is_never_worth_a_listing(workspace, monkeypatch):
+    """Every other tool reports the file it touched. Walking the whole working
+    directory twice around a call that already said what it did would cost the
+    turn far more than the nothing it could add."""
+    from raven.agent.tools import snapshot as snapshot_module
+
+    roots: list[Any] = []
+    monkeypatch.setattr(snapshot_module, "take", lambda root: roots.append(root))
+    work = workspace / "work"
+    work.mkdir()
+
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        [
+            _tool_call("c1", "write_file", {"path": str(work / "a.txt"), "content": "one\n"}),
+            LLMResponse(content="done", finish_reason="stop"),
+        ],
+    )
+
+    assert roots == []
+    assert completes[0]["file_written"] is None
