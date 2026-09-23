@@ -202,6 +202,9 @@ export interface AskData {
   body: string
   atts: string[]
   when: string
+  /* When it was said, in epoch ms: what the date line between two questions
+     far apart is measured from. 0 when the entry carried no usable stamp. */
+  at: number
   expanded: boolean
   clipped: boolean
   clipOpen: boolean
@@ -261,17 +264,12 @@ export interface DeliveredData {
   shown: boolean
 }
 
-/* One file this turn produced, as the bar shows it. `head` is the file's own
-   first lines when the page already has them -- a write tool's hunk carries
-   what it wrote, so a text artifact needs no fetch to draw a miniature of
-   itself. Absent means the page has no content for it (a binary, or a replay
-   that kept no diff) and the tile shows its kind instead. */
+/* One file this turn produced, as the bar shows it. */
 export interface ArtifactRow {
   path: string
   dir: string
   name: string
   ext: string
-  head: string | null
   lines: number
   deleted: number
   change: 'new' | 'edit' | 'deleted'

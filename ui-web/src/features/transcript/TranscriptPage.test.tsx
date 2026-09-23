@@ -156,10 +156,9 @@ describe('transcript island, history', () => {
     expect($('.turn.me .achip')).toBeNull()
   })
 
-  it('gives the pictures and the files a row each', () => {
-    /* One row for both put a file chip on the pictures' baseline, where it read
-       as a caption on the thumbnail beside it, and pushed whatever did not fit
-       onto a line of its own. */
+  it('puts the pictures above the bubble and the files inside it', () => {
+    /* The design's attachment bubble (Figma: Raven / UserMessage): a file is a
+       tag heading the sentence it came with, and a picture stands above it. */
     act(() => {
       mount.history([{
         role: 'user',
@@ -167,11 +166,21 @@ describe('transcript island, history', () => {
       }])
     })
     const rows = [...document.querySelectorAll('.turn.me .abox > .transcript-arow')]
-    expect(rows).toHaveLength(2)
+    expect(rows).toHaveLength(1)
     expect(rows[0]!.querySelectorAll('.shot')).toHaveLength(2)
     expect(rows[0]!.querySelectorAll('.achip')).toHaveLength(0)
-    expect(rows[1]!.querySelectorAll('.achip')).toHaveLength(2)
-    expect(rows[1]!.querySelectorAll('.shot')).toHaveLength(0)
+    const bubble = $('.turn.me .msg.me') as HTMLElement
+    expect([...bubble.querySelectorAll('.transcript-files > .achip .nm')].map((n) => n.textContent))
+      .toEqual(['deck.pptx', 'page.html'])
+    expect(bubble.querySelectorAll('.shot')).toHaveLength(0)
+    expect(bubble.textContent).toContain('look')
+  })
+
+  it('draws a bubble for files sent without a word', () => {
+    act(() => {
+      mount.history([{ role: 'user', text: `\n\n${ATT_NOTE}\n- uploads/notes.pdf` }])
+    })
+    expect($('.turn.me .msg.me .transcript-files .achip .nm')?.textContent).toBe('notes.pdf')
   })
 
   it('keeps a file that is not a picture as a chip', () => {
@@ -180,6 +189,69 @@ describe('transcript island, history', () => {
     })
     expect($('.turn.me .shot')).toBeNull()
     expect($('.turn.me .achip .nm')?.textContent).toBe('notes.pdf')
+  })
+
+  describe('the date between two questions far apart', () => {
+    const at = (h: number, m: number, daysAgo = 0): number => {
+      const d = new Date()
+      d.setDate(d.getDate() - daysAgo)
+      d.setHours(h, m, 0, 0)
+      return d.getTime()
+    }
+    const clock = (ms: number): string => {
+      const d = new Date(ms)
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    }
+    const lines = (): string[] => $$('.transcript-date').map((n) => n.textContent || '')
+
+    it('says when the reader came back, and only after a long gap', () => {
+      const first = at(0, 5)
+      const soon = first + 5 * 60 * 1000
+      const later = first + 2 * 60 * 60 * 1000
+      act(() => {
+        mount.history([
+          { role: 'user', text: 'one', timestamp: iso(first) },
+          { role: 'assistant', text: 'a', timestamp: iso(first + 1000) },
+          { role: 'user', text: 'two', timestamp: iso(soon) },
+          { role: 'assistant', text: 'b', timestamp: iso(soon + 1000) },
+          { role: 'user', text: 'three', timestamp: iso(later) },
+          { role: 'assistant', text: 'c', timestamp: iso(later + 1000) },
+        ])
+      })
+      expect(lines()).toEqual([`en:gui.transcript.date_today {"t":"${clock(later)}"}`])
+      /* On the column, right above the question it dates. */
+      const date = $('.transcript-date') as HTMLElement
+      expect(date.nextElementSibling?.textContent).toContain('three')
+    })
+
+    it('names yesterday, and dates anything older', () => {
+      const old = at(9, 30, 3)
+      const yesterday = at(10, 58, 1)
+      const today = at(0, 1)
+      act(() => {
+        mount.history([
+          { role: 'user', text: 'one', timestamp: iso(old - 3 * 60 * 60 * 1000) },
+          { role: 'user', text: 'two', timestamp: iso(old) },
+          { role: 'user', text: 'three', timestamp: iso(yesterday) },
+          { role: 'user', text: 'four', timestamp: iso(today) },
+        ])
+      })
+      const d = new Date(old)
+      const md = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      const year = d.getFullYear() === new Date().getFullYear() ? '' : `${d.getFullYear()}-`
+      expect(lines()).toEqual([
+        `${year}${md} 09:30`,
+        'en:gui.transcript.date_yesterday {"t":"10:58"}',
+        'en:gui.transcript.date_today {"t":"00:01"}',
+      ])
+    })
+
+    it('draws none for a question with no stamp of its own', () => {
+      act(() => {
+        mount.history([{ role: 'user', text: 'one' }, { role: 'user', text: 'two' }])
+      })
+      expect(lines()).toEqual([])
+    })
   })
 
   /* Whether a tool result counts as a failure is the source's call, not this
@@ -1073,20 +1145,38 @@ describe('a thought box while the model is still thinking', () => {
     })
   }
 
-  /* A live, open thought box with a scrollable amount of text in it. */
+  /* A live thought box the reader has opened, with a scrollable amount of text
+     in it. */
   function thinking(): ReturnType<typeof mount.step> {
     let st!: ReturnType<typeof mount.step>
     act(() => {
       mount.ask('why did it fail')
       st = mount.step()
       st.thinkAppend('first line')
-      /* `reveal` is what makes a thought live and opens it; `setThinkOpen`
-         alone pins it and leaves `thinkLive` false, which is a settled box. */
+      /* `reveal` is what makes a thought live; `setThinkOpen` alone pins it and
+         leaves `thinkLive` false, which is a settled box. */
       st.reveal()
     })
+    act(() => { ($('.think') as HTMLElement).click() })
     sized(cot(), 400, 220)
     return st
   }
+
+  it('starts folded, as the small thinking card', () => {
+    /* The design's first frame of a turn (Figma: Raven / Thinking): one live
+       line in a card of its own, and the thought behind a click. */
+    act(() => {
+      mount.ask('why did it fail')
+      const st = mount.step()
+      st.thinkAppend('first line')
+      st.reveal()
+    })
+    const think = $('.msg.ai .think') as HTMLElement
+    expect(think.classList.contains('live')).toBe(true)
+    expect(think.classList.contains('open')).toBe(false)
+    expect(think.querySelector('.lb')?.textContent).toBe('en:gui.think.live')
+    expect(cot().hidden).toBe(true)
+  })
 
   it('follows a chunk far bigger than the old forty-pixel threshold', async () => {
     /* The bug, in one case. The follow used to be gated on the distance to the
@@ -1780,7 +1870,8 @@ describe("the turn's delivered files and file changes", () => {
       ])
     })
     await act(async () => { await Promise.resolve() })
-    expect($('.deliveries .ahd .lb')?.textContent).toBe('en:gui.arts.delivered')
+    expect($('.deliveries')?.getAttribute('aria-label')).toBe('en:gui.arts.delivered')
+    expect($('.deliveries .ahd')).toBeNull()
     expect($('.changes .ahd .lb')?.textContent).toBe('en:gui.arts.changed')
     expect($$('.atile .nm').map((n) => n.textContent)).toEqual(['report.md'])
     expect($$('.achange .cn').map((n) => n.textContent)).toEqual(['report.md', 'helper.py'])
@@ -1790,7 +1881,10 @@ describe("the turn's delivered files and file changes", () => {
     expect($$('.achange .cd').map((n) => n.textContent)).toEqual(['\u22120', '\u22120'])
     expect($('.achanges')?.textContent).not.toContain('delivered')
     const turn = $('.turn.ai') as HTMLElement
-    expect(Array.from(turn.children).map((node) => node.className)).toEqual(['msg ai', 'ansfoot'])
+    /* Flat: the reply's card, the turn's files under it as a block of their
+       own, and the answer's footer under both. */
+    expect(Array.from(turn.children).map((node) => node.className)).toEqual(['msg ai', 'arts', 'ansfoot'])
+    expect(turn.querySelector('.msg.ai .arts')).toBeNull()
     expect(turn.querySelector('.answer .ansfoot')).toBeNull()
     expect(turn.querySelector(':scope > .ansfoot .turnmeta')?.textContent).toBeTruthy()
   })
@@ -1862,14 +1956,14 @@ describe("the turn's delivered files and file changes", () => {
   })
 
   /* A file a playbook or a sub-agent wrote landed on another lane, so this
-     session's workspace holds no change for it -- and the tile fell back to a
-     grey square for the one product the turn was about. */
+     session's workspace holds no change for it -- and the card still has to
+     say what it is. It does so by its type's mark, with nothing read out of
+     the file: the probe is the one request. */
   it('draws a delivered file the workspace never saw a write for', async () => {
     const asked: Array<{ url: string; method?: string }> = []
     vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
       asked.push({ url, method: init?.method })
-      if (init?.method === 'HEAD') return Promise.resolve({ ok: true })
-      return Promise.resolve({ ok: true, text: () => Promise.resolve('# Radar\n\nfirst finding') })
+      return Promise.resolve({ ok: true })
     })
     act(() => {
       mount.history([
@@ -1881,14 +1975,35 @@ describe("the turn's delivered files and file changes", () => {
     await act(async () => { await Promise.resolve() })
     await act(async () => { await Promise.resolve() })
     expect($('.changes')).toBeNull()
-    expect($('.atile .pic')?.className).toBe('pic doc')
-    expect($('.atile .amini.prose')?.textContent).toContain('Radar')
-    /* Not `.mini`: that class is the page's small button, and the miniature
-       inherited its nowrap, so the document could not wrap at any width. */
-    expect($('.atile .mini')).toBeNull()
-    /* Read from the same URL the tile already probed, and only a range of it. */
-    const read = asked.find((a) => a.method !== 'HEAD')
-    expect(read?.url).toBe('/files/download?token=radar.md')
+    expect($('.atile .pic')?.className).toBe('pic transcript-mark')
+    expect($('.atile .pic svg text')?.textContent).toBe('MD')
+    expect(asked.map((a) => a.method)).toEqual(['HEAD'])
+  })
+
+  it('offers what the design offers for each kind of file', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make them', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['page.html', 'notes.md', 'cv.pptx']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    const acts = $$('.atile').map((tile) => [...tile.querySelectorAll('.transcript-act')]
+      .map((b) => b.getAttribute('aria-label')))
+    /* A page opens in a browser tab and in the panel; a document the panel
+       reads opens there; a binary is fetched. */
+    expect(acts).toEqual([
+      ['en:gui.arts.browser', 'en:gui.arts.open {"f":"page.html"}'],
+      ['en:gui.arts.open {"f":"notes.md"}'],
+      ['en:gui.arts.download'],
+    ])
+    const [page, , deck] = $$('.atile')
+    expect(page!.querySelector('a.transcript-act')?.getAttribute('target')).toBe('_blank')
+    expect(deck!.querySelector('a.transcript-act')?.getAttribute('download')).toBe('cv.pptx')
+    act(() => { ($$('.atile')[1]!.querySelector('button.transcript-act') as HTMLElement).click() })
+    expect(opened).toEqual(['/w/notes.md'])
   })
 
   it('shows a delivered deck by its first page, rendered by the gateway', async () => {
@@ -1935,7 +2050,7 @@ describe("the turn's delivered files and file changes", () => {
     expect(src).toContain('render=thumb')
   })
 
-  it('falls back to the document face when the deck cannot be rendered', async () => {
+  it('falls back to the type mark when the deck cannot be rendered', async () => {
     vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
       if (init?.method === 'HEAD') return Promise.resolve({ ok: true })
       return Promise.resolve({ ok: true, text: () => Promise.resolve('') })
@@ -1955,7 +2070,7 @@ describe("the turn's delivered files and file changes", () => {
        land before the assertion. */
     await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
     await act(async () => { img.dispatchEvent(new Event('error')); await new Promise((r) => setTimeout(r, 0)) })
-    expect($('.atile .pic.none .ft')?.textContent).toBe('PPTX')
+    expect($('.atile .pic.transcript-mark svg text')?.textContent).toBe('PPTX')
     /* The file itself is not in question: no status is asked about it. */
     expect($('.atile')?.className).not.toContain('missing')
   })
@@ -1975,7 +2090,9 @@ describe("the turn's delivered files and file changes", () => {
     await act(async () => { await Promise.resolve() })
     await act(async () => { await Promise.resolve() })
     expect($('.atile')?.className).toContain('missing')
-    expect($('.atile .pic')?.className).toBe('pic none')
+    expect($('.atile .pic')?.className).toBe('pic transcript-mark')
+    /* Nothing to open, fetch or show in a browser once the file is gone. */
+    expect($('.atile .transcript-acts')).toBeNull()
   })
 
   it('opens a delivered file through the workspace panel', async () => {
@@ -1992,7 +2109,7 @@ describe("the turn's delivered files and file changes", () => {
     expect(opened).toEqual(['/w/final.pdf'])
   })
 
-  it('uses a horizontal full-row card only for a single delivery', async () => {
+  it('draws one delivery and several as the same card', async () => {
     vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
     act(() => {
       mount.history([
@@ -2002,7 +2119,6 @@ describe("the turn's delivered files and file changes", () => {
       ])
     })
     await act(async () => { await Promise.resolve() })
-    expect($('.atiles')?.classList.contains('single')).toBe(true)
     expect($('.atile .ds')?.textContent).toBe('Ready to publish')
 
     act(() => {
@@ -2016,10 +2132,9 @@ describe("the turn's delivered files and file changes", () => {
     const grids = $$('.atiles')
     const second = grids[grids.length - 1]
     expect(second).toBeTruthy()
-    expect(second?.classList.contains('single')).toBe(false)
-    /* The ARRANGEMENT changes; what a tile says does not. The description used
-       to be a single delivery's privilege, so the one sentence telling two
-       files apart disappeared exactly when there were two of them. */
+    /* What a card says does not depend on how many there are. The description
+       used to be a single delivery's privilege, so the one sentence telling
+       two files apart disappeared exactly when there were two of them. */
     expect([...second!.querySelectorAll('.atile .ds')].map((n) => n.textContent))
       .toEqual(['Ready to publish', 'Ready to publish'])
   })
@@ -2131,7 +2246,7 @@ describe("the turn's delivered files and file changes", () => {
       ])
     })
     await act(async () => { await Promise.resolve() })
-    expect($('.asec.deliveries .ahm .n')?.textContent).toBe('1')
+    expect($$('.asec.deliveries .atile')).toHaveLength(1)
 
     const box = document.createElement('div')
     document.body.append(box)
@@ -2151,7 +2266,7 @@ describe("the turn's delivered files and file changes", () => {
     expect(box.querySelector('.asec.deliveries')).toBeNull()
     expect(box.textContent).not.toContain('conversation.md')
     /* And the conversation still has its own. */
-    expect($('.asec.deliveries .ahm .n')?.textContent).toBe('1')
+    expect($$('.asec.deliveries .atile')).toHaveLength(1)
   })
 
   it('keeps the conversation\'s deliveries when a sub-agent panel paints', async () => {
@@ -2176,7 +2291,7 @@ describe("the turn's delivered files and file changes", () => {
       ])
     })
     await act(async () => { await Promise.resolve() })
-    expect($('.asec.deliveries .ahm .n')?.textContent).toBe('1')
+    expect($$('.asec.deliveries .atile')).toHaveLength(1)
     expect(deliveriesSnapshot().length).toBe(1)
 
     /* A delegated run's stage paints. Nothing about this conversation changed. */
@@ -2191,7 +2306,7 @@ describe("the turn's delivered files and file changes", () => {
     await act(async () => { await Promise.resolve() })
 
     expect(deliveriesSnapshot().length).toBe(1)
-    expect($('.asec.deliveries .ahm .n')?.textContent).toBe('1')
+    expect($$('.asec.deliveries .atile')).toHaveLength(1)
   })
 
   it('keeps a missing delivery in place and marks it missing', async () => {
@@ -2286,7 +2401,7 @@ describe("the turn's delivered files and file changes", () => {
     expect($('.atile .mt')?.textContent).not.toBe('en:gui.arts.missing')
     expect(($('.atile .hit') as HTMLButtonElement).disabled).toBe(false)
     /* And it does not keep a broken picture on screen either. */
-    expect($('.atile .pic')?.className).toBe('pic none')
+    expect($('.atile .pic')?.className).toBe('pic transcript-mark')
   })
 
   it('calls an image lost when the picture is gone and the status agrees', async () => {
@@ -2638,7 +2753,11 @@ describe('transcript island, tool episodes', () => {
     const bad = $$('.wkin .wrow')[1] as HTMLElement
     expect(bad.classList.contains('bad')).toBe(true)
     expect(bad.querySelector('.err')?.textContent).toBe('error: nope')
-    expect(bad.querySelector('svg path')?.getAttribute('d')).toContain('M12 4.5')
+    /* The design's alert glyph (Figma: Raven / Thinking), not the kind's own. */
+    expect(bad.querySelector('svg.transcript-ic circle')).toBeTruthy()
+    expect(bad.querySelector('svg.transcript-ic')?.outerHTML).not.toBe(
+      ($$('.wkin .wrow')[0] as HTMLElement).querySelector('svg.transcript-ic')?.outerHTML,
+    )
   })
 
   it('merges consecutive silent steps into one stretch under one summary', () => {

@@ -334,7 +334,7 @@ const LEGACY_EXPR = {
   subagents: 6,
   /* Down from 24 with the node panel: `.tpl`, written only from inside a
      `className={...}` expression, left with it. */
-  transcript: 23,
+  transcript: 21,
   workspace: 7,
 }
 

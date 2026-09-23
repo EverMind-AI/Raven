@@ -90,8 +90,35 @@
      the reader wrote. Both invert in dark, which is why they are tokens and
      not literals. */
   --black:    #111111;
-  --bubble-me:    #2e2e2e;
+  --bubble-me:    #333333;
   --bubble-me-fg: #ffffff;
+  /* The conversation's own ramp (Figma: Raven / UserMessage, AssistantMessage,
+     Thinking): the ink a reply is set in, the one quiet grey every line of
+     process work shares and the band that sweeps it while a thought is live,
+     the design's danger red, the half-pixel rule and head ground a table or a
+     listing is boxed in, the two greys of a delivered file's name and size,
+     and the tag a sent file wears inside the bubble. */
+  --chat-ink:       #1a1a1a;
+  --chat-quiet:     #999999;
+  --chat-shine:     #e6e6e6;
+  --chat-danger:    #d84520;
+  --chat-rule:      #e0e0e0;
+  --chat-head:      #f7f7f7;
+  --chat-head-ink:  #666666;
+  --chat-file-ink:  #333333;
+  --chat-file-meta: #908f8c;
+  --bubble-att:     rgba(255, 255, 255, .2);
+  --bubble-att-on:  rgba(255, 255, 255, .3);
+  --bubble-att-ink: #f0f0f0;
+  /* A listing's syntax colours (lib/highlight.ts), in the design's roles: a
+     keyword or selector, a property, a string, a tag or type, a comment, and a
+     removed line in a diff. */
+  --code-keyword:   #94129d;
+  --code-property:  #b8812c;
+  --code-string:    #488c4b;
+  --code-tag:       #1b6ed5;
+  --code-comment:   #8a8a88;
+  --code-deleted:   #d84520;
   /* A card is lifted by a shadow in light and by a brighter rim in dark -- the
      same job, two drawings -- so the rule names these and never a colour. */
   --ring:     rgba(0, 0, 0, .03);
@@ -250,6 +277,24 @@
     --black:    #e8e8e6;
     --bubble-me:    #343434;
     --bubble-me-fg: #ededeb;
+    --chat-ink:       #e8e8e6;
+    --chat-quiet:     #8a8a88;
+    --chat-shine:     #d6d6d4;
+    --chat-danger:    #e0775e;
+    --chat-rule:      #333333;
+    --chat-head:      #262626;
+    --chat-head-ink:  #afafad;
+    --chat-file-ink:  #e8e8e6;
+    --chat-file-meta: #8a8a88;
+    --bubble-att:     rgba(255, 255, 255, .12);
+    --bubble-att-on:  rgba(255, 255, 255, .2);
+    --bubble-att-ink: #ededeb;
+    --code-keyword:   #d68fe0;
+    --code-property:  #e2b265;
+    --code-string:    #8fcf8a;
+    --code-tag:       #7fb0f0;
+    --code-comment:   #7a7a78;
+    --code-deleted:   #e0775e;
     --ring:     rgba(255, 255, 255, .07);
     --ring-2:   rgba(255, 255, 255, .14);
     --sh-soft:  rgba(0, 0, 0, .5);
@@ -279,6 +324,12 @@
   --composer-ink: #e8e8e6; --composer-ph: #7a7a78; --composer-hover: #2e2e2e; --att-bg: #303030;
   --send-off: #4a4a4a; --send-off-ink: #8a8a88; --send-on: #e8e8e6; --send-on-ink: #1a1a1a;
   --bubble-me: #343434; --bubble-me-fg: #ededeb;
+  --chat-ink: #e8e8e6; --chat-quiet: #8a8a88; --chat-shine: #d6d6d4; --chat-danger: #e0775e;
+  --chat-rule: #333333; --chat-head: #262626; --chat-head-ink: #afafad;
+  --chat-file-ink: #e8e8e6; --chat-file-meta: #8a8a88;
+  --bubble-att: rgba(255, 255, 255, .12); --bubble-att-on: rgba(255, 255, 255, .2); --bubble-att-ink: #ededeb;
+  --code-keyword: #d68fe0; --code-property: #e2b265; --code-string: #8fcf8a; --code-tag: #7fb0f0;
+  --code-comment: #7a7a78; --code-deleted: #e0775e;
   --ring: rgba(255, 255, 255, .07); --ring-2: rgba(255, 255, 255, .14);
   --sh-soft: rgba(0, 0, 0, .5); --seg-on: #333333;
   --elev: 0 1px 2px rgba(0, 0, 0, .45), 0 6px 16px -8px rgba(0, 0, 0, .5);
@@ -305,7 +356,13 @@
   --composer-bg: rgba(255, 255, 255, .8); --composer-line: #e6e6e6; --composer-sh: rgba(0, 0, 0, .08);
   --composer-ink: #1a1a1a; --composer-ph: #908f8c; --composer-hover: #f7f7f7; --att-bg: #f0f0f0;
   --send-off: #bdbbb8; --send-off-ink: #faf9f5; --send-on: #1a1a1a; --send-on-ink: #ffffff;
-  --bubble-me: #2e2e2e; --bubble-me-fg: #ffffff;
+  --bubble-me: #333333; --bubble-me-fg: #ffffff;
+  --chat-ink: #1a1a1a; --chat-quiet: #999999; --chat-shine: #e6e6e6; --chat-danger: #d84520;
+  --chat-rule: #e0e0e0; --chat-head: #f7f7f7; --chat-head-ink: #666666;
+  --chat-file-ink: #333333; --chat-file-meta: #908f8c;
+  --bubble-att: rgba(255, 255, 255, .2); --bubble-att-on: rgba(255, 255, 255, .3); --bubble-att-ink: #f0f0f0;
+  --code-keyword: #94129d; --code-property: #b8812c; --code-string: #488c4b; --code-tag: #1b6ed5;
+  --code-comment: #8a8a88; --code-deleted: #d84520;
   --ring: rgba(0, 0, 0, .03); --ring-2: rgba(0, 0, 0, .05);
   --sh-soft: rgba(0, 0, 0, .06); --seg-on: #ffffff;
   --shadow: 0 14px 34px -22px rgba(26,26,26,.35);
@@ -1060,7 +1117,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .col {
   max-width: calc(var(--col) + 72px); margin: 0 auto; min-width: 0;
   padding: 26px 36px calc(var(--lift, 96px) + 26px);
-  display: flex; flex-direction: column; gap: 14px;
+  display: flex; flex-direction: column; gap: 12px;
 }
 
 .banner {
@@ -1133,21 +1190,38 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    this column is meant to be the exchange, not the sentence. */
 .turn { display: flex; flex-direction: column; min-width: 0; }
 .turn.me { align-self: flex-end; align-items: flex-end; max-width: 70%; }
-.turn.ai { align-self: stretch; width: 100%; max-width: 760px; margin-right: auto; }
+.turn.ai { align-self: stretch; width: 100%; max-width: 760px; margin-right: auto; gap: 6px; }
+/* The design's bubble (Figma: Raven / UserMessage): #333 at a 12px radius, and
+   the reply's 1.8 line so a long question reads at the same measure as its
+   answer. The inset is what keeps a one-liner at the design's 40px. */
 .msg.me {
   background: var(--bubble-me); color: var(--bubble-me-fg);
-  border-radius: 9px; padding: 11px 16px; font-size: 14px; line-height: 22px;
+  border-radius: 12px; padding: 7.4px 12px; font-size: 14px; line-height: 1.8;
   white-space: pre-wrap; overflow-wrap: break-word;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
 }
-/* Lifted off the page rather than drawn on it: a contact shadow plus a hairline
-   rim, which is one treatment with two drawings -- the shadow carries it in
-   light, the rim in dark, where a shadow on a dark ground says nothing. */
+/* A white card on the wash, flat the way the design lays it (Figma: Raven /
+   AssistantMessage): 16px all round and one 12px gap between what is in it --
+   the fold, a step, the answer -- so nothing inside carries a margin of its
+   own. The rim is for dark, where a card needs an edge; in light it is all but
+   invisible. */
 .msg.ai {
-  background: var(--ink); border-radius: 12px; padding: 6px 16px 12px;
+  display: flex; flex-direction: column; gap: 12px; min-width: 0;
+  background: var(--ink); border-radius: 12px; padding: 16px;
   font-size: 14px; line-height: 26px;
-  box-shadow: 0 1px 4px var(--sh-soft), 0 0 0 1px var(--ring); color: var(--text);
+  box-shadow: 0 0 0 1px var(--ring); color: var(--chat-ink);
 }
+.msg.ai > .tfold, .msg.ai > .step, .msg.ai > .answer, .msg.ai > .sdlv { margin: 0; }
+/* A card holding nothing yet but a live thought, folded, is the design's small
+   "thinking" card: the row alone, at its own width, 40px tall. */
+.msg.ai:not(:has(.say:not(:empty), .cot:not([hidden]), .wrow:not([hidden]), .answer, .sdlv)):has(.think.live) {
+  width: fit-content; min-height: 40px; padding: 10px 16px; justify-content: center;
+}
+/* The design draws the line alone; the caret that says it opens arrives with
+   the pointer. */
+.msg.ai:not(:has(.say:not(:empty), .cot:not([hidden]), .wrow:not([hidden]), .answer, .sdlv)) .think.live > .cv {
+  opacity: 0; transition: opacity .12s;
+}
+.msg.ai .think.live:hover > .cv, .msg.ai .think.live:focus-visible > .cv { opacity: 1; }
 /* Folded long message: ~12 lines, fading out instead of cutting mid-glyph. */
 .msg.me.clip {
   max-height: 20em; overflow: hidden;
@@ -1160,14 +1234,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .turn.me .qfold:hover { color: var(--text); background: var(--surface); }
 
-.step { margin: 10px 0; min-width: 0; }
+.step { display: flex; flex-direction: column; gap: 8px; margin: 0; min-width: 0; }
 /* One spacing for every step, deliberately not "more room once this step has
    spoken": a rule that keys off content changes its own layout the instant the
    first token lands, and the whole transcript below it visibly jumps down.
    12px is the same gap the rows inside a step use, so crossing a step boundary
    does not read as an extra blank line -- a turn is one narrative, and the
    model's call count is not something the reader should feel. */
-.step + .step { margin-top: 12px; }
+.step + .step { margin-top: 0; }
 
 /* quiet mono row: the subagent panel's running glyph and the hub card footer.
    The transcript's own notices left for .tnote -- a stop and a failure reading
@@ -1189,15 +1263,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 
 /* thinking: a shimmering one-liner while streaming, a quiet fold after */
 .think {
-  display: flex; align-items: center; gap: 7px;
-  font-size: 13.5px; color: var(--muted);
-  padding: 3px 8px; margin: 2px -8px; border-radius: 7px;
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; line-height: 15px; color: var(--chat-quiet);
+  padding: 0; margin: 0; border-radius: 0;
 }
 .think { width: fit-content; max-width: 100%; }
 .think .g { color: var(--faint); flex: none; width: 10px; font-size: 11px; }
 .think .lb { flex: none; }
 .think.live .lb {
-  background: linear-gradient(90deg, var(--muted) 30%, var(--text) 50%, var(--muted) 70%);
+  background: linear-gradient(90deg, var(--chat-quiet) 30%, var(--chat-shine) 50%, var(--chat-quiet) 70%);
   background-size: 200% 100%; -webkit-background-clip: text; background-clip: text;
   color: transparent; animation: shine 1.6s linear infinite;
 }
@@ -1206,8 +1280,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* the opened thought is quiet prose behind a hairline, not a filled card: it is
    the model muttering, and it should not outweigh what it actually said */
 .cot {
-  font-size: 13px; line-height: 1.75; color: var(--muted);
-  border-left: 1px solid var(--line); padding: 2px 0 2px 13px; margin: 4px 0 10px;
+  font-size: 12px; line-height: 1.7; color: var(--muted);
+  border-left: 1px solid var(--line); padding: 2px 0 2px 12px; margin: 0;
   white-space: pre-wrap; max-height: 220px; overflow-y: auto;
 }
 
@@ -1218,8 +1292,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    exchange beside it, the rows behind it -- declared once on the container.
    Per-child margins had the summary sitting tighter to the first row than the
    rows sat to each other, which reads as a misalignment. */
-.wk { margin: 12px 0; min-width: 0; display: grid; gap: 5px; grid-template-columns: minmax(0, 1fr); }
-.wkin { display: grid; gap: 5px; min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.wk { margin: 0; min-width: 0; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
+.wkin { display: grid; gap: 8px; min-width: 0; grid-template-columns: minmax(0, 1fr); }
+/* A step's parts are always drawn and only sometimes say anything; an empty one
+   would still spend the step's gap. */
+.step > .say:empty, .step > .wk:not(:has(> :not([hidden]))) { display: none; }
 /* The icon is what this line leads with, so the icon is what sits on the
    transcript's left edge. fit-content keeps a hover or focus state hugging its
    own line instead of growing a full-width bar.
@@ -1232,15 +1309,17 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    744px column: the track went to 923px and the row with it. The sibling
    fit-content rows (.think, .tfh) sit in block parents, where 100% is already
    the column, which is why only this one needed it. */
+/* The design's process line (Figma: Raven / Thinking): 11px in the one quiet
+   grey, a 12px glyph, 4px between the parts and 8px between the lines. */
 .wrow {
-  display: flex; align-items: center; gap: 7px; color: var(--muted);
+  display: flex; align-items: center; gap: 4px; color: var(--chat-quiet);
   width: fit-content; max-width: 100%; min-width: 0;
-  font-size: 13.5px; line-height: 1.5; padding: 3px 8px; margin: 0 -8px;
-  border-radius: 7px; text-align: left;
+  font-size: 11px; line-height: 15px; padding: 0; margin: 0;
+  border-radius: 0; text-align: left;
 }
 .wrow.tog:hover .vb, .wrow.tog:hover .ar { color: var(--text); }
 .wrow.tog:hover .ic, .wrow.tog:hover .cv { color: var(--muted); }
-.wrow .ic { width: 13px; height: 13px; flex: none; color: var(--faint); }
+.wrow .ic { width: 12px; height: 12px; flex: none; color: var(--chat-quiet); }
 .wrow.run .ic { animation: breathe 1.5s ease-in-out infinite; }
 /* The one animation in this file with no reduced-motion answer, which mattered
    while it was the only sign a step was alive. The clock beside it is not an
@@ -1250,7 +1329,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* the verb is the quiet part; what it acted on is what the eye wants */
 .wrow .vb { flex: none; }
 .wrow .vb .srv { color: var(--faint); }
-.wrow .ar { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wrow .ar { color: inherit; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── delegation detail ────────────────────────────────────────────
    spawn and run_subagent_dag are rows like every other call -- same verb,
@@ -1398,20 +1477,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 @media (prefers-reduced-motion: reduce) { .sdlv .sdcv .cv { transition: none; } }
 
 /* ── the turn's products ──────────────────────────────────────────────
-   The closing line of a turn that wrote files: one tile per file, showing
-   what the file IS. Four documents out of one turn are four identical names
-   and four different miniatures, and that difference is what the tiles buy
-   over a list.
-   Tiles wrap; they never scroll sideways. A file name has no length limit and
-   the reading column is fixed, which is exactly how the delegated row grew
-   past the page. */
+   What a turn delivered, as the design lays it out (Figma: Raven /
+   AssistantMessage, the output-file variants; the flattened layout): no panel
+   and no heading, one small white card per file under the reply -- the file's
+   mark or its picture, its name and size, and what can be done with it.
+   The file changes keep a card of their own below them. */
 .arts {
-  margin: 22px 0 2px; padding: 12px; min-width: 0;
-  border: 1px solid var(--line); border-radius: 14px; background: var(--ink);
+  display: flex; flex-direction: column; gap: 6px; margin: 0; min-width: 0;
   container: artifacts / inline-size;
-}
-.arts .asec + .asec {
-  margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--line-soft);
 }
 .arts .ahd {
   display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
@@ -1420,193 +1493,94 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .arts .ahd .ahm { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
 .arts .ahd .lb { color: var(--muted); font-weight: 500; }
 .arts .ahd .n {
-  min-width: 18px; padding: 1px 5px; border-radius: 999px; background: var(--ink);
+  min-width: 18px; padding: 1px 5px; border-radius: 999px; background: var(--surface);
   color: var(--faint); font-family: var(--mono); font-size: 10.5px; line-height: 16px;
   text-align: center; font-variant-numeric: tabular-nums;
 }
-/* One tile, two arrangements. A single delivery keeps the headline row it
-   earns -- it IS the turn's product -- and several become a grid, but the two
-   share a preview ratio, a type scale and a spacing rule, so going from one
-   file to two is a rearrangement rather than a different component. The shared
-   half lives in these variables. */
-.atiles {
-  --atile-ratio: 16 / 10;
-  --atile-pad: 11px 14px;
-  --atile-nm: 14px;
-  --atile-ds: 12.5px;
-  display: grid; gap: 8px; min-width: 0;
-  /* Tracks fill the row between a floor and the column's own width, which is
-     what makes a turn's products read as one block rather than as tiles
-     scattered on a shelf. */
-  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+.arts .asec.changes {
+  padding: 16px; border-radius: 12px; background: var(--ink); box-shadow: 0 0 0 1px var(--ring);
 }
+.atiles { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+/* One width for every card, so a stack of them reads as a list rather than a
+   ragged edge; a long name gives way inside it. */
 .atile {
-  position: relative; display: grid; min-width: 0; overflow: hidden;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--ink);
-  transition: border-color .14s, box-shadow .14s, transform .14s;
+  position: relative; display: flex; align-items: center; gap: 12px;
+  width: min(340px, 100%); min-width: 0; padding: 16px;
+  border-radius: 12px; background: var(--ink); box-shadow: 0 0 0 1px var(--ring);
+  transition: box-shadow .14s;
   animation: artifact-in .18s ease-out;
 }
 @keyframes artifact-in { from { opacity: 0; transform: translateY(3px); } }
-.atile:hover { border-color: var(--faint); box-shadow: var(--elev-up); transform: translateY(-1px); }
+.atile:hover { box-shadow: 0 0 0 1px var(--ring), var(--elev); }
 .atile.missing { opacity: .72; }
-.atile.missing:hover { border-color: var(--line); box-shadow: none; transform: none; }
-@media (prefers-reduced-motion: reduce) {
-  .atile { animation: none; }
-  .atile:hover { transform: none; }
-}
-/* One keyboard stop and one accessible name for the whole tile, laid over it
-   -- which also leaves the picture free to be block content, since a <button>
-   may not contain any. */
+.atile.missing:hover { box-shadow: 0 0 0 1px var(--ring); }
+@media (prefers-reduced-motion: reduce) { .atile { animation: none; } }
+/* One keyboard stop and one accessible name for the whole card, laid over it;
+   the card's own buttons sit above it. */
 .atile .hit {
   position: absolute; inset: 0; border: 0; background: none; padding: 0;
   cursor: pointer; border-radius: inherit;
 }
 .atile .hit:focus-visible { outline: 1px solid var(--amber); outline-offset: -2px; }
 .atile .hit:disabled { cursor: default; }
-/* The preview is 16:10 wherever it has the room, and never taller than
-   --atile-pic-max. Both halves matter: the ratio is what stops the same
-   document being drawn as a square in one card and a slice in the next, and
-   the ceiling is what stops a tile that has stretched across a wide column
-   from turning its picture into a 269px wall. */
+/* The file's mark, or its picture at the mark's height: an image as itself, a
+   deck or a pdf by its first page. */
 .atile .pic {
-  --atile-pic-max: 124px;
-  /* The width is stated, not left to the ratio. With only `aspect-ratio` and
-     `max-height`, capping the height silently capped the WIDTH too (124 x 1.6
-     = 198px), so a tile that had stretched across the row carried a preview
-     that had not -- the blank right half. Stated width, ratio for the height,
-     cap for the ceiling. */
-  display: block; width: 100%; aspect-ratio: var(--atile-ratio);
-  max-height: var(--atile-pic-max);
-  overflow: hidden; position: relative;
-  background: var(--paper); border-bottom: 1px solid var(--line-soft); border: 1px solid var(--line-soft); border-radius: 6px;
+  flex: none; position: relative; display: grid; place-items: center;
+  height: 34px; min-width: 29px; overflow: hidden;
 }
-.atile .pic.none { place-content: center; justify-items: center; gap: 5px; display: grid; background: var(--surface); border-style: dashed; }
-.atile .pic.none .fi { width: 16px; height: 16px; stroke: var(--faint); }
-.atile .pic.none .ft {
-  color: var(--faint); font-family: var(--mono); font-size: 9px; font-weight: 600;
-  letter-spacing: .08em;
-}
-/* ONE surface. The preview used to be a grey mount with a white page inset in
-   it -- two nested rectangles for one picture, and at this size the inner one
-   read as a rendering fault rather than as paper. The box's own border and
-   radius are the frame; the document fills it. */
-.atile .pic.doc { background: var(--surface); place-items: start; }
-.atile .pic.shot { background: var(--surface); }
-.atile .pic.shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
-/* The miniature: the file rendered small and then SCALED down again, so a
-   101px square shows the SHAPE of the document -- a title, a rule, a list --
-   rather than four words of it at reading size. Body type is set here; the
-   prose headings keep their own absolute sizes, so a heading is still visibly
-   a heading and the document still looks like itself.
-
-   NOT `.mini`, which this used to be called: that is the page's small BUTTON
-   (see below, ~line 3040), and the miniature was quietly wearing its border,
-   its 8px radius, its 12px type, its hover background and -- the visible one --
-   its `white-space: nowrap`, which every paragraph in the rendered document
-   inherited. The document could not wrap, so it was clipped mid-word at the
-   tile's edge whatever width it was given.
-
-   Its own padding is divided by the scale: this box is drawn at 250% and shown
-   at 40%, so the margin the text keeps from the paper's edge has to be stated
-   at 250% too. */
-.atile .amini {
-  --mini-scale: .4;
-  font-size: 12px; line-height: 1.6;
-  position: relative; display: block; width: calc(100% / var(--mini-scale));
-  height: calc(100% / var(--mini-scale)); padding: calc(8px / var(--mini-scale)) calc(9px / var(--mini-scale));
-  transform: scale(var(--mini-scale)); transform-origin: top left; pointer-events: none;
-  /* Faded rather than cut, the same way a folded question ends: a hard edge
-     mid-glyph reads as the render having broken, a fade as a page continuing. */
-  -webkit-mask-image: linear-gradient(180deg, #000 68%, transparent 100%);
-  mask-image: linear-gradient(180deg, #000 68%, transparent 100%); color: var(--muted);
-}
-.atile .amini .raw {
-  display: block; font-family: var(--mono); font-size: 12px; line-height: 1.6;
-  color: var(--muted); white-space: pre; overflow: hidden;
-}
-/* A long unbroken token (a URL, a path) still has to give way rather than run
-   past the paper. */
-.atile .amini.prose { overflow-wrap: anywhere; }
-.atile .amini.prose > :first-child { margin-top: 0; }
-.atile .cap { display: grid; gap: 2px; align-content: center; padding: var(--atile-pad); min-width: 0; }
-/* One row each, cut with an ellipsis. This is what keeps the card's height
-   independent of the window: a wrapping title grew the card as the column
-   narrowed, so the same delivery was 155px tall at one width and 175px at
-   another. How much of the title survives is the width's business; how tall
-   the card is, is not. */
+.atile .pic.shot { border-radius: 4px; background: var(--surface); box-shadow: 0 0 0 .5px var(--chat-rule); }
+/* Sized from its height, so the picture states its own width and the slot is
+   the shape of what is in it: nothing is cropped away. */
+.atile .pic.shot img { display: block; width: auto; height: 100%; max-width: 60px; object-fit: contain; }
+.atile .pic.skel { min-width: 46px; }
+.atile .pic.skel .sk { position: absolute; inset: 0; border-radius: 0; }
+.atile .cap { display: grid; gap: 2px; align-content: center; min-width: 0; flex: 1; }
 .atile .cap .nm {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
-  color: var(--text); font-size: var(--atile-nm); font-weight: 600; line-height: 1.5;
+  color: var(--chat-file-ink); font-size: 13px; font-weight: 500; line-height: 17px;
 }
-/* Drawn wherever there is one. It used to be a single delivery's privilege, so
-   the one sentence saying what a file IS vanished the moment a turn produced a
-   second file -- exactly when telling them apart starts to matter. */
 .atile .cap .ds {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
-  color: var(--muted); font-size: var(--atile-ds); line-height: 1.5;
+  color: var(--muted); font-size: 11px; line-height: 15px;
 }
-.atile .cap .mt {
-  font-family: var(--mono); font-size: 10.5px; line-height: 1.5; color: var(--faint);
-  font-variant-numeric: tabular-nums; margin-top: 2px;
+.atile .cap .mt { font-size: 11px; line-height: 15px; color: var(--chat-file-meta); font-variant-numeric: tabular-nums; }
+/* A process line's glyph, where the design draws one from its own icon set
+   (Figma: Raven / Thinking): the same 12px and the same grey as the drawn
+   glyphs beside it, and the same three states. */
+.wrow .transcript-ic { width: 12px; height: 12px; flex: none; color: var(--chat-quiet); }
+.wrow.tog:hover .transcript-ic { color: var(--muted); }
+.wrow.bad .transcript-ic { color: var(--chat-danger); }
+.wrow.run .transcript-ic { animation: breathe 1.5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .wrow.run .transcript-ic { animation: none; opacity: .62; } }
+
+/* The files a question was sent with, as tags heading its sentence inside the
+   bubble (Figma: Raven / UserMessage, the attachment variant). */
+.msg.me:has(> .transcript-files) { padding-block: 12px; }
+.msg.me .transcript-files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; white-space: normal; }
+
+/* When the reader came back: a centred date between two questions a long way
+   apart (Figma: Raven / Chat, dates between long-gap messages). */
+.transcript-date {
+  align-self: center; font-size: 11px; line-height: 40px; color: var(--chat-quiet);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-/* The headline row: the preview beside the caption rather than above it, and
-   CENTRED in its column at the shared ratio. The caption decides how tall the
-   row is -- a title and a file size no longer pay for the height of a square
-   picture, which is what made every single-delivery card the same 155px
-   whatever it actually said. */
-/* One delivery is the turn's product, so its row takes the whole width rather
-   than sitting as a lone 190px tile in an empty grid. */
-.atiles.single { grid-template-columns: minmax(0, 1fr); }
-/* A fixed column, not a fraction of the container: a preview sized in cqi grew
-   with the window, and since it is the taller half of this row it carried the
-   whole card's height up with it -- the same delivery was 133px tall in a desk
-   pane and 147px in a wide window. */
-.atiles.single .atile {
-  grid-template-columns: 92px minmax(0, 1fr);
-  align-items: center; gap: 0;
-  transition: grid-template-columns .2s ease, border-color .14s, box-shadow .14s, transform .14s;
+
+/* A delivered file's mark, when there is no picture of it to draw. */
+.atile .pic.transcript-mark svg { display: block; }
+/* A delivery card's own buttons, above the card's hit area and 30px off the
+   name the way the design spaces them: open in a browser, download, open. */
+.transcript-acts {
+  position: relative; z-index: 1; flex: none; display: flex; align-items: center; gap: 8px;
+  margin-left: 18px;
 }
-/* `width: auto`, not the 100% the grid tile needs: this preview carries
-   margins inside a fixed column, so a stated full width put it 22px past the
-   column and over the title beside it.
-   And `aspect-ratio: auto`, which is the other half of the same fault. The
-   grid tile's 16:10 is a ratio for a preview drawn ABOVE its caption; here the
-   preview stands beside one, in a 92px column, at a stated 98px tall -- and a
-   ratio plus a definite height resolves the auto width from the ratio rather
-   than from the column, so the box came out 157px wide and lay across the
-   title it stands next to. A page beside a caption is portrait: the column
-   gives the width, the 98px gives the height. */
-.atiles.single .atile .pic {
-  width: auto; aspect-ratio: auto; margin: 12px 0 12px 12px; border-bottom: 0; border-radius: 7px;
-  border: 1px solid var(--line-soft); height: 98px;
+.transcript-act {
+  width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0;
+  border-radius: 6px; background: none; color: var(--chat-quiet); cursor: pointer;
+  transition: color .12s, background .12s;
 }
-/* A rendered page or a photo keeps the tile's 16:10 ratio at that height, which
-   is wider than the 92px column the document face fits in -- left there, the
-   picture ran over the title beside it. The column follows the picture. */
-.atiles.single .atile:has(> .pic.shot) { grid-template-columns: auto minmax(0, 1fr); }
-/* And what the column follows has to be the picture's own shape. The grid
-   tile's image fills a box whose ratio is already the box's (`width: 100%`,
-   `cover`), so it states no width of its own -- and a column told to follow it
-   had nothing to follow and took the whole row instead. The box then stayed
-   98px tall at 688 wide, and `cover` cropped a 16:9 slide to the middle
-   quarter of itself: a delivered deck arrived as a letterboxed strip with its
-   own title cut in half.
-   Sized from the height instead, the image resolves its width from its own
-   ratio, the auto column resolves from that, and the box is the shape of what
-   is in it -- so `contain` and `cover` agree and there is nothing to crop. */
-.atiles.single .atile .pic.shot img { width: auto; height: 100%; object-fit: contain; }
-.atiles.single .atile .cap { align-content: center; padding: 13px 16px; }
-/* No narrow-container type step. Every caption row is one ellipsised line now,
-   so a narrow card already fits without shrinking anything -- and shrinking the
-   type here was the last thing making a delivery's card a different height in a
-   desk pane than in the chat column. */
-@media (prefers-reduced-motion: reduce) { .atiles.single .atile { transition: none; } }
-/* Where it opens, said before the click rather than after it. */
-.atile .cap .away { font-family: var(--mono); font-size: 10px; color: var(--sky); }
-/* An image is the one tile that can be slow, so it gets the same shimmering
-   placeholder the rail and the hub cards use -- a tile that jumps from blank
-   to full reads as the page having been broken until that moment. */
-.atile .pic.skel .sk { position: absolute; inset: 0; border-radius: 0; }
+.transcript-act:hover { color: var(--text); background: var(--surface); }
+.transcript-act:focus-visible { outline: 1px solid var(--amber); outline-offset: 1px; }
 .achanges { overflow: hidden; border: 1px solid var(--line-soft); border-radius: 10px; }
 .achange {
   display: grid; grid-template-columns: 48px minmax(0, 1fr) 34px 34px 34px; align-items: center;
@@ -1655,22 +1629,22 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    rows are fit-content, so the line's own end is the one edge every row
    actually has; icons keep the hard left edge for the kind of work. */
 .cv {
-  flex: none; width: 11px; height: 11px; color: var(--faint);
+  flex: none; width: 12px; height: 12px; color: var(--chat-quiet);
   transition: transform .16s ease, color .12s;
 }
 .open > .cv, .tfold.open > .tfh > .cv { transform: rotate(90deg); }
 /* How long a step in flight has been going. Monospace so the digits do not
    shuffle the row as they tick, and `flex: none` so a long verb clips before
    this does -- the number is the part that says the step is alive. */
-.wrow .runms { flex: none; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.wrow .runms { flex: none; font-variant-numeric: tabular-nums; font-size: 11px; color: var(--chat-quiet); }
 .wrow .chip { flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 8px; line-height: 16px; }
 /* diff counts read as plain numbers next to the path, not as a pill */
-.wrow .diffn { flex: none; font-family: var(--mono); font-size: 11.5px; }
+.wrow .diffn { flex: none; font-variant-numeric: tabular-nums; font-size: 11px; }
 .wrow .diffn .a { color: var(--moss); }
 .wrow .diffn .d { color: var(--clay); }
 .chip.bad { color: var(--clay); background: color-mix(in oklab, var(--clay) 12%, transparent); }
-.wrow.bad .vb, .wrow.bad .ic, .wrow.bad .g { color: var(--clay); }
-.wrow .err { color: var(--clay); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wrow.bad .vb, .wrow.bad .ic, .wrow.bad .g { color: var(--chat-danger); }
+.wrow .err { color: var(--chat-danger); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wrow.wait .vb, .wrow.wait .ic { color: var(--amber); }
 
 /* detail card: the only place raw commands, paths and output appear. A titled
@@ -1782,38 +1756,39 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .upshade .cmd button:hover { color: var(--text); }
 .upshade .foot { display: flex; justify-content: flex-end; margin-top: 14px; }
 
-/* turn fold: once the answer lands, everything that led to it collapses to a
-   single line, and a hairline separates that line from the answer below */
-.tfold { margin: 14px 0 12px; }
+/* turn fold: once the answer lands, everything that led to it collapses to the
+   design's one quiet line -- the verdict and the clock -- at the head of the
+   card, and opens into the process lines under it (Figma: Raven / Thinking). */
+.tfold { margin: 0; }
+.tfold.open { margin-bottom: 4px; }
 /* One hard left edge for the transcript: whatever a line leads with — an icon,
    a chevron, or its own first word — starts on that edge. Its rows sit right
    underneath, so the gap stays small enough to read as one block. */
 .tfh {
-  display: flex; align-items: center; gap: 7px; width: fit-content; max-width: 100%;
-  text-align: left; color: var(--faint); font-size: 13px;
-  padding: 3px 8px; margin: 0 -8px 6px;
-  border: 0; border-radius: 7px; background: none; cursor: pointer;
+  display: flex; align-items: center; gap: 4px; width: fit-content; max-width: 100%;
+  text-align: left; color: var(--chat-quiet); font-size: 11px; line-height: 15px;
+  padding: 0; margin: 0;
+  border: 0; border-radius: 0; background: none; cursor: pointer;
 }
-.tfb > .step:first-child { margin-top: 0; }
+.tfh > .cv { margin-left: -2px; }
+.tfb { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .tfb .step > .wk { margin-top: 0; }
 .tfh:hover .cv { color: var(--muted); }
-.tfold::after { content: ''; display: block; height: 1px; background: var(--line); }
 .tfb[hidden] { display: none; }
-.tfb { margin-bottom: 12px; }
 
 /* One type for every line that stands in for finished work -- "thought",
    "done", a stretch summary. They had drifted to 13 / 13.5px in two different
    greys, which made three lines of the same kind read as three kinds of thing.
    Declared together so they cannot drift again. */
-.think, .tfh, .wrow.sum { font-size: 13px; color: var(--muted); }
-.tfh .tm { color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.think, .tfh, .wrow.sum { font-size: 11px; color: var(--chat-quiet); }
+.tfh .tm { color: var(--chat-quiet); font-size: 11px; font-variant-numeric: tabular-nums; }
 /* An empty clock still spends its flex gap, which pushed the caret one whole
    gap further from the label on every line whose time happened to be blank --
    two folds side by side then looked like two different components. */
 .tfh .tm:empty { display: none; }
 .think:hover, .tfh:hover, .wrow.sum:hover { color: var(--text); }
 /* the phrase is a summary of the rows underneath, not a target of its own */
-.wrow.sum .ar { color: var(--muted); font-size: 13px; }
+.wrow.sum .ar { color: inherit; font-size: 11px; }
 .wrow.sum:hover .ar { color: var(--text); }
 
 /* the turn is never silent: a breathing dot fills the gap before events */
@@ -1926,12 +1901,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .backpill[hidden] { display: none; }
 
-/* mid-turn narration is speech, not metadata: it reads at full strength, like
-   the reference transcripts do — only the answer footer marks the final say */
-.say { margin: 12px 0 2px; font-size: 13.5px; line-height: 1.72; }
+/* mid-turn narration: what the agent said on the way, set between the process
+   lines and the answer -- a step down from the reply, since the design's
+   process trail is lines of work rather than prose, and a step up from them,
+   since it is still something said. */
+.step > .say.prose { margin: 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
 .cot { overflow-wrap: anywhere; }
 
-.answer { position: relative; margin-top: 18px; }
+.answer { position: relative; margin: 0; }
 .acts { display: flex; align-items: center; gap: 1px; margin-top: 8px; }
 .acts button {
   position: relative; width: 27px; height: 27px; display: grid; place-items: center;
@@ -2027,20 +2004,24 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* break-word, not anywhere: an unbroken token longer than the line (a URL, a
    hash) wraps instead of pushing the column sideways, while normal words
    still break only at their own boundaries. */
-.prose { line-height: 1.72; overflow-wrap: break-word; }
+.prose { line-height: 1.8; overflow-wrap: break-word; }
 .prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+/* A reply's own type (Figma: Raven / AssistantMessage): 14/1.8 prose with 8px
+   between paragraphs, and a 16/22 semibold heading in the same face. */
+.msg.ai .prose { color: var(--chat-ink); }
 .prose h2 {
-  font-family: var(--mono); font-size: var(--step-1); font-weight: 600;
-  letter-spacing: -.02em; margin: 26px 0 10px; text-wrap: balance;
+  font-family: var(--sans); font-size: 16px; line-height: 22px; font-weight: 600;
+  letter-spacing: 0; margin: 20px 0 12px; text-wrap: balance;
 }
-.prose h3 { font-size: var(--step-0); margin: 20px 0 6px; color: var(--text); }
-.prose p { margin: 10px 0; }
+.prose h3 { font-size: 14px; line-height: 22px; font-weight: 600; margin: 16px 0 8px; color: inherit; }
+.prose p { margin: 8px 0; }
 .prose .brk { height: 14px; }
-.prose ul, .prose ol { margin: 10px 0; padding-left: 18px; }
+.prose ul, .prose ol { margin: 8px 0; padding-left: 18px; }
 /* A list is a column of rows, not prose: at the paragraph reading measure an
    item that is one code chip floats in a line box half again its own height,
    and the stack of chips then reads as a row of buttons. */
-.prose li { margin: 2px 0; line-height: 1.5; }
+.prose li { margin: 2px 0; line-height: 1.8; }
 .prose li code { padding: 0 4px; }
 /* A nested level belongs to its parent item, not to the section, so it sits
    tighter than a top-level list. */
@@ -2072,12 +2053,13 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   font-family: var(--mono); font-size: 12.5px; background: var(--raised);
   padding: 1px 5px; border-radius: 4px;
 }
-/* Code is content, not a caption: it reads at text weight on a filled block,
-   with no outline competing with the prose rules around it. */
+/* Code is content, not a caption: it reads at text weight in the design's
+   listing box (Figma: Raven / AssistantMessage, the code variant) -- the table's
+   head ground, its half-pixel rule and radius, 13/1.8 mono. */
 .prose pre {
-  font-family: var(--mono); font-size: 12.5px; line-height: 1.75; margin: 14px 0;
-  background: var(--raised); border-radius: 10px; color: var(--text);
-  padding: 12px 15px; overflow-x: auto; tab-size: 2;
+  font-family: var(--mono); font-size: 13px; line-height: 1.8; margin: 16px 0;
+  background: var(--chat-head); border: .5px solid var(--chat-rule); border-radius: 12px;
+  color: var(--chat-ink); padding: 10px 16px; overflow-x: auto; tab-size: 2;
 }
 /* Mathematics, which the browser sets itself from MathML: nothing here picks a
    typeface or a size, because the reader's own math font is the one that pairs
@@ -2099,23 +2081,32 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    block itself: with it on the <pre> the margin collapses through and every
    offset here is measured from the wrong edge -- which is what put the button
    below the middle of a one-line block. */
-.cblk { position: relative; margin: 14px 0; }
+.cblk { position: relative; margin: 16px 0; }
 .cblk > pre { margin: 0; padding-right: 46px; }
 /* A fence that names its language is a listing: it gets a header to name it,
    and the button moves into that header so it never sits over the code. A bare
    fence is usually one command or a line of output -- no header, and the button
    stays out of the way until the pointer is on the block. */
-.cblk.lang { background: var(--raised); border-radius: 10px; overflow: hidden; }
-.cblk.lang > pre { background: none; border-radius: 0; padding: 11px 15px 13px; }
-/* The header is a tone shift inside the same box, not a ruled bar: the label
-   strip reads as part of the block, with the seam carried by the colour step
-   alone. */
+.cblk.lang {
+  background: var(--chat-head); border: .5px solid var(--chat-rule); border-radius: 12px; overflow: hidden;
+}
+.cblk.lang > pre {
+  background: none; border: 0; border-top: .5px solid var(--chat-rule); border-radius: 0;
+  padding: 10px 16px;
+}
+/* The header is the design's 40px strip on the same ground, ruled off from the
+   listing by the box's own half-pixel line, and it names the language the way
+   the design writes it: `< CSS >`. */
 .cbhd {
   display: flex; align-items: center; justify-content: space-between;
-  height: 31px; padding: 0 5px 0 15px;
-  background: color-mix(in oklab, var(--text) 4%, transparent);
+  height: 40px; padding: 0 7px 0 16px; background: var(--chat-head);
 }
-.cblang { font-size: 11.5px; color: var(--muted); letter-spacing: .01em; }
+.cblang {
+  font-family: var(--mono); font-size: 13px; font-weight: 500; line-height: 26px;
+  color: var(--chat-file-ink); text-transform: uppercase;
+}
+.cblang::before { content: '< '; }
+.cblang::after { content: ' >'; }
 /* Borderless, icon-only, square: a bordered pill with a word in it reads as a
    form control dropped onto the code. Always drawn, never revealed on hover --
    a button that exists only while the pointer is already inside the block is a
@@ -2193,29 +2184,31 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   text-decoration-color: color-mix(in oklab, var(--link) 45%, transparent);
 }
 .prose a:hover { text-decoration-color: var(--link); }
-.tw { overflow-x: auto; margin: 14px 0; border: 1px solid var(--line-soft); border-radius: 9px; }
-.prose table { border-collapse: collapse; width: 100%; font-size: 13px; }
-.prose th, .prose td { padding: 8px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
+/* The design's table (Figma: Raven / AssistantMessage, the table variant): one
+   half-pixel rule boxing it at a 12px radius and dividing every cell, a head
+   row on the page's grey, and 40px rows of 13/26 text. The cells wrap --
+   models routinely put a whole sentence in one, and nowrap turned a table that
+   fitted into one that scrolls sideways; the head row does not, so a column
+   is never narrower than its own name. */
+.tw { overflow-x: auto; margin: 16px 0; border: .5px solid var(--chat-rule); border-radius: 12px; }
+.prose table { border-collapse: collapse; width: 100%; font-size: 13px; line-height: 26px; }
+.prose th, .prose td {
+  padding: 7px 16px; text-align: left; vertical-align: top;
+  border: 0; border-right: .5px solid var(--chat-rule);
+}
+.prose th:last-child, .prose td:last-child { border-right: 0; }
+.prose tbody td { border-top: .5px solid var(--chat-rule); color: var(--chat-ink); }
 .prose th {
-  font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--faint); background: var(--surface); white-space: nowrap;
+  font-weight: 400; color: var(--chat-head-ink); background: var(--chat-head); white-space: nowrap;
 }
-/* An identifier is quoted, not styled: the header row is already mono and
-   uppercased for emphasis, and both of those are wrong for code -- uppercasing
-   renames `run_subagent_dag`, and a filled chip inside the tinted header reads
-   as a stray box. In the header, code sheds the chip and keeps its own case. */
+/* An identifier is quoted, not styled: a filled chip inside the tinted header
+   reads as a stray box, so in the header code sheds the chip. */
 .prose th code {
-  background: none; padding: 0; font-size: inherit;
-  text-transform: none; letter-spacing: 0; color: var(--muted);
+  background: none; padding: 0; font-size: inherit; color: inherit;
 }
-/* Same reasoning inside a heading: a 12.5px filled box under a 17px mono
-   heading sits below its cap line and reads as debris. */
+/* Same reasoning inside a heading: a 12.5px filled box under a 16px heading
+   sits below its cap line and reads as debris. */
 .prose h2 code, .prose h3 code { background: none; padding: 0; font-size: inherit; }
-.prose tr:last-child td { border-bottom: 0; }
-/* First column carries the row's subject, so it leads -- but it wraps: models
-   routinely put a whole sentence there, and nowrap turned a table that fitted
-   into one that scrolls sideways. */
-.prose td:first-child { font-weight: 600; }
 /* In a data cell the chip is the only thing marking the value as code, so it
    stays -- just tight enough that a lone identifier sits on the same line as
    the plain text in the cell beside it. */
@@ -2432,6 +2425,7 @@ textarea:focus, textarea:focus-visible,
 }
 .att.img:hover .rm, .att.img .rm:focus-visible { opacity: 1; }
 .ansfoot { display: flex; align-items: center; gap: 8px; margin-top: 6px; margin-left: -5px; flex-wrap: wrap; }
+.turn.ai > .ansfoot { margin-top: 0; }
 .ansfoot .acts { margin-top: 0; }
 /* Mirrored against the right edge the bubble is aligned to. */
 .turn.me > .ansfoot { flex-direction: row-reverse; margin-left: 0; margin-right: -5px; }
@@ -5652,7 +5646,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 
 .desk-grid { --desk-pad: 0px; --desk-gap: 6px; --desk-half-gap: 3px;
   position: absolute; inset: 0; display: grid; gap: var(--desk-gap); padding: 0;
-  overflow: hidden; pointer-events: none; background: transparent; }
+  pointer-events: none; background: transparent; }
 .desk-grid.n1 { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 /* The half gap is subtracted from the percentage track the way the absolute
    n3/n4 rules subtract it, so the seam is CENTRED on the split percentage for

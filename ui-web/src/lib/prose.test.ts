@@ -102,12 +102,20 @@ describe('prose renderer, urls', () => {
 })
 
 describe('prose renderer, blocks', () => {
+  /* What a listing holds, read as text: a fence that names its language is
+     coloured (lib/highlight.ts), so its markup is spans around the source. */
+  const preText = (html: string): string => {
+    const box = document.createElement('div')
+    box.innerHTML = html
+    return box.querySelector('pre')?.textContent ?? ''
+  }
+
   it('gives a fence with a language name a header, and one without a bare card', () => {
     wire()
     const lang = md('```bash\nnpm test\n```')
     expect(lang).toContain('<div class="cblk lang">')
     expect(lang).toContain('<span class="cblang">bash</span>')
-    expect(lang).toContain('<pre>npm test</pre>')
+    expect(preText(lang)).toBe('npm test')
     const bare = md('```\nnpm test\n```')
     expect(bare.startsWith('<div class="cblk"><pre>npm test</pre>')).toBe(true)
     expect(bare).not.toContain('cblang')
@@ -133,13 +141,13 @@ describe('prose renderer, blocks', () => {
        the same marker closes the block, so the inner ``` here ends the outer
        one -- while the inner ```bash, carrying an info string, does not. */
     const three = md('```markdown\nintro\n```bash\ninner\n```\n```')
-    expect(three).toContain('<pre>intro\n```bash\ninner</pre>')
+    expect(preText(three)).toBe('intro\n```bash\ninner')
     /* The two ways to actually nest, both intact: more marks on the outer
        fence, or a different marker. */
-    expect(md('````markdown\nintro\n```bash\ninner\n```\n````'))
-      .toContain('<pre>intro\n```bash\ninner\n```</pre>')
-    expect(md('~~~markdown\nintro\n```bash\ninner\n```\n~~~'))
-      .toContain('<pre>intro\n```bash\ninner\n```</pre>')
+    expect(preText(md('````markdown\nintro\n```bash\ninner\n```\n````')))
+      .toBe('intro\n```bash\ninner\n```')
+    expect(preText(md('~~~markdown\nintro\n```bash\ninner\n```\n~~~')))
+      .toBe('intro\n```bash\ninner\n```')
   })
 
   it('dedents an indented fence by its own indent and no further', () => {
