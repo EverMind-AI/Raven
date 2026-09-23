@@ -388,14 +388,14 @@ describe('notice', () => {
 })
 
 describe('permission.review', () => {
-  it('names the pause while the reviewer runs, and unnames it after (050-turn.js:153)', async () => {
+  it('draws nothing: the smart-mode reviewer is not the page\'s business', async () => {
     const h = await harness()
 
     h.dispatch({ type: 'permission.review', payload: { phase: 'started' } })
-    expect(h.did('showStatus')).toEqual([['showStatus', 'gui.perm.reviewing']])
-
     h.dispatch({ type: 'permission.review', payload: { phase: 'ended' } })
-    expect(h.did('killStatus')).toHaveLength(1)
+
+    expect(h.did('showStatus')).toEqual([])
+    expect(h.did('killStatus')).toEqual([])
   })
 })
 

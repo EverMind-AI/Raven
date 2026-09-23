@@ -3,10 +3,10 @@
  * One stage per contract event, declared in the order the page has always
  * handled them, and one exhaustive `switch` that picks the stage -- so a member
  * added to `TurnEvent` is a compile error here rather than a frame the page
- * drops in silence. The three the contract declares and the page does not draw
- * (`tool.progress`, `dag.node_stalled`, `media`) get a stage that says so; the
- * two the page used to handle and nothing ever sent (`cron.started`,
- * `cron.finished`) are gone.
+ * drops in silence. The four the contract declares and the page does not draw
+ * (`permission.review`, `tool.progress`, `dag.node_stalled`, `media`) get a
+ * stage that says so; the two the page used to handle and nothing ever sent
+ * (`cron.started`, `cron.finished`) are gone.
  *
  * Every stage takes the runtime the frame is about, which is what replaced the
  * page-level `live` object AND the page-level name for whose turn was running:
@@ -159,8 +159,8 @@ export const STAGES: readonly Stage[] = [
 
   arm('notice', (rt, p) => {
     /* A transient one reports on a turn still running -- the runtime waiting out
-       a failed model call -- so it goes where `permission.review` puts its pause:
-       the status line, which the next thinking/token/tool frame kills. Sealing
+       a failed model call -- so it goes on the status line, which the next
+       thinking/token/tool frame kills. Sealing
        the step and writing a row would end the turn's prose on a wait it is
        about to come back from. `episode.start` does not kill the status, so the
        line survives the whole silence and dies on the first real output. */
@@ -171,12 +171,6 @@ export const STAGES: readonly Stage[] = [
     if (rt.st) { rt.st.seal(); rt.st = null }
     flushSay(rt)
     noteRow(t('gui.notice.' + (p.kind || ''), null, p.kind || ''), p.detail || '', { quiet: true })
-  }),
-
-  /* The smart-mode reviewer runs inside the tool dispatch; name the pause. */
-  arm('permission.review', (_rt, p) => {
-    if (p.phase === 'started') transcript.status(t('gui.perm.reviewing'))
-    else transcript.killStatus()
   }),
 
   arm('thinking.delta', (rt, p) => {
@@ -337,7 +331,7 @@ export const STAGES: readonly Stage[] = [
   /* Declared by the contract and drawn by nothing. Named rather than left to
      fall off the end, so that "the page does not render this" is a decision
      with a place to be revisited. */
-  unhandled(['tool.progress', 'dag.node_stalled', 'media']),
+  unhandled(['permission.review', 'tool.progress', 'dag.node_stalled', 'media']),
 ]
 
 const BY_TYPE = new Map<EventType, Stage>()
