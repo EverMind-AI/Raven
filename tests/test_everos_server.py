@@ -1478,6 +1478,17 @@ class TestThePiecesTheChainIsMadeOf:
 
         assert everos_server.precheck_spawn() is None
 
+    def test_the_precheck_refuses_windows_before_asking_anything_else(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The settings-page restart chain reads this first; on Windows it must
+        report the platform, not stop a server and then fail to spawn one."""
+        monkeypatch.setattr("raven_everos.config.everos_role_configured", lambda _s: True)
+        monkeypatch.setattr(everos_server, "_inotify_gate", lambda: None)
+        monkeypatch.setattr(sys, "platform", "win32")
+
+        answer = everos_server.precheck_spawn()
+
+        assert answer and "Windows" in answer
+
     def test_stopping_a_root_nothing_is_serving_is_not_a_failure(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

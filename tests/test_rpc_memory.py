@@ -6,6 +6,7 @@ HTTP; tests replace :func:`memory._post` so no sockets open.
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -217,6 +218,24 @@ async def test_a_different_backend_says_this_page_is_not_where_they_are(monkeypa
     assert stats["ok"] is False
     assert "mem0" in stats["note"]
     assert listing["items"] == [] and "mem0" in listing["note"]
+
+
+@pytest.mark.asyncio
+async def test_windows_says_memory_is_not_here_yet(monkeypatch):
+    """Nothing to probe: the server cannot run on Windows, so the page says so
+    instead of a connection refused and a retry button that cannot help."""
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    async def _post(*args, **kwargs):
+        raise AssertionError("no request may leave for a server that cannot run here")
+
+    monkeypatch.setattr(memory, "_post", _post)
+
+    stats = await memory.memory_stats({})
+    listing = await memory.memory_list({"kind": "episode"})
+
+    assert stats["ok"] is False and "Windows" in stats["note"]
+    assert listing["items"] == [] and "Windows" in listing["note"]
 
 
 @pytest.mark.asyncio

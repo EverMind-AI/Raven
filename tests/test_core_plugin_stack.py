@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import sys
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ from raven.core.plugin_stack import (
     build_plugin_hooks,
     build_plugin_registry,
     build_plugin_tools,
+    everos_platform_note,
     everos_plugin_installed,
     everos_plugin_missing_note,
     maybe_build_memory_backend,
@@ -414,6 +416,14 @@ class TestEverosPresence:
         note = everos_plugin_missing_note()
         assert "everos-memory" in note
         assert "memory.backend" in note
+
+    def test_windows_gets_a_platform_note_and_everywhere_else_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
+        note = everos_platform_note()
+        assert note and "Windows" in note
+
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert everos_platform_note() is None
 
 
 def test_build_plugin_tools_stamps_the_contributing_plugin(tmp_path):

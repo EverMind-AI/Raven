@@ -1020,6 +1020,11 @@ def precheck_spawn() -> str | None:
     machine with no memory service at all, and nothing here would bring one
     back -- spawning happens in ``EverosBackend.start()``, once per session.
     """
+    from raven.core.plugin_stack import everos_platform_note
+
+    platform_block = everos_platform_note()
+    if platform_block is not None:
+        return platform_block
     try:
         _require_llm_configured()
     except EverosNotConfiguredError as exc:

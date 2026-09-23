@@ -786,14 +786,11 @@ class EverosBackend:
             type(self._adapter).__name__,
         )
         if isinstance(self._adapter, _HttpEverosAdapter):
-            import sys
+            from raven.core.plugin_stack import everos_platform_note
 
-            if sys.platform == "win32":
-                self.notify(
-                    "EverOS memory is not available on native Windows.\n"
-                    "Run Raven inside WSL for full memory support, "
-                    "or run `raven onboard` to reconfigure."
-                )
+            platform_note = everos_platform_note()
+            if platform_note is not None:
+                self.notify(platform_note)
                 self._adapter = _NoOpAdapter()
                 return
 
