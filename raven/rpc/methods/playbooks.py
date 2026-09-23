@@ -698,21 +698,21 @@ async def playbooks_run(
     # ``create_task``, which copies the context it is created in, and a binding
     # that has already been reset by then is one the detached run never sees.
     with workdir.bind(session_workdir), use_binding(loop.binding_for_session(session_key)):
-        stint = await runtime.load(
+        plan = await runtime.load(
             name,
             params.get("params") or {},
             params.get("fills") or {},
             allow_disabled=_CALLER_NAMED_IT,
             confirmed=bool(params.get("confirmed")),
         )
-    if stint is None:
+    if plan is None:
         # ``_known_name`` already proved the directory exists, so a miss here is
         # the runtime's own view disagreeing: a file that will not parse is absent
         # from it. Told apart rather than reported as one, because one is fixed by
         # editing the file and the other by enabling the playbook -- and with
         # ``allow_disabled`` true above, only the first can actually reach here.
         raise ConfigValidationError(f"playbook {name!r} does not load; validate it to see why")
-    return {"name": name, "kind": stint.kind, "reply": stint.reply}
+    return {"name": name, "kind": plan.kind, "reply": plan.reply}
 
 
 def _generation_budget_s() -> float:

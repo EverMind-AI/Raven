@@ -939,10 +939,10 @@ class _Plan:
 class _Runtime:
     """A stand-in for the loop's playbook runtime, recording how it was driven."""
 
-    def __init__(self, stint: object | None = None) -> None:
+    def __init__(self, plan: object | None = None) -> None:
         self.context: dict | None = None
         self.calls: list[dict] = []
-        self._plan = stint if stint is not None else _Plan()
+        self._plan = plan if plan is not None else _Plan()
 
     def set_context(self, *, channel, chat_id, session_key) -> None:
         self.context = {"channel": channel, "chat_id": chat_id, "session_key": session_key}
@@ -1005,7 +1005,7 @@ async def test_a_run_answers_the_executors_own_plan(library: PlaybookStore) -> N
         "name": "competitor-scan",
         "kind": "dag",
         "reply": "DAG abc123: started 'competitor-scan' (3 steps)",
-    }, "the stint is relayed verbatim, run id included, not re-shaped here"
+    }, "the plan is relayed verbatim, run id included, not re-shaped here"
 
 
 @pytest.mark.asyncio

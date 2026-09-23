@@ -56,7 +56,7 @@ def test_two_ids_differing_only_by_case_are_one_node_id() -> None:
     """The registry's key space is case-sensitive; the filesystem's is not.
 
     A node's artifacts are files named after its id, so on a case-folding
-    backend (APFS by default, and NTFS) `Stint.out.md` and `stint.out.md` are one
+    backend (APFS by default, and NTFS) `Plan.out.md` and `plan.out.md` are one
     file and the second node's write destroys the first's output. Refused rather
     than normalised: two nodes the model named differently must not silently
     become one.
@@ -65,13 +65,13 @@ def test_two_ids_differing_only_by_case_are_one_node_id() -> None:
         {
             "task_summary": "reject ids that collide when folded",
             "nodes": [
-                {"id": "Stint", "subagent": "x", "node_summary": "first", "prompt_template": "one"},
-                {"id": "stint", "subagent": "x", "node_summary": "second", "prompt_template": "two"},
+                {"id": "Plan", "subagent": "x", "node_summary": "first", "prompt_template": "one"},
+                {"id": "plan", "subagent": "x", "node_summary": "second", "prompt_template": "two"},
             ],
         }
     )
 
-    assert "duplicate node ids: ['stint']" in collect_static_graph_errors(spec.nodes)[0]
+    assert "duplicate node ids: ['plan']" in collect_static_graph_errors(spec.nodes)[0]
 
 
 def test_ids_differing_by_more_than_case_stay_separate() -> None:
@@ -97,33 +97,33 @@ def test_a_spawn_held_id_is_not_reported_as_a_run() -> None:
     """
     from raven.agent.subagent.dag_store import UNRECORDED, duplicate_node_id
 
-    spawn = duplicate_node_id("stint", "spawn", readable=False)
+    spawn = duplicate_node_id("plan", "spawn", readable=False)
     assert "an earlier spawn in this conversation" in spawn
     assert "run 'spawn'" not in spawn
     assert "that run left it" not in spawn
 
-    unrecorded = duplicate_node_id("stint", UNRECORDED, readable=False)
+    unrecorded = duplicate_node_id("plan", UNRECORDED, readable=False)
     assert f"run '{UNRECORDED}'" not in unrecorded
 
-    assert "used by run 'r1'" in duplicate_node_id("stint", "r1", readable=False), "a real run still reads as one"
+    assert "used by run 'r1'" in duplicate_node_id("plan", "r1", readable=False), "a real run still reads as one"
 
 
 def test_a_node_id_colliding_by_case_with_a_claimed_one_is_refused() -> None:
-    """`Stint` is taken, so `stint` is taken too -- one file backs both."""
+    """`Plan` is taken, so `plan` is taken too -- one file backs both."""
     spec = parse_dag_spec(
         {
             "task_summary": "reuse a claimed id in another case",
-            "nodes": [{"id": "stint", "subagent": "x", "node_summary": "retry", "prompt_template": "retry"}],
+            "nodes": [{"id": "plan", "subagent": "x", "node_summary": "retry", "prompt_template": "retry"}],
         }
     )
-    known = SessionNodes(owner={"Stint": "r1"}, state={"Stint": "completed"}, has_output={"Stint": True})
+    known = SessionNodes(owner={"Plan": "r1"}, state={"Plan": "completed"}, has_output={"Plan": True})
 
     with pytest.raises(DagValidationError) as exc_info:
         validate_and_order(spec, session_nodes=known)
 
     message = str(exc_info.value)
     assert "already used by run 'r1'" in message
-    assert "'Stint'" in message, "the refusal has to name the id actually taken, not the one asked for"
+    assert "'Plan'" in message, "the refusal has to name the id actually taken, not the one asked for"
 
 
 def test_duplicate_node_error_names_the_duplicate_ids() -> None:
@@ -864,21 +864,21 @@ def _seed_legacy_run(be: "_FakeBackend", run_id: str) -> None:
     """
     rdir = f"/hist/mas_dag/{run_id}"
     be.files[f"{rdir}/graph.json"] = json.dumps(
-        {"task_summary": "old", "nodes": [{"id": "stint", "subagent": "x", "prompt_template": "p", "depends_on": []}]}
+        {"task_summary": "old", "nodes": [{"id": "plan", "subagent": "x", "prompt_template": "p", "depends_on": []}]}
     ).encode()
-    be.files[f"{rdir}/stint.prompt.md"] = b"OLD RUN'S PROMPT"
-    be.files[f"{rdir}/stint.out.md"] = b"OLD RUN'S ANSWER"
+    be.files[f"{rdir}/plan.prompt.md"] = b"OLD RUN'S PROMPT"
+    be.files[f"{rdir}/plan.out.md"] = b"OLD RUN'S ANSWER"
     be.files[f"{rdir}/manifest.json"] = json.dumps(
         {
-            "stint": {
+            "plan": {
                 "status": "completed",
                 "subagent": "x",
                 "depends_on": [],
                 "instance": None,
                 "started_at": 1,
                 "ended_at": 2,
-                "prompt_file": f"{rdir}/stint.prompt.md",
-                "output_file": f"{rdir}/stint.out.md",
+                "prompt_file": f"{rdir}/plan.prompt.md",
+                "output_file": f"{rdir}/plan.out.md",
                 "error": None,
             }
         }
@@ -895,15 +895,15 @@ async def test_read_node_trusts_the_manifests_path_like_read_run_does() -> None:
     """
     be = _FakeBackend()
     _seed_legacy_run(be, "20260730T060242Z-6b0b89a3")
-    be.files["/hist/nodes/stint.out.md"] = b"A DIFFERENT, NEWER NODE"
-    be.files["/hist/nodes/stint.prompt.md"] = b"A DIFFERENT, NEWER PROMPT"
+    be.files["/hist/nodes/plan.out.md"] = b"A DIFFERENT, NEWER NODE"
+    be.files["/hist/nodes/plan.prompt.md"] = b"A DIFFERENT, NEWER PROMPT"
 
-    node = await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "stint", "/hist/nodes")
+    node = await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "plan", "/hist/nodes")
     run = await read_run(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "/hist/nodes")
 
     assert node["output"] == "OLD RUN'S ANSWER"
     assert node["prompt"] == "OLD RUN'S PROMPT"
-    entry = next(f for f in run["files"] if f["node"] == "stint")
+    entry = next(f for f in run["files"] if f["node"] == "plan")
     assert node["output_file"] == entry["output_file"], "the two readers must name one file"
     assert node["prompt_file"] == entry["prompt_file"]
 
@@ -920,14 +920,14 @@ async def test_read_node_honours_a_manifest_that_records_the_node_with_no_output
     run_id = "20260730T060242Z-6b0b89a3"
     rdir = f"/hist/mas_dag/{run_id}"
     be.files[f"{rdir}/graph.json"] = json.dumps(
-        {"task_summary": "old", "nodes": [{"id": "stint", "subagent": "x", "prompt_template": "p", "depends_on": []}]}
+        {"task_summary": "old", "nodes": [{"id": "plan", "subagent": "x", "prompt_template": "p", "depends_on": []}]}
     ).encode()
     be.files[f"{rdir}/manifest.json"] = json.dumps(
-        {"stint": {"status": "skipped", "prompt_file": None, "output_file": None, "error": None}}
+        {"plan": {"status": "skipped", "prompt_file": None, "output_file": None, "error": None}}
     ).encode()
-    be.files["/hist/nodes/stint.out.md"] = b"A DIFFERENT, NEWER NODE"
+    be.files["/hist/nodes/plan.out.md"] = b"A DIFFERENT, NEWER NODE"
 
-    node = await read_node(be, "/hist/mas_dag", run_id, "stint", "/hist/nodes")
+    node = await read_node(be, "/hist/mas_dag", run_id, "plan", "/hist/nodes")
 
     assert node["output"] is None
     assert node["output_file"] is None
@@ -1239,7 +1239,7 @@ async def test_the_link_is_recorded_on_the_old_runs_graph_json(tmp_path) -> None
 
 async def test_the_successors_spec_inherits_task_summary_and_confirm_from_the_old_run(tmp_path) -> None:
     """`_submit_replan` builds the successor's spec from the plan's own
-    `task_summary`/`confirm`, not from the stint's `reason` string and a bare
+    `task_summary`/`confirm`, not from the plan's `reason` string and a bare
     `False` standing in for fields nobody asked the old run about.
     """
     captured: dict[str, object] = {}
@@ -1481,17 +1481,17 @@ def _one_node(template: str, **extra: object) -> object:
 
 async def test_render_reaches_another_node_through_the_nodes_prefix() -> None:
     be = _FakeBackend()
-    be.files["/hist/nodes/stint.out.md"] = b"EARLIER"
+    be.files["/hist/nodes/plan.out.md"] = b"EARLIER"
 
-    node = _one_node("text={{ ref:@nodes/stint.out.md }} path={{ ref_path:@nodes/stint.out.md }}")
+    node = _one_node("text={{ ref:@nodes/plan.out.md }} path={{ ref_path:@nodes/plan.out.md }}")
     rendered = await render_prompt(node, backend=be, cwd="/w", nodes_root="/hist/nodes")
 
     assert "EARLIER" in rendered
-    assert "path=/hist/nodes/stint.out.md" in rendered
+    assert "path=/hist/nodes/plan.out.md" in rendered
 
 
 async def test_a_nodes_reference_is_refused_when_no_node_root_is_known() -> None:
-    node = _one_node("{{ ref:@nodes/stint.out.md }}")
+    node = _one_node("{{ ref:@nodes/plan.out.md }}")
     with pytest.raises(DagValidationError, match="node artifacts"):
         await render_prompt(node, backend=_FakeBackend(), cwd="/w")
 
@@ -2472,10 +2472,10 @@ async def test_two_callers_racing_for_one_node_id_leave_exactly_one_winner() -> 
         async with index_guard("/hist"):
             known = await read_session_nodes(be, "/hist")
             await asyncio.sleep(hold)
-            if "stint" in known.owner:
+            if "plan" in known.owner:
                 outcomes.append(f"{tag}:refused")
                 return
-            await claim_node(be, "/hist", "stint", kind=tag, started_at_ms=1)
+            await claim_node(be, "/hist", "plan", kind=tag, started_at_ms=1)
             outcomes.append(f"{tag}:claimed")
 
     await asyncio.gather(contender("spawn", 0.02), contender("dag", 0.0))
@@ -2525,14 +2525,14 @@ async def test_a_registry_whose_halves_have_the_wrong_type_degrades_per_half() -
 
     be = _FakeBackend()
     be.files["/hist/nodes.json"] = json.dumps(
-        {"nodes": {"stint": {"run_id": "r1", "status": "completed", "has_output": True}}, "runs": "not-a-list"}
+        {"nodes": {"plan": {"run_id": "r1", "status": "completed", "has_output": True}}, "runs": "not-a-list"}
     ).encode()
 
     registry = await read_registry(be, "/hist")
     assert registry["runs"] == [], "a runs value that is not a list reads as no runs"
-    assert (await read_session_nodes(be, "/hist")).owner == {"stint": "r1"}, "the node claims survive it"
+    assert (await read_session_nodes(be, "/hist")).owner == {"plan": "r1"}, "the node claims survive it"
 
-    be.files["/hist/nodes.json"] = json.dumps({"nodes": [{"id": "stint"}], "runs": [{"run_id": "r1"}]}).encode()
+    be.files["/hist/nodes.json"] = json.dumps({"nodes": [{"id": "plan"}], "runs": [{"run_id": "r1"}]}).encode()
 
     registry = await read_registry(be, "/hist")
     assert registry["nodes"] == {}, "a nodes value that is not a dict reads as no nodes"
