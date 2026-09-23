@@ -5061,6 +5061,9 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .btn { border: 1px solid var(--line); border-radius: 7px; padding: 7px 15px; font-size: 13px; }
 .btn:hover { border-color: var(--faint); }
 .btn.key { background: var(--text); border-color: var(--text); font-weight: 600; color: var(--ink); }
+/* Waiting on an answer: the send button's grey (.go:disabled) under an ink the
+   label survives in -- the send tokens dress an icon, this one dresses a word. */
+.btn.key:disabled { background: var(--send-off); border-color: var(--send-off); color: var(--muted); cursor: default; }
 .btn.bad { background: var(--clay); border-color: var(--clay); color: var(--ink-on-accent); font-weight: 600; }
 
 .toasts { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
