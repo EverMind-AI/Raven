@@ -5872,6 +5872,10 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    `.wrap` is every page's centred reading column, and the pages that really
    are documents want to keep it. */
 #kbPage .work { overflow: hidden; }
+/* The agent connector's column is the composer's: the same `--col` cap and
+   the same 36px gutters `.dock` gives it, so the grid's edges line up with the
+   input box the reader just left rather than sitting inside a narrower one. */
+#extAgentsPage .wrap { max-width: calc(var(--col) + 72px); padding-left: 36px; padding-right: 36px; }
 #kbPage .wrap {
   max-width: none; height: 100%; min-height: 0;
   display: flex; flex-direction: column; padding: 18px 22px 22px;

@@ -6655,6 +6655,10 @@
       "en": "Language",
       "zh": "语言"
     },
+    "gui.settings.general.language_sub": {
+      "en": "Choose the language used in Raven.",
+      "zh": "选择 Raven 使用的语言。"
+    },
     "gui.settings.general.lang_zh": {
       "en": "中文",
       "zh": "中文"
@@ -6664,8 +6668,12 @@
       "zh": "English"
     },
     "gui.settings.general.theme": {
-      "en": "Theme",
-      "zh": "主题"
+      "en": "Appearance",
+      "zh": "外观"
+    },
+    "gui.settings.general.theme_sub": {
+      "en": "Choose a theme or match your system settings.",
+      "zh": "选择主题，或跟随系统设置。"
     },
     "gui.settings.general.theme_system": {
       "en": "System",
@@ -6682,6 +6690,10 @@
     "gui.settings.general.notify": {
       "en": "Notifications",
       "zh": "通知"
+    },
+    "gui.settings.general.notify_sub": {
+      "en": "Get notified when tasks finish or need your attention.",
+      "zh": "任务完成或需要你处理时通知你。"
     },
     "gui.settings.general.notify_denied": {
       "en": "The browser refused notifications",
