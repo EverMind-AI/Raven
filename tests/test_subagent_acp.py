@@ -3377,6 +3377,166 @@ async def test_an_observer_that_raises_still_yields_the_approval() -> None:
     assert answer == {"outcome": {"outcome": "selected", "optionId": "allow_always"}}
 
 
+# ---- the host's own refusals bind what it approves --------------------------
+
+
+@pytest.fixture()
+def host_rules(tmp_path, monkeypatch):
+    """Write the host's config; the approver reads it live, as the host's gate does."""
+    from raven.acp_client import permissions
+
+    home = tmp_path / "host-home"
+    home.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    permissions._host_policy.cache_clear()
+
+    def write(config: dict[str, Any]) -> None:
+        (home / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    write({})
+    yield write
+    permissions._host_policy.cache_clear()
+
+
+def _asking(command: str | None, options: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    tool: dict[str, Any] = {"toolCallId": "t1", "kind": "execute", "status": "pending"}
+    if command is not None:
+        tool["rawInput"] = {"command": command}
+    offered = [
+        {"optionId": "always", "kind": "allow_always"},
+        {"optionId": "once", "kind": "allow_once"},
+        {"optionId": "no", "kind": "reject_once"},
+    ]
+    return {"sessionId": "s1", "toolCall": tool, "options": offered if options is None else options}
+
+
+def test_every_spelling_of_the_requested_command_is_read() -> None:
+    """The quoted raw form codex sends, the same without its quotes, and each
+    parsed action -- a compound command's refused segment need not be first."""
+    from raven.acp_client.permissions import requested_commands
+    from tests import acp_frames
+
+    assert requested_commands(acp_frames.CODEX_READ_PERMISSION) == [
+        "\"sed -n '1,200p' calc.py\"",
+        "sed -n '1,200p' calc.py",
+    ]
+    compound = {
+        "toolCall": {"rawInput": {"command": '"cd src && curl -s https://example.com"'}},
+        "_meta": {
+            "codex": {"params": {"commandActions": [{"command": "cd src"}, {"command": "curl -s https://example.com"}]}}
+        },
+    }
+    assert "curl -s https://example.com" in requested_commands(compound)
+    assert requested_commands(_asking(None)) == []
+    assert requested_commands({"toolCall": {"rawInput": {"command": ["curl", "x"]}}}) == []
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"permissions": {"tools": {"exec": {"curl *": "deny"}}}},
+        {"permissions": {"tools": {"exec": "deny"}}},
+        {"tools": {"exec": {"extraDenyPatterns": [r"\bcurl\b"]}}},
+    ],
+    ids=["user-rule", "whole-tool", "extra-pattern"],
+)
+async def test_a_command_the_host_denies_is_answered_with_the_reject_option(host_rules, config) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules(config)
+    handle = auto_approver("stub")
+    answer = await handle("session/request_permission", _asking("curl -s https://example.com"))
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "no"}}
+
+
+async def test_the_host_mode_does_not_lift_a_deny_rule(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"mode": "full", "tools": {"exec": {"curl *": "deny"}}}})
+    answer = await auto_approver("stub")("session/request_permission", _asking("curl x"))
+    assert answer["outcome"]["optionId"] == "no"
+
+
+async def test_a_parsed_segment_the_host_denies_refuses_the_whole_request(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    params = _asking('"cd src && curl -s x"')
+    params["_meta"] = {"codex": {"params": {"commandActions": [{"command": "cd src"}, {"command": "curl -s x"}]}}}
+    answer = await auto_approver("codex")("session/request_permission", params)
+    assert answer["outcome"]["optionId"] == "no"
+
+
+async def test_the_builtin_catastrophe_list_holds_for_a_sub_agent_too(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    answer = await auto_approver("stub")("session/request_permission", _asking("rm -rf /"))
+    assert answer["outcome"]["optionId"] == "no"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [None, "git status", "curlx --version", 'echo "unterminated'],
+    ids=["no-command", "not-denied", "prefix-is-not-a-token", "parse-error"],
+)
+async def test_what_no_deny_rule_names_is_still_approved(host_rules, command) -> None:
+    """A parse error is the host model's to fix in its own turn, not grounds to
+    refuse an adapter's quoting."""
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    answer = await auto_approver("stub")("session/request_permission", _asking(command))
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "always"}}
+
+
+async def test_a_denied_command_with_no_reject_offered_is_cancelled_not_allowed(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    only_allows = [{"optionId": "always", "kind": "allow_always"}]
+    answer = await auto_approver("stub")("session/request_permission", _asking("curl x", only_allows))
+    assert answer == {"outcome": {"outcome": "cancelled"}}
+    reject_always = [*only_allows, {"optionId": "never", "kind": "reject_always"}]
+    answer = await auto_approver("stub")("session/request_permission", _asking("curl x", reject_always))
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "never"}}
+
+
+async def test_a_deny_check_that_raises_refuses(host_rules, monkeypatch) -> None:
+    from raven.acp_client import permissions
+
+    def broken(params: dict[str, Any]) -> str | None:
+        raise RuntimeError("rules unreadable")
+
+    monkeypatch.setattr(permissions, "host_refusal", broken)
+    answer = await permissions.auto_approver("stub")("session/request_permission", _asking("git status"))
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "no"}}
+
+
+async def test_a_rule_tightened_while_running_binds_the_next_request(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    handle = auto_approver("stub")
+    first = await handle("session/request_permission", _asking("curl x"))
+    assert first["outcome"]["optionId"] == "always"
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    second = await handle("session/request_permission", _asking("curl x"))
+    assert second["outcome"]["optionId"] == "no"
+
+
+async def test_a_pooled_agent_asking_to_run_a_denied_command_is_refused(host_rules, tmp_path: Path) -> None:
+    """Through the pool's own dispatcher and a real agent process: the stub
+    reports the option it was answered with."""
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="a",
+        command=f"{sys.executable} {_STUB}",
+        env={"ACP_STUB_MODE": "permission", "ACP_STUB_COMMAND": "curl -s https://example.com"},
+        ready_timeout_ms=15000,
+    )
+    out = await build_third_party_backend(cfg).run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    assert out == "chose:no"
+
+
 # ---- cancelling a turn on the agent, not only locally -----------------------
 
 
