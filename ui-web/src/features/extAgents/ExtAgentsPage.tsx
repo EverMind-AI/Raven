@@ -7,14 +7,13 @@ import { ModelPicker } from '../../components/ModelPicker'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
-import { column } from '../model/store'
+import { offered } from '../model/types'
 import { byOf, installOf, isOwnRow } from './catalogue'
 import { SectionBlock, Spin, Tile, connect, ordered, pendingLabel, shownOf } from './Rows'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
 import type { PickerProvider } from '../../components/ModelPicker'
-import type { Offer } from '../model/types'
 import type { Shown } from './Rows'
 import type { Section } from './source'
 import type { ExtAgentsState } from './store'
@@ -129,18 +128,15 @@ function InstallBlock({ row }: { row: ExtAgentRow }): JSX.Element | null {
    raven's own connected providers, each with what it offers; an acp row picks
    from the choices its handshake advertised, bucketed the way the agent
    bucketed them. Empty is "no menu", whatever the rule. */
-/* The column a row of raven's own picks from is the composer's column, built
-   by the same helper: a provider with nothing added yet offers the registry's
-   shortlist, and only the text models. Reading the added list alone drew a
-   connected vendor with zero models here beside a composer that listed four. A
-   `pick` is stated so the column pins nothing -- the tick is the row's own. */
-const OWN_ROW_OFFER: Offer = { kind: 'text', pick: async () => {} }
-
 function pickerProvidersFor(row: ExtAgentRow): PickerProvider[] {
   if (row.model_source === 'raven') {
+    /* The text models this host offers, by the same rule the composer's column
+       reads: a provider with nothing added yet offers the registry's shortlist
+       here too. Reading the added list alone drew a connected vendor with zero
+       models beside a composer listing four. No pin -- the tick is the row's. */
     return hostProviders()
       .filter((p) => p.on)
-      .map((p) => ({ id: p.id, name: p.name, models: column(p, OWN_ROW_OFFER), labels: p.labels }))
+      .map((p) => ({ id: p.id, name: p.name, models: offered(p, 'text'), labels: p.labels }))
   }
   if (row.model_source !== 'agent') return []
   const groups = new Map<string, PickerProvider>()

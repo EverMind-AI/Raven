@@ -204,8 +204,25 @@ export type ApiProtocol = 'auto' | 'chat' | 'responses' | 'anthropic'
 
 /* The models a picker offers for a provider: the added ones. Older sources
    that predate the split hand back only `models`, and falling through to it
-   keeps them working rather than emptying their picker. */
-export const offered = (p: Provider): string[] => p.configured ?? p.models
+   keeps them working rather than emptying their picker.
+
+   Given a kind, the ones of that kind -- and a provider with nothing added yet
+   offers the registry's own shortlist, for text and text only. The first-run
+   wizard connects a vendor and picks a chat model in one step, before anyone
+   has visited the providers page to build a list, and an empty column there is
+   the whole of that step. The fallback is never taken for a kind the wizard
+   does not ask for, where the vendor's whole catalogue would be a worse answer
+   than "nothing here yet, type an id".
+
+   On the public surface because two domains draw a column from it: the picker
+   (through `store.column`, which pins the slot's own model on top) and the
+   agents page, whose rows of raven's own run on these same providers. */
+export const offered = (p: Provider, kind?: Kind): string[] => {
+  const listed = p.configured ?? p.models
+  if (!kind) return listed
+  const source = listed.length || kind !== 'text' ? listed : p.models
+  return source.filter((m) => modelKind(p.labels?.[m]) === kind)
+}
 
 export interface ModelSource {
   providers(): Provider[]
