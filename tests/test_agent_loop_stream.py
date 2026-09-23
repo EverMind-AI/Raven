@@ -250,7 +250,8 @@ async def test_llm_call_stream_timeout_after_output_fails_the_turn_unless_asked(
     (N-TURNFAILED) unless the caller asked to retry after output. Handed back as a
     retryable response instead, the loop's own ladder asked again and an
     interactive client received the words of two attempts. Asked for, the response
-    is structured and retryable, with the streamed content preserved on it."""
+    is structured and retryable, and its content is the account of the failure --
+    the words that streamed are the caller's to keep, not the error's text."""
 
     class _TimeoutStreamProvider:
         classify_error = LLMProvider.classify_error
@@ -281,7 +282,7 @@ async def test_llm_call_stream_timeout_after_output_fails_the_turn_unless_asked(
     assert response.error_classification is not None
     assert response.error_classification.category == "network"
     assert response.error_classification.retryable is True
-    assert response.content == "partial"
+    assert response.content == "Error calling LLM (network): TimeoutError"
 
 
 class _ApiError(Exception):
@@ -330,7 +331,6 @@ async def test_llm_call_stream_error_delta_is_not_rendered_as_a_token() -> None:
     assert response.error_classification is classification
 
 
-async def test_llm_call_stream_does_not_reconnect_after_emitting_deltas() -> None:
 def _half_then_error(verdict: ErrorClassification | None) -> list[ChatDelta]:
     """A stream that said something, then reported its failure as a delta."""
     return [
@@ -426,6 +426,7 @@ async def test_an_unclassified_error_delta_after_output_is_classified_and_spent(
     assert response.error_classification.retryable is False
 
 
+async def test_llm_call_stream_does_not_reconnect_after_emitting_deltas() -> None:
     """Reconnecting a stream that already emitted deltas would duplicate them in
     the caller's UI, so a partially-streamed failure is not retried — it
     propagates, which is what makes the turn fail (N-TURNFAILED)."""
@@ -607,9 +608,14 @@ async def test_llm_call_stream_first_byte_timeout_keeps_its_record() -> None:
     assert "120.4s" in (response.content or "")
 
 
-async def test_llm_call_stream_mid_answer_stall_still_keeps_the_words() -> None:
-    """The other side of that change: after output, the content stays the words
-    the reader already saw, not the error text."""
+async def test_llm_call_stream_mid_answer_stall_reports_the_failure_not_the_words() -> None:
+    """An error response's content has one meaning: the account of the failure.
+
+    It used to carry the words that had streamed instead, so a reader of the
+    content could not tell a diagnosis from half an answer and had to consult the
+    retry setting to guess which one it held. What streamed is the caller's --
+    the turn buffers it from the delta callback and files it as the assistant
+    message it was -- so nothing is lost by saying here what went wrong."""
 
     class _StallAfterOutput:
         classify_error = LLMProvider.classify_error
@@ -629,14 +635,16 @@ async def test_llm_call_stream_mid_answer_stall_still_keeps_the_words() -> None:
         _recovery_limits=RecoveryLimits(llm_retry_after_output=True),
     )
     call = AgentLoop._llm_call_stream.__get__(fake_self)
+    seen: list[str] = []
 
-    async def on_delta(_text: str) -> None:
-        return None
+    async def on_delta(text: str) -> None:
+        seen.append(text)
 
     response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
 
+    assert seen == ["half an ans"], "the words still reach the watcher as they arrive"
     assert response.finish_reason == "error"
-    assert (response.content or "") == "half an ans"
+    assert (response.content or "") == "Error calling LLM (network): TimeoutError"
 
 
 async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:

@@ -322,16 +322,16 @@ async def stream_llm_call(
             if rendered() and not retry_after_output:
                 raise
             # Classified from the live exception rather than a fresh
-            # TimeoutError, and its text kept when nothing was streamed: a
-            # first-byte timeout says which bound it was and how long it waited,
-            # and a stall before the first chunk leaves an empty buffer -- so
-            # throwing both away left the loop logging an error whose message was
-            # the empty string, which is how fifteen minutes of silence came to be
-            # recorded as nothing at all.
+            # TimeoutError: a first-byte timeout says which bound it was and how
+            # long it waited, and throwing that away left the loop logging an
+            # error whose message was the empty string, which is how fifteen
+            # minutes of silence came to be recorded as nothing at all. The words
+            # that had streamed are not the content here -- a failed call's
+            # content is the account of the failure, and the caller keeps its own
+            # copy of what the reader already saw.
             classification = provider.classify_error(exc)
-            streamed = "".join(content_buf)
             return LLMResponse(
-                content=streamed or format_llm_error(exc, classification),
+                content=format_llm_error(exc, classification),
                 finish_reason="error",
                 error_classification=classification,
                 usage=final_usage or {},

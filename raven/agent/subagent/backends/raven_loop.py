@@ -616,12 +616,14 @@ class RavenLoopBackend:
                     **generation_kwargs(provider),
                 )
                 if response.finish_reason == "error" and not response.has_tool_calls:
-                    # The stream ended before anything deliverable arrived
-                    # (``stream_llm_call`` hands that back as an error reply rather
-                    # than raising, for the loop that owns a ladder). Its text is a
-                    # diagnostic, not the answer. The failed call's tokens were still
-                    # spent -- a cut mid-thought is 11-15k reasoning tokens -- so they
-                    # are billed before the reply is replaced.
+                    # An error reply has two sources: a stream that died before
+                    # anything deliverable arrived (still retryable), or one that
+                    # died after rendering, whose retry ``stream_llm_call`` has
+                    # already spent so the same words are not drawn twice. Either
+                    # way its text is a diagnostic, not the answer. The failed
+                    # call's tokens were still spent -- a cut mid-thought is 11-15k
+                    # reasoning tokens -- so they are billed before the reply is
+                    # replaced.
                     activity.note_usage(response.usage)
                     verdict = response.error_classification
                     if verdict is None and (classify := getattr(provider, "classify_error", None)) is not None:

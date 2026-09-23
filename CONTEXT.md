@@ -641,7 +641,8 @@ those are emitted by the Spine worker, not a runner.
 
 **AnswerlessTurnError**:
 The exception a runner raises to say the turn it ran ended with no answer and that its message is
-already the report a reader should see — the model call the loop gave up on, in the loop's own words.
+already the report a reader should see — the model call the loop gave up on, in the provider's words,
+or the loop's when the provider gave none.
 `describe_failure` passes its text through unchanged, and the `turn_ended` marker that says so is
 filed before the failure leaves the loop.
 _Avoid_: conflating AnswerlessTurnError with `TurnFailed`, the lifecycle event the Spine worker
