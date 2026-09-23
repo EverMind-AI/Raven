@@ -124,8 +124,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>宋代居家美学（成本约 0.80 美元）</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>古希腊如何被漂白（成本约 0.80 美元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于宋代居家美学的演示文稿（成本约 5.5 元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于古希腊如何被漂白的演示文稿（成本约 5.5 元）</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7bf450bb-3d5c-4d4a-826a-e5a06344d489"><img src="https://github.com/user-attachments/assets/7bf450bb-3d5c-4d4a-826a-e5a06344d489" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
@@ -139,8 +139,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>流行音乐如何被制造出来（成本约 0.80 美元）</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>抽象艺术的一百年（成本约 0.80 美元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于流行音乐如何被制造出来的演示文稿（成本约 5.5 元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于百年抽象艺术的演示文稿（成本约 5.5 元）</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
@@ -154,8 +154,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>六个智能体编排框架横向对比</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>参数扫描：编写、运行、绘图</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于六个智能体编排框架横向对比的海报</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于参数扫描的数据分析</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/db8ac2b2-bf18-4d18-a8f4-6d4904a7a0c4"><img src="https://github.com/user-attachments/assets/db8ac2b2-bf18-4d18-a8f4-6d4904a7a0c4" alt="Task graph: two Raven-Research nodes running in parallel into one Raven-Design node" width="100%"></a></p></td>
@@ -169,8 +169,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>光污染如何偷走野生动物的睡眠</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>GPS 为什么需要四颗卫星</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于光污染如何偷走野生动物睡眠的海报</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于 GPS 为什么需要四颗卫星的网站</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd"><img src="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd" alt="Task graph: three Raven-Research nodes in parallel into a Raven-Code node; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="83%"></a></p></td>
@@ -184,8 +184,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>用二分法测出一根梁的极限载荷</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>一次溃坝模拟，调到水相不再越界</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>梁的极限载荷仿真，用二分法测出</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>溃坝仿真，调到水相不再越界</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783"><img src="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a CalculiX cantilever plastic limit chain, 3 of 3 done in 5m21s, 1m28s and 4m11s" width="100%"></a></p></td>

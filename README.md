@@ -124,8 +124,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>Song-dynasty domestic aesthetics (costs ~$0.80)</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>How ancient Greece was whitewashed (costs ~$0.80)</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A presentation about Song-dynasty domestic aesthetics (costs ~$0.80)</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A presentation about how ancient Greece was whitewashed (costs ~$0.80)</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7bf450bb-3d5c-4d4a-826a-e5a06344d489"><img src="https://github.com/user-attachments/assets/7bf450bb-3d5c-4d4a-826a-e5a06344d489" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
@@ -139,8 +139,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>How pop music is manufactured (costs ~$0.80)</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>A century of abstract art (costs ~$0.80)</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A presentation about how pop music is manufactured (costs ~$0.80)</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A presentation about a century of abstract art (costs ~$0.80)</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
@@ -154,8 +154,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>Six agent-orchestration frameworks, compared</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>A parameter sweep, written, run and plotted</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A poster about how six agent-orchestration frameworks compare</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>Data analysis on a parameter sweep</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/db8ac2b2-bf18-4d18-a8f4-6d4904a7a0c4"><img src="https://github.com/user-attachments/assets/db8ac2b2-bf18-4d18-a8f4-6d4904a7a0c4" alt="Task graph: two Raven-Research nodes running in parallel into one Raven-Design node" width="100%"></a></p></td>
@@ -169,8 +169,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>How light pollution steals wildlife sleep</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>Why GPS needs a fourth satellite</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A poster about how light pollution steals wildlife sleep</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A website about why GPS needs a fourth satellite</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd"><img src="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd" alt="Task graph: three Raven-Research nodes in parallel into a Raven-Code node; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="83%"></a></p></td>
@@ -184,8 +184,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>A beam's limit load, found by bisection</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>A dam break, tuned until the water stays bounded</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A simulation that finds a beam's limit load by bisection</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A dam-break simulation, tuned until the water stays bounded</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783"><img src="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a CalculiX cantilever plastic limit chain, 3 of 3 done in 5m21s, 1m28s and 4m11s" width="100%"></a></p></td>
