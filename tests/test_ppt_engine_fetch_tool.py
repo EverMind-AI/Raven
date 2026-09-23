@@ -427,6 +427,18 @@ def test_an_svg_behind_a_declaration_and_comment_is_still_an_svg(monkeypatch) ->
         _sniff(exported)
 
 
+def test_an_svg_behind_a_byte_order_mark_is_still_an_svg(monkeypatch) -> None:
+    """Editors that save UTF-8 with a BOM put it before the root element; read as
+    text, it would be kept as path data in a document."""
+    from raven_ppt.tools import fetch
+    from raven_ppt.tools.fetch import _sniff
+
+    monkeypatch.setattr(fetch, "_load_cairosvg", lambda: (None, "no cairo here"))
+
+    with pytest.raises(ValueError, match="no cairo here"):
+        _sniff(b"\xef\xbb\xbf" + SVG)
+
+
 def _without_libcairo(monkeypatch) -> None:
     """`import cairosvg` pulls in cairocffi, which raises OSError -- not ImportError --
     when the native library is absent."""

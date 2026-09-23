@@ -427,10 +427,10 @@ def _sniff(payload: bytes) -> tuple[bytes, str, str]:
 SVG_WIDTH_PX = 1600
 
 
-# The first element of the document, past any XML declaration, comment or doctype.
-# An HTML page carrying inline `<svg>` icons is a page, not a picture, and never
-# reaches the rasteriser.
-_SVG_ROOT = re.compile(r"\A\s*(?:<\?.*?\?>\s*|<!--.*?-->\s*|<!doctype[^>]*>\s*)*<svg[\s>/]", re.I | re.S)
+# The first element of the document, past a byte-order mark and any XML
+# declaration, comment or doctype. An HTML page carrying inline `<svg>` icons is a
+# page, not a picture, and never reaches the rasteriser.
+_SVG_ROOT = re.compile(r"\A\ufeff?\s*(?:<\?.*?\?>\s*|<!--.*?-->\s*|<!doctype[^>]*>\s*)*<svg[\s>/]", re.I | re.S)
 
 
 def _load_cairosvg() -> tuple[ModuleType | None, str]:
