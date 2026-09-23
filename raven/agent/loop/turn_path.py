@@ -981,10 +981,16 @@ class TurnPathMixin:
             )
             # Every provider call ``decide`` makes reaches the provider seam, and
             # an Action may make more than one (best-of-n, a critic pass: see
-            # ActionRequest), so none of them is claimed here. The session is
-            # bound so the seam bills each to this turn's conversation, which a
-            # caller entering below ``run_turn`` has not bound for it.
-            with usage_context.bind(session_key) if session_key else contextlib.nullcontext():
+            # ActionRequest), so none of them is claimed here. The session and
+            # the sink are both bound so the seam bills each call to this turn's
+            # conversation and to this loop's own registry -- a caller entering
+            # below ``run_turn`` has bound neither for it, and the sink is bound
+            # per turn because a candidate generation is built while the one it
+            # replaces may still be serving.
+            with (
+                usage_record.bind(self.strategies),
+                usage_context.bind(session_key) if session_key else contextlib.nullcontext(),
+            ):
                 response = await self.harness.action.decide(
                     ActionRequest(
                         provider=self.provider,
@@ -1006,6 +1012,8 @@ class TurnPathMixin:
                         generation_overrides=gen_overrides,
                     )
                 )
+                # Read inside the bind: the count belongs to it and ends with it.
+                recorded_at_seam = usage_record.recorded_inbound()
             # Assigned, not latched: the fact this carries is that the turn's
             # own last word was cut, so a call that recovers clears it. Latching
             # would report a cut to a reader whose question is what the turn
@@ -1028,12 +1036,10 @@ class TurnPathMixin:
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
             usage_snapshot = self._build_usage_snapshot(response, call_model, session_key or "")
-            # When the seam reports to this loop's own registry it has already
-            # recorded every call behind this response, and the row here would
-            # be a second copy of one of them. Reporting elsewhere or nowhere (a
-            # test, an embedder), it recorded nothing this registry hears, and
-            # this row is the only one.
-            if not usage_record.hears(self.strategies):
+            # A call behind this response was recorded at the seam and this row
+            # would be a second copy of one of them; with no sink bound (a test,
+            # an embedder) nothing was recorded and this row is the only one.
+            if not recorded_at_seam:
                 await self.strategies.after_llm_call(
                     {
                         "content": response.content,

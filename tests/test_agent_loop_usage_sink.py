@@ -626,9 +626,10 @@ async def test_a_delegating_turn_costs_what_it_delegated(workspace):
 
 @pytest.mark.asyncio
 async def test_a_turn_is_billed_once_while_the_provider_seam_listens_too(workspace):
-    """Production installs the loop's own registry at the provider seam, so the
-    seam and the loop hear the same call. The loop's row is the one kept -- it
-    carries the turn's session and spend -- and the seam stays out of it."""
+    """Production installs the loop's own registry at the provider seam as well
+    as binding it for the turn, so the seam and the loop hear the same call. The
+    seam's row is the one kept, under the turn's session, and the loop adds
+    none."""
     tracker = UsageTracker(persist=False)
     registry = StrategyRegistry([tracker])
     usage_record.install(registry.after_llm_call)
@@ -647,6 +648,31 @@ async def test_a_turn_is_billed_once_while_the_provider_seam_listens_too(workspa
     assert billed.cost_usd == pytest.approx(0.005)
     assert tracker.total.calls == 2
     assert sink["cost_usd"] == pytest.approx(0.005)
+
+
+@pytest.mark.asyncio
+async def test_a_serving_generation_is_billed_alone_after_a_candidate_installs(workspace):
+    """A candidate generation's assembly installs its registry process-wide
+    before it is known to be usable, and the generation it would replace goes
+    on serving. That generation's turn is billed to its own registry only: the
+    seam used to record it into the candidate's, and the loop, no longer
+    matching the installed sink, recorded it again into its own."""
+    serving_tracker = UsageTracker(persist=False)
+    serving = StrategyRegistry([serving_tracker])
+    candidate_tracker = UsageTracker(persist=False)
+    usage_record.install(StrategyRegistry([candidate_tracker]).after_llm_call)
+    agent = _costing_agent(
+        workspace,
+        [_asks_for("list_dir", 0.002, path="."), _says("done", 0.003)],
+        strategies=serving,
+    )
+    sink: dict = {}
+
+    await _turn(agent, sink)
+
+    assert agent.provider.calls == 2
+    assert serving_tracker.total.calls == 2, "each call once, to the generation that made it"
+    assert candidate_tracker.total.calls == 0, "the candidate billed nothing it did not make"
 
 
 class _BestOfTwoAction(DefaultAction):

@@ -478,9 +478,8 @@ class _SplitStreamProvider(_DirectProvider):
 
 
 def _listening() -> UsageTracker:
-    tracker = UsageTracker(persist=False)
-    usage_record.install(StrategyRegistry([tracker]).after_llm_call)
-    return tracker
+    """A tracker the seam reports to for the length of one block."""
+    return UsageTracker(persist=False)
 
 
 async def test_a_direct_provider_call_is_billed_once_to_the_bound_session():
@@ -490,7 +489,7 @@ async def test_a_direct_provider_call_is_billed_once_to_the_bound_session():
     tracker = _listening()
     provider = _DirectProvider()
 
-    with usage_context.bind("heartbeat"):
+    with usage_record.bind(StrategyRegistry([tracker])), usage_context.bind("heartbeat"):
         await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}], model="direct/model")
 
     assert provider.calls == 1
@@ -506,7 +505,8 @@ async def test_a_wrapped_provider_is_billed_at_the_outer_call_only():
     inner = _DirectProvider()
     lazy = LazyProvider(lambda: inner, "direct/model", GenerationSettings())
 
-    await lazy.chat_with_retry(messages=[{"role": "user", "content": "hi"}])
+    with usage_record.bind(StrategyRegistry([tracker])):
+        await lazy.chat_with_retry(messages=[{"role": "user", "content": "hi"}])
 
     assert inner.calls == 1
     assert tracker.total.calls == 1
@@ -518,9 +518,10 @@ async def test_a_call_its_caller_records_is_not_billed_twice():
     tracker = _listening()
     provider = _DirectProvider()
 
-    with usage_record.recorded_by_caller():
+    with usage_record.bind(StrategyRegistry([tracker])):
+        with usage_record.recorded_by_caller():
+            await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}])
         await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}])
-    await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}])
 
     assert provider.calls == 2
     assert tracker.total.calls == 1, "only the call made outside the claim"
@@ -532,7 +533,8 @@ async def test_a_stream_over_the_non_streaming_fallback_is_one_row_not_two():
     tracker = _listening()
     provider = _DirectProvider()
 
-    deltas = [d async for d in provider.chat_stream(messages=[{"role": "user", "content": "hi"}])]
+    with usage_record.bind(StrategyRegistry([tracker])):
+        deltas = [d async for d in provider.chat_stream(messages=[{"role": "user", "content": "hi"}])]
 
     assert deltas and provider.calls == 1
     assert tracker.total.calls == 1
@@ -545,7 +547,8 @@ async def test_a_stream_whose_usage_and_finish_arrive_apart_is_one_row():
     tracker = _listening()
     lazy = LazyProvider(lambda: _SplitStreamProvider(), "direct/model", GenerationSettings())
 
-    text = "".join([d.content or "" async for d in lazy.chat_stream(messages=[{"role": "user", "content": "hi"}])])
+    with usage_record.bind(StrategyRegistry([tracker])):
+        text = "".join([d.content or "" async for d in lazy.chat_stream(messages=[{"role": "user", "content": "hi"}])])
 
     assert text == "hello"
     assert tracker.total.calls == 1
@@ -557,39 +560,99 @@ async def test_an_error_that_reached_no_model_is_not_a_row():
     tracker = _listening()
     provider = _DirectProvider(LLMResponse(content="Error: connection refused", finish_reason="error"))
 
-    await provider.chat(messages=[{"role": "user", "content": "hi"}])
+    with usage_record.bind(StrategyRegistry([tracker])):
+        await provider.chat(messages=[{"role": "user", "content": "hi"}])
 
     assert tracker.total.calls == 0
 
 
 async def test_a_sink_that_fails_does_not_fail_the_call():
-    async def _broken(_response, _usage):
-        raise RuntimeError("disk full")
+    class _Broken:
+        async def after_llm_call(self, _response, _usage):
+            raise RuntimeError("disk full")
 
-    usage_record.install(_broken)
+        def __len__(self) -> int:  # the seam reads only this one method
+            return 1
+
     provider = _DirectProvider()
 
-    response = await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}])
+    with usage_record.bind(_Broken()):
+        response = await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}])
 
     assert response.content == "ok"
 
 
-async def test_the_assembly_installs_its_registry_at_the_seam(tmp_path: Path):
-    """``install_from_config`` is where production learns which registry hears
-    the calls the loop never sees; without it the seam records nothing."""
+async def test_a_call_is_billed_to_the_registry_the_caller_bound(tmp_path: Path):
+    """The assembly installs its registry as the default, for the callers the
+    loop never sees; a caller that binds a registry of its own is billed there
+    instead, because a generation is built while the one it replaces may still
+    be serving (see the swap test below)."""
     from raven.config.raven import TokenWiseConfig
     from raven.core.token_wise_stack import install_from_config
 
     provider = _DirectProvider()
     await provider.chat(messages=[{"role": "user", "content": "hi"}])
 
-    registry = install_from_config(TokenWiseConfig(), telemetry_dir=tmp_path)
+    default = install_from_config(TokenWiseConfig(), telemetry_dir=tmp_path)
     await provider.chat(messages=[{"role": "user", "content": "hi"}])
+    default_tracker = default.get("usage_tracker")
+    assert default_tracker is not None
+    assert default_tracker.total.calls == 1, "the call before assembly went nowhere; the one after is billed"
 
-    tracker = registry.get("usage_tracker")
-    assert tracker is not None
-    assert tracker.total.calls == 1, "the call before assembly went nowhere; the one after is billed"
+    bound = _listening()
+    with usage_record.bind(StrategyRegistry([bound])):
+        await provider.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert bound.total.calls == 1, "bound: the call is billed to the bound registry"
+    assert default_tracker.total.calls == 1, "and not to the default as well"
     rows = [
         json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
     ]
     assert [r["model"] for r in rows] == ["direct/model"]
+
+
+async def test_calls_made_in_tasks_spawned_under_a_bind_count_toward_it():
+    """An Action may fan out (best-of-n with ``gather``); each task copies the
+    context, so a counter held by value would stay at zero in the turn and the
+    loop would write its own row over calls the seam already recorded."""
+    import asyncio
+
+    tracker = _listening()
+    provider = _DirectProvider()
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        await asyncio.gather(*(provider.chat(messages=[{"role": "user", "content": "hi"}]) for _ in range(3)))
+        assert usage_record.recorded_inbound() == 3
+
+    assert tracker.total.calls == 3
+    assert usage_record.recorded_inbound() == 0, "the count ends with its bind"
+
+
+async def test_a_registry_swap_does_not_bill_one_call_to_both_registries(tmp_path: Path):
+    """Generation N+1's registry is built while N may still be serving: a
+    candidate that fails to assemble leaves N running, and a forced reload can
+    overlap N's shutdown grace. A process-wide sink would have N's next call
+    recorded by the seam into N+1's tracker, and then -- because N's loop goes on
+    recording its own row -- into N's as well, so one physical call landed in the
+    usage file twice."""
+    from raven.config.raven import TokenWiseConfig
+    from raven.core.token_wise_stack import install_from_config
+
+    new_registry = install_from_config(TokenWiseConfig(), telemetry_dir=tmp_path)
+    old_registry = install_from_config(TokenWiseConfig(), telemetry_dir=tmp_path)
+    new_tracker = new_registry.get("usage_tracker")
+    old_tracker = old_registry.get("usage_tracker")
+    assert new_tracker is not None and old_tracker is not None
+    provider = _DirectProvider()
+
+    # N is serving: its loop bound its own registry around the turn.
+    with usage_record.bind(old_registry):
+        # N+1 is built mid-flight (its registry now exists, and a process-wide
+        # install would have pointed the seam at it), and N+1's build then fails,
+        # so N keeps serving with its own binding still in force.
+        install_from_config(TokenWiseConfig(), telemetry_dir=tmp_path)
+        await provider.chat(messages=[{"role": "user", "content": "hi"}])
+        assert usage_record.recorded_inbound() == 1
+
+    assert old_tracker.total.calls == 1, "the serving generation's tracker billed the call"
+    assert new_tracker.total.calls == 0, "the candidate's tracker billed nothing"

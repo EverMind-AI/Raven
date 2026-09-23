@@ -10,7 +10,20 @@ own loop -- called a provider directly and were never billed anywhere.
 So the recording happens here instead, around the calls themselves:
 :func:`instrument` wraps every provider class's ``chat``, ``chat_with_retry``
 and ``chat_stream`` (``raven.providers.base.LLMProvider`` applies it to each
-subclass), and whatever sink :func:`install` was given hears each call once.
+subclass), and the sink bound for the calling context hears each call once.
+
+Which sink a call goes to is decided in two steps. A caller that *is* a
+generation binds its own registry for the calls it makes (:func:`bind`, entered
+by the loop for the turn it is about to run); everything else -- the heartbeat,
+the sentinel, consolidation, a session title, the judge -- reports to the
+process-wide default :func:`install` was given.
+
+The two-step is what keeps a generation swap honest. A candidate is built while
+the generation it replaces may still be serving (a candidate that later fails to
+assemble, or one overlapping its predecessor's shutdown grace), so the loop
+binds its own registry per turn rather than trusting whichever assembly ran
+last: the serving generation's turns are billed to the serving generation,
+throughout a build that fails.
 
 Once, in three senses:
 
@@ -26,8 +39,13 @@ Once, in three senses:
   here records it a second time. The turn loop does *not* do that: one Action
   decision may make several calls (best-of-n, a critic pass), and a claim over
   the whole decision would lose every call but the one returned. The seam
-  records each of them instead, and the loop checks :func:`hears` and skips its
-  own row when that would copy one of them.
+  records each of them instead, and the loop skips its own row while any call
+  behind it was recorded -- :func:`recorded_inbound`, which counts the calls
+  made under this context rather than comparing registries. A registry
+  comparison is what made a swap bill one call twice: the serving generation's
+  `after_llm_call` no longer matched a process-wide sink that a candidate build
+  had already replaced, so the call was recorded by the seam into the
+  candidate's tracker and again by the loop into its own.
 - **A stream is one row, recorded when it is exhausted.** Usage and the finish
   reason may arrive on different deltas, so neither alone is the trigger. The
   wrapper nearest the wire owns the stream: it marks the deltas it passes on,
@@ -39,10 +57,8 @@ A call that failed before reaching a model -- an error response carrying no
 usage -- is not recorded: nothing was spent, and a row of zeros would read as a
 cheap call. A call that raised has no response to record.
 
-Until :func:`install` is called nothing is recorded, which is what an entry
-point that assembles no runtime (``raven doctor``, a unit test) wants. The sink
-is process-wide by the same necessity as ``prompt_cache.set_ttl``: providers are
-rebuilt on a model switch, so nothing fixed at one construction survives.
+With no sink installed and none bound, nothing is recorded, which is what an
+entry point that assembles no runtime (``raven doctor``, a unit test) wants.
 """
 
 from __future__ import annotations
@@ -56,7 +72,17 @@ from loguru import logger
 
 Sink = Callable[[dict[str, Any], Any], Awaitable[None]]
 
+# The default sink, for callers that are not a generation (a heartbeat, the
+# sentinel), and the sink bound over it for the length of one turn.
 _sink: Sink | None = None
+_bound: ContextVar[Sink | None] = ContextVar("usage_sink", default=None)
+
+# How many calls have been recorded under the innermost ``bind``, for a caller
+# that records one of its own and needs to know whether the seam already did. A
+# box rather than an int so a call made in a task spawned under the bind (an
+# Action that fans out with ``gather``) counts toward it: the task copies the
+# context, and with it the box, not the number.
+_recorded: ContextVar[list[int] | None] = ContextVar("usage_recorded_calls", default=None)
 
 # True while an outer frame accounts for the model call being made: an outer
 # provider entry, or a caller that records the call itself.
@@ -67,7 +93,7 @@ _WRAPPED_MARK = "__usage_recorded_wrapper__"
 
 
 def install(sink: Sink | None) -> None:
-    """Send every unowned model call to ``sink``; ``None`` stops recording.
+    """Set the sink for callers that are not a generation; ``None`` clears it.
 
     ``sink`` takes the same ``(response, usage)`` pair a TokenStrategy's
     ``after_llm_call`` does, so a ``StrategyRegistry`` method is one.
@@ -76,13 +102,32 @@ def install(sink: Sink | None) -> None:
     _sink = sink
 
 
-def hears(registry: Any) -> bool:
-    """Whether the calls this module records reach ``registry``.
+@contextmanager
+def bind(registry: Any) -> Iterator[None]:
+    """Send this context's model calls to ``registry``, over the default.
 
-    True when the installed sink is that registry's own ``after_llm_call``,
-    which is what the runtime assembly installs for the loop it builds.
+    Entered by the loop for the turn it is about to run, so a generation's own
+    turns are billed to that generation however many candidates are being built
+    beside it.
     """
-    return _sink is not None and _sink == getattr(registry, "after_llm_call", None)
+    sink = getattr(registry, "after_llm_call", None)
+    sink_token = _bound.set(sink)
+    count_token = _recorded.set([0])
+    try:
+        yield
+    finally:
+        _bound.reset(sink_token)
+        _recorded.reset(count_token)
+
+
+def recorded_inbound() -> int:
+    """Model calls this module has recorded under the innermost :func:`bind`.
+
+    Read by a caller that records a call of its own to decide whether the seam
+    already did: >0 means the row it would write is a copy of one of these.
+    """
+    box = _recorded.get()
+    return box[0] if box else 0
 
 
 @contextmanager
@@ -107,13 +152,16 @@ def _snapshot(usage: dict[str, Any] | None, model: str | None) -> Any:
 
 
 async def _record(response: dict[str, Any], model: str | None) -> None:
-    sink = _sink
+    sink = _bound.get() or _sink
     if sink is None:
         return
     usage = response.get("usage")
     if response.get("finish_reason") == "error" and not usage:
         return
     try:
+        box = _recorded.get()
+        if box is not None:
+            box[0] += 1
         await sink(response, _snapshot(usage, model))
     except Exception as exc:  # noqa: BLE001 - accounting must never fail the call it accounts
         logger.warning("usage record failed for model={}: {}", model, exc)
@@ -206,4 +254,4 @@ def instrument(cls: type) -> None:
         setattr(cls, name, wrap(method))
 
 
-__all__ = ["hears", "install", "instrument", "recorded_by_caller"]
+__all__ = ["bind", "install", "instrument", "recorded_by_caller", "recorded_inbound"]
