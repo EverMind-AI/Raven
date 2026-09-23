@@ -91,7 +91,11 @@ Raven 的权限门管理自身注册表调用，不是外部 Agent 进程内每�
 
 - **入站 ACP：** Raven 可通过 `session/request_permission` 请求编辑器或宿主审批。
 - **出站 ACP：** Raven 无人值守客户端自动优先选择子 Agent 的 `allow_always` 或
-  `allow_once`；启用 Agent 不代表每个内部操作都有人审阅。
+  `allow_once`；启用 Agent 不代表每个内部操作都有人审阅。拒绝规则会传过去：请求中的
+  shell 命令命中你的 `deny` 规则或 `tools.exec.extraDenyPatterns` 时，Raven 选择子
+  Agent 的拒绝选项；Raven 自家 Agent（Raven-Code 等）的渲染配置也带上这些规则，不经
+  询问即拒绝。第三方 Agent 只在它发出请求的调用上受约束；新增的规则要等正在运行的
+  Raven Agent 下次启动才生效。ask 档和权限模式不会传递。
 - **CLI 和其他后端：** 检查启动命令、环境、工作目录及原生权限策略。宿主规则不会
   自动跨所有后端继承。
 - **A2A：** 共享 bearer token 接纳远程操作者。宿主工具门仍有效，但当前入站 A2A

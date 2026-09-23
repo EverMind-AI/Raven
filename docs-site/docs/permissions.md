@@ -108,7 +108,14 @@ might execute inside its process.
   `session/request_permission`.
 - **Outbound ACP:** Raven's unattended client automatically prefers the
   child's `allow_always` or `allow_once` option. Enabling this agent is not a
-  promise of human review for each internal operation.
+  promise of human review for each internal operation. Your refusals do
+  travel: a request whose shell command matches your `deny` rules or
+  `tools.exec.extraDenyPatterns` is answered with the child's reject option,
+  and Raven's own agents (Raven-Code and its siblings) carry those rules in
+  their rendered config, so they refuse such a call without asking. A
+  third-party agent is held only for what it asks about, and a rule you add
+  reaches an already running Raven agent when it is next launched. The ask
+  tier and the mode are not carried.
 - **CLI and other backends:** inspect their command, environment, working
   directory, and native permission policy. Host permission rules are not
   automatically inherited across every backend.

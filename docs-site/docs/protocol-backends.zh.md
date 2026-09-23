@@ -72,7 +72,8 @@ ACP client 使用可选功能前先协商。Prompt 等待期间并发处理请�
 无人回答和客户端断开。
 
 打包 schema fixtures 和 `tests/test_acp_schema.py` 检查帧形状。当前出站客户端
-自动批准对方提供的权限选项，集成应说明这一信任模型，不能承诺人工逐操作审批。
+自动批准对方提供的权限选项；但请求中的 `toolCall.rawInput.command` 被宿主拒绝规则
+命中时，改选拒绝选项。集成应说明这一信任模型，不能承诺人工逐操作审批。
 
 ## 安全集成 A2A { #integrate-a2a-safely }
 

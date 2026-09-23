@@ -2273,13 +2273,19 @@ statement about the agent right now.
 **Unattended Approval** (`raven/acp_client/permissions.py`):
 How raven answers an ACP Subagent's `session/request_permission`: it approves, choosing
 from the options the agent offered by their protocol `kind` (`allow_always`, then
-`allow_once`) and never by `optionId`, which is the agent's own vocabulary. There is no
-third answer - a dispatch has no operator and no surface that could render a prompt - and
-*not* answering is not one either: measured on `codex-acp`, any error to this request,
+`allow_once`) and never by `optionId`, which is the agent's own vocabulary. It never asks
+a person - a dispatch has no operator and no surface that could render a prompt - and
+*not* answering is no answer either: measured on `codex-acp`, any error to this request,
 including the `method not found` raven used to send, cancels the whole turn. Presets that
 take a launch-time never-ask setting carry it too, so the question is not asked at all.
 The same trust boundary the cli transport already ran under (`codex -a never`,
 `claude --permission-mode auto`), stated in one place instead of per command template.
+The one request it refuses is one naming a shell command (`toolCall.rawInput.command`,
+codex's `commandActions`) that the host's own deny rules refuse - the builtin list with
+`tools.exec.extraDenyPatterns`, or a `deny` entry in `permissions.tools`: refusing needs no
+operator, so it is answered with the agent's reject option. Raven's own products carry the
+same refusals in their rendered config (`product_render.inherit_host_denials`), because a call
+their own gate allows never reaches this handler.
 Distinct from what raven still refuses: `fs/read_text_file` and its siblings are declared
 unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
 that way.

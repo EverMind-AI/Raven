@@ -36,9 +36,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from raven.acp import redact
 from raven.acp.tool_kinds import locations, title_for, tool_kind
 from raven.acp.updates import notice_text, turn_failure_text
+from raven.security import redact
 
 # A replayed transcript is bounded by what a client can draw, not by what is
 # stored: a session with two thousand messages would otherwise emit two thousand

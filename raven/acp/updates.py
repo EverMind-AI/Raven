@@ -35,8 +35,8 @@ from urllib.parse import quote
 from loguru import logger
 
 from raven.acp import protocol
-from raven.acp.redact import redact, redact_value
 from raven.acp.tool_kinds import absolute_path, locations, title_for, tool_kind
+from raven.security.redact import redact, redact_value
 
 # Every event type ``RpcOutlet``, the spine sink, the DAG bridge and the cron
 # fan-out can put on a subscription. Pinned as a set so a new wire event fails
@@ -499,7 +499,7 @@ def _tool_call_update(payload: dict[str, Any], meta: dict[str, Any] | None) -> d
         # first can slice a credential so that it no longer matches the pattern
         # that would have caught it -- ``redact("token sk-ant-api")`` returns it
         # unchanged -- and then the head of it is published as ordinary text.
-        # The scan cap in :mod:`raven.acp.redact` is four times this one, so a
+        # The scan cap in :mod:`raven.security.redact` is four times this one, so a
         # preview of any length that reaches here is scanned whole or truncated
         # by that module with a notice of its own.
         scanned = redact(preview)

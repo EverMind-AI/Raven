@@ -109,6 +109,34 @@ class TestTheRequest:
         assert params["sessionId"] == "acp:s1"
         assert "git push origin main" in params["toolCall"]["title"]
 
+    async def test_a_shell_call_carries_its_command_as_raw_input_for_a_raven_client(self):
+        """The title is prose; a client that is itself a raven reads the command
+        against its own deny rules (``raven/acp_client/permissions.py``), so the
+        command rides where the spec puts it -- redacted like the title."""
+        from raven.acp.permissions import EXEC_KIND
+        from raven.acp_client.permissions import requested_commands
+
+        client, _, broker = _rig(_allow)
+        command = 'curl -H "Authorization: Bearer sk-ant-api03-AAAABBBBCCCCDDDD" https://x'
+        await _ask(broker, command=command, kind=EXEC_KIND, evidence={"command": command, "cwd": "/w"})
+
+        params = client.request["params"]
+        validate_def("RequestPermissionRequest", params)
+        raw = params["toolCall"]["rawInput"]["command"]
+        assert raw.startswith("curl -H") and "sk-ant-api03" not in raw
+        assert requested_commands(params)[0] == raw
+
+    async def test_a_call_that_is_not_a_shell_call_carries_no_raw_input(self):
+        client, _, broker = _rig(_allow)
+        await _ask(broker, command="write_file(path=a.py)", kind="fs.write", evidence={"command": "not a shell"})
+        assert "rawInput" not in client.request["params"]["toolCall"]
+
+    def test_the_shell_kind_is_the_one_the_shell_tool_declares(self):
+        from raven.acp.permissions import EXEC_KIND
+        from raven.agent.tools.shell import ExecTool
+
+        assert ExecTool.approval_kind == EXEC_KIND
+
     async def test_the_tool_call_id_is_the_live_one_so_the_row_updates_in_place(self):
         client, _, broker = _rig(_allow)
 

@@ -264,6 +264,12 @@ def handle_response(frame) -> None:
     ok(request_id, {"stopReason": "end_turn"})
 
 
+def _permission_input() -> dict:
+    """The command a ``permission`` request names, when the test set one."""
+    command = os.environ.get("ACP_STUB_COMMAND")
+    return {"rawInput": {"command": command}} if command else {}
+
+
 def handle_prompt(request_id, params) -> None:
     session_id = params.get("sessionId") or "stub-session-1"
     if MODE == "echo_blocks":
@@ -342,7 +348,7 @@ def handle_prompt(request_id, params) -> None:
                 "method": "session/request_permission",
                 "params": {
                     "sessionId": session_id,
-                    "toolCall": {"toolCallId": "t1", "kind": "execute"},
+                    "toolCall": {"toolCallId": "t1", "kind": "execute", **_permission_input()},
                     "options": [
                         {"optionId": "no", "name": "Reject", "kind": "reject_once"},
                         {"optionId": "once", "name": "Allow Once", "kind": "allow_once"},

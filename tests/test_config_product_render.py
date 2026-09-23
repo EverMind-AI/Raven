@@ -379,3 +379,111 @@ def test_acp_home_instance_tag_tells_same_named_homes_apart(tmp_path, monkeypatc
         tags.append(render._instance_tag())
     assert tags[0] != tags[1]
     assert all(tag.startswith("rhome-") for tag in tags)
+
+
+# --- inherit_host_denials: the host's refusals reach every product render ------
+
+
+def _exec_tier(tools: dict, command: str):
+    from raven.permissions.rules import user_tier
+
+    return user_tier("exec", {"command": command}, tools)
+
+
+def test_host_denials_merge_into_the_product_and_a_refusal_always_wins():
+    host = {
+        "permissions": {
+            "mode": "full",
+            "tools": {
+                "exec": {"curl *": "deny", "git *": "allow", "rm *": "ask"},
+                "web_fetch": "deny",
+                "write_file": "ask",
+            },
+        },
+        "tools": {"exec": {"extraDenyPatterns": [r"\bnc\b", "(", r"\bdd\b"]}},
+    }
+    config = {
+        "permissions": {"mode": "ask", "tools": {"exec": {"curl *": "allow", "ls *": "allow"}, "web_fetch": "allow"}},
+        "tools": {"exec": {"timeout": 600, "extraDenyPatterns": [r"\bdd\b"]}},
+    }
+
+    carried = render.inherit_host_denials(config, host)
+
+    assert config["permissions"] == {
+        "mode": "ask",
+        "tools": {"exec": {"curl *": "deny", "ls *": "allow"}, "web_fetch": "deny"},
+    }, "only refusals travel; the product's mode and its own allows stay"
+    assert config["tools"]["exec"] == {"timeout": 600, "extraDenyPatterns": [r"\bdd\b", r"\bnc\b"]}, (
+        "patterns are unioned, and one that does not compile is left behind"
+    )
+    assert carried == ["exec curl *", "web_fetch", r"\bnc\b"]
+    from raven.contracts.permissions import Tier
+
+    assert _exec_tier(config["permissions"]["tools"], "curl -s https://example.com") is Tier.DENY
+    assert _exec_tier(config["permissions"]["tools"], "ls -la") is Tier.ALLOW
+
+
+def test_a_product_exec_tier_becomes_the_fallback_beside_the_hosts_patterns():
+    from raven.contracts.permissions import Tier
+
+    config = {"permissions": {"tools": {"exec": "allow"}}}
+    render.inherit_host_denials(config, {"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+
+    tools = config["permissions"]["tools"]
+    assert tools["exec"] == {"*": "allow", "curl *": "deny"}
+    assert _exec_tier(tools, "curl x") is Tier.DENY
+    assert _exec_tier(tools, "make test") is Tier.ALLOW, "the product's own tier still answers everything else"
+
+
+def test_a_host_that_denies_a_whole_tool_denies_it_in_the_product():
+    config = {"permissions": {"tools": {"exec": {"ls *": "allow"}}}}
+    render.inherit_host_denials(config, {"permissions": {"tools": {"exec": "deny"}}})
+    assert config["permissions"]["tools"]["exec"] == "deny"
+
+    already = {"permissions": {"tools": {"exec": "deny"}}}
+    render.inherit_host_denials(already, {"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    assert already["permissions"]["tools"]["exec"] == "deny", "a whole-tool refusal is already the strictest"
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        {},
+        {"permissions": {"mode": "ask", "tools": {"exec": {"git *": "allow"}, "write_file": "ask"}}},
+        {"permissions": "garbage", "tools": {"exec": {"extraDenyPatterns": "not-a-list"}}},
+        {"tools": {"exec": {"extraDenyPatterns": ["("]}}},
+    ],
+)
+def test_a_host_with_nothing_to_refuse_leaves_the_render_untouched(host):
+    config = {"agents": {"defaults": {"model": "m"}}}
+    assert render.inherit_host_denials(config, host) == []
+    assert config == {"agents": {"defaults": {"model": "m"}}}, "no empty permissions block appears"
+
+
+def test_write_rendered_carries_the_hosts_denials(homed):
+    (homed / "config.json").write_text(
+        json.dumps(
+            {
+                "permissions": {"tools": {"exec": {"curl *": "deny"}}},
+                "tools": {"exec": {"extra_deny_patterns": [r"\bcurl\b"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    rendered = json.loads(render.write_rendered({"permissions": {"mode": "ask"}}, homed).read_text())
+    assert rendered["permissions"] == {"mode": "ask", "tools": {"exec": {"curl *": "deny"}}}
+    assert rendered["tools"]["exec"]["extraDenyPatterns"] == [r"\bcurl\b"], "either host spelling is read"
+
+
+LAUNCHERS = sorted(Path(__file__).resolve().parents[1].glob("agents/*/run.py")) + [
+    Path(__file__).resolve().parents[1] / "raven" / "templates" / "agents_scaffold" / "run.py"
+]
+
+
+@pytest.mark.parametrize("launcher", LAUNCHERS, ids=lambda p: p.parent.name)
+def test_every_launcher_writes_its_render_through_write_rendered(launcher):
+    """The host's refusals are merged in ``write_rendered``, so a launcher
+    that wrote its render any other way would ship a product without them."""
+    source = launcher.read_text(encoding="utf-8")
+    assert "render.write_rendered(" in source
+    assert ".config.rendered" not in source

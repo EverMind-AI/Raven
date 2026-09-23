@@ -36,13 +36,14 @@ from urllib.parse import unquote, urlparse
 
 from loguru import logger
 
-from raven.acp import protocol, redact
+from raven.acp import protocol
 from raven.acp.capabilities import ClientCapabilities, initialize_result
 from raven.acp.config_options import MODEL_OPTION_ID, model_option, set_model
 from raven.acp.modes import SessionModes, build_session_modes
 from raven.acp.replay import replay
 from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTranslator
 from raven.config import load_config
+from raven.security import redact
 
 # Methods in the stable manifest that raven does not serve yet. Answered with
 # method-not-found, which is the same answer an unknown name gets -- the
