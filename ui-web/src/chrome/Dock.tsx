@@ -93,7 +93,7 @@ function DockIn(): JSX.Element {
           <PermChip />
           <PermPopover />
         </span>
-        <span className="chip" id="envChip" hidden><span className="led" /><span id="envName">本机</span></span>
+        <span className="chip" id="envChip" hidden><span className="led" /><span id="envName">Local</span></span>
         <span className="meter" id="meter" />
         <CtxChip />
         {/* The sub-agent tier is a row of the picker this chip opens

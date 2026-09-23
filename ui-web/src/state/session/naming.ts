@@ -18,7 +18,7 @@
 
 import { draw as sessionDraw } from '../../features/rail/store'
 import { plainTitle } from '../../features/rail/title'
-import { t } from '../../i18n/t'
+import { I18N, t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
@@ -142,9 +142,18 @@ export function namingEnded(id: string, reason: string): void | Promise<void> {
   return namingDeclined(id)
 }
 
+/* Every spelling of the default title, not only the one this reader is in. A
+   conversation is created with the default the message catalogue gives whoever
+   created it and the string is what gets stored, so the same conversation read
+   in the other language carries a title that is still a default rather than a
+   name. The current language stays in the list for a message catalogue with no entry at
+   all, where `t` answers the key. */
+const unnamed = (): string[] => [t('gui.new_task'), ...Object.values(I18N.ui['gui.new_task'] ?? {})]
+  .filter((s): s is string => s != null)
+
 export function beginNaming(text: string): void {
   const s = sess(sessionCurrent())
-  if (!s || (s.title && s.title !== '新任务' && s.title !== t('gui.new_task'))) return
+  if (!s || (s.title && !unnamed().includes(s.title))) return
   if (!String(text || '').trim()) return
   const id = s.id
   /* Not capped here: how a title fits a row is the front end's own business and

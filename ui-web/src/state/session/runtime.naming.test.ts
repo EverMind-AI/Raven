@@ -4,18 +4,25 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
+import messages from '../../../../i18n/messages.json'
 import { fakeGateway, loadPart, looseQuery, moduleText } from '../../../scripts/module-harness.mjs'
 
 type Naming = typeof import('./naming')
 
 interface Row { id: string; title: string; naming?: boolean }
 
+/* Both spellings of the default title, read from the message catalogue rather
+   than typed here: the case below is about a title written under one language and
+   read under the other, and either one typed in would only agree with itself. */
+const NEW_TASK = (messages as { ui: Record<string, Record<string, string>> }).ui['gui.new_task']!
+
 /* The four naming verbs driven together: they only make sense that way, and
    each one on its own would only assert that it exists. */
-async function harness({ rows, current, titleCall }: {
+async function harness({ rows, current, titleCall, words }: {
   rows: Row[]
   current: string | null
   titleCall: (method: string, params?: unknown) => Promise<unknown>
+  words?: (key: string) => string
 }): Promise<Naming & { heading: HTMLElement; draws: string[] }> {
   document.body.innerHTML = '<h1 id="title"></h1>'
   const heading = document.getElementById('title') as HTMLElement
@@ -31,7 +38,8 @@ async function harness({ rows, current, titleCall }: {
         sess: (id: string) => rows.find((r) => r.id === id),
       },
       'src/i18n/t': {
-        t: (key: string) => key,
+        t: words ?? ((key: string) => key),
+        I18N: { ui: { 'gui.new_task': NEW_TASK } },
       },
       'src/lib/dom': {
         $: looseQuery(),
@@ -66,6 +74,21 @@ describe('the live naming block', () => {
 
     expect(rows[0]!.naming).toBeUndefined()
     expect(h.heading.classList.contains('skel')).toBe(false)
+  })
+
+  /* A conversation is created with the default title the message catalogue
+     spells in the language of whoever created it, and the title is stored.
+     Read back in the other language, that spelling is still the default and
+     not a name. */
+  it('names a conversation left at the default of the other language', async () => {
+    const rows: Row[] = [{ id: 's1', title: NEW_TASK.en! }]
+    const h = await harness({
+      rows, current: 's1', titleCall: async () => ({}), words: () => NEW_TASK.zh!,
+    })
+
+    h.beginNaming('please cut a desktop release')
+
+    expect(rows[0]!.naming).toBe(true)
   })
 
   it('fills the name in and clears the placeholder when the event lands', async () => {

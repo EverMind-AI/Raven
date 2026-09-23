@@ -2,6 +2,11 @@ import { t } from '../../i18n/t'
 
 import type { CronJob } from './types'
 
+/* The mark between two items of a list, which is a word of the language like
+   the items themselves: an ideographic comma reads as Chinese whatever it
+   holds together. */
+const sep = (): string => t('gui.cron.h.sep')
+
 /* What a schedule means, in words. The raw five-field expression stays in
    the editor for whoever writes one, but nobody should have to read it. */
 export function cronExprHuman(expr: string): string {
@@ -27,7 +32,7 @@ export function cronExprHuman(expr: string): string {
     day = dow
       .split(',')
       .map((d) => t('gui.cron.h.dow' + d))
-      .join('、')
+      .join(sep())
   } else return raw
   let time: string
   const mN = /^\d+$/.test(m)
@@ -41,7 +46,7 @@ export function cronExprHuman(expr: string): string {
     time = h
       .split(',')
       .map((x) => `${pad(x)}:${pad(m)}`)
-      .join('、')
+      .join(sep())
   } else if (hStep && mN) time = t('gui.cron.h.every_h', { n: hStep[1]! })
   else if (mStep && h === '*') time = t('gui.cron.h.every_m', { n: mStep[1]! })
   else {

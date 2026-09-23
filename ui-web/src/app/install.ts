@@ -395,7 +395,7 @@ export function installDevHooks(): void {
   const hooks = window as unknown as Record<string, unknown>
   // Previews the clarify sheet without spending a model turn
   // (window.__clarify({question, choices})).
-  hooks.__clarify = (p: unknown) => clarifyRequest(p || { request_id: 'dev', question: '预览', choices: ['A', 'B'] })
+  hooks.__clarify = (p: unknown) => clarifyRequest(p || { request_id: 'dev', question: 'Preview', choices: ['A', 'B'] })
 
   // The update row's version state only appears when a release is actually
   // newer, which never happens on a dev checkout (window.__upnote('ver', '0.1.11')),

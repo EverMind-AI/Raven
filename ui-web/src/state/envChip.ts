@@ -8,6 +8,6 @@
  */
 
 export function setRuntime(): void {
-  ;(document.getElementById('envName') as HTMLElement).textContent = '本机'
+  ;(document.getElementById('envName') as HTMLElement).textContent = 'Local'
   ;(document.getElementById('envChip') as HTMLElement).querySelector('.led')!.className = 'led'
 }

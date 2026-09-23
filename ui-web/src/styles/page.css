@@ -781,9 +781,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
     0 24px 56px -22px rgba(0, 0, 0, .3);
 }
 
-/* 更多 opens in place: its three rows are rail rows, indented one step under
-   the button that revealed them, so the group reads as part of the column it
-   belongs to rather than as a floating panel beside it. */
+/* The More group opens in place: its three rows are rail rows, indented one
+   step under the button that revealed them, so the group reads as part of the
+   column it belongs to rather than as a floating panel beside it. */
 /* The group unfolds into the list rather than beside it: its rows are .navi
    rows like the four above them -- same indent, same glyph slot, same lift when
    current -- so opening it lengthens one list instead of revealing a second,
