@@ -58,6 +58,13 @@ WebUI。
 ```bash
 raven web --stop
 raven upgrade
+```
+
+在 Linux 和 macOS 上，`raven upgrade` 会在前台完成安装后才返回。在原生 Windows 上，
+它会把安装交给一个独立的辅助进程并立即返回：请等它打印完成信息后再继续。然后再
+启动 Raven：
+
+```bash
 raven web
 ```
 

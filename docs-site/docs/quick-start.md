@@ -61,6 +61,14 @@ To update from the command line instead:
 ```bash
 raven web --stop
 raven upgrade
+```
+
+On Linux and macOS `raven upgrade` runs the install in the foreground and
+returns when it is done. On native Windows it hands the install to a separate
+helper and returns at once; wait for the helper's completion message before
+going on. Then start Raven again:
+
+```bash
 raven web
 ```
 
