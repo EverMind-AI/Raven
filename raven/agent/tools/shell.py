@@ -6,6 +6,7 @@ dispatched. What stays here is the tool's own integrity boundary -- the
 operator's allowlist and the workspace fence -- and the execution itself.
 """
 
+import asyncio
 import fnmatch
 import os
 import re
@@ -271,7 +272,9 @@ class ExecTool(Tool):
                 task = background_exec.start(command, cwd=cwd, env=bg_env)
             except OSError as exc:
                 return f"Error starting background command: {exc}"
-            return background_exec.start_note(task)
+            # The note waits up to a second to see whether the command died at once;
+            # on the loop's thread that wait would stall every other turn with it.
+            return await asyncio.to_thread(background_exec.start_note, task)
 
         # Use `is None` check — `timeout or default` would treat timeout=0 as falsy.
         effective_timeout = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
