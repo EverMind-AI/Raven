@@ -2,9 +2,15 @@
 
 exports[`the attachment tray > keeps its rendered shape 1`] = `
 "div.att
-  span.nm
-  span.sz
-  button.rm"
+  span.cp-ik
+    svg
+      path
+      path
+      path
+    button.rm
+      svg
+        path
+  span.nm"
 `;
 
 exports[`the queue rows > keeps its rendered shape 1`] = `

@@ -1,3 +1,5 @@
+import { Loading03Icon } from '@hugeicons/core-free-icons'
+
 import { SEND, SEND_PX, SEND_STROKE } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
@@ -184,8 +186,13 @@ export const hasAtts = (): boolean => get().atts.length > 0
    different sizes and stroke weights while each held its own numbers. */
 export const ICON_SEND = `<svg width="${SEND_PX}" height="${SEND_PX}" viewBox="0 0 24 24" fill="none"`
   + ` stroke="currentColor" stroke-width="${SEND_STROKE}" aria-hidden="true"><path d="${SEND}"/></svg>`
-const ICON_STOP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
-  + '<rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>'
+const ICON_STOP = '<svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true">'
+  + '<rect width="10" height="10" rx="2"/></svg>'
+/* The turn has been sent and nothing has come back yet: the design's spinner
+   (HugeIcons loading-03), turning in place of the stop square. */
+const ICON_SENDING = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+  + ' stroke-width="1.5" stroke-linecap="round" aria-hidden="true">'
+  + Loading03Icon.map(([, a]) => `<path d="${(a as { d: string }).d}"/>`).join('') + '</svg>'
 
 /* The send/stop button. Written imperatively rather than rendered: it is one
    static element in page.html that half the page reaches by id, and the whole
@@ -201,14 +208,17 @@ export function goPaint(): void {
   const b = el<HTMLButtonElement>('go')
   if (!b) return
   if (turn.busy() && turn.cancellable()) {
+    const sending = turn.phase() === 'sending'
     b.disabled = false
     b.classList.add('halt')
-    b.innerHTML = ICON_STOP
+    b.dataset.state = sending ? 'sending' : 'stop'
+    b.innerHTML = sending ? ICON_SENDING : ICON_STOP
     b.setAttribute('aria-label', t('gui.stop'))
     return
   }
   b.disabled = !(ta && ta.value.trim()) && !hasAtts()
   b.classList.remove('halt')
+  delete b.dataset.state
   b.innerHTML = ICON_SEND
   b.setAttribute('aria-label', t('gui.send'))
 }

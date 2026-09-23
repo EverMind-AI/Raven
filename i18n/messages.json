@@ -4091,6 +4091,10 @@
       "en": "Naming this session",
       "zh": "正在命名这个会话"
     },
+    "gui.sess.more": {
+      "en": "More",
+      "zh": "更多"
+    },
     "gui.sess.pin": {
       "en": "Pin to top",
       "zh": "固定到顶部"

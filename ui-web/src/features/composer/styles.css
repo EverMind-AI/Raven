@@ -156,3 +156,14 @@
 .cp-ask .opt .cp-rec + .cp-box { margin-left: 8px; }
 .cp-ask .cp-hint { font-size: 11.5px; color: var(--faint); margin-top: 2px; }
 .cp-ask .foot .cp-back { margin-right: auto; }
+
+/* A staged file's type badge, and the remove button that takes its slot while
+   the pointer is on the tag (ComposerPage.tsx, AttChip). */
+.cp-ik { position: relative; display: grid; place-items: center; width: 14px; height: 14px; flex: none; color: var(--muted); }
+.cp-ik svg { display: block; }
+.cp-ik .rm {
+  position: absolute; inset: 0; display: none; place-items: center; padding: 0;
+  color: var(--muted); background: none;
+}
+.cp-ik .rm:focus-visible { display: grid; }
+.cp-ik .rm:hover { color: var(--composer-ink); background: none; }

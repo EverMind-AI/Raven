@@ -267,7 +267,7 @@ const LEGACY_LOCAL = {
      vocabulary, shared with the popovers beside it. */
   model: 4,
   onboard: 0,
-  rail: 11,
+  rail: 10,
   settings: 0,
   /* Up one the same way: `.chev` was shared with the schedules island's run
      list, whose rows carry a prefixed stamp and note now instead of the

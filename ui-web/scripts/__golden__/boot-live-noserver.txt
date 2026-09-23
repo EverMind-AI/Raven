@@ -4,22 +4,33 @@ div.app[data-rail=on]
     div.railtop
       span.wordmark
         svg
-          rect
-          path
-          circle
-          ellipse
-          ellipse
-          circle
-          circle
-          path
-          path
+          g
+            rect
+            rect
+            path
+            path
+            path
+            circle
+            circle
+            circle
+            circle
+            circle
+            path
+            rect
+            rect
+          defs
+            lineargradient#rvm_r_0_g
+              stop
+              stop
+            clippath#rvm_r_0_c
+              rect
       button#railBtn.ghost-ic.tipdn
         svg
-          rect
+          path
           path
       button#findBtn.ghost-ic.tipdn
         svg
-          circle
+          path
           path
     nav.rail-nav
       button#newBtn.navi.newrun
@@ -28,14 +39,17 @@ div.app[data-rail=on]
         span
       button#agentsBtn.navi
         svg
-          rect
-          rect
-          path
+          g
+            path
+            path
+            path
+            path
         span
     div#findBox.find
-      svg.ic
-        circle
-        path
+      span.ic
+        svg
+          path
+          path
       input#sfind
       button#sclr.clr
     div#list.list
@@ -48,7 +62,7 @@ div.app[data-rail=on]
       button#meBtn.me
         span.av.anon
           svg
-            circle
+            path
             path
         span.who
           span.n
@@ -79,15 +93,26 @@ div.app[data-rail=on]
         div#brand
           span.mk
             svg
-              rect
-              path
-              circle
-              ellipse
-              ellipse
-              circle
-              circle
-              path
-              path
+              g
+                rect
+                rect
+                path
+                path
+                path
+                circle
+                circle
+                circle
+                circle
+                circle
+                path
+                rect
+                rect
+              defs
+                lineargradient#rvm_r_1_g
+                  stop
+                  stop
+                clippath#rvm_r_1_c
+                  rect
           span.wl
         div.dock
           div#sheetRack.sheets
@@ -125,8 +150,9 @@ div.app[data-rail=on]
                   circle.fg
               button#modelChip.chip.model
                 span#modelName
-                svg.chrome-model-caret
-                  path
+                span.chrome-model-caret
+                  svg
+                    path
               button#go.go
                 svg
                   path
@@ -167,7 +193,7 @@ div.app[data-rail=on]
         div#wsBody.ws-body
 button#railShow.ghost-ic.tipdn
   svg
-    rect
+    path
     path
 section#extAgentsPage.page[data-open=false]
   header

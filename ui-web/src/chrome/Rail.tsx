@@ -6,9 +6,11 @@
  * What is here is the page's own furniture: elements the document was served with, rendered
  * by the page's root now.
  *
- * Every element below is a transcription -- tag, id, class, data-*, role, aria,
- * the svg path data and the text exactly as page.html spelled them, attributes
- * in the same order -- and src/test/__golden__/region-app.txt is what says so.
+ * Every element below began as a transcription -- tag, id, class, data-*, role,
+ * aria and the text exactly as page.html spelled them, attributes in the same
+ * order -- and src/test/__golden__/region-app.txt is what holds the shape. The
+ * glyphs are the page's icon set now (components/Icon.tsx), not page.html's
+ * hand-drawn paths.
  * The column itself is here too now: src/App.tsx renders this region inside the
  * one portal it makes at the body.
  *
@@ -35,8 +37,10 @@
  * document, so a value it never changes is a value it never writes again.
  */
 
+import { LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
 import { useSyncExternalStore } from 'react'
 
+import { AgentsGlyph, Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
 import { open as openExtAgents } from '../features/extAgents/store'
 import { open as openSettings } from '../features/settings/store'
@@ -69,9 +73,7 @@ function RailTop(): JSX.Element {
         aria-label={lang.attr('gui.collapse_rail')}
         onClick={() => rail.set(false)}
       >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-          <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M9.5 4.5v15" />
-        </svg>
+        <Icon icon={LayoutAlignLeftIcon} stroke={1.8} />
       </button>
       <button
         className="ghost-ic tipdn"
@@ -81,9 +83,7 @@ function RailTop(): JSX.Element {
         aria-label={lang.attr('gui.search_sessions')}
         onClick={() => find.toggle()}
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-          <circle cx="11" cy="11" r="7" /><path d="M20 20l-4.3-4.3" />
-        </svg>
+        <Icon icon={Search01Icon} stroke={1.8} />
       </button>
     </div>
   )
@@ -109,11 +109,7 @@ const NAV_ROWS: ReadonlyArray<{
     button: 'agentsBtn',
     key: 'gui.nav.agents',
     open: () => openExtAgents(),
-    icon: (
-      <>
-        <rect x="3.5" y="4" width="7" height="7" rx="1.6" /><rect x="13.5" y="13" width="7" height="7" rx="1.6" /><path d="M10.5 7.5h3.5a3 3 0 0 1 3 3v2.5" />
-      </>
-    ),
+    icon: <AgentsGlyph />,
   },
 ]
 
@@ -123,16 +119,12 @@ function RailNav(): JSX.Element {
   return (
     <nav className="rail-nav">
       <button className="navi newrun" id="newBtn">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
-          <path d="M12 5v14M5 12h14" />
-        </svg>
+        <Icon icon={PlusSignIcon} />
         <span>{t('gui.new_task')}</span>
       </button>
       {NAV_ROWS.map((row) => (
         <button className="navi" id={row.button} key={row.button} onClick={row.open}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-            {row.icon}
-          </svg>
+          {row.icon}
           <span>{t(row.key)}</span>
         </button>
       ))}
@@ -155,9 +147,7 @@ function FindRow(): JSX.Element {
   return (
     <div className="find" id="findBox" hidden={!s.open}>
       {' '}
-      <svg className="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-        <circle cx="11" cy="11" r="7" /><path d="M20 20l-4.3-4.3" />
-      </svg>
+      <span className="ic"><Icon icon={Search01Icon} size={14} /></span>
       {' '}
       <input
         id="sfind"
@@ -196,8 +186,7 @@ function RailFoot(): JSX.Element {
            for, not the one row that has to stay legible at a glance. */}
       <button className="me" id="meBtn" aria-label={lang.attr('gui.nav.set')} onClick={() => void openSettings()}>
         <span className="av anon">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" />
-            <path d="M12 3v2.2M12 18.8V21M4.6 7.8l1.9 1.1M17.5 15.1l1.9 1.1M4.6 16.2l1.9-1.1M17.5 8.9l1.9-1.1M3 12h2.2M18.8 12H21" /></svg>
+          <Icon icon={Settings02Icon} />
         </span>
         <span className="who">
           <span className="n">{t('gui.nav.set')}</span>

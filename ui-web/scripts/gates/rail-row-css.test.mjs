@@ -41,7 +41,7 @@ describe('the rail row CSS contract', () => {
        session leaves the ROW focused -- `.sess:focus-within` hid the stamp
        there, while the actions, which answer to focus inside `.quick`, stayed
        away. The session you had just opened was the one row in the rail
-       carrying no time, with 48px of nothing where it had been.
+       carrying no time, with a gap of nothing where it had been.
 
        Read off the stylesheet because this is a cascade fact: jsdom does no
        layout and computes no :focus-within, so the component test cannot see
@@ -52,7 +52,7 @@ describe('the rail row CSS contract', () => {
     expect(hideStamp[0]).toContain('.sess:has(.quick:focus-within) .w');
     /* The room made for them moves on the same condition, or the title reflows
        without the buttons arriving. */
-    const padTitle = css.split('\n').filter((l) => /^\.sess.*\.t \{ padding-right: 48px/.test(l));
+    const padTitle = css.split('\n').filter((l) => /^\.sess.*\.t \{ padding-right: \d+px/.test(l));
     expect(padTitle).toHaveLength(1);
     expect(padTitle[0]).not.toContain('.sess:focus-within');
     expect(padTitle[0]).toContain('.sess:has(.quick:focus-within) .t');
@@ -67,12 +67,12 @@ describe('the rail row CSS contract', () => {
        own left padding carries the indent the glyph used to occupy -- and the
        empty-group note lines up with the label rather than with the caret it no
        longer sits behind. Equality is the assertion: either one drifting alone
-       is the bug. The heading sits on the session rows' own left edge now, so
-       the shared number is 10 rather than 23, and the row's shorthand has three
-       parts instead of four. */
-    const grpPad = /\n\.list \.grp \{[^}]*padding: 17px (\d+)px 4px/.exec(css);
+       is the bug. The heading sits on the session rows' own left edge, and its
+       vertical rhythm is margin now (the heading is a 28px box with a hover
+       ground of its own), so its shorthand carries the inset alone. */
+    const grpPad = /\n\.list \.grp \{[^}]*padding: 0 (\d+)px;/.exec(css);
     expect(grpPad).toBeTruthy();
-    const emptyPad = /\n\.grp-empty \{[^}]*padding: 3px 10px 5px (\d+)px/.exec(css);
+    const emptyPad = /\n\.grp-empty \{[^}]*padding: 3px \d+px 5px (\d+)px/.exec(css);
     expect(emptyPad).toBeTruthy();
     expect(grpPad[1]).toBe(emptyPad[1]);
   });

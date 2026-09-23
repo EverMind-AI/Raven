@@ -47,6 +47,7 @@
  * with them because a portal can only append: rendered from here it would land
  * after #noJs instead of between the two.
  */
+import { LayoutAlignLeftIcon } from '@hugeicons/core-free-icons'
 import { useEffect, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
@@ -59,6 +60,7 @@ import { SheetRack } from './chrome/SheetRack'
 import { Tooltip } from './chrome/Tooltip'
 import { UpgradeShade } from './chrome/UpgradeShade'
 import { WsPane } from './chrome/WsPane'
+import { Icon } from './components/Icon'
 import { t } from './i18n/t'
 import * as confirm from './state/confirm'
 import * as detail from './state/detail'
@@ -278,9 +280,7 @@ function RailShow(): JSX.Element {
       aria-label={lang.attr('gui.expand_rail')}
       onClick={() => rail.set(true)}
     >
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-        <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M9.5 4.5v15" />
-      </svg>
+      <Icon icon={LayoutAlignLeftIcon} stroke={1.8} />
     </button>
   )
 }
