@@ -89,7 +89,7 @@ const ACT_HUGE: Record<string, IconSvgElement> = {
   use_skill: Wrench01Icon,
   exec: DocumentCodeIcon,
   write_file: PencilEdit01Icon, edit_file: PencilEdit01Icon,
-  web_fetch: InternetIcon, deep_research: InternetIcon,
+  web_fetch: InternetIcon,
 }
 
 function ActIco({ name, bad }: { name: string; bad?: boolean }): ReactElement {
