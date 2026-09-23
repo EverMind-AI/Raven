@@ -10,7 +10,7 @@
  * de-dups by, because a provider's list mixes ids added by hand with ids the
  * vendor reports.
  */
-import { cleanup, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import * as store from '../features/model/store'
@@ -109,5 +109,19 @@ describe('the model chip', () => {
     store.setCurrent('my-model')
     mount()
     expect(name()).toBe('My Model')
+  })
+})
+
+describe('the model chip, to a screen reader', () => {
+  it('says whether the picker it opens is up', () => {
+    install([{ id: 'openrouter', name: 'OpenRouter', on: true, models: ['my-model'], configured: ['my-model'] }])
+    store.setCurrent('my-model')
+    mount()
+    const chip = (): HTMLElement => document.getElementById('modelChip')!
+    expect(chip().getAttribute('aria-expanded')).toBe('false')
+    act(() => store.open(chip()))
+    expect(chip().getAttribute('aria-expanded')).toBe('true')
+    act(() => store.close())
+    expect(chip().getAttribute('aria-expanded')).toBe('false')
   })
 })

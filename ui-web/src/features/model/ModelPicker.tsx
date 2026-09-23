@@ -114,11 +114,17 @@ function Row({ p, m, current, owner, account }: { p: Provider; m: string; curren
      did before the pick started naming one. */
   const ticked = (!owner || owner.id === p.id) && sameModel(p, m, current)
   return (
-    <button className="row" title={store.short(m)} onClick={() => void store.choose(m, p.id)}>
+    <button
+      className="row"
+      role="radio"
+      aria-checked={ticked ? 'true' : 'false'}
+      title={store.short(m)}
+      onClick={() => void store.choose(m, p.id)}
+    >
       <span className="nm">{label(p, m)}</span>
       <ModelTags facts={p.labels?.[m]} />
       {account ? <span className="ct">{p.name}</span> : null}
-      {ticked ? <span className="tick">✓</span> : null}
+      {ticked ? <span className="tick" aria-hidden="true">✓</span> : null}
     </button>
   )
 }
@@ -285,7 +291,14 @@ function Pick(): JSX.Element {
   }
 
   return (
-    <div className="mpick" role="dialog" ref={box}>
+    /* The popover says what is being chosen: the slot's name where one opened it,
+       the word for a model otherwise. Through `t` and not `lang.attr`, which the
+       chip popovers name themselves with -- that one withholds the text until a
+       reader picks a language, because the markup it writes over is served with
+       words already. Nothing here is served: the picker does not exist until it
+       is opened, so there is no served text to leave standing and a reader who
+       never picks a language would get no name at all. */
+    <div className="mpick" role="dialog" aria-label={at.offer.title || t('gui.picker.title')} ref={box}>
       <ModelTagDefs />
       <div className="find">
         {at.offer.title ? <span className="model-slot">{at.offer.title}</span> : null}
@@ -318,7 +331,7 @@ function Pick(): JSX.Element {
       </div>
       <div className="models">
         {recents.length ? (
-          <div className="model-group model-recent">
+          <div className="model-group model-recent" role="radiogroup" aria-label={t('gui.picker.recent')}>
             <div className="model-group-hd"><span className="nm">{t('gui.picker.recent')}</span></div>
             {recents.map(({ p, m }) => <Row key={`${p.id}/${m}`} p={p} m={m} current={current} owner={currentProvider} account />)}
           </div>
@@ -330,8 +343,17 @@ function Pick(): JSX.Element {
              on the way. */
           if (q && !list.length) return null
           const { rows, more } = shown(p, list)
+          /* A set per account rather than one for the picker: a model listed by
+             an account is also listed under Recent, and both are marked, so one
+             set for the whole list would hold two checked members. */
           return (
-            <div className="model-group" key={p.id} data-provider={p.id}>
+            <div
+              className="model-group"
+              key={p.id}
+              data-provider={p.id}
+              role={rows.length ? 'radiogroup' : undefined}
+              aria-label={rows.length ? p.name : undefined}
+            >
               <div className="model-group-hd">
                 <ProviderIcon id={p.id} name={p.name} />
                 <span className="nm">{p.name}</span>

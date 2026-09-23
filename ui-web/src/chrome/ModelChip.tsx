@@ -72,6 +72,7 @@ export function ModelChip(): JSX.Element {
       id="modelChip"
       title={current}
       aria-haspopup="true"
+      aria-expanded={model.isOpen() ? 'true' : 'false'}
       onClick={() => {
         if (openModelsForMissingProvider()) return
         model.open(null)
