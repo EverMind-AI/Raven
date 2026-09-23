@@ -176,12 +176,16 @@ export const renderURL = (p: string): string => fileURL(p) + '&render=pdf'
 /* The first page of a deck as a picture, for a tile that has room for one
    picture and not for a viewer. */
 export const thumbURL = (p: string): string => fileURL(p) + '&render=thumb'
-/* The rendering framed without the browser viewer's own toolbar: the bar above
-   the frame is the one set of controls a deck gets. `version` rides along as a
-   query the gateway ignores, so a deck delivered again under the same path is
-   fetched again rather than shown from the frame's cache. */
-export const framedRenderURL = (p: string, version?: number | null): string =>
-  renderURL(p) + (version ? '&v=' + version : '') + '#toolbar=0&navpanes=0&view=FitH'
+/* One page of the rendering as a picture. The viewer draws a PDF this way
+   rather than framing the document: Safari does not draw a framed PDF served
+   under the sandbox policy these files carry, and that policy is what keeps an
+   agent's document away from the page's cookie and its socket, so it stays.
+   Pictures need no policy, look the same in every browser, and run nothing.
+
+   `version` rides along as a query the gateway ignores, so a deck delivered
+   again under the same path is fetched again rather than shown from cache. */
+export const pageURL = (p: string, n: number, version?: number | null): string =>
+  fileURL(p) + '&render=page&p=' + n + (version ? '&v=' + version : '')
 
 /* The same route, asked to serve the file under a policy that lets its scripts
    run. One view of one file: the route remembers nothing, so the next request
