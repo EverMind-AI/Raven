@@ -5,6 +5,7 @@ import { useEffect } from 'react'
 import { t } from '../../../i18n/t'
 import { show as toast } from '../../../state/toast'
 import { Card, Row, Rov, Seg, fmt } from '../Fields'
+import { UsageWait } from '../Skeletons'
 import * as store from '../store'
 import { isoDay, lastDays } from '../store'
 
@@ -170,7 +171,7 @@ export function Usage(): JSX.Element {
           </div>
         )}
       </Card>
-      {u === undefined && <Card><Row><Rov>{t('gui.settings.loading')}</Rov></Row></Card>}
+      {u === undefined && <UsageWait />}
       {u === null && <Card><Row><Rov>{t('gui.settings.usage.unavailable')}</Rov></Row></Card>}
       {u && (
         <>

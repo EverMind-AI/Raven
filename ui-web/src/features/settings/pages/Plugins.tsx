@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { KeyInput } from '../../../components/KeyInput'
 import { t } from '../../../i18n/t'
 import { Card, Chip, KeyLink, Row, Rov, Spin, Switch, Xrow } from '../Fields'
+import { KeyFieldsWait } from '../Skeletons'
 import * as store from '../store'
 
 import type { McpSnapshot } from '../../../rpc/generated'
@@ -71,7 +72,7 @@ function KeyPanel({ m }: { m: McpSnapshot }): JSX.Element {
       .catch(() => { if (live) setFields([]) })
     return () => { live = false }
   }, [m.name])
-  if (fields === null) return <Row><Rov>{t('gui.settings.loading')}</Rov></Row>
+  if (fields === null) return <KeyFieldsWait />
   if (!fields.length) return <Row><Rov>{t('gui.settings.plugins.no_credential')}</Rov></Row>
   return (
     <>

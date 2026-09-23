@@ -125,6 +125,22 @@ afterEach(() => {
 })
 
 describe('connections island', () => {
+  it('waits as the rows it becomes rather than as an empty column', async () => {
+    /* `!loaded && !rows.length` used to draw nothing, so the seconds before the
+       adapters answered looked exactly like "there are no channels". */
+    let land: ((r: ConnChannel[]) => void) | null = null
+    install([], { rows: () => new Promise((resolve) => { land = resolve }) })
+    render(<ConnectionsApp />, { container: document.getElementById('connectionsBody')! })
+    await act(async () => { void store.refresh(true); await Promise.resolve() })
+    const wait = side().querySelector('.two-pane-wait')!
+    expect(wait.getAttribute('aria-busy')).toBe('true')
+    expect(wait.querySelectorAll('.two-pane-row').length).toBe(7)
+
+    await act(async () => { land!([chan()]); await Promise.resolve() })
+    expect(document.querySelector('.two-pane-wait')).toBeNull()
+    expect(rowNamed('Slack')).toBeTruthy()
+  })
+
   it('lists every catalogue row, grouped by whether it is in service', async () => {
     install([
       chan({ on: true, running: true }),

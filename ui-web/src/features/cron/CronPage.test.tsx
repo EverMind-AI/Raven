@@ -125,6 +125,29 @@ async function pickFreq(id: string): Promise<void> {
 }
 
 describe('cron island', () => {
+  it('waits as the rows it becomes rather than as an empty column', async () => {
+    let land: ((r: CronJob[]) => void) | null = null
+    install([], { rows: () => new Promise((resolve) => { land = resolve }) })
+    render(<CronApp />, { container: document.getElementById('cronBody')! })
+    await act(async () => { void store.refresh(); await Promise.resolve() })
+    expect(side().querySelectorAll('.two-pane-wait .two-pane-row').length).toBe(7)
+
+    await act(async () => { land!([job()]); await Promise.resolve() })
+    expect(document.querySelector('.two-pane-wait')).toBeNull()
+  })
+
+  it('waits on the run history as the runs it becomes, not as an empty block', async () => {
+    let land: ((r: never[]) => void) | null = null
+    install([job()], { runs: () => new Promise((resolve) => { land = resolve }) })
+    await mount()
+    await act(async () => { rowText('morning digest').click() })
+    expect(document.querySelectorAll('.cronwait .cronrun').length).toBe(4)
+
+    await act(async () => { land!([]); await Promise.resolve() })
+    expect(document.querySelector('.cronwait')).toBeNull()
+    expect(screen.getByText('gui.cron.hist_none')).toBeTruthy()
+  })
+
   it('shows every row the source answers, grouped by whether it is on', async () => {
     install([job(), job({ id: 'j2', name: 'weekly report', on: false })])
     await mount()

@@ -18,6 +18,7 @@ import { Skills } from './pages/Skills'
 import { Tools } from './pages/Tools'
 import { Usage } from './pages/Usage'
 import { AddModelLayer } from './providers/AddModelPop'
+import { SectionWait } from './Skeletons'
 import * as store from './store'
 import { HOSTED, SECTIONS } from './store'
 import './styles.css'
@@ -108,7 +109,7 @@ export function SettingsApp(): JSX.Element {
       {/* Nothing for a hosted section: the box beside this one is its pane. */}
       {HOSTED[s.tab] || !Page ? null : (
         <div className="settings-panel" data-section={s.tab} key={s.epoch}>
-          {s.loaded ? <Page /> : <div className="settings-soonbox"><div className="settings-t">{t('gui.settings.loading')}</div></div>}
+          {s.loaded ? <Page /> : <SectionWait id={s.tab} />}
           <InlineErr text={s.err} />
         </div>
       )}

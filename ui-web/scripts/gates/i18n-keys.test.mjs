@@ -90,7 +90,6 @@ const ALIAS = {
   dur: 'cron',
   fold: 'transcript',
   freq: 'cron',
-  hub: 'memory',
   img: 'transcript',
   imode: 'subagents',
   imodel: 'subagents',

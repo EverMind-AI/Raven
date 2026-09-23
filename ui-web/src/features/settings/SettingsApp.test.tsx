@@ -40,11 +40,18 @@ describe('settings root', () => {
     const opening = store.open()
     await settle()
     expect(settingsDialog.open).toHaveBeenCalled()
-    expect(document.querySelector('.settings-soonbox')!.textContent).toBe('gui.settings.loading')
+    /* The section's own shape, not a box with a word in it: the general
+       page is a card of rows, and the wait is that card with bars where the
+       labels and controls will be. The word is still said, once, to a reader
+       who cannot see a bar. */
+    const wait = document.querySelector('.settings-wait')!
+    expect(wait.getAttribute('aria-label')).toBe('gui.settings.loading')
+    expect(wait.getAttribute('aria-busy')).toBe('true')
+    expect(wait.querySelectorAll('.settings-row .settings-wbar').length).toBe(6)
 
     land!()
     await act(async () => { await opening })
-    expect(document.querySelector('.settings-soonbox')).toBeNull()
+    expect(document.querySelector('.settings-wait')).toBeNull()
     expect(document.querySelectorAll('.settings-row').length).toBeGreaterThan(0)
   })
 

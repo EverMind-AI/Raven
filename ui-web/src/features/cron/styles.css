@@ -110,3 +110,26 @@
 .cronwhen[data-bad] select,
 input.cronname[data-bad],
 textarea.cronsay[data-bad] { border-color: var(--amber); }
+
+/* The history's own wait: the rows it becomes, with a bar where each line of
+   text will be (CronPage.tsx's RunsWait). A translucent wash rather than
+   --raised, which is what a hovered run paints -- a bar in it would vanish
+   under the pointer and reappear as the shimmer swept past. */
+.cronwait { display: flex; flex-direction: column; gap: 1px; }
+.cronwait .cronrun { cursor: default; }
+.cronwait .cronrun:hover { background: none; }
+.cronwait .cronrun > i { background: var(--line); }
+.cronwbar {
+  display: block;
+  height: 11px;
+  border-radius: 5px;
+  flex: none;
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--text) 7%, transparent) 30%,
+    color-mix(in oklab, var(--text) 15%, transparent) 50%,
+    color-mix(in oklab, var(--text) 7%, transparent) 70%);
+  background-size: 300% 100%;
+  animation: cron-wshine 1.3s linear infinite;
+}
+@keyframes cron-wshine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .cronwbar { animation: none; } }
