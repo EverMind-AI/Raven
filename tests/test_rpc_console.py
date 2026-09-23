@@ -398,6 +398,108 @@ async def test_a_rejected_edit_leaves_the_job_alone(tmp_path: Path) -> None:
     assert jobs[0]["name"] == "hourly"
 
 
+def _cron_job(loop):
+    """One recurring job on the stub loop's service, whose id keys its session."""
+    from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+    return loop.cron_service.add_job(
+        name="hourly",
+        schedule=CronSchedule(kind="every", every_ms=3_600_000),
+        message="ping",
+        channel="tui",
+        to="direct",
+    )
+
+
+def _cron_session(monkeypatch: pytest.MonkeyPatch, messages: list[dict]) -> None:
+    """Hand ``cron.runs`` one stored ``cron:<id>`` transcript.
+
+    The handler reaches for the shared session manager and the config from
+    inside the call, so both are replaced here rather than on an object.
+    """
+    monkeypatch.setattr("raven.config.loader.load_config", lambda: SimpleNamespace())
+    monkeypatch.setattr("raven.rpc.methods.session._safe_invoke_factory", lambda _factory: None)
+    monkeypatch.setattr(
+        "raven.session.resolve.manager_for",
+        lambda _loop, _config: SimpleNamespace(peek=lambda _key: SimpleNamespace(messages=messages)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_cron_runs_reads_a_failed_run_from_its_turn_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed cron turn leaves two assistant messages behind -- the half
+    answer that had already streamed, then the marker naming the failure -- and
+    both used to read as a reply, so the run was drawn ok and the job's error
+    was tacked on as a second, phantom run."""
+    loop = _cron_loop(tmp_path)
+    job = _cron_job(loop)
+    job.state.last_status = "error"
+    job.state.last_error = "RateLimitError: 429 slow down"
+    _cron_session(
+        monkeypatch,
+        [
+            {"role": "user", "content": "ping", "timestamp": "2026-09-22T10:00:00"},
+            {"role": "assistant", "content": "starting on it"},
+            {
+                "role": "assistant",
+                "content": "(turn failed: RateLimitError: 429 slow down)",
+                "turn_ended": {"status": "failed", "reason": "RateLimitError: 429 slow down"},
+            },
+        ],
+    )
+
+    runs = (await console_module.cron_runs({"id": job.id}, agent_loop_factory=lambda: loop))["runs"]
+
+    assert len(runs) == 1, "the failure is the run, not a row of its own"
+    assert runs[0]["ok"] is False
+    assert runs[0]["preview"] == "RateLimitError: 429 slow down"
+
+
+@pytest.mark.asyncio
+async def test_cron_runs_keeps_a_cancelled_runs_text_when_the_marker_names_no_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cancel files a marker with no reason, so what the reader gets is what
+    the turn had already said -- but the run is still not an ok one."""
+    loop = _cron_loop(tmp_path)
+    job = _cron_job(loop)
+    _cron_session(
+        monkeypatch,
+        [
+            {"role": "user", "content": "ping", "timestamp": "2026-09-22T10:00:00"},
+            {"role": "assistant", "content": "starting on it"},
+            {
+                "role": "assistant",
+                "content": "(turn cancelled by the user)",
+                "turn_ended": {"status": "cancelled"},
+            },
+        ],
+    )
+
+    runs = (await console_module.cron_runs({"id": job.id}, agent_loop_factory=lambda: loop))["runs"]
+
+    assert [(r["ok"], r["preview"]) for r in runs] == [(False, "starting on it")]
+
+
+@pytest.mark.asyncio
+async def test_cron_runs_still_reads_a_delivered_run_as_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = _cron_loop(tmp_path)
+    job = _cron_job(loop)
+    _cron_session(
+        monkeypatch,
+        [
+            {"role": "user", "content": "ping", "timestamp": "2026-09-22T10:00:00"},
+            {"role": "assistant", "content": "reminder delivered"},
+        ],
+    )
+
+    runs = (await console_module.cron_runs({"id": job.id}, agent_loop_factory=lambda: loop))["runs"]
+
+    assert [(r["ok"], r["preview"]) for r in runs] == [(True, "reminder delivered")]
+
+
 # ---------------------------------------------------------------------------
 # ext.list reports MCP from what this branch actually knows
 # ---------------------------------------------------------------------------

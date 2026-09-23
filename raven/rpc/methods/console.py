@@ -527,8 +527,9 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
 
     Every fire writes the job prompt as a user message into that session, so
     one user message = one run; a run counts as ok once its turn produced a
-    non-empty assistant reply. The job state's last_error names the newest
-    failure (per-run errors are not stored anywhere else).
+    non-empty assistant reply and did not then say it had failed. The job
+    state's last_error names the newest failure (per-run errors are not stored
+    anywhere else).
     """
     from datetime import datetime
 
@@ -566,6 +567,16 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
             cur = {"at_ms": _iso_ms(m.get("timestamp")), "ok": False, "preview": ""}
             runs.append(cur)
         elif role == "assistant" and cur is not None:
+            ended = m.get("turn_ended")
+            if isinstance(ended, dict):
+                # Read before the text, and the last word on this run: the marker
+                # is an assistant message too, and so is the half-answer that
+                # streamed before the turn broke, so both read as a reply here.
+                cur["ok"] = False
+                reason = str(ended.get("reason") or "").strip()
+                if reason:
+                    cur["preview"] = reason[:140]
+                continue
             text = _msg_text(m.get("content")).strip()
             if text:
                 cur["ok"] = True
