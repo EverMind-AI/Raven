@@ -76,6 +76,31 @@ async def test_legacy_channel_none_job_claimable_by_any_partition(tmp_path: Path
     assert job.id in fired
 
 
+async def test_a_channel_added_to_the_partition_makes_its_job_claimable(tmp_path: Path) -> None:
+    """``allowed_channels`` is read live, and a job refused once is not written off.
+
+    The gateway mutates this very set when a channel is enabled or disabled while it
+    runs, so a reminder addressed to that channel has to become claimable without a
+    restart -- and the per-job skip log must not double as a permanent verdict.
+    """
+    store = tmp_path / "jobs.json"
+    job_id = _add_due_tui_job(CronService(store, allowed_channels={"tui"}))
+
+    fired: list[str] = []
+
+    async def on_job(job) -> None:
+        fired.append(job.id)
+
+    svc = CronService(store, allowed_channels={"weixin"})
+    svc.on_job = on_job
+    await svc._process_due()
+    assert fired == []
+
+    svc.allowed_channels.add("tui")
+    await svc._process_due()
+    assert fired == [job_id]
+
+
 async def test_foreign_channel_skip_logs_once_per_job(tmp_path: Path) -> None:
     from loguru import logger
 
