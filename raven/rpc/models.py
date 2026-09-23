@@ -3784,6 +3784,18 @@ class ChannelsConfigureParams(_Strict):
 
 class ChannelsConfigureResult(_Strict):
     applied: bool
+    outcome: str | None = Field(
+        default=None,
+        description=(
+            "What the gateway did with the switch: started | already | stopped | absent | disabled | "
+            "deny_all | missing_dep | bad_config | unknown | no_manager, or 'unreachable' when no gateway "
+            "answered. Null when the write carried no switch."
+        ),
+    )
+    detail: str | None = Field(
+        default=None,
+        description="What to do about an outcome that is not a start, when there is something to say.",
+    )
 
 
 class FsEntry(_Strict):

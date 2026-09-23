@@ -5094,6 +5094,14 @@
           "properties": {
             "applied": {
               "type": "boolean"
+            },
+            "outcome": {
+              "description": "What the gateway did with the switch: started | already | stopped | absent | disabled | deny_all | missing_dep | bad_config | unknown | no_manager, or 'unreachable' when no gateway answered. Null when the write carried no switch.",
+              "type": "string"
+            },
+            "detail": {
+              "description": "What to do about an outcome that is not a start, when there is something to say.",
+              "type": "string"
             }
           },
           "required": [

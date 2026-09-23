@@ -4721,6 +4721,14 @@ export interface ChannelsConfigureParams {
  */
 export interface ChannelsConfigureResult {
   applied: boolean;
+  /**
+   * What the gateway did with the switch: started | already | stopped | absent | disabled | deny_all | missing_dep | bad_config | unknown | no_manager, or 'unreachable' when no gateway answered. Null when the write carried no switch.
+   */
+  outcome?: string;
+  /**
+   * What to do about an outcome that is not a start, when there is something to say.
+   */
+  detail?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

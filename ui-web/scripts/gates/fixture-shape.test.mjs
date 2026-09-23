@@ -204,6 +204,8 @@ const UNSENT = new Set([
   'model.save_key.provider.accepts_api_key', 'model.save_key.provider.api_base', 'model.save_key.provider.default_api_base', 'model.save_key.provider.docs', 'model.save_key.provider.key_env', 'model.save_key.provider.platforms', 'model.save_key.provider.protocol_overrides', 'model.save_key.provider.protocols',
   // model.set_protocol: 8
   'model.set_protocol.provider.accepts_api_key', 'model.set_protocol.provider.api_base', 'model.set_protocol.provider.default_api_base', 'model.set_protocol.provider.docs', 'model.set_protocol.provider.key_env', 'model.set_protocol.provider.platforms', 'model.set_protocol.provider.protocol_overrides', 'model.set_protocol.provider.protocols',
+  // channels.configure: 1 -- the sentence that comes with a refusal, and this world refuses nothing
+  'channels.configure.detail',
   // plug.auth: 1
   'plug.auth.mcp',
   // plug.install: 2
