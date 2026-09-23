@@ -2,7 +2,6 @@
 import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import catalogue from '../../../../i18n/messages.json'
 import { setTranslator } from '../../i18n/t'
 import { I18N } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
@@ -20,7 +19,7 @@ import * as tail from './tail';
 
 import type { ProseTarget } from '../../lib/prose'
 import type { WorkspaceSource } from '../workspace/types'
-import type { ArtifactRow, ArtifactsSource, HistoryMessage, SpawnListRow, TranscriptSource } from './types'
+import type { HistoryMessage, SpawnListRow, TranscriptSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -54,31 +53,31 @@ function wire(over: Partial<TranscriptSource> = {}): void {
   setSources({
     transcript: source,
     workspace: { shortPath: (p: string) => p, openPath: (p: string) => opened.push(p) } as unknown as WorkspaceSource,
-    artifacts: { changes: (n: number) => PRODUCED.get(n) || [] } as unknown as ArtifactsSource,
     /* The renderer reads this for what counts as an openable path. */
     prose: { pathOf: () => null, linkTargetOf: () => null },
   })
   document.body.innerHTML = '<div id="scroll"><div class="col" id="stage"></div></div>'
 }
 
-/* What the artifacts source hands back, per turn, and where a tile's open
-   lands when the page cannot browse (which is the fixture case). */
-const PRODUCED = new Map<number, unknown[]>()
+/* Where a tile's open lands when the page cannot browse (which is the fixture
+   case). */
 const opened: string[] = []
 
-/* A workspace-record row in the shape the panel's own hooks build: a write
-   carries what it wrote as `add` rows, plus a `gap` row for the tail past the
-   fortieth line. */
-const wrote = (name: string, body: string | null, kind = 'write'): unknown => {
-  const lines = body == null ? [] : body.split('\n')
-  const rows: unknown[] = lines.slice(0, 40).map((l, i) => ['add', l, null, i + 1])
-  if (lines.length > 40) rows.push(['gap', lines.slice(40)])
-  return {
-    key: `/w/${name}`, dir: '/w/', name, kind, add: lines.length, del: 0,
-    hunks: body == null ? [] : [{ rows, add: lines.length, del: 0 }], turn: 0,
-  }
-}
-const art = (name: string, head: string | null, _lines = 3): unknown => wrote(name, head)
+/* A deliver_files result's metadata, naming the files it delivered. */
+const manifest = (names: string[], missing = false, description = ''): Record<string, unknown> => ({
+  raven_delivery: {
+    files: names.map((name) => ({
+      path: `/w/${name}`, name, title: name, size: 12000,
+      media_type: name.endsWith('.png') ? 'image/png'
+      : name.endsWith('.pptx') ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+      : 'text/markdown',
+      download_path: `/files/download?token=${name}`,
+      description,
+      missing,
+    })),
+    invalid: [],
+  },
+})
 
 const $ = <T extends Element = HTMLElement>(sel: string): T | null => document.querySelector<T>(sel)
 const $$ = (sel: string): Element[] => [...document.querySelectorAll(sel)]
@@ -112,7 +111,6 @@ beforeEach(() => {
   store._resetForTests()
   tail._resetForTests()
   attachmentCache._resetForTests()
-  PRODUCED.clear()
   opened.length = 0
   wire()
 })
@@ -1709,23 +1707,24 @@ describe('a delegated result coming back', () => {
      must be filed under ITS turn, not its parent's. On replay the stored
      delegated entry is what opens that turn -- the rule this test pins. */
   it('files a delegated reaction under its own turn, not its parent\'s', () => {
+    vi.stubGlobal('fetch', () => new Promise(() => {}))
     const t0 = Date.now() - 60000
-    PRODUCED.set(1, [art('parent.md', '# Parent')])
-    PRODUCED.set(2, [art('delegated.md', '# Delegated')])
     act(() => {
       mount.history([
         { role: 'user', text: 'do the thing', timestamp: iso(t0) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['parent.md']) },
         { role: 'assistant', text: 'on it', timestamp: iso(t0 + 1000) },
         {
           role: 'user', text: fenced('done'), timestamp: iso(t0 + 9000),
           delegated: { kind: 'dag', label: 'run-7', status: 'ok', run_id: 'run-7' },
         },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['delegated.md']) },
         { role: 'assistant', text: 'the graph came back clean', timestamp: iso(t0 + 11000) },
       ])
     })
     const bars = [...document.querySelectorAll('.arts')].map((b) => ({
       at: b,
-      file: b.querySelector('.achange .cn')?.textContent,
+      file: b.querySelector('.atile .nm')?.textContent,
     }))
     /* Two turns, two bars, each with only its own file. */
     expect(bars.map((b) => b.file)).toEqual(['parent.md', 'delegated.md'])
@@ -1841,25 +1840,10 @@ describe('a delegated result coming back', () => {
   })
 })
 
-describe("the turn's delivered files and file changes", () => {
-  const manifest = (names: string[], missing = false, description = ''): Record<string, unknown> => ({
-    raven_delivery: {
-      files: names.map((name) => ({
-        path: `/w/${name}`, name, title: name, size: 12000,
-        media_type: name.endsWith('.png') ? 'image/png'
-        : name.endsWith('.pptx') ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
-        : 'text/markdown',
-        download_path: `/files/download?token=${name}`,
-        description,
-        missing,
-      })),
-      invalid: [],
-    },
-  })
+describe("the turn's delivered files", () => {
 
-  it('keeps explicit deliveries separate from every file the turn created or edited', async () => {
+  it('shows the files the turn delivered and no list of every file it touched', async () => {
     vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
-    PRODUCED.set(1, [wrote('report.md', '# Report', 'add'), wrote('helper.py', 'x = 1', 'edit')])
     act(() => {
       mount.history([
         { role: 'user', text: 'finish it', timestamp: iso(Date.now() - 9000) },
@@ -1870,14 +1854,8 @@ describe("the turn's delivered files and file changes", () => {
     await act(async () => { await Promise.resolve() })
     expect($('.deliveries')?.getAttribute('aria-label')).toBe('en:gui.arts.delivered')
     expect($('.deliveries .ahd')).toBeNull()
-    expect($('.changes .ahd .lb')?.textContent).toBe('en:gui.arts.changed')
     expect($$('.atile .nm').map((n) => n.textContent)).toEqual(['report.md'])
-    expect($$('.achange .cn').map((n) => n.textContent)).toEqual(['report.md', 'helper.py'])
-    expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.new', 'en:gui.arts.edit'])
-    expect($$('.achange .ct').map((n) => n.textContent)).toEqual(['MD', 'PY'])
-    expect($$('.achange .ca').map((n) => n.textContent)).toEqual(['+1', '+1'])
-    expect($$('.achange .cd').map((n) => n.textContent)).toEqual(['\u22120', '\u22120'])
-    expect($('.achanges')?.textContent).not.toContain('delivered')
+    expect($('.changes')).toBeNull()
     const turn = $('.turn.ai') as HTMLElement
     /* Flat: the reply's card, the turn's files under it as a block of their
        own, and the answer's footer under both. */
@@ -1885,72 +1863,6 @@ describe("the turn's delivered files and file changes", () => {
     expect(turn.querySelector('.msg.ai .arts')).toBeNull()
     expect(turn.querySelector('.answer .ansfoot')).toBeNull()
     expect(turn.querySelector(':scope > .ansfoot .turnmeta')?.textContent).toBeTruthy()
-  })
-
-  /* Only a write onto nothing is new. A whole-file write over a file that was
-     already there replaced its contents, and calling that a creation put "New"
-     on every rewrite the turn made. */
-  it('calls a whole-file write over an existing file edited, not new', async () => {
-    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
-    PRODUCED.set(1, [wrote('notes.md', 'redone', 'write')])
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'redo it', timestamp: iso(Date.now() - 9000) },
-        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
-      ])
-    })
-    await act(async () => { await Promise.resolve() })
-    expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.edit'])
-  })
-
-  /* A file a command left behind rather than a tool: the runtime listed the
-     directory around the command, so the row has a verdict and a count and no
-     contents at all. The card draws it like any other creation, and the head it
-     would preview is simply absent rather than an error. */
-  it('calls a file a command created new, with its count and nothing to preview', async () => {
-    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
-    PRODUCED.set(1, [{ key: '/w/tally.txt', dir: '/w/', name: 'tally.txt', kind: 'add',
-      add: 4, del: 0, hunks: [], turn: 0 }])
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'run it', timestamp: iso(Date.now() - 9000) },
-        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
-      ])
-    })
-    await act(async () => { await Promise.resolve() })
-    expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.new'])
-    expect($('.achange .ca')?.textContent).toBe('+4')
-    expect($('.achange .cd')?.textContent).toBe('\u22120')
-  })
-
-  /* The third verdict a change row can carry, and the one no tool argument can
-     state: the file is gone, so the card says so rather than calling the lines
-     it held an edit. */
-  it('calls a file the turn removed deleted, not edited', async () => {
-    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
-    PRODUCED.set(1, [wrote('scratch.md', 'gone', 'delete')])
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'drop it', timestamp: iso(Date.now() - 9000) },
-        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
-      ])
-    })
-    await act(async () => { await Promise.resolve() })
-    expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.deleted'])
-    expect($('.achange .ck')?.className).toBe('ck deleted')
-  })
-
-  /* The three words come off a lookup keyed by the verdict, which the
-     catalogue gate reads literal keys only and cannot follow -- a verdict whose
-     word was never added renders its own key at the reader with nothing red.
-     Written as a record of the union so a fourth verdict fails to compile until
-     it is listed. */
-  it('has a catalogue word for every verdict a change row can carry', () => {
-    const verdicts: Record<ArtifactRow['change'], string> = {
-      new: 'gui.arts.new', edit: 'gui.arts.edit', deleted: 'gui.arts.deleted',
-    }
-    const ui = (catalogue as { ui: Record<string, unknown> }).ui
-    expect(Object.values(verdicts).filter((key) => !(key in ui))).toEqual([])
   })
 
   /* A file a playbook or a sub-agent wrote landed on another lane, so this
@@ -2192,26 +2104,8 @@ describe("the turn's delivered files and file changes", () => {
     expect(again.length).toBe(steps.length + 1)
   })
 
-  it('does not leak a main-turn file change into an agent turn with the same number', () => {
-    PRODUCED.set(1, [wrote('main-only.md', '# Main only')])
-    const box = document.createElement('div')
-    document.body.append(box)
-    act(() => {
-      mount.agentStage(box, {
-        status: 'completed',
-        messages: [
-          { role: 'user', text: 'research it', timestamp: iso(Date.now() - 9000) },
-          { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
-        ],
-      }, { key: 'agent-1', reset: true })
-    })
-    expect(box.querySelector('.arts')).toBeNull()
-    expect(box.textContent).not.toContain('main-only.md')
-  })
-
-  it('shows a file the agent explicitly delivered without reading main-turn changes', async () => {
+  it('shows a file the agent explicitly delivered', async () => {
     vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
-    PRODUCED.set(1, [wrote('main-only.md', '# Main only')])
     const box = document.createElement('div')
     document.body.append(box)
     act(() => {
@@ -2226,8 +2120,6 @@ describe("the turn's delivered files and file changes", () => {
     })
     await act(async () => { await Promise.resolve() })
     expect(box.querySelector('.atile .nm')?.textContent).toBe('agent-final.pdf')
-    expect(box.textContent).not.toContain('main-only.md')
-    expect(box.querySelector('.changes')).toBeNull()
   })
 
   it('does not give a sub-agent card the conversation\'s files of the same turn', async () => {
@@ -2479,22 +2371,7 @@ describe("the turn's delivered files and file changes", () => {
     expect($$('.atile')).toHaveLength(3)
   })
 
-  it('shows four file changes by default and expands the remainder', () => {
-    PRODUCED.set(1, Array.from({ length: 7 }, (_, i) => wrote(`f${i}.md`, `# f${i}`, i % 2 ? 'edit' : 'write')))
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'seven', timestamp: iso(Date.now() - 9000) },
-        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
-      ])
-    })
-    expect($$('.achange')).toHaveLength(4)
-    const more = $('.changes .amore') as HTMLElement
-    expect(more.textContent).toBe('en:gui.arts.more {"n":"3"}')
-    act(() => { more.click() })
-    expect($$('.achange')).toHaveLength(7)
-  })
-
-  it('draws no closing block when the turn delivered and changed nothing', () => {
+  it('draws no closing block when the turn delivered nothing', () => {
     act(() => {
       mount.history([
         { role: 'user', text: 'just checking', timestamp: iso(Date.now() - 5000) },

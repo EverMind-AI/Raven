@@ -177,7 +177,6 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 @media(max-width:640px) {
 .settings-cut .settings-r {grid-template-columns:1fr; gap:4px}
 }
-footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; color:var(--faint); font-size:12.5px}
 .settings-tiles4 {display:grid; grid-template-columns:repeat(auto-fit,minmax(112px,1fr)); gap:1px; background:var(--line)}
 .settings-tl {background:var(--paper); padding:12px 14px}
 .settings-tl .settings-n {font-family:var(--disp); font-size:21px; font-weight:600; letter-spacing:-.02em; font-variant-numeric:tabular-nums; line-height:1.2}

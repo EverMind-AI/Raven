@@ -9,9 +9,9 @@ import { pane } from '../../state/wsPane'
 import * as dagNodes from '../dag/nodes'
 import * as deliveries from '../workspace/deliveries'
 
-import type { DeliveryRow, WsChange } from '../workspace/types'
+import type { DeliveryRow } from '../workspace/types'
 import type {
-  AnswerData, ArtifactRow, ArtifactsSource, ArtsData, AskData, CallData, CallHandle,
+  AnswerData, ArtsData, AskData, CallData, CallHandle,
   DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
   SpawnListRow, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
 } from './types'
@@ -25,45 +25,6 @@ import type {
  */
 
 const source = (): TranscriptSource => ds('transcript')
-
-/* Tolerated missing rather than thrown on: a page that has installed no
-   artifacts source has no products to show, and the bar is drawn from the same
-   boot sequence that installs it. */
-function artifactsSource(): ArtifactsSource {
-  try {
-    return ds('artifacts')
-  } catch {
-    return { changes: () => [] }
-  }
-}
-
-/* Every file this turn created or edited. The workspace record already owns
-   that classification and survives live/replay through the same tool rows. */
-export function artifactsOf(lane: Lane, turn: number): ArtifactRow[] {
-  if (!lane.main) return []
-  let rows: WsChange[] = []
-  try {
-    rows = artifactsSource().changes(turn) || []
-  } catch {
-    return []
-  }
-  return rows.filter(Boolean).map((c) => {
-    const shown = `${c.dir || ''}${c.name || ''}` || String(c.key || '')
-    const name = String(c.name || shown)
-    const dot = name.lastIndexOf('.')
-    return {
-      path: String(c.key || ''),
-      dir: String(c.dir || ''),
-      name,
-      ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : '',
-      lines: c.add || 0,
-      deleted: c.del || 0,
-      /* Only a write onto nothing is new: a whole-file write over a file that
-         was already there replaced its contents, which is an edit. */
-      change: c.kind === 'add' ? 'new' : c.kind === 'delete' ? 'deleted' : 'edit',
-    }
-  })
-}
 
 /* Not held here: the desk's shelf lists the same rows for the whole session, so
    the registry they live in is shared ground (workspace/deliveries.ts).
@@ -533,23 +494,24 @@ export function toggleDelivered(lane: Lane, seg: DeliveredData): void {
   bump(lane, seg)
 }
 
-/* The turn's products, as its closing line. Appended once the turn is over and
-   only when it produced something: a bar reading "0 products" is furniture the
-   reader learns to skip, and then skips on the turn that had some.
+/* The turn's deliveries, as its closing line. Appended once the turn is over and
+   only when it delivered something: a bar reading "0 products" is furniture the
+   reader learns to skip, and then skips on the turn that had some. The check
+   can be made here because every delivery is recorded off its tool result,
+   which always lands before the turn ends.
 
-   Nothing is copied in. The row list is read from the source when the tiles
-   draw, so a reload -- which rebuilds the workspace record from history -- and
-   a live turn cannot disagree about what a turn produced. */
+   Nothing is copied in. The row list is read from the registry when the tiles
+   draw, so a reload and a live turn cannot disagree about what a turn
+   delivered. */
 export function artifacts(lane: Lane, turn: number): void {
-  if (!artifactsOf(lane, turn).length && !deliveriesOf(lane, turn).length) return
+  if (!deliveriesOf(lane, turn).length) return
   push(lane, {
-    v: 0, id: nextId(), kind: 'arts', turn, deliveriesOpen: false, changesOpen: false,
+    v: 0, id: nextId(), kind: 'arts', turn, deliveriesOpen: false,
   } satisfies ArtsData)
 }
 
-export function toggleArts(lane: Lane, seg: ArtsData, section: 'deliveries' | 'changes'): void {
-  if (section === 'deliveries') seg.deliveriesOpen = !seg.deliveriesOpen
-  else seg.changesOpen = !seg.changesOpen
+export function toggleArts(lane: Lane, seg: ArtsData): void {
+  seg.deliveriesOpen = !seg.deliveriesOpen
   bump(lane, seg)
 }
 

@@ -105,6 +105,31 @@ describe('the confirm dialog', () => {
     expect(confirm.get().open).toBe(true)
   })
 
+  it('colours yes by what answering it does, clay unless told otherwise', () => {
+    render()
+    confirm.ask('Delete this?', '', 'Delete', () => {})
+    expect(el('cfYes').className).toBe('btn bad')
+    confirm.ask('Upgrade?', '', 'Upgrade', () => {}, 'primary')
+    expect(el('cfYes').className).toBe('btn key')
+    expect(el('cfNo').hidden).toBe(false)
+    expect(document.activeElement).toBe(el('cfNo'))
+  })
+
+  it('shows a notice with its one button, focused, and cancel out of sight', () => {
+    render()
+    const seen: string[] = []
+    confirm.ask('Busy', 'A turn is running.', 'Close', () => seen.push('yes'), 'notice')
+    expect(el('cfYes').className).toBe('btn')
+    expect(el('cfNo').hidden).toBe(true)
+    expect(document.activeElement).toBe(el('cfYes'))
+    /* The Escape chain still clicks the hidden cancel, and it still answers. */
+    el('cfNo').click()
+    expect(veil()).toBe('false')
+    expect(seen).toEqual([])
+    confirm.ask('Delete this?', '', 'Delete', () => {})
+    expect(el('cfNo').hidden).toBe(false)
+  })
+
   it('does not throw on a page without the sheet', () => {
     document.body.innerHTML = ''
     expect(() => confirm.ask('t', 'b', 'l', () => {})).not.toThrow()
