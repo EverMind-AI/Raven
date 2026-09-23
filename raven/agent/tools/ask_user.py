@@ -43,7 +43,7 @@ DEFAULT_TIMEOUT_S = 600.0
 _MAX_JSON_LAYERS = 3
 
 
-def _normalize_questions(raw: Any) -> list[dict[str, Any]]:
+def _normalize_questions(raw: Any, *, strict_json: bool = False) -> list[dict[str, Any]]:
     """Coerce the model's ``questions`` argument into the documented shape.
 
     Models routinely emit an array-typed argument as a JSON *string*, and a
@@ -53,7 +53,10 @@ def _normalize_questions(raw: Any) -> list[dict[str, Any]]:
     was plainly meant and drop what cannot be read, rather than trusting the
     declared schema.
     """
-    raw = _loads(raw)
+    try:
+        raw = _loads(raw, strict_json=strict_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"questions is not valid JSON: {exc}") from exc
     if isinstance(raw, dict):
         raw = [raw]
     if not isinstance(raw, list):
@@ -127,8 +130,8 @@ def _flagged(raw: Any) -> int | None:
     return None
 
 
-def _loads(raw: Any) -> Any:
-    """``json.loads`` for a string, unchanged for anything else, never raising.
+def _loads(raw: Any, *, strict_json: bool = False) -> Any:
+    """``json.loads`` for a string, unchanged for anything else; optionally report invalid JSON.
 
     The exception list is the point. ``json.loads`` answers deeply nested input
     with ``RecursionError``, which is not a ``ValueError``, so catching only
@@ -147,6 +150,10 @@ def _loads(raw: Any) -> Any:
             return raw
         try:
             parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            if strict_json:
+                raise
+            return raw
         except (TypeError, ValueError, RecursionError):
             return raw
         if parsed is raw:
@@ -415,7 +422,7 @@ class AskUserTool(Tool):
         params = dict(params)
         if "questions" in params:
             entries = []
-            for entry in _normalize_questions(params["questions"]):
+            for entry in _normalize_questions(params["questions"], strict_json=True):
                 entry = dict(entry)
                 if "options" in entry:
                     # A flag written on an option is the recommendation when the
@@ -450,7 +457,10 @@ class AskUserTool(Tool):
             return "Error: ask_user not configured (no question broker)"
         if not cid:
             return "Error: ask_user has no conversation context"
-        entries = _normalize_questions(questions)
+        try:
+            entries = _normalize_questions(questions, strict_json=True)
+        except ValueError as exc:
+            return f"Error: ask_user {exc}"
         if not entries:
             return "Error: ask_user requires at least one question"
 

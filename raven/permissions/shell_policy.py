@@ -1293,6 +1293,8 @@ class ShellCommandPolicy:
         if any(pattern.search(executable) for pattern in self._deny_patterns):
             return PolicyOutcome(CommandDecision.HARD_DENY, "deny_pattern")
         try:
+            if any(PurePath(argv[0]).name.lower() in {"format", "format.exe"} for argv in _iter_argv(executable)):
+                return PolicyOutcome(CommandDecision.HARD_DENY, "disk_format")
             if _matches_catastrophic_delete(executable):
                 return PolicyOutcome(CommandDecision.HARD_DENY, "catastrophic_delete")
             if _matches_windows_catastrophic_delete(executable):

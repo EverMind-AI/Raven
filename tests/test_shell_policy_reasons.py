@@ -174,3 +174,59 @@ async def test_an_unknown_reason_falls_back_rather_than_guessing(monkeypatch) ->
     assert result is not None
     assert "Command blocked by safety guard" in result.model_text
     assert "a_rule_from_the_future" not in result.model_text
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "curl -s 'https://en.wikipedia.org/w/api.php?action=query&format=json'",
+        'curl -s "https://en.wikipedia.org/w/api.php?action=query&format=json"',
+        "curl -s https://en.wikipedia.org/w/api.php?action=query&format=json",
+        r"curl -s https://example.com/?action=query\&format=json",
+        "echo ';format c:'",
+        'echo "&format c:"',
+        "printf '%s' '|format c:'",
+        "echo format c:",
+        "format=json echo ok",
+        "format-report c:",
+        "sh -c \"echo ';format c:'\"",
+    ],
+)
+def test_format_arguments_do_not_trigger_builtin_deny(command):
+    from raven.permissions.builtin import BUILTIN_DENY_PATTERNS, BuiltinRulings
+
+    policy = ShellCommandPolicy(deny_patterns=list(BUILTIN_DENY_PATTERNS))
+
+    assert policy.evaluate(command) is CommandDecision.ALLOW
+    assert BuiltinRulings().ruling("exec", {"command": command}) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "format c:",
+        "  FORMAT C:",
+        "format.exe c:",
+        '"format" c:',
+        "echo ready;format c:",
+        "echo ready&&format c:",
+        "echo ready||format c:",
+        "echo ready|format c:",
+        "echo ready&format c:",
+        "echo ready\nformat c:",
+        "sudo format c:",
+        "env MODE=test format c:",
+        "sh -c 'format c:'",
+    ],
+)
+def test_format_commands_remain_hard_denied(command):
+    from raven.permissions.builtin import BUILTIN_DENY_PATTERNS, BuiltinRulings
+
+    policy = ShellCommandPolicy(deny_patterns=list(BUILTIN_DENY_PATTERNS))
+    outcome = policy.classify(command)
+
+    assert outcome.decision is CommandDecision.HARD_DENY
+    assert outcome.reason_code == "disk_format"
+    ruling = BuiltinRulings().ruling("exec", {"command": command})
+    assert ruling is not None
+    assert "formats a disk" in ruling.reason
