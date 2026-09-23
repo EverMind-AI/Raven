@@ -267,7 +267,8 @@ const LEGACY_LOCAL = {
      vocabulary, shared with the popovers beside it. */
   model: 4,
   onboard: 0,
-  rail: 10,
+  /* Down one: an empty group is its heading alone, so `.grp-empty` is gone. */
+  rail: 9,
   settings: 0,
   /* Up one the same way: `.chev` was shared with the schedules island's run
      list, whose rows carry a prefixed stamp and note now instead of the

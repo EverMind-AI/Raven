@@ -247,7 +247,10 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
    eyebrow starts on the word the eye is looking for; the label's own x is held
    by the row's left padding instead (see `.list .grp` in styles/page.css). The
    cron and recent groups are permanent fixtures of the rail (rendered even
-   when empty); pinned only exists while something is pinned. */
+   when empty); pinned only exists while something is pinned. An empty group
+   is its heading alone: a plain label with no caret, press or focus stop, and
+   nothing under it, since there is nothing to fold open. A verb it carries
+   (the cron group's Manage) stays. */
 function Group({
   label,
   items,
@@ -268,6 +271,25 @@ function Group({
   busy: boolean
 }): JSX.Element | null {
   if (!items.length && !always) return null
+  const manage = action ? (
+    <button
+      className="grp-go"
+      onClick={e => {
+        e.stopPropagation()
+        action()
+      }}
+    >
+      {t('gui.rail.manage')}
+    </button>
+  ) : null
+  if (!items.length) {
+    return (
+      <div className="grp" data-empty="">
+        <span className="lab">{label}</span>
+        {manage}
+      </div>
+    )
+  }
   const folded = store.isFolded(gid)
   const open = store.isOpen(gid)
   // A long tail of old sessions buries the rail's other groups, so a group
@@ -292,21 +314,9 @@ function Group({
         <span className="car">
           <Icon icon={ArrowDown01Icon} />
         </span>
-        {action ? (
-          <button
-            className="grp-go"
-            onClick={e => {
-              e.stopPropagation()
-              action()
-            }}
-          >
-            {t('gui.rail.manage')}
-          </button>
-        ) : null}
+        {manage}
       </div>
-      {folded ? null : !items.length ? (
-        <div className="grp-empty">{t('gui.rail.none')}</div>
-      ) : (
+      {folded ? null : (
         <>
           {shown.map(s => (
             <Row key={s.id} s={s} cur={cur} busy={busy} />

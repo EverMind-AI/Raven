@@ -313,11 +313,29 @@ describe('rail island', () => {
 
   it('keeps the permanent groups on an empty list', () => {
     install({ rows: [], cur: null })
-    const host = mount()
-    expect(host.querySelectorAll('.grp-empty').length).toBe(2)
+    mount()
     expect(screen.getByText('gui.rail.from_cron')).toBeTruthy()
     expect(screen.getByText('gui.rail.recent')).toBeTruthy()
     expect(screen.queryByText('gui.rail.pinned')).toBeNull()
+  })
+
+  it('draws an empty group as its heading alone, a plain label keeping only its verb', () => {
+    install({ rows: [], cur: null })
+    const host = mount()
+    const heads = [...host.querySelectorAll<HTMLElement>('.grp')]
+    expect(heads.map(g => g.firstElementChild!.textContent)).toEqual(['gui.rail.from_cron', 'gui.rail.recent'])
+    for (const g of heads) {
+      expect(g.hasAttribute('data-empty')).toBe(true)
+      expect(g.getAttribute('role')).toBeNull()
+      expect(g.getAttribute('tabindex')).toBeNull()
+      expect(g.getAttribute('aria-expanded')).toBeNull()
+      expect(g.querySelector('.car')).toBeNull()
+    }
+    expect([...heads[0]!.children].map(c => c.className)).toEqual(['lab', 'grp-go'])
+    expect([...heads[1]!.children].map(c => c.className)).toEqual(['lab'])
+    expect([...host.children].map(c => c.className)).toEqual(['grp', 'grp'])
+    act(() => heads[1]!.click())
+    expect(store.isFolded('recent')).toBe(false)
   })
 
   it('holds skeleton rows for the live boot and swaps them for the list', () => {

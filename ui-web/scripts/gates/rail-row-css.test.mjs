@@ -62,21 +62,6 @@ describe('the rail row CSS contract', () => {
     expect(raise).toContain('.sess .quick:focus-within');
   });
 
-  it('leaves the group label where the caret used to put it', () => {
-    /* The caret now follows the label (features/rail/RailPage.tsx), so the row's
-       own left padding carries the indent the glyph used to occupy -- and the
-       empty-group note lines up with the label rather than with the caret it no
-       longer sits behind. Equality is the assertion: either one drifting alone
-       is the bug. The heading sits on the session rows' own left edge, and its
-       vertical rhythm is margin now (the heading is a 28px box with a hover
-       ground of its own), so its shorthand carries the inset alone. */
-    const grpPad = /\n\.list \.grp \{[^}]*padding: 0 (\d+)px;/.exec(css);
-    expect(grpPad).toBeTruthy();
-    const emptyPad = /\n\.grp-empty \{[^}]*padding: 3px \d+px 5px (\d+)px/.exec(css);
-    expect(emptyPad).toBeTruthy();
-    expect(grpPad[1]).toBe(emptyPad[1]);
-  });
-
   it('sizes the naming placeholder in pixels, once, for every row', () => {
     /* A percentage resolves against the title slot, and the slot's width
        depends on the neighbouring timestamp -- "yesterday" and a full date gave
