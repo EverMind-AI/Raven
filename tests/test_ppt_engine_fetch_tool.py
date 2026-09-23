@@ -367,20 +367,23 @@ SVG = (
 )
 
 
+def _needs_cairo() -> None:
+    from raven_ppt.tools.fetch import _load_cairosvg
+
+    module, missing = _load_cairosvg()
+    if module is None:
+        pytest.skip(f"rasterising an SVG needs the native cairo library: {missing}")
+
+
 def test_a_brand_mark_arrives_as_svg_and_is_kept_as_a_picture() -> None:
     """A logo saved as `.md` is a competitor analysis with no competitor's mark on it.
 
     Rasterising needs cairo's native library, which `cairosvg` cannot supply itself, so
-    this asserts the conversion only where the conversion is possible. The degraded path
-    is a case of its own below rather than a looser assertion here.
+    this asserts the conversion only where the conversion is possible. The skip goes
+    through the same loader the tool uses, so a Homebrew libcairo the plain import
+    cannot see no longer skips it. The degraded path is a case of its own below.
     """
-    try:
-        # Not `importorskip`: it catches ImportError only, and a missing libcairo
-        # surfaces as OSError from cairocffi -- which would error this test rather
-        # than skip it, the same trap the guard under test exists for.
-        import cairosvg  # noqa: F401
-    except (ImportError, OSError) as exc:
-        pytest.skip(f"rasterising an SVG needs the native cairo library: {exc}")
+    _needs_cairo()
     from raven_ppt.tools.fetch import _sniff
 
     payload, suffix, kind = _sniff(SVG)
@@ -389,50 +392,91 @@ def test_a_brand_mark_arrives_as_svg_and_is_kept_as_a_picture() -> None:
     assert payload.startswith(b"\x89PNG"), "python-pptx places rasters only"
 
 
-def test_an_svg_that_will_not_draw_is_still_the_text_it_is() -> None:
+def test_an_svg_that_will_not_draw_is_refused_not_kept_as_text() -> None:
+    _needs_cairo()
     from raven_ppt.tools.fetch import _sniff
 
-    payload, suffix, kind = _sniff(b"<svg this is not really an svg at all")
-
-    assert kind == "document"
-    assert payload == b"<svg this is not really an svg at all"
+    with pytest.raises(ValueError, match="SVG that would not draw"):
+        _sniff(b"<svg this is not really an svg at all")
 
 
-def test_the_other_three_kinds_come_back_byte_for_byte() -> None:
+def test_a_page_with_inline_svg_icons_is_a_page(monkeypatch) -> None:
+    """A page is not a picture because an icon sits near its top, and the rasteriser
+    is not asked about it -- a missing cairo must not refuse ordinary HTML."""
+    from raven_ppt.tools import fetch
     from raven_ppt.tools.fetch import _sniff
 
-    for blob, expected in (
-        (b"<html><body>hi</body></html>", ".html"),
-        (b"# a markdown note", ".md"),
-        (b"%PDF-1.4 trailer", ".pdf"),
-    ):
-        payload, suffix, _ = _sniff(blob)
-        assert suffix == expected
-        assert payload == blob
+    monkeypatch.setattr(fetch, "_load_cairosvg", lambda: pytest.fail("a page reached the rasteriser"))
+    page = b'<!doctype html><html><body><svg viewBox="0 0 1 1"><path d="M0 0"/></svg>hi</body></html>'
+
+    payload, suffix, kind = _sniff(page)
+
+    assert (payload, suffix, kind) == (page, ".html", "document")
 
 
-def test_a_machine_without_libcairo_keeps_the_svg_instead_of_failing(monkeypatch) -> None:
+def test_an_svg_behind_a_declaration_and_comment_is_still_an_svg(monkeypatch) -> None:
+    from raven_ppt.tools import fetch
+    from raven_ppt.tools.fetch import _sniff
+
+    monkeypatch.setattr(fetch, "_load_cairosvg", lambda: (None, "no cairo here"))
+    exported = (
+        b'<?xml version="1.0"?>\n<!-- Generator: Sketch -->\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN">\n' + SVG
+    )
+
+    with pytest.raises(ValueError, match="no cairo here"):
+        _sniff(exported)
+
+
+def _without_libcairo(monkeypatch) -> None:
     """`import cairosvg` pulls in cairocffi, which raises OSError -- not ImportError --
-    when the native library is absent, so the guard has to catch that too."""
+    when the native library is absent."""
     import builtins
     import sys
-
-    from raven_ppt.tools.fetch import _sniff
 
     real_import = builtins.__import__
 
     def no_libcairo(name, *args, **kwargs):
         if name == "cairosvg":
-            raise OSError("no library called 'cairo-2' was found")
+            raise OSError('no library called "cairo-2" was found\nno library called "cairo" was found')
         return real_import(name, *args, **kwargs)
 
     monkeypatch.delitem(sys.modules, "cairosvg", raising=False)
     monkeypatch.setattr(builtins, "__import__", no_libcairo)
 
-    payload, suffix, kind = _sniff(SVG)
 
-    assert kind == "document", "an SVG that cannot be drawn is still the text it is"
-    assert payload == SVG
+def test_a_machine_without_libcairo_refuses_the_svg_and_says_what_installs_it(monkeypatch) -> None:
+    """The SVG used to be kept as a `.md` of path data, with no figure id and no log
+    line, so a deck lost its logos while every fetch reported success."""
+    from loguru import logger
+
+    from raven.utils import cairo
+    from raven_ppt.tools.fetch import _sniff
+
+    _without_libcairo(monkeypatch)
+    logged: list[str] = []
+    sink = logger.add(logged.append, level="WARNING", format="{message}")
+    try:
+        with pytest.raises(ValueError) as refused:
+            _sniff(SVG)
+    finally:
+        logger.remove(sink)
+
+    said = str(refused.value)
+    assert 'no library called "cairo-2" was found' in said
+    assert 'cairo" was found' not in said, "one line of cairocffi's list, not all of it"
+    assert cairo.install_hint() in said
+    assert any("cairo could not be loaded" in line for line in logged), logged
+
+
+@pytest.mark.asyncio
+async def test_a_refused_svg_leaves_nothing_in_the_decks_sources(fetch, monkeypatch, tmp_path: Path) -> None:
+    _without_libcairo(monkeypatch)
+
+    body = await _run(fetch(SVG), url="https://example.com/mem0-logo.svg")
+
+    assert body["ok"] is False and "SVG" in body["error"]
+    sources_dir = Project(workspace=tmp_path, slug="tarvis").sources_dir
+    assert not sources_dir.exists() or not any(sources_dir.iterdir())
 
 
 @pytest.mark.asyncio

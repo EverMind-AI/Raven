@@ -33,11 +33,14 @@ import json
 import re
 import zipfile
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import httpx
+from loguru import logger
 
 from raven.contracts.tool import Tool
+from raven.utils import cairo
 from raven_ppt.contracts import Project
 from raven_ppt.services.ingest import sources
 from raven_ppt.services.template import bind, template_dir
@@ -424,25 +427,49 @@ def _sniff(payload: bytes) -> tuple[bytes, str, str]:
 SVG_WIDTH_PX = 1600
 
 
-def _rasterised_svg(payload: bytes, text: str) -> bytes | None:
-    """An SVG as PNG bytes, or None when this is not an SVG or cannot be drawn.
+# The first element of the document, past any XML declaration, comment or doctype.
+# An HTML page carrying inline `<svg>` icons is a page, not a picture, and never
+# reaches the rasteriser.
+_SVG_ROOT = re.compile(r"\A\s*(?:<\?.*?\?>\s*|<!--.*?-->\s*|<!doctype[^>]*>\s*)*<svg[\s>/]", re.I | re.S)
 
-    None rather than an error on a failure to convert: an SVG that will not
-    rasterise is still text, and the document branch below can still keep it.
+
+def _load_cairosvg() -> tuple[ModuleType | None, str]:
+    """`(cairosvg, "")`, or `(None, why)` when it cannot be imported.
+
+    `cairocffi` raises `OSError`, not `ImportError`, when the package is installed
+    and the native library is not, so both are caught. Its message lists every
+    name it tried, one per line; the first line is the one worth repeating.
     """
-    if "<svg" not in text[:4096].casefold():
-        return None
     try:
-        import cairosvg
-    except (ImportError, OSError):
-        # cairocffi raises OSError, not ImportError, when the native cairo library
-        # is missing under an installed cairosvg. Catching only the one leaves the
-        # other to end the fetch, and an SVG kept as text is the whole point here.
+        with cairo.libcairo_reachable():
+            import cairosvg
+    except (ImportError, OSError) as exc:
+        return None, (str(exc).splitlines() or [type(exc).__name__])[0]
+    return cairosvg, ""
+
+
+def _rasterised_svg(payload: bytes, text: str) -> bytes | None:
+    """An SVG as PNG bytes, or None when this is not an SVG.
+
+    An SVG that cannot be drawn is refused rather than kept as text. Kept, it was
+    saved as a `.md` of path data that the ingest read as a document: no figure id
+    came back, nothing was logged, and the deck went without the logo while every
+    call reported success.
+    """
+    if not _SVG_ROOT.match(text[:4096]):
         return None
+    cairosvg, missing = _load_cairosvg()
+    if cairosvg is None:
+        logger.warning("ppt_fetch: an SVG was refused because cairo could not be loaded: {}", missing)
+        raise ValueError(
+            "that download is an SVG and nothing here can draw it: the native cairo library "
+            f"could not be loaded ({missing}); {cairo.install_hint()}"
+        )
     try:
         return cairosvg.svg2png(bytestring=payload, output_width=SVG_WIDTH_PX)
-    except Exception:  # noqa: BLE001 -- any failure here means "not an image after all"
-        return None
+    except Exception as exc:  # noqa: BLE001 -- cairosvg raises whatever its XML and CSS parsers raise
+        logger.warning("ppt_fetch: an SVG was refused because it would not draw: {!r}", exc)
+        raise ValueError(f"that download is an SVG that would not draw: {str(exc) or type(exc).__name__}") from exc
 
 
 def _as_text(payload: bytes) -> str | None:
