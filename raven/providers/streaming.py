@@ -124,10 +124,10 @@ async def stream_llm_call(
     TurnFailed), not a text reply about one. Two outcomes come back as an error
     response (``finish_reason="error"`` with its classification) instead of
     raising, because their recovery belongs to the caller: a stream the upstream
-    closed before its terminal chunk with nothing rendered, classified as a
-    retryable network failure for the loop to wait out its own ladder on, and
-    ``strip_images``, whose recovery is a change to the messages that only the
-    loop can make.
+    closed before its terminal chunk with nothing deliverable in it, classified
+    as a network failure for the loop to wait out its own ladder on -- retryable
+    unless a thought had already reached the watcher -- and ``strip_images``,
+    whose recovery is a change to the messages that only the loop can make.
 
     ``stream_kwargs`` reaches ``chat_stream`` unchanged. It exists because that
     signature carries *literal* generation defaults rather than the provider's
@@ -282,6 +282,16 @@ async def stream_llm_call(
                     reasoning_chars,
                 )
                 stop_thinking()
+                cut_verdict: ErrorClassification | None = ErrorClassification(
+                    "network", retryable=True, should_fallback=True
+                )
+                if rendered() and not retry_after_output:
+                    # The thought is already on the watcher's screen, so the
+                    # caller's ladder asking again would draw a second one. The
+                    # same rule the raising exits below hold, spent here because
+                    # this exit hands the failure back rather than raising.
+                    cut_verdict = _spent(cut_verdict, provider, None)
+                    logger.warning("the cut stream had already rendered its reasoning; not asking again")
                 # In the canonical error shape, so the readers of that shape (the
                 # loop's failure report, the CLI's diagnosis) keep this account.
                 return LLMResponse(
@@ -292,7 +302,7 @@ async def stream_llm_call(
                         f"before any content arrived ({reasoning_chars} chars of reasoning were lost)",
                     ),
                     finish_reason="error",
-                    error_classification=ErrorClassification("network", retryable=True, should_fallback=True),
+                    error_classification=cut_verdict,
                     usage=final_usage or {},
                     reasoning_ms=reasoning_ms,
                     call_record=record,
