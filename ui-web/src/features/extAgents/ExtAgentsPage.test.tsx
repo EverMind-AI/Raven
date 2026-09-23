@@ -489,7 +489,8 @@ describe('the sheet', () => {
     await openSheet('Raven')
     expect(sheetActs()).toEqual([])
     expect(sheetStatus()).toBe('gui.agent.hd_on_by {"by":"gui.agent.by_raven"}')
-    expect(sheetTextarea()!.readOnly).toBe(true)
+    expect(sheetTextarea()).toBeNull()
+    expect(sheet()!.querySelector('.extAgents-ro')!.textContent).toBe('Claude Code CLI')
   })
 
   it('reads the last verdict into the status line', async () => {
