@@ -207,6 +207,8 @@ def test_format_arguments_do_not_trigger_builtin_deny(command):
         "format c:",
         "  FORMAT C:",
         "format.exe c:",
+        "format.com c:",
+        "  FORMAT.COM C:",
         '"format" c:',
         "echo ready;format c:",
         "echo ready&&format c:",
