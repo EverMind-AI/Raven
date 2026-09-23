@@ -415,7 +415,7 @@ class TurnController {
 
     this.finalizeInterruptedTurn({ appendMessage, sys })
 
-    patchUiState({ status: 'interrupted' })
+    patchUiState({ status: haltedLine(false) })
     this.clearStatusTimer()
 
     this.statusTimer = setTimeout(() => {

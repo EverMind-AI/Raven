@@ -109,7 +109,7 @@ export interface ChatStreamOptions {
 /** Default server-ack watchdog window — see {@link ChatStreamOptions.watchdogMs}. */
 export const DEFAULT_WATCHDOG_MS = 10_000
 
-/** How long an interrupt's `interrupted` hint stands before the prompt settles back to `ready`. */
+/** How long a stop hint stands on the status bar before the prompt settles back to `ready`. */
 const STATUS_COOLDOWN_MS = 800
 
 export interface ChatStreamHandle {
@@ -659,12 +659,12 @@ const restoreInputPrompt = (appendMessage?: (msg: Msg) => void, sys?: (msg: stri
   // Mirror the visible end-state of turnController.interruptTurn without
   // routing through the legacy `session.interrupt` RPC: preserve the streamed
   // content into the transcript (shared finalize), drop streaming state,
-  // release `busy`, and settle status. The 'interrupted' status hint is
-  // consistent with the legacy interrupt path so users see the same
+  // release `busy`, and settle status. The stop wording is the catalogue's, and
+  // the same one the legacy interrupt path patches, so users see the same
   // affordance regardless of which chat path is live.
   turnController.finalizeInterruptedTurn({ appendMessage, sys })
   turnController.clearStatusTimer()
-  patchUiState({ status: 'interrupted' })
+  patchUiState({ status: haltedLine(false) })
   // Reset to 'ready' after the brief cooldown window so the prompt looks
   // settled if the user is just watching -- but only if the session is still
   // idle when it fires.
