@@ -1840,10 +1840,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .backpill[hidden] { display: none; }
 
 /* mid-turn narration: what the agent said on the way, set between the process
-   lines and the answer -- a step down from the reply, since the design's
-   process trail is lines of work rather than prose, and a step up from them,
-   since it is still something said. */
-.step > .say.prose { margin: 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
+   lines and the answer. It used to sit a step under the reply and a step over
+   the process trail, which worked while that trail was 11px -- 11, 12, 14 read
+   as a ladder. Once the trail took the answer's 14px the middle rung became the
+   smallest type in the card, with a larger tool row above and below it, so a
+   sentence the agent actually said was harder to read than the calls around it.
+   It takes the reply's own size and measure now, and stays the quieter grey:
+   what separates narration from the answer is colour, not size. */
+.step > .say.prose { margin: 0; color: var(--muted); }
 .cot { overflow-wrap: anywhere; }
 
 .answer { position: relative; margin: 0; }
