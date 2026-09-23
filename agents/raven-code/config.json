@@ -30,6 +30,7 @@
     "exec": {
       "timeout": 600
     },
+    "connectionAdd": true,
     "web": {
       "search": {
         "maxResults": 5

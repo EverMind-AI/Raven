@@ -183,6 +183,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         web_fetch_provider = tools.web_fetch_provider
         web_provider_keys = tools.web_provider_keys
         image_search = tools.image_search
+        connection_add = tools.connection_add
         restrict_to_workspace = tools.restrict_to_workspace
         disabled_tools = tools.disabled_tools
         tool_search_config = tools.tool_search_config
@@ -265,6 +266,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self._boot_web_fetch_provider = web_fetch_provider
         self.web_provider_keys = web_provider_keys
         self.image_search = image_search
+        self.connection_add = connection_add
         from raven.config.raven import MemoryConfig, SubagentDagConfig, SubagentQuestionsConfig
         from raven.config.schema import DeepResearchToolConfig, MediaGenConfig
 

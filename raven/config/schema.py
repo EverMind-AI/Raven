@@ -1329,6 +1329,12 @@ class ToolsConfig(Base):
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     tool_search: ToolSearchConfig = Field(default_factory=ToolSearchConfig)
+    connection_add: bool = False
+    """Serve ``ops_connection_add``, the tool that writes a machine the owner
+    describes into their connection registry after reaching it. Off by default:
+    a lane that never runs work on the owner's machines has no use for a tool
+    that writes to their ``~/.ssh/config``. The two products that build or run
+    work there (raven-code, raven-oncall) turn it on in their own config."""
     disabled_tools: list[str] = Field(default_factory=list)
     """Tool names to withhold from the assembled tool array and refuse at dispatch.
     The general off switch for a tool this deploy does not want, and the only one

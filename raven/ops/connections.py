@@ -26,13 +26,14 @@ wait until there is a platform that needs them (2026-08-17, deliberate): storing
 one means a keychain or a master password, and neither is worth building before
 something asks for it.
 
-Read-only here: the file is written by hand or by
-``raven ops connection add`` (``raven/cli/ops_connection_commands.py``). What an
-agent is *shown*, and how a campaign is given a way onto the machine it names,
-belong to that agent's own installation and are not rendered here; what this
-module offers a caller is the store behind the owner's command, the faults that
-make a row unusable, and the projection (:func:`shown`) that keeps an address
-out of whatever gets handed on.
+Read-only here: the file is written by hand or through
+:mod:`raven.ops.connection_add`, the one door behind both ``raven ops
+connection add`` and the ``ops_connection_add`` tool. What an agent is *shown*
+beyond :func:`shown`, and how a campaign is given a way onto the machine it
+names, belong to that agent's own installation; what this module offers a
+caller is the store behind the owner's command, the faults that make a row
+unusable, and the projection (:func:`shown`) that keeps an address out of
+whatever gets handed on.
 """
 
 from __future__ import annotations
@@ -277,28 +278,47 @@ def usable(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # solver belongs on the CPU box" would therefore pick the one machine that
 # cannot run it. What a machine has installed decides; what it is made of only
 # narrows.
-_SHOWN = ("kind", "device", "gpus", "cores", "memory", "software", "budget_unit", "concurrency", "note")
+SHOWN = ("kind", "device", "gpus", "cores", "memory", "software", "budget_unit", "concurrency", "note")
+_SHOWN = SHOWN  # the name this module and its tests have always read
 
-# Points this instance at a registry that is not beside its own config. Set by
-# a launcher that hosts raven inside another raven: the machines belong to the
-# owner, not to whichever sub-agent is asking, and every copy taken to keep an
-# instance supplied is a copy that stops being true the day the owner adds a
-# machine. Five byte-identical copies existed on this computer on 2026-08-25,
-# and the launcher that made them copied once and never again.
+# Points this instance at a registry somewhere else entirely. The machines
+# belong to the owner, not to whichever instance is asking, and every copy taken
+# to keep an instance supplied is a copy that stops being true the day the owner
+# adds a machine. Five byte-identical copies existed on this computer on
+# 2026-08-25, and the launcher that made them copied once and never again.
 CONNECTIONS_ENV = "RAVEN_CONNECTIONS"
 
 
 def store_path() -> Path:
-    """Where this instance reads its machines: the env var, else beside its config."""
+    """Where this instance reads its machines, and where a first add lands.
+
+    The env var when set; else the owner's home (``raven_home()``) when a
+    registry is there; else the one beside this instance's own config when THAT
+    exists; else the owner's home, which is where a machine added now belongs.
+
+    The home comes before "beside the config" because a sub-agent runs on a
+    rendered config of its own, in a state directory of its own, and the host
+    hands it ``RAVEN_HOME`` -- not a copy of the file. Resolved beside the
+    config alone, the coding agent read an empty directory while the owner's
+    machines sat one level up (measured 2026-09-22: ``exec(machine=...)``
+    answered "No connection is registered" on a home that listed two), and
+    the model then reached for the raw address instead. An install that kept
+    its own list beside a config elsewhere stays on it.
+    """
     override = os.environ.get(CONNECTIONS_ENV, "").strip()
     if override:
         return Path(override).expanduser()
     from raven.config.paths import get_config_path
+    from raven.home import raven_home
 
+    home = raven_home() / STORE
+    if home.is_file():
+        return home
     try:
-        return Path(get_config_path()).expanduser().parent / STORE
+        beside = Path(get_config_path()).expanduser().parent / STORE
     except Exception:  # noqa: BLE001 -- a missing config path is not a failure here
-        return Path.home() / ".raven" / STORE
+        return home
+    return beside if beside.is_file() else home
 
 
 MISSING, UNREADABLE, OK = "missing", "unreadable", "ok"

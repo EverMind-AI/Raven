@@ -26,365 +26,55 @@ wait until there is a platform that needs them (2026-08-17, deliberate): storing
 one means a keychain or a master password, and neither is worth building before
 something asks for it.
 
-The file is written by hand, by the host's ``raven ops connection add``, or --
-since 2026-09-20 -- by this instance's own ``ops_connection_add`` once the owner
-has answered what that command asks (the host stopped gating a spawn on the
-registry on 2026-09-06, and with it went the step that ran the
-command on the owner's behalf; the ask survived, the write did not). This module
-is the plugin's own reader and writer over the same store the trunk module
-reads (RAVEN_CONNECTIONS, else the owner's ``~/.raven/connections.json``): the
-trunk module is deliberately not a contracts paper, so the plugin cannot import
-it at runtime -- behaviour is aligned to the trunk version and any drift is a
-parity-ledger entry (C2). ``probe``, ``write`` and ``write_ssh_alias`` mirror
-``raven/cli/ops_connection_commands.py`` for the same reason.
+Trunk's :mod:`raven.ops.connections` is the reader and
+:mod:`raven.ops.connection_add` the writer; both are imported here rather than
+mirrored. This module kept a byte-aligned copy of the reader from the vendored
+fork until 2026-09-23, on the ground that trunk's module was not a contracts
+paper; the plugin already imported trunk's utilities and hooks, the copy had to
+be re-aligned by hand on every change, and the coding agent came to need the
+same functions -- so a third copy was the alternative. What stays here is what
+only a campaign needs: looking a connection up by id, its owner-facing name,
+filling a campaign's meta from its row, and the listing the on-call model reads.
 """
 
 from __future__ import annotations
 
-import json
-import os
-import re
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-STORE = "connections.json"
+# The reader, whole. Re-exported by name so every caller in this plugin keeps
+# its ``connections.<name>`` spelling.
+from raven.ops.connection_add import ASK_OWNER
+from raven.ops.connections import (  # noqa: F401 -- re-exports
+    LOCAL,
+    MISSING,
+    OK,
+    SHOWN,
+    SSH,
+    STORE,
+    UNREADABLE,
+    Problem,
+    Read,
+    capacity,
+    load,
+    problems,
+    read,
+    resource_unit,
+    row_problems,
+    shown,
+    store_path,
+    transport_of,
+    usable,
+)
 
-SSH, LOCAL = "ssh", "local"
-
-# Without these there is no way onto the machine, so a row missing one cannot be
-# used for anything and saying so is a refusal. The list is short on purpose:
-# every row that existed before this file was written predates most of the fields
-# below, and those rows work. A check that retroactively condemns a working
-# registry is a check the owner turns off.
-_BLOCKING = ("id", "display_name")
-_BLOCKING_SSH = ("host", "port", "user", "key")
-
-# Wanted, and reported, but never a refusal. ``software`` is the deciding one for
-# picking a machine -- measured 2026-08-17, CalculiX runs only on the box with
-# the A800s because the binary needs a glibc the 32-core box does not have, so a
-# rule like "a CPU-only solver belongs on the CPU box" picks the one machine that
-# cannot run it. ``budget_unit`` and ``concurrency`` belong to the machine and
-# were being restated in every campaign's meta instead.
-_WANTED = ("software", "budget_unit", "concurrency")
-
-_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-
-# Where a machine's budget is metered: a property of the machine, so it is not
-# restated in the meta of every campaign run on it.
-_BUDGET_UNITS = ("minute", "core-minute", "gpu-minute")
-
-# Names that mean a field this file reads, spelled the way someone writing the
-# file by hand reaches for first: without them a row written with ``name``
-# lists as its bare id, and nothing says why.
-_MISSPELLED = {
-    "name": "display_name",
-    "hostname": "host",
-    "address": "host",
-    "username": "user",
-    "identity_file": "key",
-    "ssh_key": "key",
-    "gpu": "device",
-    "cpus": "cores",
-    "ram": "memory",
-}
-
-
-def transport_of(row: dict[str, Any]) -> str:
-    """``ssh`` or ``local``. Absent means ssh, which is what the runner assumes."""
-    return LOCAL if str(row.get("transport") or SSH).strip().lower() == LOCAL else SSH
-
-
-# How many devices a ``device`` line written as "2 x NVIDIA A800..." names.
-_DEVICE_COUNT = re.compile(r"^\s*(\d+)\s*[xX]\s")
-# A memory line such as "463 GB" or "1.5 TiB", read only when admission asks.
-_MEMORY = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(TiB|TB|T|GiB|GB|G)\b", re.IGNORECASE)
-
-
-def capacity(row: dict[str, Any]) -> dict[str, int]:
-    """What a row can hand out, in whole units. Empty when it says nothing countable.
-
-    ``gpus`` is read first; absent, a ``device`` written as "N x ..." names the
-    count. ``cores`` is the row's own field. ``memory_gb`` is parsed from the
-    memory text when it parses at all. A row that hands out nothing here is
-    admitted by job count, the way every row was before capacity existed.
-    """
-    out: dict[str, int] = {}
-    g = row.get("gpus")
-    if isinstance(g, int) and not isinstance(g, bool) and g >= 1:
-        out["gpus"] = g
-    elif str(row.get("kind") or "").strip().lower() == "gpu":
-        # The "N x ..." reading is for a GPU row only, as the admission design
-        # says: a CPU box whose device line reads "2 x Intel Xeon" hands out
-        # cores, and reading it as two devices would gate it on GPUs it has not.
-        m = _DEVICE_COUNT.match(str(row.get("device") or ""))
-        if m and int(m.group(1)) >= 1:
-            out["gpus"] = int(m.group(1))
-    c = row.get("cores")
-    if isinstance(c, int) and not isinstance(c, bool) and c >= 1:
-        out["cores"] = c
-    m = _MEMORY.match(str(row.get("memory") or ""))
-    if m:
-        n = float(m.group(1))
-        if m.group(2).lower().startswith("t"):
-            n *= 1024
-        if n >= 1:
-            out["memory_gb"] = int(n)
-    return out
-
-
-def resource_unit(row: dict[str, Any]) -> str:
-    """``gpus``, ``cores``, or "" for a row admitted by job count.
-
-    A GPU machine's cores are not what its jobs contend for, so a row that hands
-    out devices is gated on those alone -- and a GPU row whose device count is
-    unknown is gated by job count, never by its cores (reviewed 2026-09-07: a
-    probed two-card box with no count was admitted by its 128 cores, sixteen
-    jobs deep). The doctor names such a row; `gpus: N` or a "N x ..." device
-    line moves it onto device admission.
-    """
-    cap = capacity(row)
-    if "gpus" in cap:
-        return "gpus"
-    if str(row.get("kind") or "").strip().lower() == "gpu":
-        return ""
-    if "cores" in cap:
-        return "cores"
-    return ""
-
-
-@dataclass(frozen=True)
-class Problem:
-    """One thing wrong with a row. ``blocking`` means the machine cannot be used.
-
-    The two levels are not decoration. A blocking problem is the ground a caller
-    refuses on -- an agent reading this list to pick a machine has nowhere to put
-    the work without one -- while the rest is worth telling the owner and worth
-    nobody's refusal. Folding them together would mean a registry that predates a field
-    reads as broken, and a check that condemns working machines gets turned off.
-    """
-
-    text: str
-    blocking: bool = False
-
-    def __str__(self) -> str:
-        return self.text
-
-
-def row_problems(row: dict[str, Any]) -> list[Problem]:
-    """Everything wrong with one row, in the owner's terms. Empty when it is fine.
-
-    Judged here, next to the reader, rather than in whatever wrote the file. Every
-    connections.json that has existed so far was written by hand, and a
-    hand-written file has to be judged by what reads it or by nothing at all.
-    """
-    rid = str(row.get("id") or "").strip()
-    label = rid or "<no id>"
-    out: list[Problem] = []
-    raw_id = str(row.get("id") or "")
-    if not rid:
-        out.append(Problem("a machine here has no id", blocking=True))
-    elif raw_id != rid:
-        # Consumers normalise differently: `shown` hands the raw id on, while
-        # whoever asks for a machine by name has usually stripped it, and
-        # `usable` collects its duplicate set on stripped ids, so two spellings
-        # of one id are seen as one. A padded id would otherwise read as usable
-        # and then be unselectable. Refused at the row instead of taught to
-        # every reader.
-        out.append(Problem(f"{label}: id has leading or trailing whitespace", blocking=True))
-    elif not _ID.match(rid):
-        out.append(Problem(f"{label}: id must be lowercase letters, digits, '-' or '_'", blocking=True))
-    for wrong, right in _MISSPELLED.items():
-        if wrong in row and right not in row:
-            out.append(Problem(f"{label}: '{wrong}' is not a field this reads; it is spelled '{right}'"))
-    kind = transport_of(row)
-    blocking = _BLOCKING + (_BLOCKING_SSH if kind == SSH else ())
-    for field in blocking:
-        if field != "id" and row.get(field) in (None, ""):
-            out.append(Problem(f"{label}: '{field}' is missing, so there is no way onto it", blocking=True))
-    for field in _WANTED:
-        if field == "concurrency" and resource_unit(row):
-            continue
-        if row.get(field) in (None, ""):
-            out.append(Problem(f"{label}: '{field}' is not set"))
-    port = row.get("port")
-    if port not in (None, "") and (isinstance(port, bool) or not isinstance(port, int)):
-        out.append(Problem(f"{label}: 'port' must be a number, not {port!r}", blocking=True))
-    elif isinstance(port, int) and not 1 <= port <= 65535:
-        out.append(Problem(f"{label}: 'port' {port} is not a port number", blocking=True))
-    conc = row.get("concurrency")
-    if conc not in (None, "") and (isinstance(conc, bool) or not isinstance(conc, int) or conc < 1):
-        out.append(Problem(f"{label}: 'concurrency' must be a whole number of jobs, not {conc!r}"))
-    gp = row.get("gpus")
-    if gp not in (None, "") and (isinstance(gp, bool) or not isinstance(gp, int) or gp < 1):
-        out.append(Problem(f"{label}: 'gpus' must be a whole number of devices, not {gp!r}"))
-    held_unit = resource_unit(row)
-    if str(row.get("kind") or "").strip().lower() == "gpu" and held_unit != "gpus":
-        out.append(
-            Problem(
-                f"{label}: kind is gpu but neither 'gpus' nor a device written as 'N x ...' says how many "
-                "devices it hands out; jobs are admitted by job count until it does"
-            )
-        )
-    elif held_unit and conc not in (None, ""):
-        out.append(
-            Problem(
-                f"{label}: 'concurrency' is not read on a row that says {held_unit}; capacity decides how many jobs fit"
-            )
-        )
-    unit = row.get("budget_unit")
-    if unit not in (None, "") and str(unit) not in _BUDGET_UNITS:
-        out.append(Problem(f"{label}: 'budget_unit' should be one of {', '.join(_BUDGET_UNITS)}, not {unit!r}"))
-    paths = row.get("paths")
-    if paths is not None:
-        if not isinstance(paths, list):
-            out.append(Problem(f"{label}: 'paths' must be a list of absolute paths"))
-        else:
-            for claim in paths:
-                if not str(claim).startswith("/"):
-                    out.append(Problem(f"{label}: path {claim!r} is not absolute"))
-                elif not _is_specific_enough(Path(str(claim))):
-                    out.append(Problem(f"{label}: path {claim!r} names a filesystem rather than a place"))
-    return out
-
-
-def usable(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The machines that can actually be run on. What a caller refuses over.
-
-    A duplicated id takes every row that carries it out, not just the later
-    one: the id is what a campaign stores and what anything asking for a
-    machine by name looks up, so two rows behind one id make the reference
-    ambiguous -- which row answers depends on file order, and "the first one"
-    is an accident, not an answer. Judged here rather than only in
-    :func:`problems` because this is the list the tools that pick a machine and
-    the doctor's exit code key on; a blocking
-    diagnostic that leaves the registry usable is a warning nobody refuses
-    over (measured: two valid rows sharing an id kept usable=2 and doctor
-    exit 0 while problems() reported a blocking defect).
-    """
-    ids = [str(r.get("id") or "").strip() for r in rows]
-    duplicated = {i for i in ids if i and ids.count(i) > 1}
-    return [
-        r
-        for r in rows
-        if str(r.get("id") or "").strip() not in duplicated and not any(p.blocking for p in row_problems(r))
-    ]
-
-
-# What the agent may see. The key path is deliberately not in it: the agent never
-# needs to authenticate, and a field it cannot use is one more thing to reason
-# about wrongly.
-#
-# ``software`` is the deciding one and was not obvious. Measured 2026-08-17 on
-# these two machines: CalculiX runs only on the box with the A800s, because the
-# binary needs a glibc the 32-core box does not have. A rule like "a CPU-only
-# solver belongs on the CPU box" would therefore pick the one machine that
-# cannot run it. What a machine has installed decides; what it is made of only
-# narrows.
-_SHOWN = ("kind", "device", "gpus", "cores", "memory", "software", "budget_unit", "concurrency", "note")
+_SHOWN = SHOWN
 
 # What the backend needs and the agent does not. ``transport`` is in here rather
-# than in _SHOWN on purpose: whether a machine is reached over ssh or is simply
+# than in SHOWN on purpose: whether a machine is reached over ssh or is simply
 # this one changes nothing about which machine the work calls for, and a field
 # the agent can see is a field it can reason about wrongly -- here, by deciding
 # it may skip naming the machine at all, which loses the record of where a
 # command ran.
 _TRANSPORT = ("host", "port", "user", "key", "transport")
-
-
-# Points this instance at a registry that is not beside its own config. Set by
-# a launcher that hosts raven inside another raven: the machines belong to the
-# owner, not to whichever sub-agent is asking, and every copy taken to keep an
-# instance supplied is a copy that stops being true the day the owner adds a
-# machine. Five byte-identical copies existed on this computer on 2026-08-25,
-# and the launcher that made them copied once and never again.
-CONNECTIONS_ENV = "RAVEN_CONNECTIONS"
-
-
-def store_path() -> Path:
-    """Where this instance reads its machines: the env var, else the owner's home.
-
-    The trunk module resolves the fallback beside its own config file; a plugin
-    cannot read the host's config path, so the fallback is the default config
-    home the launcher points RAVEN_CONNECTIONS away from anyway (verdict C2:
-    trunk behaviour is the baseline, and the launcher always sets the env var
-    in a hosted install, so the fallback only serves a bare local run).
-    """
-    override = os.environ.get(CONNECTIONS_ENV, "").strip()
-    if override:
-        return Path(override).expanduser()
-    return Path.home() / ".raven" / STORE
-
-
-MISSING, UNREADABLE, OK = "missing", "unreadable", "ok"
-
-
-@dataclass(frozen=True)
-class Read:
-    """The registry as this instance found it, and why it looks that way.
-
-    The state is separate from the rows because "there are no machines" and "the
-    machine list could not be read" are different facts and were being reported
-    as one. A hand-edited file with a stray comma parsed as ``ValueError``,
-    became ``[]``, and ``describe`` then told the loop that the owner had set no
-    machine up -- so a typo silently took the whole on-call surface out, and the
-    one thing the loop was told about it was false.
-    """
-
-    rows: list[dict[str, Any]]
-    state: str
-    detail: str = ""
-
-
-def read() -> Read:
-    """The registry, with the reason behind an empty one. Never raises."""
-    path = store_path()
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return Read([], MISSING)
-    except OSError as exc:
-        return Read([], UNREADABLE, f"{path} could not be opened: {exc}")
-    try:
-        data = json.loads(text)
-    except ValueError as exc:
-        return Read([], UNREADABLE, f"{path} is not valid JSON: {exc}")
-    rows = data.get("connections") if isinstance(data, dict) else data
-    if not isinstance(rows, list):
-        return Read(
-            [],
-            UNREADABLE,
-            f"{path} should hold a list of machines, either as the whole file or "
-            "under a 'connections' key; it holds neither.",
-        )
-    out = [r for r in rows if isinstance(r, dict) and str(r.get("id") or "").strip()]
-    dropped = len(rows) - len(out)
-    detail = f"{dropped} entr{'y' if dropped == 1 else 'ies'} in {path} had no id and were skipped."
-    return Read(out, OK, detail if dropped else "")
-
-
-def load() -> list[dict[str, Any]]:
-    """Every connection, in file order. An unreadable or absent file is none."""
-    return read().rows
-
-
-def problems() -> list[Problem]:
-    """Everything wrong with the registry as a whole: the file, then each row."""
-    found = read()
-    if found.state == UNREADABLE:
-        return [Problem(found.detail, blocking=True)]
-    out = [Problem(found.detail)] if found.detail else []
-    seen: dict[str, int] = {}
-    for row in load():
-        out.extend(row_problems(row))
-        rid = str(row.get("id") or "").strip()
-        seen[rid] = seen.get(rid, 0) + 1
-    out.extend(
-        Problem(f"{rid}: appears {n} times; an id has to name one machine", blocking=True)
-        for rid, n in seen.items()
-        if n > 1
-    )
-    return out
 
 
 def get(conn_id: str) -> dict[str, Any] | None:
@@ -430,44 +120,13 @@ def resolve_into(meta: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-# What the owner has to be asked for, when there is nobody to ask it of here.
-# Kept to what only they know: the address and the key are deliberately outside
-# what the loop can see, and a name is theirs to give. Everything a machine can
-# say about itself -- cores, memory, devices -- is read off it once reached, and
-# ssh's own config resolves a port, a user or a key the owner left out. Once
-# they have answered, the write is the loop's own: ops_connection_add.
-_REQUEST = """\
-Ask the owner, in one message, and stop there until they answer (there is no
-campaign yet, so end the turn with the question; whoever called you relays the
-answer):
-  - is the machine this very computer, or another one reached over ssh?
-  - what do they call it?
-  - if another one: its address -- and port, username and private-key path
-    only if they know them; left out, ssh's own config is tried and whatever
-    connects is kept
-Optional, only if they care to say: what is installed on it (with paths),
-which directories on it hold their work, and how its budget is counted.
-
-With the answers, call ops_connection_add: it reaches the machine before
-writing anything, and what the machine says about itself is read off it.
-Until a machine is listed there is nothing to run on. Do not submit anything,
-and do not look for a way in with exec or ssh."""
-
-
-def shown(row: dict[str, Any]) -> dict[str, Any]:
-    """One machine as anything outside may see it: no address, no credential.
-
-    The same projection ``describe`` renders, handed over as data so a caller in
-    another process can put it in front of whoever needs it. The split is the
-    point of the function: what a machine *is* travels, and the way onto it does
-    not -- a field the reader cannot use is one more thing to reason about
-    wrongly, and here the reader may be a node writing a training script.
-    """
-    out = {"id": str(row.get("id") or ""), "display_name": str(row.get("display_name") or row.get("id") or "")}
-    out.update({k: row[k] for k in _SHOWN if row.get(k) not in (None, "")})
-    if isinstance(row.get("paths"), list):
-        out["paths"] = [str(x) for x in row["paths"]]
-    return out
+# The ask is trunk's (the coding agent's guide points at the same text); what
+# follows it is this product's: there is no campaign yet, so the turn ends on
+# the question.
+_REQUEST = (
+    ASK_OWNER + "\nThere is no campaign yet, so end the turn with the question; whoever called you "
+    "relays the answer. Do not submit anything until a machine is listed."
+)
 
 
 def describe() -> str:
@@ -481,8 +140,9 @@ def describe() -> str:
             f"The machine registry for this instance cannot be read.\n{found.detail}\n\n"
             "This is NOT the same as having no machines: the file may well list "
             "several, and this instance cannot see any of them. Say exactly this "
-            "to the owner -- the file needs fixing by hand. Do not submit anything "
-            "and do not look for a way in yourself."
+            "to the owner -- the file needs fixing, or rewriting with "
+            "`raven ops connection add`. Do not submit anything and do not look "
+            "for a way in yourself."
         )
     rows = load()
     if not rows:
@@ -496,7 +156,7 @@ def describe() -> str:
     lines = []
     for row in rows:
         bits = [f"{row.get('display_name') or row['id']}   (id {row['id']})"]
-        bits += [f"{k} {row[k]}" for k in _SHOWN if row.get(k) not in (None, "")]
+        bits += [f"{k} {row[k]}" for k in SHOWN if row.get(k) not in (None, "")]
         lines.append("  " + "   ".join(bits))
     trouble = (
         "\n\nOne or more of these cannot be used as written, and picking it will "
@@ -551,208 +211,3 @@ _PROBE = (
     "echo GPU=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | paste -sd'|' -); "
     "echo LIBC=$(ldd --version 2>/dev/null | head -1)"
 )
-
-
-def ssh_defaults(host: str, *, port: int = 0, user: str = "") -> dict[str, Any]:
-    """What ssh itself would use for this host: ``port``, ``user``, ``keys``.
-
-    ``ssh -G`` prints the resolved configuration -- ``~/.ssh/config`` blocks
-    included -- so an owner who left the port, the user or the key path out
-    gets the values their own ssh would pick, not a guess. ``keys`` lists only
-    identity files that exist here, in ssh's own order; the caller probes each
-    and keeps the one that connects. Empty when ssh is not on this computer.
-    """
-    import subprocess
-
-    argv = ["ssh", "-G"] + (["-p", str(port)] if port else []) + [f"{user}@{host}" if user else host]
-    try:
-        done = subprocess.run(argv, capture_output=True, text=True, timeout=10, check=False)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return {}
-    if done.returncode != 0:
-        return {}
-    out: dict[str, Any] = {"keys": []}
-    for line in done.stdout.splitlines():
-        key, _, value = line.partition(" ")
-        if key == "port" and value.strip().isdigit():
-            out["port"] = int(value)
-        elif key == "user" and value.strip():
-            out["user"] = value.strip()
-        elif key == "identityfile" and value.strip():
-            if Path(os.path.expanduser(value.strip())).exists():
-                out["keys"].append(value.strip())
-    return out
-
-
-def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = False) -> tuple[bool, str, dict[str, Any]]:
-    """Reach the machine and read what it is. ``(reached, message, detected)``.
-
-    The reaching is the point and the reading is the bonus. A row that cannot be
-    reached is not written, because an unreachable row in the registry is worse
-    than an absent one: absent is a question the loop knows to ask, unreachable
-    is a fact it acts on. Rides the plugin's own transport seam, so the way a
-    machine is reached here is the way its jobs will be reached.
-
-    ``isolate_key`` is for the one caller that has to say WHICH key opened the
-    session rather than merely that one opened: trying the keys ssh named when
-    the owner gave no path. Without it, ``-i`` is a preference and not a
-    restriction -- the other configured identities and the agent are offered too
-    -- so the first candidate could be credited with a session a different key
-    authenticated, and the registry would then hold a path that stops working
-    the day that agent or config changes.
-    """
-    from oncall_flow.backend import JobBackendError
-    from oncall_flow.transport import runner_from
-
-    where = "this computer" if transport_of(row) == LOCAL else f"{row.get('user')}@{row.get('host')}:{row.get('port')}"
-    try:
-        if isolate_key and transport_of(row) == SSH:
-            from oncall_flow.docker_backend import make_ssh_runner
-
-            runner = make_ssh_runner(
-                str(row.get("host") or ""),
-                int(row.get("port") or 22),
-                os.path.expanduser(str(row.get("key") or "")),
-                user=str(row.get("user") or "root"),
-                identities_only=True,
-            )
-        else:
-            runner = runner_from(row, what="connection", cap_seconds=timeout)
-        code, out = runner(_PROBE)
-    except JobBackendError as exc:
-        return False, f"could not reach {where}: {exc}", {}
-    if code != 0:
-        return False, f"could not reach {where}: {out.strip() or f'exit {code}'}", {}
-    return True, f"reached {where}", _parse_probe(out)
-
-
-def _parse_probe(out: str) -> dict[str, Any]:
-    seen: dict[str, str] = {}
-    for line in out.splitlines():
-        key, _, value = line.partition("=")
-        if value.strip():
-            seen[key.strip()] = value.strip()
-    found: dict[str, Any] = {}
-    if seen.get("CORES", "").isdigit():
-        found["cores"] = int(seen["CORES"])
-    if seen.get("MEM", "").isdigit() and int(seen["MEM"]) > 0:
-        found["memory"] = f"{seen['MEM']} GB"
-    gpu = seen.get("GPU", "")
-    if gpu:
-        cards = [c.strip() for c in gpu.split("|") if c.strip()]
-        found["gpus"] = len(cards)
-        found["device"] = f"{len(cards)} x {cards[0]}" if len(set(cards)) == 1 else " + ".join(cards)
-        found["kind"] = "gpu"
-    elif "cores" in found:
-        found["kind"] = "cpu"
-    if seen.get("LIBC"):
-        found["note"] = seen["LIBC"]
-    return found
-
-
-def write(row: dict[str, Any]) -> Path:
-    """Append one machine, keeping whatever shape the file already had.
-
-    Refuses rather than rewrites when the file holds entries this reader skips:
-    serialising the survivors would erase rows the owner wrote by hand, and a
-    recoverable typo is theirs to fix, not ours to delete on the way past.
-    """
-    path = store_path()
-    found = read()
-    if found.state == UNREADABLE:
-        raise ValueError(f"{found.detail}\nFix or move that file before adding to it.")
-    if found.detail:
-        raise ValueError(
-            f"{found.detail}\nAdding a machine here would rewrite the file without them. "
-            "Give those entries an id (or remove them) first, then add this machine."
-        )
-    rows = list(found.rows)
-    if any(str(r.get("id")).strip() == row["id"] for r in rows):
-        raise ValueError(f"a machine with id {row['id']!r} is already listed in {path}")
-    rows.append(row)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"connections": rows}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return path
-
-
-_ALIAS_MARK = "# raven connection {conn_id} (managed; rewritten on every add)"
-
-
-def write_ssh_alias(row: dict[str, Any]) -> str | None:
-    """Keep a ``Host <id>`` alias in ``~/.ssh/config`` for an ssh row.
-
-    Transfers cannot ride the exec machine channel -- rsync and scp run their
-    client HERE and only address the machine -- so without an alias every
-    transfer carries the raw address into the model's context. One managed
-    block per id, replaced in full on re-add; everything outside the markers
-    is the owner's and is never touched. Returns the alias, or None for a
-    local row. A failure is the caller's to report as a warning, never as a
-    refusal: the alias is a convenience beside the registry, not part of it.
-    """
-    if transport_of(row) == LOCAL:
-        return None
-    conn_id = str(row["id"])
-    mark = _ALIAS_MARK.format(conn_id=conn_id)
-    block = "\n".join(
-        [
-            mark,
-            f"Host {conn_id}",
-            f"  HostName {row.get('host')}",
-            f"  Port {int(row.get('port') or 22)}",
-            f"  User {row.get('user') or 'root'}",
-            f"  IdentityFile {row.get('key') or '~/.ssh/id_rsa'}",
-            mark,
-        ]
-    )
-    path = Path(os.path.expanduser("~/.ssh/config"))
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    if mark in text:
-        head, _, rest = text.partition(mark)
-        _, _, tail = rest.partition(mark)
-        text = head.rstrip("\n") + ("\n" if head.strip() else "") + tail.lstrip("\n")
-    text = (text.rstrip("\n") + "\n\n" if text.strip() else "") + block + "\n"
-    path.write_text(text, encoding="utf-8")
-    path.chmod(0o600)
-    return conn_id
-
-
-# A claim shallower than this is a whole filesystem, not a case: "/", "/opt",
-# "/Users/admin". Honouring one would put a line about machines on every ordinary
-# look, and a note that fires everywhere is read as noise and then not read at
-# all. Three components is the shallowest thing worth claiming
-# ("/Evermind/bj_share/lxt" is four; "/srv/arena" is two and is allowed by the
-# root list below rather than by depth).
-_MIN_CLAIM_DEPTH = 2
-_NEVER_CLAIMED = frozenset(
-    {
-        "/",
-        "/usr",
-        "/opt",
-        "/etc",
-        "/var",
-        "/tmp",
-        "/bin",
-        "/sbin",
-        "/lib",
-        "/home",
-        "/Users",
-        "/Applications",
-        "/System",
-        "/Library",
-        "/private",
-    }
-)
-
-
-def _is_specific_enough(root: Path) -> bool:
-    """Whether a claimed root names a place rather than a filesystem."""
-    text = str(root).rstrip("/") or "/"
-    if text in _NEVER_CLAIMED:
-        return False
-    parts = [p for p in root.parts if p not in ("/", "")]
-    if len(parts) < _MIN_CLAIM_DEPTH:
-        return False
-    # A home directory itself: /Users/admin, /home/me. Two components, and every
-    # ordinary look happens under it.
-    return not (len(parts) == 2 and f"/{parts[0]}" in ("/Users", "/home"))

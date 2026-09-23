@@ -368,3 +368,80 @@ def test_a_gpu_row_with_no_device_count_is_admitted_by_job_count_not_by_cores():
     assert connections.resource_unit(row) == ""
     said = [str(p) for p in connections.row_problems({"id": "g", "display_name": "G", "transport": "local", **row})]
     assert any("admitted by job count" in s for s in said)
+
+
+# ---- where the registry is looked for --------------------------------------
+
+
+def _rendered_config(tmp_path, monkeypatch):
+    """A sub-agent's shape: its own config in a state directory of its own, and
+    the host's home handed down as RAVEN_HOME."""
+    import raven.home as home
+
+    state = tmp_path / "state"
+    state.mkdir()
+    rendered = state / ".config.rendered.json"
+    rendered.write_text("{}")
+    monkeypatch.setattr(home, "_current_config_path", rendered)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv(connections.CONNECTIONS_ENV, raising=False)
+    (tmp_path / "home").mkdir()
+    return state
+
+
+def test_a_sub_agent_reads_the_owners_registry_not_an_empty_directory_of_its_own(tmp_path, monkeypatch):
+    """Measured 2026-09-22: Raven-Code, on a rendered config in its state root,
+    resolved the registry beside that config, found nothing, and reported "No
+    connection is registered" on a home that listed two machines -- then reached
+    for the raw ssh address. The home the host hands down is where the owner's
+    machines are."""
+    _rendered_config(tmp_path, monkeypatch)
+    theirs = tmp_path / "home" / "connections.json"
+    theirs.write_text(json.dumps({"connections": [{"id": "conn_cpu", "display_name": "CPU", "transport": "local"}]}))
+
+    assert connections.store_path() == theirs
+    assert [r["id"] for r in connections.load()] == ["conn_cpu"]
+
+
+def test_a_first_add_lands_in_the_owners_home_when_nothing_exists_yet(tmp_path, monkeypatch):
+    """Where the write goes decides who reads it afterwards: the coding agent
+    adds a machine before the on-call agent runs, and the on-call agent reads
+    the owner's home. A row written into the coding agent's own state root
+    would be a registry nobody else can see."""
+    state = _rendered_config(tmp_path, monkeypatch)
+    assert not (state / "connections.json").exists() and not (tmp_path / "home" / "connections.json").exists()
+
+    assert connections.store_path() == tmp_path / "home" / "connections.json"
+
+
+def test_an_install_that_kept_its_own_list_beside_its_config_stays_on_it(tmp_path, monkeypatch):
+    """Nothing in the owner's home, a registry beside the config: that is an
+    install that predates this resolution and wrote its list where the old rule
+    read it. It keeps working unchanged."""
+    state = _rendered_config(tmp_path, monkeypatch)
+    own = state / "connections.json"
+    own.write_text(json.dumps({"connections": [{"id": "mine", "display_name": "Mine", "transport": "local"}]}))
+
+    assert connections.store_path() == own
+    assert [r["id"] for r in connections.load()] == ["mine"]
+
+
+def test_the_owners_home_wins_over_a_list_beside_the_config_when_both_exist(tmp_path, monkeypatch):
+    """Two lists, one truth: the owner's. A copy in a state directory is the
+    copy-once bug -- five byte-identical registries on one computer, 2026-08-25
+    -- and reading it would hide every machine the owner added since."""
+    state = _rendered_config(tmp_path, monkeypatch)
+    (state / "connections.json").write_text(json.dumps({"connections": []}))
+    theirs = tmp_path / "home" / "connections.json"
+    theirs.write_text(json.dumps({"connections": [{"id": "conn_gpu", "display_name": "GPU", "transport": "local"}]}))
+
+    assert connections.store_path() == theirs
+
+
+def test_the_env_var_still_outranks_every_default(tmp_path, monkeypatch):
+    _rendered_config(tmp_path, monkeypatch)
+    (tmp_path / "home" / "connections.json").write_text(json.dumps({"connections": []}))
+    elsewhere = tmp_path / "elsewhere.json"
+    monkeypatch.setenv(connections.CONNECTIONS_ENV, str(elsewhere))
+
+    assert connections.store_path() == elsewhere

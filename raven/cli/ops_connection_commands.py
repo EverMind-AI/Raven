@@ -26,187 +26,30 @@ typing them anyway, and the probe still has the last word.
 from __future__ import annotations
 
 import json
-import os
 import shlex
-import subprocess
-from pathlib import Path
 from typing import Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
+# One probe, one writer, one alias, whichever door knocks: the same functions
+# serve the ``ops_connection_add`` tool. Bound here by name so this module's
+# ``add`` reads them as its own globals -- which is also what a test that
+# stands in a reachable machine patches.
+from raven.ops.connection_add import parse_probe as _parse_probe  # noqa: F401 -- re-export, the tests read it here
+from raven.ops.connection_add import probe
+from raven.ops.connection_add import write as _write
+from raven.ops.connection_add import write_ssh_alias as _write_ssh_alias
+
 connection_app = typer.Typer(help="The machines this instance can run work on.")
 console = Console()
-
-_PROBE = (
-    "echo CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null); "
-    "echo MEM=$(free -g 2>/dev/null | awk '/^Mem:/{print $2}'); "
-    "echo GPU=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | paste -sd'|' -); "
-    "echo LIBC=$(ldd --version 2>/dev/null | head -1)"
-)
-
-
-def _run(argv: list[str], timeout: float) -> tuple[int, str, str]:
-    try:
-        done = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
-    except FileNotFoundError:
-        return 127, "", f"{argv[0]} not found on this computer"
-    except subprocess.TimeoutExpired:
-        return 124, "", f"timed out after {timeout:.0f}s"
-    return done.returncode, done.stdout, done.stderr
-
-
-def _ssh_argv(host: str, port: int, user: str, key: str, command: str) -> list[str]:
-    return [
-        "ssh",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=10",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-p",
-        str(port),
-        "-i",
-        os.path.expanduser(key),
-        f"{user}@{host}",
-        command,
-    ]
-
-
-def probe(row: dict[str, Any], *, timeout: float = 30.0) -> tuple[bool, str, dict[str, Any]]:
-    """Reach the machine and read what it is. ``(reached, message, detected)``.
-
-    The reaching is the point and the reading is the bonus. A row that cannot be
-    reached is not written, because an unreachable row in the registry is worse
-    than an absent one: absent is a question the loop knows to ask, unreachable
-    is a fact it acts on.
-    """
-    from raven.ops.connections import LOCAL, transport_of
-
-    if transport_of(row) == LOCAL:
-        code, out, err = _run(["sh", "-c", _PROBE], timeout)
-        where = "this computer"
-    else:
-        argv = _ssh_argv(str(row["host"]), int(row["port"]), str(row["user"]), str(row["key"]), _PROBE)
-        code, out, err = _run(argv, timeout)
-        where = f"{row['user']}@{row['host']}:{row['port']}"
-    if code != 0:
-        return False, f"could not reach {where}: {(err or out).strip() or f'exit {code}'}", {}
-    return True, f"reached {where}", _parse_probe(out)
-
-
-def _parse_probe(out: str) -> dict[str, Any]:
-    seen: dict[str, str] = {}
-    for line in out.splitlines():
-        key, _, value = line.partition("=")
-        if value.strip():
-            seen[key.strip()] = value.strip()
-    found: dict[str, Any] = {}
-    if seen.get("CORES", "").isdigit():
-        found["cores"] = int(seen["CORES"])
-    if seen.get("MEM", "").isdigit() and int(seen["MEM"]) > 0:
-        found["memory"] = f"{seen['MEM']} GB"
-    gpu = seen.get("GPU", "")
-    if gpu:
-        cards = [c.strip() for c in gpu.split("|") if c.strip()]
-        # The count is what admission reads (`gpus`), and the device line is
-        # written as "N x <card>" when the cards match, which is the other
-        # spelling the readers infer a count from. Left as a "+"-joined list,
-        # the row a real two-card box probed to (2026-09-07) had no count at all,
-        # and admission fell back to job count on a machine it could have gated
-        # by device.
-        found["gpus"] = len(cards)
-        found["device"] = f"{len(cards)} x {cards[0]}" if len(set(cards)) == 1 else " + ".join(cards)
-        found["kind"] = "gpu"
-    elif "cores" in found:
-        found["kind"] = "cpu"
-    if seen.get("LIBC"):
-        found["note"] = seen["LIBC"]
-    return found
-
-
-def _write(row: dict[str, Any]) -> Path:
-    """Append one machine, keeping whatever shape the file already had."""
-    from raven.ops.connections import read, store_path
-
-    path = store_path()
-    found = read()
-    if found.state == "unreadable":
-        raise ValueError(f"{found.detail}\nFix or move that file before adding to it.")
-    # `read` filters entries without an id and says so in `detail`; rewriting
-    # from its rows would serialize the survivors and erase the rest. The owner
-    # hand-wrote those, and a recoverable typo is theirs to fix, not ours to
-    # delete on the way past.
-    if found.detail:
-        raise ValueError(
-            f"{found.detail}\nAdding a machine here would rewrite the file without them. "
-            "Give those entries an id (or remove them) first, then add this machine."
-        )
-    rows = list(found.rows)
-    if any(str(r.get("id")).strip() == row["id"] for r in rows):
-        raise ValueError(f"a machine with id {row['id']!r} is already listed in {path}")
-    rows.append(row)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"connections": rows}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return path
 
 
 def _slug(text: str) -> str:
     from raven.utils.paths import mint_slug
 
     return mint_slug(text)
-
-
-_ALIAS_MARK = "# raven connection {conn_id} (managed; rewritten on every add)"
-
-
-def _write_ssh_alias(row: dict[str, Any]) -> str | None:
-    """Keep a ``Host <id>`` alias in ``~/.ssh/config`` for an ssh row.
-
-    Transfers cannot ride the exec machine channel -- rsync and scp run their
-    client HERE and only address the machine -- so without an alias every
-    transfer carries the raw address, and the raw address then has to live in
-    the model's context (measured 2026-09-03: a task statement shipped the
-    ssh string because nothing else could address the machine). With the
-    alias, ``rsync ... <id>:...`` resolves inside ssh's own config and the
-    context carries only the registry name.
-
-    One managed block per id, replaced in full on re-add; everything outside
-    the markers is the owner's and is never touched. Returns the alias, or
-    None when there is nothing to write (a local row) -- a failure is
-    reported by the caller as a warning, never as a refusal: the alias is a
-    convenience beside the registry, not part of it.
-    """
-    from raven.ops.connections import LOCAL, transport_of
-
-    if transport_of(row) == LOCAL:
-        return None
-    conn_id = str(row["id"])
-    mark = _ALIAS_MARK.format(conn_id=conn_id)
-    block = "\n".join(
-        [
-            mark,
-            f"Host {conn_id}",
-            f"  HostName {row.get('host')}",
-            f"  Port {int(row.get('port') or 22)}",
-            f"  User {row.get('user') or 'root'}",
-            f"  IdentityFile {row.get('key') or '~/.ssh/id_rsa'}",
-            mark,
-        ]
-    )
-    path = Path(os.path.expanduser("~/.ssh/config"))
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    if mark in text:
-        head, _, rest = text.partition(mark)
-        _, _, tail = rest.partition(mark)
-        text = head.rstrip("\n") + ("\n" if head.strip() else "") + tail.lstrip("\n")
-    text = (text.rstrip("\n") + "\n\n" if text.strip() else "") + block + "\n"
-    path.write_text(text, encoding="utf-8")
-    path.chmod(0o600)
-    return conn_id
 
 
 def _ask(label: str, default: str = "", *, required: bool = True) -> str:

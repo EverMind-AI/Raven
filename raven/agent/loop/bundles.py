@@ -25,6 +25,9 @@ class ToolWiring:
     web_fetch_provider: str = "jina"
     web_provider_keys: dict[str, str] | None = None
     image_search: bool = False
+    # Serve the registry-writing tool (``tools.connectionAdd``); off unless the
+    # product asks, see ``ToolsConfig.connection_add``.
+    connection_add: bool = False
     restrict_to_workspace: bool = False
     disabled_tools: list[str] | None = None
     tool_search_config: Any = None

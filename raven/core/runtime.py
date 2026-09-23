@@ -239,6 +239,7 @@ def build_runtime(
             web_fetch_provider=config.tools.web.fetch.provider,
             web_provider_keys=config.tools.web.vendor_keys(),
             image_search=config.tools.web.search.images,
+            connection_add=config.tools.connection_add,
             media_config=config.effective_media_config(),
             deep_research_config=config.tools.deep_research,
             exec_config=config.tools.exec,
