@@ -106,6 +106,22 @@ def everos_plugin_missing_note() -> str:
     )
 
 
+def everos_platform_note() -> str | None:
+    """Why EverOS cannot run on this machine, or ``None`` where it can.
+
+    Native Windows, for now: the server is spawned, found and stopped through
+    POSIX tooling. Asked before any surface probes, spawns or offers to
+    configure the service, so a Windows install reads one sentence instead of a
+    connection refused and a retry button that cannot help.
+    """
+    if sys.platform != "win32":
+        return None
+    return (
+        "EverOS long-term memory is not available on Windows yet; support is coming soon. "
+        "Raven runs without long-term memory here for now (WSL has it today)."
+    )
+
+
 def plugin_discovery_sources() -> dict:
     """Resolve the four fixed discovery-source locations the host scans.
 
