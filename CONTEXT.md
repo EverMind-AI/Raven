@@ -630,6 +630,9 @@ The single backbone every turn flows through: one entry
 A handle resolves three ways: the `TurnOutcome` of a turn that answered, the `TurnFailed`
 its Lane filed for a turn that failed with a name, or `None` when it was cancelled or never
 ran (a queued turn drained by a stop, an inject merged into a turn that did not answer).
+A `TurnFailed` is `reported` when the runner worded `error` itself (an `AnswerlessTurnError`)
+rather than it being whatever a crash carried — in-process only, so a consumer deciding what to
+show a stranger can quote a report and refuse to quote a crash.
 Per-conversation **Lanes** are the unit of both ordering and cancellation. Deliberately
 not a broadcast bus.
 _Avoid_: "the bus" — there is no Bus; "queue" for Lane — Lane is a serial+cancel domain.
@@ -657,8 +660,11 @@ those are emitted by the Spine worker, not a runner.
 The exception a runner raises to say the turn it ran ended with no answer and that its message is
 already the report a reader should see — the model call the loop gave up on, in the provider's words,
 or the loop's when the provider gave none.
-`describe_failure` passes its text through unchanged, and the `turn_ended` marker that says so is
-filed before the failure leaves the loop.
+`describe_failure` passes its text through unchanged (it arrives bounded from the layer that built
+it), and the `turn_ended` marker that says so is filed before the failure leaves the loop. The marker
+is worded twice, for its two readers: `turn_ended.reason` keeps the provider's account for whoever is
+diagnosing the failure, while the entry text the model reads back names the failure's category and
+endpoint only — a vendor body is not history the model should spend context on or try to answer.
 _Avoid_: conflating AnswerlessTurnError with `TurnFailed`, the lifecycle event the Spine worker
 emits for any exception a runner lets out, this one included.
 

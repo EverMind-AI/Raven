@@ -263,7 +263,66 @@ async def test_a_model_call_the_loop_gives_up_on_fails_the_turn_and_leaves_the_m
     msgs = _persisted(workspace)
     assert [m["role"] for m in msgs] == ["user", "assistant"]
     assert msgs[-1]["turn_ended"] == {"status": "failed", "reason": error}
-    assert msgs[-1]["content"] == f"(turn failed: {error})"
+    # The two readers are told apart: ``turn_ended.reason`` keeps the
+    # provider's own account for whoever is diagnosing the failure, while the
+    # text the model reads back next turn names the category only.
+    assert msgs[-1]["content"] == (
+        "(turn failed: The model sent nothing before the first-byte timeout expired (stub). "
+        "The runtime log has the provider's own account.)"
+    )
+    assert "no first byte after 5.0s" not in msgs[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_a_vendors_body_does_not_reach_the_model_through_the_marker(workspace):
+    """The marker is history the model reads on its next turn. A vendor's auth
+    body carries a masked key and an account URL, and both would be spent
+    context and something to answer rather than the end of the turn."""
+    vendor_body = (
+        "AuthenticationError: OpenrouterException - No auth credentials found for key sk-or-v1-a1b2...ef90; "
+        "see https://openrouter.ai/settings/keys"
+    )
+    error = f"Error calling LLM (auth@openrouter): {vendor_body}"
+    agent = _agent_without_ladder(workspace, DyingProvider([_error_response(error)]))
+
+    with pytest.raises(AnswerlessTurnError):
+        await agent._process_message(_make_msg("hello"))
+
+    marker = _persisted(workspace)[-1]
+    assert "sk-or-v1" not in marker["content"]
+    assert "openrouter.ai/settings" not in marker["content"]
+    assert marker["content"] == (
+        "(turn failed: The provider rejected the credentials (openrouter). "
+        "The runtime log has the provider's own account.)"
+    )
+    assert marker["turn_ended"]["reason"] == error
+
+
+@pytest.mark.asyncio
+async def test_a_crash_leaves_a_bounded_reason_on_the_marker(workspace):
+    """A crash's message is arbitrary -- a chained SDK trace, a whole HTTP body
+    -- and it is filed into a session a model reads back. It is cut to the same
+    ceiling the lane's own event uses, and the mark says it was cut."""
+    from raven.spine.events import TURN_FAILURE_TEXT_MAX
+
+    class _Boom(Exception):
+        pass
+
+    agent = _agent_without_ladder(workspace, DyingProvider([]))
+
+    async def _explode(*args, **kwargs):
+        raise _Boom("z" * 5000)
+
+    agent._run_agent_loop = _explode
+
+    with pytest.raises(_Boom):
+        await agent._process_message(_make_msg("hello"))
+
+    marker = _persisted(workspace)[-1]
+    reason = marker["turn_ended"]["reason"]
+    assert len(reason) == TURN_FAILURE_TEXT_MAX and reason.endswith("...")
+    # Not a canonical model-call sentence, so the model's copy is the same text.
+    assert marker["content"] == f"(turn failed: {reason})"
 
 
 @pytest.mark.asyncio

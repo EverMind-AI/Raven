@@ -120,6 +120,7 @@ from raven.providers.base import (
     LLMProvider,
     LLMResponse,
     ToolCallRequest,
+    canonical_llm_error,
 )
 from raven.tracing import trace
 
@@ -534,7 +535,7 @@ def _halted_response(detail: str) -> LLMResponse:
     error path instead, and the driver reads the halt off the shared state.
     """
     return LLMResponse(
-        content=f"Error calling LLM (replay_divergence): {detail}",
+        content=canonical_llm_error("replay_divergence", None, detail),
         finish_reason="error",
         error_classification=_HALTED_CLASSIFICATION,
     )

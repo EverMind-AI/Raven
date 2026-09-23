@@ -5,6 +5,7 @@ import asyncio
 from loguru import logger
 
 from raven.spine import (
+    AnswerlessTurnError,
     ChatType,
     Notice,
     NoticeKind,
@@ -304,6 +305,26 @@ async def test_run_exception_yields_turn_failed_and_resolves_future():
     # The future carries the same report, not a bare None: the awaiting
     # submitter and the event subscriber learn the failure in one wording.
     assert result is failed
+    # A crash, not a report the runner wrote: a consumer deciding what to show a
+    # stranger must not quote this text.
+    assert failed.reported is False
+
+
+async def test_a_turn_the_runner_worded_itself_is_marked_reported():
+    """``AnswerlessTurnError`` says the runner already worded the failure for a
+    reader. The flag is how a consumer tells that from a crash's message without
+    re-parsing the text: the gateway quotes the first and refuses the second."""
+
+    class ReportingRunner:
+        async def run(self, req, emit, drain) -> TurnOutcome:
+            raise AnswerlessTurnError("The model returned no content on 4 attempts.")
+
+    events, sink = _collector()
+    lane = Lane(runner=ReportingRunner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
+    await lane.submit(_req())
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.reported is True
+    assert failed.error == "The model returned no content on 4 attempts."
 
 
 async def test_a_failure_with_no_message_still_names_itself():
@@ -334,6 +355,20 @@ def test_a_message_that_already_names_its_class_is_not_prefixed_twice():
     assert describe_failure(APIError("rate limited")) == "APIError: rate limited"
     assert describe_failure(APIError("")) == "APIError"
     assert describe_failure(ValueError("boom")) == "ValueError: boom"
+
+
+def test_a_crash_message_is_bounded_before_it_becomes_the_report():
+    """This text reaches a cron job record and a session marker, not only a log,
+    and an SDK exception carries whatever it likes -- a chained trace, a whole
+    HTTP body. A runner's own report is not cut here: it arrives already bounded
+    by the layer that knows what it is cutting."""
+    from raven.spine.events import TURN_FAILURE_TEXT_MAX
+    from raven.spine.scheduler import describe_failure
+
+    crash = describe_failure(ValueError("z" * 5000))
+    assert len(crash) == TURN_FAILURE_TEXT_MAX and crash.endswith("...")
+    assert crash.startswith("ValueError: ")
+    assert describe_failure(AnswerlessTurnError("y" * 5000)) == "y" * 5000
 
 
 def test_a_turn_failure_is_reported_in_its_own_words():

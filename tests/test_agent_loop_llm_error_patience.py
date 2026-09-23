@@ -157,6 +157,63 @@ async def test_an_error_nobody_will_ask_again_about_is_not_announced(workspace):
     assert notices == []
 
 
+class _WordsItsOwnFailure(LLMProvider):
+    """Hands back a failure worded its own way -- the transport-failure account,
+    which is not the canonical sentence -- and is never asked twice."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(api_key="test")
+        self._detail = detail
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, *args, **kwargs):
+        return LLMResponse(
+            content=self._detail,
+            finish_reason="error",
+            error_classification=ErrorClassification("upstream_transport_failure", retryable=False),
+        )
+
+    async def chat_stream(self, *args, **kwargs):  # pragma: no cover - the non-stream path is under test
+        raise NotImplementedError
+
+
+@pytest.mark.asyncio
+async def test_a_failure_the_provider_worded_itself_is_bounded_too(workspace):
+    """Not every error response carries the canonical sentence: the
+    transport-failure account is the provider's own prose and is passed through
+    whole. It travels into a chat reply, a session marker and a cron job record
+    like any other, so the same ceiling applies to it."""
+    from raven.providers.base import LLM_ERROR_DETAIL_MAX
+
+    agent = _agent(workspace, _WordsItsOwnFailure("the upstream said it failed: " + "x" * 5000), delays=())
+
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _turn(agent)
+
+    detail = str(failed.value)
+    assert len(detail) == LLM_ERROR_DETAIL_MAX and detail.endswith("...")
+    assert detail.startswith("the upstream said it failed: ")
+
+
+@pytest.mark.asyncio
+async def test_a_canonical_sentence_is_not_cut_a_second_time(workspace):
+    """Its detail was bounded where the sentence was built, so the whole
+    sentence is longer than the bound by the width of its head. Cutting it
+    again here would eat the detail the head promises a reader."""
+    from raven.providers.base import LLM_ERROR_DETAIL_MAX, canonical_llm_error
+
+    sentence = canonical_llm_error("invalid_request", "ppt", "y" * 5000)
+    assert len(sentence) > LLM_ERROR_DETAIL_MAX
+    agent = _agent(workspace, _WordsItsOwnFailure(sentence), delays=())
+
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _turn(agent)
+
+    assert str(failed.value) == sentence
+
+
 class _StallsThenAnswers(LLMProvider):
     """Streams a word, then stalls (the idle cap's TimeoutError); answers whole next time."""
 
