@@ -1360,6 +1360,43 @@ def _everos_applied(agent_loop_factory: Any, cost: str = "") -> dict:
     return {"applied": True, **({"warning": cost} if cost else {})}
 
 
+def everos_follows_provider(slug: str, agent_loop_factory: Any) -> None:
+    """Restart EverOS when ``slug`` is what one of its four roles runs on.
+
+    A role stores a pin -- a model and a provider -- and resolves the address
+    and key from that provider at spawn time. So a credential edited on the
+    models page changes what the *next* spawn would hand the server while the
+    one already running keeps what it booted with, and nothing on any screen
+    says so: EverOS's health endpoint never touches a model, so a revoked key
+    reads as healthy right up until memory fails in EverOS's own log.
+
+    ``roles_changed_since_spawn`` catches this at the next session whatever
+    wrote the credential, ``raven provider set`` and a hand-edited config.json
+    included. This is the half that makes it the moment the person made the
+    change instead.
+
+    Silent when the install has no EverOS, when no role names this provider, or
+    when no session is connected to hear the outcome. None of those is a reason
+    to fail a save that already succeeded.
+    """
+    try:
+        from raven.providers.registry import names_same_provider
+        from raven_everos.config import ROLES, role_pin
+    except ImportError:
+        return
+    try:
+        for section in ROLES:
+            pin = role_pin(section)
+            if pin is not None and names_same_provider(pin[1], slug):
+                break
+        else:
+            return
+    except Exception:  # noqa: BLE001 - a save must not fail over this question
+        logger.debug("settings/everos: could not tell whether {} serves a memory role", slug)
+        return
+    _everos_applied(agent_loop_factory)
+
+
 async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     """Record which model and provider serve one EverOS role, or clear the role.
 

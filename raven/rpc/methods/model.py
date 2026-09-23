@@ -553,7 +553,19 @@ async def model_set_protocol(params: dict) -> dict:
     return {"provider": provider}
 
 
-async def model_save_key(params: dict) -> dict:
+def _everos_follows(slug: str, agent_loop_factory: "AgentLoopFactory | None") -> None:
+    """Move the memory service onto a credential this handler just changed.
+
+    Lazily imported: ``console`` is where everything that knows about EverOS
+    lives, and importing it at module scope would tie the model handlers to a
+    plugin they otherwise never mention.
+    """
+    from raven.rpc.methods.console import everos_follows_provider
+
+    everos_follows_provider(slug, agent_loop_factory)
+
+
+async def model_save_key(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     parsed = _parse(ModelSaveKeyParams, params)
 
     # No spec of our own is not a reason to refuse: the picker lists such a
@@ -607,18 +619,20 @@ async def model_save_key(params: dict) -> dict:
     except KeyError as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
 
+    _everos_follows(parsed.slug, agent_loop_factory)
     _, current_provider = _current_selection()
     return {
         "provider": await _entry_off_loop(parsed.slug, current_provider),
     }
 
 
-async def model_disconnect(params: dict) -> dict:
+async def model_disconnect(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     parsed = _parse(ModelDisconnectParams, params)
     try:
         await asyncio.to_thread(reset_provider, parsed.slug)
     except KeyError as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+    _everos_follows(parsed.slug, agent_loop_factory)
     return {"disconnected": True}
 
 
@@ -801,7 +815,7 @@ async def model_add_models(params: dict) -> dict:
 _SETTABLE_FIELDS = frozenset({"api_base", "deployment", "api_version", "extra_headers"})
 
 
-async def model_set_fields(params: dict) -> dict:
+async def model_set_fields(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """Patch a provider's non-credential fields; the key stays with save_key.
 
     ``extra_headers`` arrives as a patch (``{name: value | null}``) and is merged
@@ -839,6 +853,11 @@ async def model_set_fields(params: dict) -> dict:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     if "extra_headers" in previous:
         previous["extra_headers"] = _redact_headers(previous["extra_headers"])
+    if "api_base" in fields:
+        # The only field here that travels to EverOS: it is handed a model, an
+        # address and a key, so a deployment or an extra header changes nothing
+        # a restart would pick up.
+        _everos_follows(parsed.slug, agent_loop_factory)
     return {"previous": previous}
 
 
@@ -885,7 +904,7 @@ async def model_endpoints(params: dict) -> dict:
     return {"endpoints": await _endpoints_off_loop(parsed.slug)}
 
 
-async def model_add_endpoint(params: dict) -> dict:
+async def model_add_endpoint(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     parsed = _parse(ModelAddEndpointParams, params)
     try:
         # extra_headers is deliberately not a parameter: the picker has no screen
@@ -902,15 +921,17 @@ async def model_add_endpoint(params: dict) -> dict:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     # Re-read rather than redacting what the write returned, so the one place
     # deciding how a key is masked stays ``list_provider_endpoints``.
+    _everos_follows(parsed.slug, agent_loop_factory)
     return {"endpoints": await _endpoints_off_loop(parsed.slug)}
 
 
-async def model_remove_endpoint(params: dict) -> dict:
+async def model_remove_endpoint(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     parsed = _parse(ModelRemoveEndpointParams, params)
     try:
         await asyncio.to_thread(remove_provider_endpoint, parsed.slug, parsed.label)
     except (KeyError, ValidationError) as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+    _everos_follows(parsed.slug, agent_loop_factory)
     return {"endpoints": await _endpoints_off_loop(parsed.slug)}
 
 
@@ -936,17 +957,17 @@ def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "Age
     """Register the ten ``model.*`` handlers on a dispatcher instance."""
     dispatcher.register("model.options", partial(model_options, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.set_protocol", model_set_protocol)
-    dispatcher.register("model.save_key", model_save_key)
-    dispatcher.register("model.disconnect", model_disconnect)
+    dispatcher.register("model.save_key", partial(model_save_key, agent_loop_factory=agent_loop_factory))
+    dispatcher.register("model.disconnect", partial(model_disconnect, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.fetch_models", model_fetch_models)
     dispatcher.register("model.add_model", model_add_model)
     dispatcher.register("model.add_models", model_add_models)
-    dispatcher.register("model.set_fields", model_set_fields)
+    dispatcher.register("model.set_fields", partial(model_set_fields, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.oauth_login", model_oauth_login)
     dispatcher.register("model.remove_model", model_remove_model)
     dispatcher.register("model.endpoints", model_endpoints)
-    dispatcher.register("model.add_endpoint", model_add_endpoint)
-    dispatcher.register("model.remove_endpoint", model_remove_endpoint)
+    dispatcher.register("model.add_endpoint", partial(model_add_endpoint, agent_loop_factory=agent_loop_factory))
+    dispatcher.register("model.remove_endpoint", partial(model_remove_endpoint, agent_loop_factory=agent_loop_factory))
 
 
 __all__ = [
