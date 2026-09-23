@@ -257,9 +257,10 @@ which is three island graphs it does not otherwise carry. Enforced by
    The literal every region was served with is no longer among them. Each was
    Chinese because `src/page.html` was, and each is a transcription rather than
    a lookup because a rendered value would fight the store that owns the
-   element; they are in English now, which is both the gateway's default
-   language and the message catalogue's own spelling of the word each stands in
-   for, so the frame before a pick is one language throughout.
+   element; they are in English now, which is both the language
+   `raven/config/schema.py` defaults to and the message catalogue's own
+   spelling of the word each stands in for, so the frame before a pick is one
+   language throughout.
    **Ratcheted by `first-frame-literals`**: a count of runs per file, down or
    gone, each with its reason in the gate's header; a string is read cooked, so
    an escaped run counts as the characters it stands for, and a file that loses
@@ -589,6 +590,6 @@ shrink-only: the way off a list is the fix.
 | 17 files inside a runtime cycle, in two components | The session knot is the large one; `state/session/naming.ts` is in it because it was carved out of `runtime.ts`, which already was. Inverting `runtime.ts`'s two calls into it is the way back to 16 | `import-direction`'s `CYCLES` and `IN_CYCLES` |
 | 64 cross-domain edges, eight of them the desk's | Splitting the desk out of `features/workspace/` turned eight intra-domain edges into cross-domain ones. Same imports, same runtime edges, two domains | `import-direction`'s `CROSS` |
 | `src/app/boot.ts` assigns one seam key of its own, exactly once | The first frame's claim installs the session source because the `holdRail()` on the next line reads it, and the installer runs later in the boot sequence. The row pins the count, so a second write of `sources.rail` -- spelled as an assignment, a destructuring target, or through a name the file bound to the seam -- is not covered by that reason. Inverting the two is what takes the row off | `seam-assignment`'s `EXCEPTIONS` |
-| 21 non-English runs in 4 files | A run is an unbroken stretch of CJK, the nearest thing to a word in a script written without spaces. Six are the served first frame, which has no catalogue to read; two are a month and a day formatted for a reader already in that language; thirteen spell out three patterns matched against text and never drawn | `first-frame-literals`'s `PINNED` |
+| 21 non-English runs in 4 files | A run is an unbroken stretch of CJK, the nearest thing to a word in a script written without spaces. Six are the served first frame, which has no message catalogue to read; two are a month and a day formatted for a reader already in that language; thirteen spell out three patterns matched against text and never drawn | `first-frame-literals`'s `PINNED` |
 | `curly` is off | 2,063 one-line guards | `eslint.config.js` |
 | `rpc-schema/openrpc.json` disagrees with its own descriptions in three places | `CronJobInfo.next_run_at_ms` / `last_run_at_ms` are sent as null against an integer schema, and `PlaybookNode.skills` / `mcps` describe three states against an array schema. `Wire<T>` is this page's accommodation; the schema is the cure, and it is outside `ui-web/` | `src/rpc/fixtureTransport.ts`'s header |

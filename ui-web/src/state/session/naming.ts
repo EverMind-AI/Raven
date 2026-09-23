@@ -146,7 +146,7 @@ export function namingEnded(id: string, reason: string): void | Promise<void> {
    conversation is created with the default the message catalogue gives whoever
    created it and the string is what gets stored, so the same conversation read
    in the other language carries a title that is still a default rather than a
-   name. The current language stays in the list for a catalogue with no entry at
+   name. The current language stays in the list for a message catalogue with no entry at
    all, where `t` answers the key. */
 const unnamed = (): string[] => [t('gui.new_task'), ...Object.values(I18N.ui['gui.new_task'] ?? {})]
   .filter((s): s is string => s != null)

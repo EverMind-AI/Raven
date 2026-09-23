@@ -23,7 +23,7 @@
  * was served with before a language was picked. Each was Chinese because
  * `src/page.html` was, and each is transcribed rather than looked up because a
  * rendered value would fight the store that owns the element (src/App.tsx names
- * them). They are in English now -- the language the gateway defaults to
+ * them). They are in English now -- the language the backend defaults to
  * (raven/config/schema.py) and the message catalogue's own spelling of the word
  * each one stands in for -- so the frame before a pick is one language
  * throughout rather than two.

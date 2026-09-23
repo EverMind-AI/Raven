@@ -1,5 +1,5 @@
 /* What a schedule reads as. The words are the message catalogue's; what this
-   pins is that the punctuation holding two of them together is the catalogue's
+   pins is that the punctuation holding two of them together is the message catalogue's
    too --
    a list joined with the mark of one language reads as that language whatever
    the words around it say. */
