@@ -62,7 +62,7 @@ import type { JSX } from 'react'
 function Header(): JSX.Element {
   return (
     <>
-      <h1 id="title">新任务</h1>
+      <h1 id="title">New task</h1>
       {/* The folder this conversation runs in, said once beside its name: the
           composer's workspace chip is gone once a conversation starts
           (src/chrome/WorkdirTag.tsx). */}

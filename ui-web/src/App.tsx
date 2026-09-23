@@ -106,11 +106,11 @@ function ConfirmSheet(): JSX.Element {
   return (
     <div className="veil" id="veil" data-open="false">
       <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="cfTitle">
-        <header id="cfTitle">{s.title ?? '确认'}</header>
+        <header id="cfTitle">{s.title ?? 'Confirm'}</header>
         <div className="body" id="cfBody">{s.body}</div>
         <footer>
           <button className="btn" id="cfNo" onClick={cancel}>{t('gui.cancel')}</button>
-          <button className="btn bad" id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? '确认'}</button>
+          <button className="btn bad" id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? 'Confirm'}</button>
         </footer>
       </div>
     </div>
@@ -184,7 +184,7 @@ function SettingsModal(): JSX.Element {
         <div className="sbody">
           <header className="shd">
             <div className="ttl">
-              <h3 id="setTitle">设置</h3>
+              <h3 id="setTitle">Settings</h3>
               <p className="sub" id="setSub" />
             </div>
             <button
@@ -262,8 +262,8 @@ function Toasts(): JSX.Element {
    chat header because that header opens a stacking context of its own (.top is
    positioned with a z-index), which capped this button below the full-page
    modules no matter how high its own z-index went -- collapsing the rail inside
-   技能 / 插件 / 记忆 then covered the only control that brings it back, with no
-   way left to reach another module.
+   Skills / Plugins / Memory then covered the only control that brings it back,
+   with no way left to reach another module page.
 
    Collapsing the rail is the reader's call, never the window's: it holds the
    session list, and having it vanish on resize loses your place. This is the

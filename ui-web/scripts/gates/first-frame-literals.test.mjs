@@ -11,18 +11,22 @@
  *    no store could read one, so the shell is written in one language. The
  *    `lang` attribute is a tag rather than a word, so the runs counted for
  *    that file are all the shell's.
- *  - A fallback argument. A confirm sheet's title and button, the settings
- *    heading, the capability filter's four chips and its search field, the chat
- *    heading, the environment chip, the permission chip: each renders a literal
- *    while `lang.get()` has answered nothing yet, which is the very frame
- *    `scripts/__golden__/` and `src/test/__golden__/` record. Turning one into
- *    `t()` moves the DOM those goldens are taken from.
+ *  - A word the page writes with no key behind it yet.
+ *    `features/memory/MemoryPage.tsx` spells a month and a day in the arm it
+ *    takes for a reader who is in that language.
  *  - A mark rather than a word. `lib/prose.ts` carries a CJK character class
- *    and a line prefix it matches, `state/session/runtime.ts` strips a
- *    trailing colon of either width, `state/session/naming.ts` compares a
- *    title against the literal `chrome/ChatTop.tsx` serves, and
- *    `features/cron/humanize.ts` joins an already-translated list with an
- *    ideographic comma -- drawn, but punctuation rather than a word.
+ *    and a line prefix it matches, and `state/session/runtime.ts` strips a
+ *    trailing colon of either width -- read, but punctuation rather than a
+ *    word.
+ *
+ * The set that used to stand here and no longer does: the literal every region
+ * was served with before a language was picked. Each was Chinese because
+ * `src/page.html` was, and each is transcribed rather than looked up because a
+ * rendered value would fight the store that owns the element (src/App.tsx names
+ * them). They are in English now -- the language the gateway defaults to
+ * (raven/config/schema.py) and the message catalogue's own spelling of the word
+ * each one stands in for -- so the frame before a pick is one language
+ * throughout rather than two.
  *
  * The unit is a maximal run of CJK characters, not a line: CJK is written
  * without spaces, so an unbroken run is the closest machine-checkable thing to
@@ -82,19 +86,10 @@ const CJK_RUN = /[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud
 const PINNED = {
   /* the served first frame */
   'page.html': 6,
-  /* a fallback the served frame carries, until a language is picked */
-  'App.tsx': 3,
-  'chrome/ChatTop.tsx': 1,
-  'chrome/Dock.tsx': 1,
-  'chrome/PermChip.tsx': 1,
-  'state/envChip.ts': 1,
   /* a message the page writes itself, with no key behind it yet */
-  'app/install.ts': 1,
   'features/memory/MemoryPage.tsx': 2,
   /* a mark rather than a word */
-  'features/cron/humanize.ts': 2,
   'lib/prose.ts': 12,
-  'state/session/naming.ts': 1,
   'state/session/runtime.ts': 1,
 }
 

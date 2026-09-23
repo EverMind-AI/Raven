@@ -2111,6 +2111,10 @@
       "en": "Day {d} of each month, {hm}",
       "zh": "每月 {d} 日 {hm}"
     },
+    "gui.cron.h.sep": {
+      "en": ", ",
+      "zh": "、"
+    },
     "gui.cron.create": {
       "en": "Create",
       "zh": "创建"

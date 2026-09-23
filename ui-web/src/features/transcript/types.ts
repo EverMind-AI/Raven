@@ -112,8 +112,8 @@ export interface CallData {
   spawnAsked: boolean
   /* The RUN's own clock, in ms since the epoch, from whichever source named it.
      Not the tool call's: a spawn returns when the work is dispatched, so `ms` is
-     near zero on every spawn card and reading it printed `耗时 0.0s` over a run
-     that had taken eight seconds. Zero means unknown. */
+     near zero on every spawn card and reading it printed an elapsed 0.0s over a
+     run that had taken eight seconds. Zero means unknown. */
   spawnT0: number
   spawnT1: number
   /* The run's own messages, newest last, as `subagent.context` answers them.
