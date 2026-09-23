@@ -89,8 +89,10 @@ from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, fil
 from raven.contracts.harness import ActionRequest, CapabilityRequest, PlanningRequest, WindowPressure, WindowState
 from raven.contracts.loop_hooks import HookDecision
 from raven.permissions.turn import set_current_tool_call_id
+from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
+from raven.spine.events import bound_failure_text
 from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise.turn_spend import TurnSpend
 
@@ -110,12 +112,33 @@ def _llm_failure_detail(content: str | None, verdict: ErrorClassification | None
     failure and nothing else -- no setting decides which of two meanings the
     content carries. A response with no text at all still needs a sentence the
     readers of that format can parse.
+
+    A canonical sentence arrives bounded from the constructor that built it; a
+    provider that words a failure its own way (the upstream-transport-failure
+    account) is bounded here, so every route out of a failed call carries the
+    same ceiling.
     """
     text = (content or "").strip()
     if text:
-        return text
+        return text if parse_llm_error(text) is not None else bound_llm_detail(text)
     category = verdict.category if verdict is not None else "unknown"
-    return f"Error calling LLM ({category}): the provider gave no detail"
+    return canonical_llm_error(category, None, "the provider gave no detail")
+
+
+def _marker_failure(reason: str | None) -> str:
+    """How a broken turn's marker tells the MODEL the turn failed.
+
+    Separated from ``turn_ended.reason``, which keeps the provider's own
+    account for whoever is diagnosing the failure, the way ``notice`` and
+    ``origin`` are separated from what the model reads. A vendor body is not
+    written for a model: it spends context on a masked key and an account URL,
+    and reads as something to answer rather than as the end of the turn.
+    """
+    parsed = parse_llm_error(reason or "")
+    if parsed is not None:
+        category, provider, _detail = parsed
+        return llm_error_summary(category, provider)
+    return reason or "unknown error"
 
 
 def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, Any] | None, turn_base: int) -> None:
@@ -2466,7 +2489,10 @@ class TurnPathMixin:
                 None,
                 streamed,
                 status="failed",
-                reason=str(exc),
+                # Bounded the way the lane bounds the same crash for its event:
+                # an arbitrary exception message is filed in a session a reader
+                # and a model both read back.
+                reason=bound_failure_text(str(exc)),
             )
             raise
         self._stash_recovery(key, outcome)
@@ -2606,7 +2632,11 @@ class TurnPathMixin:
           its own assistant message -- it was on the reader's screen, and the
           loop only commits a message once the provider call returns;
         - the marker entry carries ``turn_ended`` so a client can say WHY the
-          transcript stops there, and readable text so the model sees the same.
+          transcript stops there, and readable text so the model knows the same.
+          The two are worded for their own reader: ``turn_ended.reason`` keeps
+          the provider's account for the person diagnosing it, while the text
+          the model reads back names the category only (see
+          ``_marker_failure``).
 
         ``received_at`` and ``inbound_original`` describe the turn's question,
         which ``_process_message`` files before the attempt starts and hands
@@ -2654,7 +2684,7 @@ class TurnPathMixin:
                 ):
                     partial["reasoning_content"] = streamed["thought"]
                 tail.append(partial)
-            word = "cancelled by the user" if status == "cancelled" else f"failed: {reason or 'unknown error'}"
+            word = "cancelled by the user" if status == "cancelled" else f"failed: {_marker_failure(reason)}"
             marker: dict[str, Any] = {
                 "role": "assistant",
                 "content": f"(turn {word})",

@@ -83,12 +83,46 @@ class TurnStarted:
     turn_id: str = ""
 
 
+#: The longest failure text a turn's report carries. The providers layer bounds
+#: a model call's own account to the same number before it ever gets here; this
+#: second copy is for the texts that never passed through it -- a crash's
+#: message, a runner's own wording -- and it is written again rather than
+#: imported because the kernel does not reach into raven.providers.
+TURN_FAILURE_TEXT_MAX = 200
+
+_ELLIPSIS = "..."
+
+
+def bound_failure_text(text: str) -> str:
+    """``text`` cut to ``TURN_FAILURE_TEXT_MAX``, marked when it was cut.
+
+    A crash message is arbitrary -- a stack of chained exceptions, a whole HTTP
+    body -- and it is read back in a chat reply, a session marker and a cron
+    job record, none of which is a log.
+    """
+    text = text.strip()
+    if len(text) <= TURN_FAILURE_TEXT_MAX:
+        return text
+    return text[: TURN_FAILURE_TEXT_MAX - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
+
+
 @dataclass(frozen=True)
 class TurnFailed:
+    """A turn that ended without an answer, and what it is reported by.
+
+    ``reported`` says the runner itself worded ``error`` -- it raised an
+    ``AnswerlessTurnError``, whose message is the report a reader should see --
+    rather than the text being whatever a crash carried. In-process only: the
+    wire frame stays one ``error``, and the distinction exists so a consumer
+    deciding what to show a stranger (the gateway's channel reply) can quote a
+    report and refuse to quote a crash.
+    """
+
     error: str
     cancelled: bool
     conversation_id: str | None = None
     turn_id: str = ""
+    reported: bool = False
 
 
 @dataclass(frozen=True)

@@ -28,6 +28,7 @@ from raven.providers.base import (
     LLMResponse,
     RunMeta,
     ToolCallRequest,
+    canonical_llm_error,
     format_llm_error,
     send_max_tokens,
 )
@@ -284,9 +285,11 @@ async def stream_llm_call(
                 # In the canonical error shape, so the readers of that shape (the
                 # loop's failure report, the CLI's diagnosis) keep this account.
                 return LLMResponse(
-                    content=(
-                        f"Error calling LLM (network): the model's reply was cut off by the connection after "
-                        f"{elapsed:.0f}s, before any content arrived ({reasoning_chars} chars of reasoning were lost)"
+                    content=canonical_llm_error(
+                        "network",
+                        None,
+                        f"the model's reply was cut off by the connection after {elapsed:.0f}s, "
+                        f"before any content arrived ({reasoning_chars} chars of reasoning were lost)",
                     ),
                     finish_reason="error",
                     error_classification=ErrorClassification("network", retryable=True, should_fallback=True),
@@ -370,7 +373,7 @@ async def stream_llm_call(
                 # deck build on the first render an endpoint refused for its size,
                 # and waiting would not have shrunk the bytes.
                 return LLMResponse(
-                    content=f"Error calling LLM ({classification.category}): {exc}",
+                    content=canonical_llm_error(classification.category, None, str(exc)),
                     finish_reason="error",
                     error_classification=classification,
                     usage=final_usage or {},

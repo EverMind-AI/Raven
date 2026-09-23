@@ -113,7 +113,11 @@ _NON_AUTH_HINTS = {
 def _print_llm_error(content: str) -> bool:
     """Render a provider error as a diagnosis + fix hint instead of a fake
     agent reply. Returns True when handled; marks the one-shot path to exit
-    non-zero."""
+    non-zero.
+
+    The detail is printed whole: it arrives already cut to
+    ``providers.base.LLM_ERROR_DETAIL_MAX`` by the sentence's own constructor,
+    and a second bound here would only be a second number to keep in step."""
     from rich.markup import escape
 
     from raven.providers.base import parse_llm_error
@@ -128,11 +132,11 @@ def _print_llm_error(content: str) -> bool:
         # PermissionDeniedError and on substring matches, so naming one would
         # be a guess. The detail carries the provider's own reason instead.
         where = f" ({escape(provider)})" if provider else ""
-        console.print(f"[red]Error: provider rejected the credentials{where}: {escape(detail[:200])}[/red]")
+        console.print(f"[red]Error: provider rejected the credentials{where}: {escape(detail)}[/red]")
         target = provider or "<name>"
         console.print(f"Fix: raven provider test {escape(target)}  or  raven onboard")
     else:
-        console.print(f"[red]Error: LLM call failed ({escape(category)}): {escape(detail[:200])}[/red]")
+        console.print(f"[red]Error: LLM call failed ({escape(category)}): {escape(detail)}[/red]")
         hint = _NON_AUTH_HINTS.get(category)
         if hint:
             console.print(hint)

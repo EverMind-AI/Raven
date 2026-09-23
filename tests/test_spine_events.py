@@ -92,7 +92,32 @@ def test_lifecycle_events_construct_and_are_frozen():
 
 def test_turn_failed_has_no_usage():
     fields = {f.name for f in dataclasses.fields(TurnFailed)}
-    assert fields == {"error", "cancelled", "conversation_id", "turn_id"}  # failure carries no usage
+    # No usage; ``reported`` is the in-process flag saying the runner worded
+    # ``error`` itself rather than it being whatever a crash carried.
+    assert fields == {"error", "cancelled", "conversation_id", "turn_id", "reported"}
+    assert TurnFailed(error="boom", cancelled=False).reported is False
+
+
+def test_a_failure_text_is_bounded_and_says_it_was_cut():
+    """A crash message is arbitrary and is read back in a chat reply, a session
+    marker and a cron job record, so the kernel caps it. The cap is written
+    here rather than imported from the providers layer: the kernel stands
+    alone, and a canonical model-call sentence is already bounded upstream."""
+    from raven.spine.events import TURN_FAILURE_TEXT_MAX, bound_failure_text
+
+    assert bound_failure_text("  short  ") == "short"
+    cut = bound_failure_text("x" * 5000)
+    assert len(cut) == TURN_FAILURE_TEXT_MAX
+    assert cut.endswith("...")
+
+
+def test_the_kernel_and_the_providers_layer_cap_a_failure_at_one_number():
+    """Two copies of the ceiling, because the kernel may not import the
+    providers layer; this is what keeps them from drifting apart."""
+    from raven.providers.base import LLM_ERROR_DETAIL_MAX
+    from raven.spine.events import TURN_FAILURE_TEXT_MAX
+
+    assert TURN_FAILURE_TEXT_MAX == LLM_ERROR_DETAIL_MAX
 
 
 def test_turn_ended_carries_usage_latency_and_explicit_reply():
