@@ -97,8 +97,6 @@ def machines_registered() -> bool:
         return False
 
 
-# Values ssh takes as a separate word, so the destination is not confused with
-# one of them. Only the flags that can precede a destination are listed.
 # What punctuation_chars hands back as its own token, split by what the token
 # does to the command. A separator ends it, so the words after one belong to the
 # next command and not to this ssh.
@@ -115,7 +113,45 @@ _REDIRECTIONS = frozenset({"<", ">", ">>", "<<", "<<<", "<&", ">&", "&>", "&>>",
 # whitespace; OpenSSH honours both spellings.
 _OPTION_SPLIT = re.compile(r"\s*=\s*|\s+")
 
-_SSH_VALUE_FLAGS = frozenset("bcDEeFIiJLlmOoQRSWw")
+# ssh(1)'s own getopt string, copied from the OpenSSH_9.9p2 binary rather than
+# listed from memory: a letter followed by ':' takes a value. The hand-kept set
+# this replaces had lost `B` (bind interface), so `ssh -B lo -p 58717 host`
+# read `lo` as the destination (reviewed 2026-09-21). OpenSSH_8.9 differs in
+# one letter -- `P` takes no value there -- and the current release is read.
+_SSH_OPTSTRING = "1246ab:c:e:fgi:kl:m:no:p:qstvxAB:CD:E:F:GI:J:KL:MNO:P:Q:R:S:TVw:W:XYy"
+_SSH_VALUE_FLAGS = frozenset(ch for i, ch in enumerate(_SSH_OPTSTRING) if _SSH_OPTSTRING[i + 1 : i + 2] == ":")
+
+
+def _read_option_group(word: str, tokens: list[str], index: int) -> tuple[int, str | None]:
+    """Read one ``-xyz`` option group the way getopt does. ``(index, port)``.
+
+    Letters are read in turn until one takes a value; the rest of the group is
+    that value, or the next word when nothing is left (``-p58717``, ``-p
+    58717``, ``-vp 58717``, ``-vvvp58717`` all name port 58717). Reading only a
+    two-character ``-p`` skipped ``-vp`` as a group with no argument and took
+    its port for the destination (reviewed 2026-09-21). ``port`` is the value
+    the group gives the port -- from ``-p`` or from an ``-o`` port option -- or
+    None; ``index`` is past whatever the group consumed.
+    """
+    letters = word[1:]
+    for offset, letter in enumerate(letters):
+        if letter not in _SSH_VALUE_FLAGS:
+            continue
+        value = letters[offset + 1 :]
+        if not value and index < len(tokens):
+            value = tokens[index]
+            index += 1
+        if letter == "p":
+            return index, value
+        if letter == "o":
+            # `ssh -G` prints `port 58717` for -o Port=58717 and for
+            # -o "Port 58717" alike. Splitting only on the equals sign dropped
+            # the spaced spelling's value and left the port at 22, so a machine
+            # registered on another port went unrecognised (reviewed 2026-09-20).
+            pair = _OPTION_SPLIT.split(value.strip(), maxsplit=1)
+            return index, (pair[1].strip() if len(pair) == 2 and pair[0].lower() == "port" else None)
+        return index, None
+    return index, None
 
 
 def _ssh_destinations(command: str) -> list[tuple[str, int]]:
@@ -140,6 +176,11 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     because the registry holds several machines at one address on different
     ports: the address alone picks whichever row is listed first and names the
     wrong machine. Repeats keep the first value, as ssh does.
+
+    Options are read the way ssh reads them: a ``-xyz`` group letter by letter
+    (``-vp 58717``), and on past the destination until the first word that is
+    not an option (``ssh root@h -p 58717 true`` is port 58717, ``ssh root@h
+    true -p 58717`` is 22) or a ``--``.
     """
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
@@ -160,6 +201,8 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
         port = 22
         port_set = False
         destination: str | None = None
+        options_open = True
+        options_ended = False
         while index < len(tokens):
             word = tokens[index]
             if word in _COMMAND_SEPARATORS or PurePosixPath(word.lstrip("\\")).name == "ssh":
@@ -188,36 +231,41 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
                 index += 1
                 continue
             index += 1
-            if destination is not None:
+            if not options_open:
+                # The remote command; nothing in it is this ssh's to read.
                 continue
-            if word.startswith("-") and len(word) > 1:
-                value = ""
-                if word.startswith("-p") or word.startswith("-o"):
-                    value = word[2:]
-                    if not value and index < len(tokens):
-                        value = tokens[index]
-                        index += 1
-                    if word.startswith("-o"):
-                        # `ssh -G` prints `port 58717` for -o Port=58717 and for
-                        # -o "Port 58717" alike. Splitting only on the equals
-                        # sign dropped the spaced spelling's value and left the
-                        # port at 22, so a machine registered on another port
-                        # went unrecognised (reviewed 2026-09-20).
-                        pair = _OPTION_SPLIT.split(value.strip(), maxsplit=1)
-                        value = pair[1].strip() if len(pair) == 2 and pair[0].lower() == "port" else ""
-                    # First obtained value wins, which is ssh's own rule for
-                    # every option: `ssh -G -p 2222 -o Port=58717 host` prints
-                    # 2222, and reversing the two prints 58717. Overwriting
-                    # instead read `-p 58717 -p 22` as port 22 and let a
-                    # command that really reaches the registered machine past
-                    # the guard (reviewed 2026-09-21).
-                    if value.isdigit() and not port_set:
-                        port = int(value)
-                        port_set = True
-                elif len(word) == 2 and word[1] in _SSH_VALUE_FLAGS:
-                    index += 1
+            if word == "--" and not options_ended:
+                # getopt's end of options. Before the destination it makes the
+                # next word the host whatever it looks like; after it, the rest
+                # is the remote command: `ssh -G root@h -- -p 58717` prints 22.
+                options_ended = True
+                if destination is not None:
+                    options_open = False
                 continue
-            destination = word.rsplit("@", 1)[-1].strip("[]").lower()
+            if word.startswith("-") and len(word) > 1 and not options_ended:
+                index, value = _read_option_group(word, tokens, index)
+                # First obtained value wins, which is ssh's own rule for every
+                # option: `ssh -G -p 2222 -o Port=58717 host` prints 2222, and
+                # reversing the two prints 58717. Overwriting instead read
+                # `-p 58717 -p 22` as port 22 and let a command that really
+                # reaches the registered machine past the guard (reviewed
+                # 2026-09-21).
+                if value is not None and value.isdigit() and not port_set:
+                    port = int(value)
+                    port_set = True
+                continue
+            if destination is None:
+                destination = word.rsplit("@", 1)[-1].strip("[]").lower()
+                # OpenSSH re-enters its option loop once it has the host, so
+                # `ssh root@h -p 58717 true` connects on 58717; stopping at the
+                # destination read it as 22 and let the line past the guard
+                # (reviewed 2026-09-21). A `--` already seen means no re-entry.
+                options_open = not options_ended
+                continue
+            # The first non-option word after the host starts the remote
+            # command, and ssh stops reading options there: `ssh -G root@h
+            # true -p 58717` prints 22.
+            options_open = False
         if destination:
             found.append((destination, port))
     return found

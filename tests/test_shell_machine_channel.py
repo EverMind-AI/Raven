@@ -680,3 +680,90 @@ async def test_a_value_taking_flag_does_not_stand_in_for_the_destination(registr
 
     assert "Error:" in out and "conn_gpu" in out
     assert not marker.exists()
+
+
+# Each spelling beside what OpenSSH itself resolves it to. The expectations were
+# measured with `ssh -G` (OpenSSH_9.9p2 here, and OpenSSH_8.9p1 in review for
+# the ones that apply to both), and the test below re-measures them wherever an
+# ssh client is installed, so a wrong expectation cannot hide in this table.
+GETOPT_SPELLINGS = [
+    ("ssh -vp 58717 root@h true", ("h", 58717)),
+    ("ssh -4p 58717 h", ("h", 58717)),
+    ("ssh -vvvp58717 h", ("h", 58717)),
+    ("ssh -vo Port=58717 h", ("h", 58717)),
+    ("ssh -o Port=58717 -vp 22 h", ("h", 58717)),
+    ("ssh root@h -p 58717 true", ("h", 58717)),
+    ("ssh root@h -o Port=58717 true", ("h", 58717)),
+    ("ssh root@h -vp 58717 ls -la", ("h", 58717)),
+    ("ssh -p 58717 root@h -p 22", ("h", 58717)),
+    ("ssh root@h true -p 58717", ("h", 22)),
+    ("ssh root@h -- -p 58717", ("h", 22)),
+    ("ssh -- root@h -p 58717", ("h", 22)),
+    ("ssh -B lo -p 58717 root@h", ("h", 58717)),
+    ("ssh -P tag -p 58717 root@h", ("h", 58717)),
+]
+GETOPT_IDS = [
+    "bundled",
+    "bundled-after-a-number-flag",
+    "bundled-attached",
+    "bundled-option",
+    "bundled-after-a-port",
+    "port-after-host",
+    "option-after-host",
+    "bundled-after-host",
+    "first-port-wins-across-host",
+    "after-the-remote-command",
+    "after-double-dash",
+    "double-dash-before-host",
+    "bind-interface-value",
+    "tag-value",
+]
+
+
+@pytest.mark.parametrize(("command", "expected"), GETOPT_SPELLINGS, ids=GETOPT_IDS)
+def test_options_are_read_the_way_getopt_and_ssh_read_them(command, expected):
+    """Two readings the reviewer showed let a real connection past the guard
+    (2026-09-21): a bundled group (`-vp 58717`) was skipped as if it took no
+    argument, so the port became the destination; and the scan stopped at the
+    host, while OpenSSH goes back to reading options after it until the first
+    word that is not one. `-B` takes a value too; the set that said which flags
+    do was kept by hand and had lost it, so it is read from ssh's own getopt
+    string now."""
+    assert machine_exec._ssh_destinations(command) == [expected]
+
+
+@pytest.mark.parametrize(("command", "expected"), GETOPT_SPELLINGS, ids=GETOPT_IDS)
+def test_the_table_agrees_with_the_ssh_on_this_computer(command, expected):
+    import shutil
+    import subprocess
+
+    if not shutil.which("ssh"):
+        pytest.skip("no ssh on this computer")
+    words = command.split()[1:]
+    out = subprocess.run(["ssh", "-G", *words], capture_output=True, text=True, check=False, timeout=10).stdout
+    seen = dict(line.split(" ", 1) for line in out.splitlines() if line.startswith(("hostname ", "port ")))
+    if "-P" in words and "tag" not in out:
+        pytest.skip("this ssh predates `-P tag` (OpenSSH < 9.2), where P takes no value")
+    assert (seen.get("hostname"), int(seen.get("port", 0))) == expected
+
+
+def test_the_value_taking_flags_are_ssh_s_own():
+    """The set is derived from the getopt string, not listed beside it: the
+    hand-kept list this replaces had lost `B`."""
+    assert machine_exec._SSH_VALUE_FLAGS == frozenset("bceilmopBDEFIJLOPQRSWw")
+
+
+@pytest.mark.asyncio
+async def test_a_port_written_after_the_host_is_still_refused(registry, tmp_path):
+    """Through ExecTool, the shape the reviewer ran: the whole line used to run
+    on the plain shell path and reached 203.0.113.7:58717."""
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    for command in (
+        f"ssh -o ConnectTimeout=1 root@203.0.113.7 -p 58717 true; touch {marker}",
+        f"ssh -o ConnectTimeout=1 -vp 58717 root@203.0.113.7 true; touch {marker}",
+    ):
+        out = await tool.execute(command=command)
+        assert "Error:" in out and "conn_gpu" in out, command
+        assert not marker.exists()
