@@ -10,7 +10,7 @@
  * de-dups by, because a provider's list mixes ids added by hand with ids the
  * vendor reports.
  */
-import { cleanup, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import * as store from '../features/model/store'
@@ -109,5 +109,36 @@ describe('the model chip', () => {
     store.setCurrent('my-model')
     mount()
     expect(name()).toBe('My Model')
+  })
+})
+
+describe('the model chip, to a screen reader', () => {
+  it('says whether the picker it opens is up', () => {
+    install([{ id: 'openrouter', name: 'OpenRouter', on: true, models: ['my-model'], configured: ['my-model'] }])
+    store.setCurrent('my-model')
+    mount()
+    const chip = (): HTMLElement => document.getElementById('modelChip')!
+    expect(chip().getAttribute('aria-expanded')).toBe('false')
+    act(() => store.open(chip()))
+    expect(chip().getAttribute('aria-expanded')).toBe('true')
+    act(() => store.close())
+    expect(chip().getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('says nothing about a picker another control opened', () => {
+    /* One store serves every opener, so "a picker is up" is not the same
+       question as "mine is up": the settings role pills open it against their
+       own button (features/settings/providers/Roles.tsx). A chip that answered
+       the first would hand a reader a control and a state that do not belong
+       together. */
+    install([{ id: 'openrouter', name: 'OpenRouter', on: true, models: ['my-model'], configured: ['my-model'] }])
+    store.setCurrent('my-model')
+    mount()
+    const chip = (): HTMLElement => document.getElementById('modelChip')!
+    const pill = document.body.appendChild(document.createElement('button'))
+
+    act(() => store.open(pill, undefined, undefined, { kind: 'text', title: 'Planner model' }))
+
+    expect(chip().getAttribute('aria-expanded')).toBe('false')
   })
 })

@@ -8,7 +8,7 @@ import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import * as tier from '../../state/tier'
 import { domSnapshot } from '../../test/domSnapshot'
-import { ModelApp } from './ModelPicker'
+import { FOLD, ModelApp } from './ModelPicker'
 import * as store from './store';
 
 import type { ModelSource, Provider } from './types'
@@ -970,5 +970,83 @@ describe('the picker with nothing to offer', () => {
     openIt()
     expect(pick()).toBeNull()
     expect(h.toasts).toEqual(['gui.picker.no_account'])
+  })
+})
+
+/* What a reader who cannot see the list is told. The tick is a glyph and the
+   grouping is a heading, so both are shape alone until the markup states them. */
+describe('the model picker, to a screen reader', () => {
+  it('names the popover after what is being chosen', () => {
+    install()
+    mount()
+    openIt()
+    expect(pick()!.getAttribute('aria-label')).toBe('gui.picker.title')
+  })
+
+  it('names it after the slot instead, when a slot opened it', () => {
+    install()
+    mount()
+    act(() => { store.open(undefined, undefined, undefined, { kind: 'text', title: 'Planner model' }) })
+    expect(pick()!.getAttribute('aria-label')).toBe('Planner model')
+  })
+
+  it('states the current model as the checked one of a set', () => {
+    store.setCurrent('claude-sonnet-5')
+    install()
+    mount()
+    openIt()
+    expect(rows('models').map((b) => b.getAttribute('role'))).toEqual(['radio', 'radio', 'radio', 'radio'])
+    expect(rows('models').map((b) => b.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false', 'true'])
+  })
+
+  it('gives each account its own set, named after the account', () => {
+    install()
+    mount()
+    openIt()
+    /* Per account rather than one set for the picker: the same model can be
+       listed under Recent and under its account, and one set may hold one
+       checked member. An account with nothing to list owns no set. */
+    expect(groups().map((g) => g.getAttribute('role'))).toEqual(['radiogroup', 'radiogroup', null])
+    expect(groups().map((g) => g.getAttribute('aria-label'))).toEqual(['MiniMax (Global)', 'Anthropic', null])
+  })
+
+  it('leaves the tick out of the row\'s spoken name, now that the state is said', () => {
+    /* Chrome builds a radio's name from its contents, so a glyph left visible
+       to it is read out beside the checked state it duplicates. */
+    store.setCurrent('claude-sonnet-5')
+    install()
+    mount()
+    openIt()
+    const ticked = rows('models').find((b) => b.querySelector('.tick'))!
+    expect(ticked.querySelector('.tick')!.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('leaves the show-all row out of the set it sits in', () => {
+    /* It reveals more of the account's radios rather than being one: a row that
+       answers to the set's state would be offered as a model to pick. Asserted
+       against its siblings rather than on its own, because it carries their
+       `row` class: on a picker that marked no row at all, "the show-all row is
+       not a radio" is true for the wrong reason. */
+    const many = Array.from({ length: FOLD + 2 }, (_, i) => `router/model-${String(i)}`)
+    install({}, [{ id: 'router', name: 'Router', on: true, models: many, configured: many }])
+    mount()
+    openIt()
+    const siblings = [...document.querySelectorAll<HTMLElement>('.mpick .models .model-group .row')]
+    expect(siblings.map((b) => b.getAttribute('role')))
+      .toEqual([...Array<string | null>(FOLD).fill('radio'), null])
+    expect(siblings.at(-1)).toBe(more())
+    expect(more()!.getAttribute('aria-checked')).toBeNull()
+  })
+
+  it('gives the recent group a set of its own', async () => {
+    install()
+    mount()
+    openIt()
+    await act(async () => { rows('models')[3]!.click() })
+    openIt()
+    const recent = document.querySelector<HTMLElement>('.mpick .model-recent')!
+    expect(recent.getAttribute('role')).toBe('radiogroup')
+    expect(recent.getAttribute('aria-label')).toBe('gui.picker.recent')
+    expect(recents().map((b) => b.getAttribute('aria-checked'))).toEqual(['true'])
   })
 })

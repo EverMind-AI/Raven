@@ -7939,6 +7939,10 @@
       "en": "Max",
       "zh": "全力"
     },
+    "gui.picker.title": {
+      "en": "Model",
+      "zh": "模型"
+    },
     "gui.picker.recent": {
       "en": "Recent",
       "zh": "最近使用"

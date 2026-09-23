@@ -19,7 +19,7 @@
  */
 
 import { ArrowDown01Icon } from '@hugeicons/core-free-icons'
-import { useSyncExternalStore } from 'react'
+import { useRef, useSyncExternalStore } from 'react'
 
 import { Icon } from '../components/Icon'
 import { ProviderIcon } from '../components/ProviderMark'
@@ -63,15 +63,18 @@ function serving(current: string): { provider: Provider; id: string } | null {
 export function ModelChip(): JSX.Element {
   useSyncExternalStore(model.subscribe, model.version)
   useSyncExternalStore(paint.subscribe, paint.get)
+  const me = useRef<HTMLButtonElement>(null)
   const current = model.current()
   const at = serving(current)
   const label = at?.provider.labels?.[at.id]?.label || model.short(current)
   return (
     <button
+      ref={me}
       className="chip model"
       id="modelChip"
       title={current}
       aria-haspopup="true"
+      aria-expanded={model.openedFrom(me.current) ? 'true' : 'false'}
       onClick={() => {
         if (openModelsForMissingProvider()) return
         model.open(null)
