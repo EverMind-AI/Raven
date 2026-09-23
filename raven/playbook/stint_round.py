@@ -101,6 +101,7 @@ class RoundContext:
     _self_committed: bool = False
     _spent: dict[str, int] = field(default_factory=dict)
     _results: dict[str, CheckResult] = field(default_factory=dict)
+    _unmeasured: set[str] = field(default_factory=set)
     _git: ProjectGit | None = None
     _git_ready: bool = False
 
@@ -309,6 +310,13 @@ class RoundContext:
         # answered, so anything missing here appeared between then and now.
         project = Path(self.record.project or self.workdir)
         specs, missing = resolve_checks(project, self.spec.name, wanted)
+        # On the record and not only in the log. A greenfield tree starts with
+        # this gap by design -- nothing has decided what builds this project
+        # yet -- and the gap does not announce its own closing: a project whose
+        # source lands at the repository root grows no directory the layout
+        # recognises, so nothing here would ever ask again. A round that could
+        # not measure a gate says so in the one place the round is read from.
+        self._unmeasured.update(missing)
         for name in missing:
             logger.error(
                 "stint {} round {}: nothing says what {!r} runs here, so it was not measured",
@@ -508,6 +516,11 @@ class RoundContext:
             if report is not None:
                 entry.violations.extend(report.violations)
             entry.verify = [result.to_dict() for result in self._results.values()]
+            for name in sorted(self._unmeasured):
+                entry.violations.append(
+                    f"nothing says what the {name!r} check runs here, so this round passed through it unmeasured; "
+                    f'answer it with `raven playbook stint check set {self.spec.name} {name} --run "..."`'
+                )
             if failures:
                 entry.violations.append(
                     f"{len(failures)} check(s) still failing when the round moved on: "

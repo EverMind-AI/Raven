@@ -57,6 +57,7 @@ from raven.playbook.stint_spec import (
 from raven.playbook.types import PlaybookSpec
 from raven.stint import backlog as backlog_mod
 from raven.stint.backlog import STINT_DIR
+from raven.stint.bootstrap import is_greenfield
 from raven.stint.checks import CHECKS_FILE, resolve_checks
 from raven.stint.git import HistoryError, ProjectGit
 from raven.stint.journal import JOURNAL
@@ -1236,11 +1237,22 @@ def _unanswered_checks(project: Path, spec: PlaybookSpec) -> str:
     reads, in the round's own table, exactly like a gate that passed. Said
     before the tree is opened, because the answer is one line in a file and the
     person is standing right here.
+
+    Except on a greenfield tree, where the person is standing here and cannot
+    answer: what builds this project is not yet a fact about it, because
+    nothing has decided what it is written in -- that is round one's work. The
+    refusal asked for a guess, and a guess is worse than the gap it fills; the
+    honest answer for an empty tree, `python -m pytest`, exits non-zero for
+    having collected nothing, and fails the round that was supposed to create
+    the thing. Left to the approval, which names the gate nobody can run yet,
+    and to each round's record, which says it was not measured.
     """
     if not spec.verify:
         return ""
     _, missing = resolve_checks(project, spec.name, spec.verify)
     if not missing:
+        return ""
+    if is_greenfield(project):
         return ""
     told = "; ".join(
         f"{entry.name} ({entry.description.strip()})" for entry in spec.verify if entry.name in set(missing)

@@ -224,6 +224,20 @@ GREENFIELD_DIRS = ("src/**", "project/**", "tools/**", "tests/**")
 _NOT_SOURCE_BY_ITSELF = ("tools", "scripts", "tests", "test", "spec")
 
 
+def is_greenfield(project: Path) -> bool:
+    """Whether this project is still the handover and not yet the thing.
+
+    Shared rather than asked twice, because two halves of the same layout were
+    answering it differently: the guard grants ``GREENFIELD_DIRS`` on the
+    grounds that a stint's first round is the one that creates the source,
+    while the check ledger refused to start a project that had none. One of
+    them had to be wrong about the same tree, and they were never comparing the
+    same thing.
+    """
+    project = Path(project)
+    return not any((project / name).is_dir() for name in SOURCE_DIRS if name not in _NOT_SOURCE_BY_ITSELF)
+
+
 def source_dirs(project: Path) -> list[str]:
     """The directories this project keeps its work in, or the ones it is about to.
 
@@ -235,8 +249,7 @@ def source_dirs(project: Path) -> list[str]:
     """
     project = Path(project)
     found = [f"{name}/**" for name in SOURCE_DIRS if (project / name).is_dir()]
-    has_source = any(f"{name}/**" in found for name in SOURCE_DIRS if name not in _NOT_SOURCE_BY_ITSELF)
-    return found if has_source else sorted(set(found) | set(GREENFIELD_DIRS))
+    return sorted(set(found) | set(GREENFIELD_DIRS)) if is_greenfield(project) else found
 
 
 def _godot_bin() -> str:

@@ -429,6 +429,11 @@ class TestRunning:
         anything was refused on the retry, for the files the first try wrote."""
         project = tmp_path / "project"
         project.mkdir()
+        # Source, so the tree is not a greenfield one: an empty project cannot
+        # answer what builds it, and is let through unanswered. The refusal this
+        # test needs is the one a project that could have answered gets.
+        (project / "src").mkdir()
+        (project / "src" / "main.py").write_text("x = 1\n", encoding="utf-8")
         (project / "docs").mkdir()
         (project / "docs" / "PRD.md").write_text(
             "# The thing\n\n" + "The build must pass. The player must be able to move.\n" * 20, encoding="utf-8"
@@ -3267,3 +3272,89 @@ def test_the_shipped_example_is_a_playbook_that_would_actually_run() -> None:
     # rule into every prompt is how the reply ceiling was reached the first time.
     assert "{{ref:.stint/planner.md}}" in nodes[0]["prompt_template"]
     assert "undone" in nodes[1]["prompt_template"], "the builder is told what it owns"
+
+
+class TestAProjectThatIsStillOnlyItsBrief:
+    """A greenfield handover is how a stint normally starts, and the check
+    ledger used to be the one part of the layout that disagreed.
+
+    `source_dirs` grants the conventional directories on the grounds that round
+    one is the round that creates the source; `_unanswered_checks` refused to
+    start a project that had none. Both were reading the same tree.
+    """
+
+    @staticmethod
+    def _brief_only(tmp_path: Path, *, with_source: bool = False) -> Path:
+        project = tmp_path / "project"
+        (project / "docs").mkdir(parents=True)
+        (project / "docs" / "PRD.md").write_text(
+            "# The thing\n\n" + "The tool must count words. The output should be deterministic.\n" * 20,
+            encoding="utf-8",
+        )
+        if with_source:
+            (project / "src").mkdir()
+            (project / "src" / "main.py").write_text("x = 1\n", encoding="utf-8")
+        ProjectGit(project).ensure_repo()
+        return project
+
+    @staticmethod
+    def _asks_for_a_build() -> PlaybookSpec:
+        return _spec(
+            confirm=True,
+            setup="stint",
+            verify=[{"name": "build", "description": "the source compiles"}],
+            roles=[
+                {"as": "planner", "name": "echo", "promptTemplate": "plan", "owns": ["reports/**"]},
+                {
+                    "as": "builder",
+                    "name": "echo",
+                    "dependsOn": ["planner"],
+                    "promptTemplate": "build",
+                    "owns": ["src/**"],
+                    "verifyAfter": ["build"],
+                },
+            ],
+        )
+
+    async def test_a_tree_that_is_only_a_brief_may_start_without_saying_what_builds_it(self, tmp_path: Path) -> None:
+        """Nothing has decided what this project is written in -- that is round
+        one's work -- so there is no honest answer to give, and the refusal was
+        asking for a guess."""
+        project = self._brief_only(tmp_path)
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: project)
+
+        receipt = await driver.start(self._asks_for_a_build())
+
+        assert not receipt.startswith("Error"), receipt
+        assert not (project / ".stint" / "checks.json").exists(), "nothing was invented on the project's behalf"
+
+    async def test_a_tree_with_source_in_it_is_still_refused(self, tmp_path: Path) -> None:
+        """The refusal is not gone, it is scoped. A project with code in it can
+        say what builds that code, and a person who is asked is standing here."""
+        project = self._brief_only(tmp_path, with_source=True)
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: project)
+
+        receipt = await driver.start(self._asks_for_a_build())
+
+        assert receipt.startswith("Error") and "never answered" in receipt, receipt
+
+    async def test_a_round_that_could_not_measure_a_gate_says_so_on_its_record(self, tmp_path: Path) -> None:
+        """The exemption does not announce its own closing: source that lands at
+        the repository root grows no directory the layout recognises, so nothing
+        would ever ask again. Every round it is skipped, it is written down."""
+        spec = _spec(
+            roles=[{"as": "dev", "name": "echo", "promptTemplate": "work", "verifyAfter": ["build"]}],
+            verify=[{"name": "build", "description": "the source compiles"}],
+        )
+        context = TestBoundaries._context(tmp_path, spec)
+        node = TestBoundaries._node("game-dev-r01-dev")
+
+        verdict = await context.judge(node=node)
+
+        assert verdict.accomplished is True, "an unanswered check is not a failure to hand back"
+        entry = context.record.round(1)
+        assert entry.verify == [], "nothing ran, so nothing is reported as having run"
+        assert any("passed through it unmeasured" in note for note in entry.violations), entry.violations
+        assert any("check set game-dev build" in note for note in entry.violations), entry.violations
