@@ -43,6 +43,7 @@ from loguru import logger
 
 from raven.acp_client import elicitation
 from raven.acp_client.client import UNHANDLED
+from raven.security.redact import redact
 
 PERMISSION_METHOD = "session/request_permission"
 
@@ -170,7 +171,10 @@ def auto_approver(name: str, observe: Callable[[str, dict[str, Any]], Awaitable[
     """An ``on_request`` handler that approves permissions and refuses the rest.
 
     A permission whose command the host's deny rules refuse is the exception
-    (:func:`host_refusal`) and is answered with a reject option. A check that
+    (:func:`host_refusal`) and is answered with a reject option. What either
+    log line names is redacted first: the command is the sub-agent's to write,
+    and a denied ``curl -H "Authorization: ..."`` is exactly the one that lands
+    in the retained log. A check that
     raises refuses too: the request still has to be answered, and approving a
     command nobody could check is the failure this exception exists to stop.
 
@@ -197,10 +201,10 @@ def auto_approver(name: str, observe: Callable[[str, dict[str, Any]], Awaitable[
         title = tool.get("title") or tool.get("kind") if isinstance(tool, dict) else None
         if refusal is not None:
             outcome = refusal_outcome(params)
-            logger.info("acp agent {!r}: refusing {} ({})", name, refusal, outcome)
+            logger.info("acp agent {!r}: refusing {} ({})", name, redact(refusal), outcome)
         else:
             outcome = permission_outcome(params)
-            logger.debug("acp agent {!r}: approving {} ({})", name, title or "a tool call", outcome)
+            logger.debug("acp agent {!r}: approving {} ({})", name, redact(str(title or "a tool call")), outcome)
         if observe is not None:
             try:
                 await observe(method, params)

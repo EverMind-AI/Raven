@@ -40,7 +40,6 @@ from uuid import uuid4
 
 from loguru import logger
 
-from raven.acp import redact
 from raven.acp.outbound import (
     DEFAULT_REQUEST_TIMEOUT_S,
     ConnectionClosedError,
@@ -49,6 +48,7 @@ from raven.acp.outbound import (
 )
 from raven.acp.updates import UpdateTranslator
 from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
+from raven.security import redact
 
 ALLOW_KIND = "allow_once"
 SESSION_KIND = "allow_always"

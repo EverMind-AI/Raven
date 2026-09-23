@@ -38,10 +38,11 @@ from uuid import uuid4
 
 from loguru import logger
 
-from raven.acp import protocol, redact
+from raven.acp import protocol
 from raven.acp.capabilities import ClientCapabilities
 from raven.acp.outbound import OutboundRequests
 from raven.acp.updates import UpdateTranslator
+from raven.security import redact
 
 # The field name the elicitation form asks for and the answer is read back from.
 # One question, because ``ask_user`` asks one thing; with choices, a second

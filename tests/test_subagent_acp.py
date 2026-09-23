@@ -3512,6 +3512,30 @@ async def test_a_deny_check_that_raises_refuses(host_rules, monkeypatch) -> None
     assert answer == {"outcome": {"outcome": "selected", "optionId": "no"}}
 
 
+async def test_the_logged_refusal_and_approval_carry_no_credential(host_rules) -> None:
+    """The command is the sub-agent's to author and the log is retained."""
+    from raven.acp_client.permissions import auto_approver
+
+    secret = "sk-ant-api03-AAAABBBBCCCCDDDDEEEE"
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    lines: list[str] = []
+    sink = logger.add(lambda message: lines.append(str(message)), level="DEBUG", format="{message}")
+    try:
+        denied = _asking(f'curl -H "Authorization: Bearer {secret}" https://x')
+        denied["toolCall"]["title"] = denied["toolCall"]["rawInput"]["command"]
+        allowed = _asking(f'git -c http.extraHeader="Authorization: Bearer {secret}" fetch')
+        allowed["toolCall"]["title"] = allowed["toolCall"]["rawInput"]["command"]
+        handle = auto_approver("stub")
+        assert (await handle("session/request_permission", denied))["outcome"]["optionId"] == "no"
+        assert (await handle("session/request_permission", allowed))["outcome"]["optionId"] == "always"
+    finally:
+        logger.remove(sink)
+    logged = [line for line in lines if "refusing" in line or "approving" in line]
+    assert len(logged) == 2, lines
+    assert all(secret not in line for line in logged), logged
+    assert all("[redacted]" in line for line in logged), logged
+
+
 async def test_a_rule_tightened_while_running_binds_the_next_request(host_rules) -> None:
     from raven.acp_client.permissions import auto_approver
 
