@@ -237,6 +237,23 @@ describe('the model picker', () => {
     expect(h.persisted).toEqual(['m2'])
   })
 
+  it('adds a typed id to the account on, when it spells the current model the other way', async () => {
+    /* "The account the reader is already on" is found by looking the current
+       model up in each column. By string it finds nobody, and the id silently
+       joins whichever account happens to be listed first. */
+    const h = install({}, [
+      { id: 'minimax', name: 'MiniMax', on: true, models: ['minimax-m3'], configured: ['minimax-m3'] },
+      { id: 'openrouter', name: 'OpenRouter', on: true, models: ['openrouter/my-model'], configured: ['openrouter/my-model'] },
+    ])
+    store.setCurrent('my-model')
+    mount()
+    openIt()
+    type('brand-new')
+    expect(typedRow()!.querySelector('.ct')!.textContent).toBe('gui.model.pick_add_to {"name":"OpenRouter"}')
+    await act(async () => { fireEvent.click(typedRow()!) })
+    expect(h.added).toEqual([['brand-new', 'openrouter', 'text']])
+  })
+
   it('leaves the typed row out once the term is a model exactly', () => {
     install()
     mount()
@@ -662,6 +679,19 @@ describe('the fold', () => {
     expect(more()!.textContent).toBe('gui.picker.show_all {"n":"20"}')
   })
 
+  it('keeps it visible when the conversation spells it without the vendor half', () => {
+    /* The same mixed spellings the column de-dups by `sameModel`. Pinning by
+       string leaves the running model behind the fold, where the reader has no
+       way to know it is the one in force. */
+    store.setCurrent('model-17')
+    install({}, ROUTER)
+    mount()
+    openIt()
+    const names = rows('models').map((b) => b.querySelector('.nm')!.textContent)
+    expect(names.slice(0, 7)).toEqual(['model-00', 'model-01', 'model-02', 'model-03', 'model-04', 'model-05', 'model-17'])
+    expect(rows('models')[6]!.querySelector('.tick')).not.toBeNull()
+  })
+
   it('does not fold while searching: the term is the way to a hidden model', () => {
     install({}, ROUTER)
     mount()
@@ -799,6 +829,22 @@ describe('what the picker offers', () => {
       })
     })
     expect(rows('models').map((x) => x.querySelector('.nm')!.textContent)).toEqual(['my-embedder'])
+  })
+
+  it('marks the current model when the account spells it the other way', () => {
+    /* The de-dup above is by `sameModel`, so the one row that survives carries
+       the provider's spelling while the conversation carries the bare one. A
+       tick compared by string then marks nothing, and the reader is left with
+       no sign of which model is running. */
+    install({}, [{
+      id: 'openrouter', name: 'OpenRouter', on: true,
+      models: ['openrouter/my-model'], configured: ['openrouter/my-model'],
+    }])
+    store.setCurrent('my-model')
+    mount()
+    openIt()
+    expect(rows('models').map((x) => x.querySelector('.nm')!.textContent)).toEqual(['my-model'])
+    expect(rows('models')[0]!.querySelector('.tick')).not.toBeNull()
   })
 
   it('offers the registry shortlist for a text opening on a provider with nothing added', () => {

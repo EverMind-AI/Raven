@@ -24,17 +24,30 @@ import { ProviderIcon } from '../components/ProviderMark'
 import { paint } from '../features/model/chip'
 import { openModelsForMissingProvider } from '../features/model/source'
 import * as model from '../features/model/store'
+import { sameModel } from '../features/model/types'
 
 import type { Provider } from '../features/model/types'
 import type { JSX } from 'react'
 
 const CHEVRON = 'M6 9l6 6 6-6'
 
-/* The provider serving the current model, or null while no list is installed
-   (the served frame, and a test that never installs one). */
-function serving(current: string): Provider | null {
+/* The provider serving the current model and the id as that provider spells it,
+   or null while no list is installed (the served frame, and a test that never
+   installs one).
+
+   By the backend's identity rather than by string, the way the column is built
+   (features/model/store.ts): a list mixes ids added by hand with ids the vendor
+   reports, so the conversation's spelling and the account's need not match. The
+   account's spelling comes back with it because `labels` is keyed by that one --
+   looking the label up under the conversation's spelling misses and falls
+   through to the raw id. */
+function serving(current: string): { provider: Provider; id: string } | null {
   try {
-    return model.source().providers().find((p) => model.column(p).includes(current)) ?? null
+    for (const p of model.source().providers()) {
+      const id = model.column(p).find((m) => sameModel(p.id, m, current))
+      if (id !== undefined) return { provider: p, id }
+    }
+    return null
   } catch {
     return null
   }
@@ -44,8 +57,8 @@ export function ModelChip(): JSX.Element {
   useSyncExternalStore(model.subscribe, model.version)
   useSyncExternalStore(paint.subscribe, paint.get)
   const current = model.current()
-  const provider = serving(current)
-  const label = provider?.labels?.[current]?.label || model.short(current)
+  const at = serving(current)
+  const label = at?.provider.labels?.[at.id]?.label || model.short(current)
   return (
     <button
       className="chip model"
@@ -57,7 +70,7 @@ export function ModelChip(): JSX.Element {
         model.open(null)
       }}
     >
-      {provider ? <ProviderIcon id={provider.id} name={provider.name} /> : null}
+      {at ? <ProviderIcon id={at.provider.id} name={at.provider.name} /> : null}
       <span id="modelName">{label}</span>
       <svg className="chrome-model-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
         <path d={CHEVRON} />
