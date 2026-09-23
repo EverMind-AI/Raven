@@ -213,7 +213,10 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
   /* The built-in row's list may simply not have landed yet; its click loads it. */
   const menuless = fixed || (row.model_source === 'agent' && !provs.length)
   const shown = fixed ? null : shownModel(row)
-  const unset = own ? 'gui.agent.model_follow' : menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default'
+  /* `fixed` outranks ownership: one of raven's own whose folder carries its own
+     chat credential runs on that key and the model beside it, so "follows the
+     main Raven" was the one thing it does not do. */
+  const unset = own && !fixed ? 'gui.agent.model_follow' : menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default'
   const cls = [
     'extAgents-pill',
     menuless ? 'extAgents-pill-fixed' : '',

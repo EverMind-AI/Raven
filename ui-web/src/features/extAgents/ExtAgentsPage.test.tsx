@@ -881,6 +881,22 @@ describe('the model pill', () => {
     expect(acts).toEqual([['model', 'Raven-Code', { clear_model: true }]])
   })
 
+  it("says a product on its own key manages its own model, not that it follows", async () => {
+    /* One of raven's own, so `own` is set -- but its folder carries the chat
+       credential its launcher branches on, which is the one case where an own
+       row does not inherit the host's model at all. The server says so with
+       `fixed`, and ownership must not draw over it. */
+    hostModels.providers = [{ id: 'openrouter', name: 'OpenRouter', models: ['anthropic/claude-opus-5'], on: true }]
+    install([
+      row({ name: 'Raven-Research', preset: undefined, kind: 'acp', own: true, vendored: true, model_source: 'fixed' }),
+    ])
+    await mount()
+    await openSheet('Raven-Research')
+    expect(pill()!.textContent).toBe('gui.agent.model_managed')
+    expect(pill()!.disabled).toBe(true)
+    expect(sheet()!.querySelector('.extAgents-mx')).toBeNull()
+  })
+
   it("does not show an endpoint's configured model as a pick, and still lets a menuless acp row clear one", async () => {
     const { acts } = install([
       row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', model_source: 'fixed', model: 'miro-1' }),

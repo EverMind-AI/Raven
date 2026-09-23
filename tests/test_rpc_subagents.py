@@ -2304,7 +2304,7 @@ async def test_a_builtin_name_cannot_be_added_as_another_transport(config_path: 
 # --------------------------------------------------------------- product readiness on the page
 
 
-def _product_tree(tmp_path: Path, *, launcher: bool = True, engine: dict | None = None) -> Path:
+def _product_tree(tmp_path: Path, *, launcher: bool = True, engine: dict | None = None, kind: str = "cli") -> Path:
     """An `agents/` tree with one product folder.
 
     The manifest command names the interpreter and the folder's `run.py`, the
@@ -2316,9 +2316,11 @@ def _product_tree(tmp_path: Path, *, launcher: bool = True, engine: dict | None 
     folder.mkdir(parents=True)
     manifest = {
         "name": "Raven-Probe",
-        "kind": "cli",
+        "kind": kind,
         "description": "d",
-        "command": "{PYTHON} {SUBAGENT_DIR}/run.py {prompt}",
+        # An acp folder is served, not spawned per task, so it takes no prompt
+        # placeholder -- the shape the five shipped products ship with.
+        "command": "{PYTHON} {SUBAGENT_DIR}/run.py" + (" {prompt}" if kind == "cli" else ""),
     }
     if engine is not None:
         manifest["engine"] = engine
@@ -2545,6 +2547,65 @@ async def test_list_marks_the_built_in_row_and_a_discovered_product_as_ravens_ow
     assert rows["Raven-Probe"]["own"] is True and rows["Raven-Probe"]["model_source"] == "fixed"
     assert rows["Coder"]["own"] is False and rows["Coder"]["model_source"] == "fixed"
     assert rows["Researcher"]["own"] is False and rows["Researcher"]["model_source"] == "fixed"
+
+
+async def test_list_takes_a_product_on_its_own_key_off_the_hosts_catalogue(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A folder carrying its own `<PREFIX>_API_KEY` is what each launcher
+    branches on: it takes that credential with the provider and model beside it
+    and never calls `inherit_llm`. So the row does not follow the main Raven,
+    its model is not one this host can name, and the page must not offer raven's
+    ids for it -- which is what the `fixed` rule says, the same answer an openai
+    row gets for the same reason.
+
+    The same folder either way, so the key is the only thing that moved: without
+    it the row reads its menu off raven's own catalogue, the way every shipped
+    product does today.
+    """
+    from raven.acp_client.capabilities import CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path, kind="acp")
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
+    monkeypatch.delenv("PROBE_API_KEY", raising=False)
+    cfg = next(c for c in va.discover_product_rows(root) if c.name == "Raven-Probe")
+    SnapshotStore(path=tmp_path / "caps.json").record(
+        CapabilitySnapshot(
+            agent="Raven-Probe",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=1,
+            agent_name="raven",
+        )
+    )
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["Raven-Probe"]["own"] is True and rows["Raven-Probe"]["model_source"] == "raven"
+
+    (root / "raven-probe" / ".env").write_text("PROBE_API_KEY=sk-its-own\n", encoding="utf-8")
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["Raven-Probe"]["own"] is True and rows["Raven-Probe"]["model_source"] == "fixed"
+
+
+async def test_update_refuses_a_model_on_a_product_that_runs_on_its_own_key(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal is the point: the pick would be pushed at a session whose own
+    config was rendered from the folder's credential and has never heard of this
+    host's ids."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path, kind="acp")
+    (root / "raven-probe" / ".env").write_text("PROBE_API_KEY=sk-its-own\n", encoding="utf-8")
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    monkeypatch.delenv("PROBE_API_KEY", raising=False)
+
+    with pytest.raises(ConfigFieldReadonlyError, match="no menu this call can pick from"):
+        await subagents_update({"name": "Raven-Probe", "model": "gpt-5"})
 
 
 async def test_list_marks_a_config_row_whose_handshake_named_raven_as_ravens_own(

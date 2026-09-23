@@ -64,6 +64,7 @@ __all__ = [
     "merge_product_seeds",
     "product_folder",
     "product_image_key",
+    "product_llm_key",
     "product_secret",
     "product_state",
     "Readiness",
@@ -219,6 +220,28 @@ def _folder_setting(folder: Path, suffix: str) -> str:
     from raven.config.product_render import env_value
 
     return (env_value(f"{env_prefix(folder.name)}_{suffix}", env_file=folder / ".env") or "").strip()
+
+
+def product_llm_key(row_name: str, root: Path | None = None) -> str:
+    """The chat credential one product's folder supplies on its own, or ``""``.
+
+    ``<PREFIX>_API_KEY``, read the way the launcher reads it -- the process
+    environment first, then the folder's ``.env`` -- because this answers a
+    question about what the launcher will do: each product branches on exactly
+    this value, taking its own provider and model when it is set and inheriting
+    the host's whole LLM block when it is not (``raven.config.product_render``'s
+    ``inherit_llm``). ``api_key_var`` is the mirror of the ``REQUIRED_SECRETS``
+    name they read it under.
+
+    ``""`` means the product follows the host, which is the common case and the
+    one every shipped folder ships in. Raven-Design is the exception in the
+    other direction: it drops its own model, provider and provider table before
+    inheriting, so it follows whatever its folder holds -- it names no
+    ``DESIGN_API_KEY`` in its ``.env.example`` and never reads one, so nothing
+    puts a value here for it to be wrong about.
+    """
+    folder = product_folder(row_name, root)
+    return "" if folder is None else _folder_setting(folder, "API_KEY")
 
 
 def product_image_key(row_name: str, root: Path | None = None) -> str:

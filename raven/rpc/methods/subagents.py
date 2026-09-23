@@ -527,6 +527,16 @@ def _model_rule(cfg: Any, snapshot: Any, meta: Any) -> str:
     """
     if cfg.kind == "builtin":
         return "raven"
+    # A product whose folder carries its own chat credential is not on this
+    # host's catalogue at all: its launcher takes that key with the provider and
+    # model beside it and never reads what the host would have lent. Nothing
+    # here can name what it answers with, and a pick made from raven's ids would
+    # be pushed at a session whose own config has never heard of them -- so the
+    # model is the folder's, the way an openai row's is its section's.
+    from raven.agent.subagent.vendored_agents import product_llm_key
+
+    if product_llm_key(getattr(cfg, "name", "") or ""):
+        return "fixed"
     if cfg.kind != "acp":
         return "fixed"
     return "raven" if getattr(snapshot, "agent_name", "") == "raven" else "agent"
