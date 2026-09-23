@@ -729,8 +729,12 @@ function OrderTab({ row, node, roster, rec }: {
    slack the transcript's own thought box allows a reader. */
 const TAIL_SLACK_PX = 40
 
-/* What the reader can do to a scroller, as the events that say they did it. */
-const GESTURES = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const
+/* What the reader can do to a scroller, as the events that say they did it:
+   the ones over as they happen, and the presses that last until let go --
+   whose release is heard on the window, since a drag can end off the box. */
+const GESTURES = ['wheel', 'keydown'] as const
+const PRESSES = ['pointerdown', 'touchstart'] as const
+const RELEASES = ['pointerup', 'pointercancel', 'touchend', 'touchcancel'] as const
 
 /* How long a scroller has to sit still before the reader's hand counts as
    off it. Momentum outlives the wheel that started it and a dragged bar
@@ -781,7 +785,31 @@ function useTailFollow(key: string, record: NodeRecord | null, live: boolean) {
     const el = box.current
     if (!el) return
     let settle: ReturnType<typeof setTimeout> | null = null
-    const mark = (): void => { gestured.current = 1 }
+    /* A press is the reader's for as long as it is held: a bar can be pressed
+       and held still before the drag, or paused mid-drag, and a scroll after
+       either is still theirs. So a held press never disarms, and letting go
+       starts the settle like any other gesture. */
+    let held = false
+    const disarmSoon = (): void => {
+      if (settle) clearTimeout(settle)
+      settle = setTimeout(() => { if (!held) gestured.current = 0 }, SETTLE_MS)
+    }
+    /* A gesture that scrolls nothing -- a click on a fold, a key the page
+       handles -- has no scroll to disarm it, so it disarms itself. One that
+       does scroll has `note` push the deadline on for as long as it moves. */
+    const mark = (): void => {
+      gestured.current = 1
+      disarmSoon()
+    }
+    const press = (): void => {
+      held = true
+      mark()
+    }
+    const release = (): void => {
+      if (!held) return
+      held = false
+      disarmSoon()
+    }
     const pin = (): void => { if (wantsTail.current) el.scrollTop = el.scrollHeight }
     const note = (): void => {
       /* Nothing the reader did, so nothing about what they want -- this is the
@@ -799,8 +827,7 @@ function useTailFollow(key: string, record: NodeRecord | null, live: boolean) {
         return
       }
       wantsTail.current = el.scrollHeight - el.scrollTop - el.clientHeight < TAIL_SLACK_PX
-      if (settle) clearTimeout(settle)
-      settle = setTimeout(() => { gestured.current = 0 }, SETTLE_MS)
+      disarmSoon()
     }
     /* The box itself as well as what is in it. Measured in Safari: a repaint
        takes the box's own height up by 74px for an instant, the browser clamps
@@ -820,6 +847,8 @@ function useTailFollow(key: string, record: NodeRecord | null, live: boolean) {
     for (const kid of el.children) seen.observe(kid)
     kids.observe(el, { childList: true })
     for (const name of GESTURES) el.addEventListener(name, mark, { passive: true })
+    for (const name of PRESSES) el.addEventListener(name, press, { passive: true })
+    for (const name of RELEASES) window.addEventListener(name, release, { passive: true })
     el.addEventListener('scroll', note, { passive: true })
     /* And then, while the record is still being written, every frame.
      *
@@ -850,6 +879,8 @@ function useTailFollow(key: string, record: NodeRecord | null, live: boolean) {
       seen.disconnect()
       kids.disconnect()
       for (const name of GESTURES) el.removeEventListener(name, mark)
+      for (const name of PRESSES) el.removeEventListener(name, press)
+      for (const name of RELEASES) window.removeEventListener(name, release)
       el.removeEventListener('scroll', note)
     }
   }, [live])

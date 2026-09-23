@@ -1157,12 +1157,14 @@ describe('a node record still being written', () => {
   }
   const body = (): HTMLElement => document.querySelector('.tkbody') as HTMLElement
 
-  /* A reader moving the box: the gesture that did it, then the scroll it
-     caused. Both, because only a gesture makes the scroll theirs. */
+  /* A reader moving the box: the press that did it, the scroll it caused, and
+     letting go. All three, because only a gesture makes the scroll theirs and
+     a press is theirs until it is released. */
   const reader = (top: number): void => {
     body().dispatchEvent(new Event('pointerdown'))
     body().scrollTop = top
     body().dispatchEvent(new Event('scroll'))
+    window.dispatchEvent(new Event('pointerup'))
   }
 
   /* What the browser does on its own: a scroll with no gesture behind it. */
@@ -1225,6 +1227,106 @@ describe('a node record still being written', () => {
     await readAgain('second')
 
     expect(body().scrollTop).toBe(5090)
+  })
+
+  it('is not talked out of following by a press that scrolled nothing', async () => {
+    /* A gesture arms the scrolls that follow it, and only the scrolling
+       stopping disarms it again -- so a gesture that never scrolls has to
+       disarm on its own. A press on a fold inside the box, or a key the page
+       handles, is a gesture with no scroll after it; left armed, the next
+       move the browser makes by itself reads as the reader walking away, and
+       the follow ends for good, the defect this whole hook exists for. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => {
+      body().dispatchEvent(new Event('pointerdown'))
+      window.dispatchEvent(new Event('pointerup'))
+    })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(3378) })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(5090)
+  })
+
+  it('is not talked out of following by a long press that scrolled nothing', async () => {
+    /* Held past the settle, the press's own deadline has already come and
+       gone while it was held, so it is letting go that has to start the
+       count -- or the gesture stays armed for good. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { body().dispatchEvent(new Event('pointerdown')) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 400)) })
+    act(() => { window.dispatchEvent(new Event('pointerup')) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(3378) })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(5090)
+  })
+
+  it('is not talked out of following by a key that scrolled nothing', async () => {
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { body().dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(3378) })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(5090)
+  })
+
+  it('still lets a reader scroll away with a gesture that does scroll', async () => {
+    /* The other half: disarming a gesture that scrolled nothing must not
+       disarm one that is scrolling. A wheel starts, its scroll follows inside
+       the settle window, and that is the reader leaving. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => {
+      body().dispatchEvent(new Event('wheel'))
+      body().scrollTop = 900
+      body().dispatchEvent(new Event('scroll'))
+    })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(900)
+  })
+
+  it('lets a reader drag away after holding the bar still', async () => {
+    /* The press is what makes a drag the reader's. Timed from the press
+       alone, a bar held still for longer than the settle would disarm before
+       the drag began, and every scroll of the drag would then be answered as
+       the browser's -- the reader pinned to the end, unable to leave it. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { body().dispatchEvent(new Event('pointerdown')) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 400)) })
+    act(() => {
+      body().scrollTop = 900
+      body().dispatchEvent(new Event('scroll'))
+      window.dispatchEvent(new Event('pointerup'))
+    })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(900)
   })
 
   it('puts a reader back the moment the browser moves them', async () => {
