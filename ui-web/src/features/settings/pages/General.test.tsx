@@ -2,7 +2,6 @@
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import * as notifications from '../../../lib/notifications'
 import * as look from '../../../state/look'
 import { resetSources, setSources } from '../../../state/sources'
 import { install, modelSource, mount, source as settingsSource } from '../../../test/settingsHarness'
@@ -25,7 +24,6 @@ afterEach(() => {
   resetSources()
   localStorage.clear()
   look.load()
-  notifications.setEnabled(false)
   toasts.calls = []
 })
 
@@ -54,27 +52,20 @@ describe('general page', () => {
   it('says what each setting is for under its name', async () => {
     install()
     await mount('general')
-    for (const k of ['language', 'theme', 'notify']) {
+    for (const k of ['language', 'theme']) {
       const title = screen.getByText('gui.settings.general.' + k, { selector: '.settings-gen-t' })
       expect(title.nextElementSibling!.textContent).toBe('gui.settings.general.' + k + '_sub')
     }
   })
 
-  it('the notification switch goes to the notifications module and refuses where the browser has none', async () => {
-    /* Before the mount: the page reads whether the browser has notifications
-       when it draws the row. */
+  it('offers no desktop-notification switch', async () => {
+    /* The row is gone from the page, not from the tree: src/lib/notifications
+       and its writer in state/session/runtime.ts are untouched, and this is
+       what says the reader is no longer offered the setting. */
     Object.defineProperty(window, 'Notification', { value: { permission: 'granted', requestPermission: async () => 'granted' }, configurable: true })
     install()
     await mount('general')
-    const sw = screen.getByRole('switch', { name: 'gui.settings.general.notify' })
-    expect(sw.getAttribute('aria-checked')).toBe('false')
-    await act(async () => { fireEvent.click(sw) })
-    expect(notifications.enabled()).toBe(true)
-    delete (window as { Notification?: unknown }).Notification
-    notifications.setEnabled(false)
-    store.redraw()
-    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'gui.settings.general.notify' })) })
-    expect(notifications.enabled()).toBe(false)
-    expect(toasts.calls).toEqual(['gui.settings.general.notify_denied'])
+    expect(screen.queryByRole('switch')).toBeNull()
+    expect(screen.queryByText('gui.settings.general.notify')).toBeNull()
   })
 })

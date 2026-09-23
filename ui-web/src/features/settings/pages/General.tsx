@@ -1,11 +1,22 @@
-/* General: language, theme, notifications. Language goes through the source
-   (it is config the agent reads too); theme and notifications are the browser's
-   own preferences and go to the modules that already hold them. */
+/* General: language and theme. Language goes through the source (it is config
+   the agent reads too); theme is the browser's own preference and goes to the
+   module that already holds it.
+
+   Desktop notifications are not offered here, because half of what the row
+   promised does not exist. Its line read "when tasks finish or need your
+   attention", and only the first half was ever sent: an answer landing is
+   announced from state/session/runtime.ts, while the three side-channel asks
+   that actually stop a turn on the reader -- confirm, the permission gate,
+   clarify -- announce nothing. A switch is not offered for a thing that is
+   half built.
+
+   Taken out of the page rather than out of the tree: the switch was the only
+   writer of the preference src/lib/notifications.ts reads, so with it gone the
+   page announces nothing at all, and finishing the other half is putting this
+   row back rather than writing the feature again. */
 import { code as langCode, t } from '../../../i18n/t'
-import * as notifications from '../../../lib/notifications'
 import * as look from '../../../state/look'
-import { show as toast } from '../../../state/toast'
-import { Seg, Switch } from '../Fields'
+import { Seg } from '../Fields'
 import * as store from '../store'
 
 import type { JSX, ReactNode } from 'react'
@@ -18,7 +29,7 @@ const SHOT = { light: 'settings-shot', dark: 'settings-shot settings-shot-dark' 
 
 /* One setting: its name and a line about it on the left, the control on the
    right, or -- for the theme cards -- under both. No card around the list: the
-   page is three settings, and the whitespace between them is the division. */
+   page is two settings, and the whitespace between them is the division. */
 function Setting({ title, sub, below, children }: {
   title: string
   sub: string
@@ -55,23 +66,7 @@ function Preview({ theme }: { theme: Theme }): JSX.Element {
 }
 
 export function General(): JSX.Element {
-  const on = notifications.enabled()
-  const canNtf = 'Notification' in window
   const theme = look.get().theme as Theme
-  const flip = async (v: boolean): Promise<void> => {
-    if (v && canNtf && Notification.permission !== 'granted') {
-      const r = await Notification.requestPermission()
-      if (r !== 'granted') {
-        notifications.setEnabled(false)
-        store.redraw()
-        toast(t('gui.settings.general.notify_denied'))
-        return
-      }
-    }
-    notifications.setEnabled(v && canNtf)
-    store.redraw()
-    if (v && !canNtf) toast(t('gui.settings.general.notify_denied'))
-  }
   return (
     <div className="settings-genlist">
       <Setting title={t('gui.settings.general.language')} sub={t('gui.settings.general.language_sub')}>
@@ -100,9 +95,6 @@ export function General(): JSX.Element {
             </button>
           ))}
         </div>
-      </Setting>
-      <Setting title={t('gui.settings.general.notify')} sub={t('gui.settings.general.notify_sub')}>
-        <Switch on={on} label={t('gui.settings.general.notify')} onChange={(v) => void flip(v)} />
       </Setting>
     </div>
   )
