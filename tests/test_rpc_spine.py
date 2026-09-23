@@ -3,6 +3,8 @@
 import asyncio
 from dataclasses import replace
 
+import pytest
+
 from raven.acp_client.asker import current_ask
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.message import MessageTool
@@ -23,6 +25,7 @@ from raven.rpc.spine import (
 )
 from raven.sandbox import ExecResult, SandboxExecutor
 from raven.spine import (
+    AnswerlessTurnError,
     ChatType,
     EpisodeStart,
     MediaOut,
@@ -475,6 +478,27 @@ async def test_runner_cron_captures_reply_non_streaming():
 
     assert loop.last_stream is False  # CRON runs non-streaming
     assert readback["cron:job1"] == "reminder fired"  # reply captured for fan-out
+
+
+async def test_runner_cron_clears_the_readback_a_failed_turn_would_hand_on():
+    # The submitter pops the read-back text by conversation after the handle
+    # resolves. A turn that fails stores nothing, so without the clear the next
+    # run on that conversation would read the previous run's reply as its own.
+    readback: dict[str, str] = {}
+    req = TurnRequest(origin=Origin.CRON, source=_src(chat_id="direct"), text="[cron]", conversation="cron:job1")
+    _events, emit = _collect()
+    await RpcTurnRunner(_RunTurnLoop(reply_text="reminder fired"), FakeEmitter(), {}, readback).run(
+        req, emit, lambda: []
+    )
+    assert readback["cron:job1"] == "reminder fired"
+
+    class _FailsLoop(_RunTurnLoop):
+        async def run_turn(self, req, emit, drain, **kwargs) -> TurnOutcome:
+            raise AnswerlessTurnError("Error calling LLM (server@openrouter): 503")
+
+    with pytest.raises(AnswerlessTurnError):
+        await RpcTurnRunner(_FailsLoop(), FakeEmitter(), {}, readback).run(req, emit, lambda: [])
+    assert "cron:job1" not in readback
 
 
 # --- RpcOutlet.deliver: maps each spine event to its wire event ---

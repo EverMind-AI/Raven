@@ -227,7 +227,14 @@ class RpcTurnRunner(AgentTurnRunner):
         # the gateway's GatewayTurnRunner read-back path.
         if req.origin is Origin.CRON:
             text_sink: dict[str, str] = {}
-            outcome = await self._loop.run_turn(req, emit, drain, stream=False, text_sink=text_sink)
+            try:
+                outcome = await self._loop.run_turn(req, emit, drain, stream=False, text_sink=text_sink)
+            finally:
+                # A turn that fails stores nothing and the submitter pops by
+                # conversation, so the previous run's text must not be left for
+                # it to read back as this run's reply.
+                if req.conversation is not None:
+                    self._readback_texts.pop(req.conversation, None)
             if req.conversation is not None and (text := text_sink.get("text")) is not None:
                 self._readback_texts[req.conversation] = text
             return outcome
