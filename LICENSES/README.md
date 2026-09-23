@@ -24,10 +24,12 @@ history.
   vendors too, on the same nominative basis: each identifies the channel row it
   sits on. Nine are the app icons the vendors publish on their App Store
   listings, resampled from the listing's 512px artwork to 96x96 PNG. For the
-  five Chinese apps that listing is the one published source of a colour icon:
-  the permissively licensed icon sets carry them only as single-colour glyphs.
-  `matrix.svg` and `mochat.svg` are the files matrix.org and Mochat serve as
-  their own marks, copied byte for byte. `scripts/refresh_channel_marks.py`
+  five Chinese apps the listing is where a colour icon was found: the
+  permissively licensed icon sets checked (lobe-icons, `@cherrystudio/ui`, SVG
+  Logos, Simple Icons and the brand sets on Iconify) carry them only as
+  single-colour glyphs. `matrix.svg` and `mochat.svg` are the files matrix.org
+  and MoChat serve as their own marks, copied byte for byte.
+  `scripts/refresh_channel_marks.py`
   names the listing or URL behind every file and regenerates the directory.
 - `MIT-cherry-studio.txt` - the provider and model brand marks under
   `ui-web/src/assets/providers/`, taken from `@cherrystudio/ui`

@@ -2,13 +2,14 @@
 
 The channels section of the settings dialog shows each entrance's own app icon
 (``ui-web/src/components/ChannelMark.tsx``). Nine of them are the icon the vendor
-publishes on its App Store listing, which is the one place the five Chinese apps
-publish a colour icon at all: the open icon sets carry them only as single-colour
-glyphs, and their own sites serve favicons of 16 to 48 pixels. The listing's
-512px artwork is resampled here, so a refreshed icon is this script rerun rather
-than a hand-edited binary, and ``LICENSES/README.md`` can name where each file
-came from. Matrix and Mochat publish a vector mark on their own sites, and those
-two are copied byte for byte.
+publishes on its App Store listing, at 512px. That listing is where the five
+Chinese apps' colour icons were found: the permissively licensed icon sets
+checked (lobe-icons, @cherrystudio/ui, SVG Logos, Simple Icons and the brand sets
+on Iconify) carry those five only as single-colour glyphs. The artwork is
+resampled here, so a refreshed icon is this script rerun rather than a
+hand-edited binary, and ``LICENSES/README.md`` can name where each file came
+from. Matrix and MoChat publish a vector mark on their own sites, and those two
+are copied byte for byte.
 
     uv run python scripts/refresh_channel_marks.py
 """
