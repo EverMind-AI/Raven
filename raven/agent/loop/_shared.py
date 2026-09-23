@@ -223,10 +223,13 @@ class LoopOutcome:
     ``edited_files`` carry the shadow-git snapshot info used to build the
     next turn's recovery prompt.
 
-    ``error`` is the loop's own account of a model call it gave up on, in the
-    words a reader is shown; None when the call succeeded or a hook salvaged
-    an answer. The caller fails the turn on it unless the message tool already
-    answered in this turn.
+    ``error`` is the loop's own account of why this turn has no answer, in the
+    words a reader is shown: a model call it gave up on, or an empty-response
+    recovery that spent every budget without a word coming back. None when the
+    turn produced an answer or a hook salvaged one, and also when the turn
+    returned no text at all with the recovery switched off, which the caller
+    fails on by itself. The caller fails the turn on it unless one of the
+    turn's tools has already put an answer in front of the reader.
     """
 
     status: str = "completed"  # "completed" | "interrupted" | "error"

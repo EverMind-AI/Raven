@@ -174,6 +174,12 @@ _SAID_LOG_MAX_CHARS = 2000
 _TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY)
 
 
+# How a turn reports the model saying nothing with no recovery behind it. The
+# exhausted-recovery exit words its own sentence from the budgets it spent;
+# this one has no counts to give, and says why there are none.
+_NO_CONTENT_UNRECOVERED = "The model returned no content, and this turn's empty-response recovery is switched off."
+
+
 def _log_what_the_model_said(response: Any) -> None:
     """Record the assistant's own words and how much it thought.
 
@@ -600,9 +606,10 @@ class TurnPathMixin:
         # Track whether the turn was a normal exit or a max-iter interruption.
         # ``status`` labels the shadow-git commit and, with ``error_detail`` --
         # the loop's own words for a model call it gave up on -- stamps the
-        # ``LoopOutcome`` the caller fails the turn on. The empty-response exit
-        # below sets only ``status``: it also fires after a tool has already
-        # delivered the reply, so its account stays a reply rather than a failure.
+        # ``LoopOutcome`` the caller fails the turn on. Both the provider-error
+        # exit and the exhausted empty-response exit set the pair: a turn that
+        # ran out of ways to get a word back has no answer either, and it is the
+        # caller that knows whether a tool has already delivered one.
         status = "completed"
         error_detail: str | None = None
 
@@ -1606,8 +1613,8 @@ class TurnPathMixin:
                     break
 
                 # Empty-response recovery: an empty assistant turn would
-                # otherwise break out here and surface a "no response to give"
-                # dud. Try to recover before giving up. Synthetic scaffolding is
+                # otherwise end here as a turn with no answer, which fails.
+                # Try to recover before giving up. Synthetic scaffolding is
                 # marked ``_recovery_synthetic`` and stripped before persistence
                 # / extraction so it can't poison future context.
                 # Asked of the provider for the model this call went to: a
@@ -1724,13 +1731,16 @@ class TurnPathMixin:
                 if action is RecoveryAction.FAIL:
                     # Same shape as the provider-error exit above, because it is
                     # the same kind of outcome: the turn produced nothing and the
-                    # caller has to be able to act on that. Reported as a
-                    # completion, it made a measured DAG node file a dead turn as
-                    # a finished one -- ``stopReason: "end_turn"`` carrying the
-                    # canned "no response to give" line, which reads as an answer.
-                    # The reply says which budgets were spent, because the reader
-                    # who has to decide whether to ask again is a person or a
-                    # judging model, and neither can see this log line.
+                    # caller has to be able to act on that. What it buys is the
+                    # label every surface puts on the turn -- the web page, the
+                    # terminal, ``raven agent -p``'s exit code and a channel's
+                    # reply -- plus the marker filed in the session and the
+                    # failure a cron record and a trajectory reader keep. It is
+                    # not about ACP's stop reason: that answers ``end_turn`` with
+                    # the failure as text for every failed turn by design.
+                    # The counts go into the detail, because the reader who has
+                    # to decide whether to ask again is a person or a judging
+                    # model, and neither can see this log line.
                     attempts = 1 + prefill_retries + post_tool_nudges + empty_retries
                     logger.error(
                         "empty-recovery: no content after {} attempt(s) "
@@ -1740,11 +1750,17 @@ class TurnPathMixin:
                         post_tool_nudges,
                         empty_retries,
                     )
-                    final_content = (
+                    error_detail = (
                         f"The model returned no content on {attempts} attempt(s) "
                         f"(prefill {prefill_retries}, post-tool nudge {post_tool_nudges}, "
-                        f"plain retry {empty_retries}) and this turn's empty-response recovery is "
-                        "spent. The turn produced no answer; this is a failed call, not a reply."
+                        f"plain retry {empty_retries})."
+                    )
+                    # Kept, and read only where a tool has already answered: the
+                    # caller fails an unanswered turn on ``error`` above instead
+                    # of delivering this.
+                    final_content = (
+                        f"{error_detail} This turn's empty-response recovery is spent; "
+                        "the turn produced no answer of its own."
                     )
                     status = "error"
                     break
@@ -1941,6 +1957,7 @@ class TurnPathMixin:
         origin: Origin | None = None,
         drain: Drain | None = None,
         hook_sink: dict[str, str] | None = None,
+        delivered_sink: dict[str, bool] | None = None,
     ) -> tuple[str | None, list[str]] | None:
         """Process a single turn request and return its reply.
 
@@ -1951,6 +1968,12 @@ class TurnPathMixin:
         ``"appended"`` whatever the ``after_send`` chain added to the end of the
         reply: a streamed reply has already left as deltas by then, so the
         caller has to send that tail itself.
+
+        ``delivered_sink`` is the caller's record that one of this turn's tools
+        already put an answer in front of the reader -- ``run`` writes
+        ``"answer"`` into it when it streams an inline research result. Without
+        it only the message tool can say so, and a turn the model then ends in
+        silence would be failed for having no answer when it has one.
         """
         from raven.agent.hook import AgentHookContext
 
@@ -2452,15 +2475,55 @@ class TurnPathMixin:
                         # budget allows more reruns than the one.
                         await on_progress("That attempt produced no answer; running the turn again.")
                     final_content, _, all_msgs, outcome = await _attempt(_seed_for_the_rerun(all_msgs), attempt_no)
+                # Session-level because this turn may persist no assistant row at
+                # all -- a turn whose whole budget went to reasoning has no
+                # message to hang a record on. Stamped with the index this turn's
+                # rows start at, so a reader can tell the fact apart from an
+                # earlier turn's.
+                #
+                # Written OR cleared every turn, which is what actually makes it
+                # turn-scoped: the index alone would only be enough if it never
+                # went backwards, and `Session.clear()` (what `/new` calls) resets
+                # it while `undo_last_turn` rewinds it, neither touching metadata.
+                # An old marker could then sit at an index a later turn's own
+                # start satisfies, and that turn would be reported as cut -- a
+                # false fact, which is worse than the missing one this exists to
+                # supply.
+                #
+                # Ahead of the answerless exit below rather than after it: the
+                # turn most likely to have been cut at the ceiling is the one that
+                # came back with nothing, and left downstream of the raise that
+                # turn both loses its own marker and leaves an earlier turn's
+                # standing -- which is exactly the reading ACP's ``max_tokens``
+                # refinement makes.
+                if turn_hook_meta.get("output_limited"):
+                    session.metadata["output_limit_turn_at"] = prev_len
+                else:
+                    # None rather than dropping the key: a save merges its
+                    # metadata over the record on disk, so a key left unsaid is
+                    # kept rather than cleared (SessionManager._metadata_to_write).
+                    # The reader asks whether this is an int, which None is not.
+                    session.metadata["output_limit_turn_at"] = None
                 # The loop gave up on the model. Its ladder, its rerun and its
                 # salvage have all had their say, so what is left is a turn with
                 # no answer: the failure the handler below files and the lane
-                # reports, not a reply for the outlets to deliver. A turn the
-                # message tool already answered is not answerless, and keeps
-                # ending the way it always has.
+                # reports, not a reply for the outlets to deliver. A turn whose
+                # answer a tool already put in front of the reader is not
+                # answerless, and keeps ending the way it always has.
                 mt = self.tools.get("message")
-                if outcome.error and not (isinstance(mt, MessageTool) and mt.sent_in_turn):
-                    raise AnswerlessTurnError(outcome.error)
+                answered = (isinstance(mt, MessageTool) and mt.sent_in_turn) or bool(
+                    delivered_sink and delivered_sink.get("answer")
+                )
+                if not answered:
+                    if outcome.error:
+                        raise AnswerlessTurnError(outcome.error)
+                    if final_content is None:
+                        # The other way a turn arrives here with nothing: recovery
+                        # switched off, so the empty response was taken at its word
+                        # and no budget was ever spent. Same fact as the exit above
+                        # -- the model said nothing -- so it is reported the same
+                        # way rather than dressed as a reply.
+                        raise AnswerlessTurnError(_NO_CONTENT_UNRECOVERED)
         except asyncio.CancelledError:
             # A stop is not a failure, but it is also not amnesia: what already
             # streamed is work the reader saw, so it lands in the session with a
@@ -2498,6 +2561,9 @@ class TurnPathMixin:
         self._stash_recovery(key, outcome)
 
         if final_content is None:
+            # Only a turn a tool already answered reaches this now: the guard
+            # above fails an unanswered one. What follows is the record, the
+            # after_send chain and the log line, and each of them wants a string.
             final_content = NO_RESPONSE_FALLBACK
 
         # AgentHook ``after_send`` chain — typically a Sentinel
@@ -2529,28 +2595,6 @@ class TurnPathMixin:
         if len(self.hooks) > 0:
             _stamp_turn_observers(all_msgs, turn_hook_meta, turn_start_idx)
 
-        # Session-level because this turn may persist no assistant row at all --
-        # a turn whose whole budget went to reasoning has no message to hang a
-        # record on. Stamped with the index this turn's rows start at, so a
-        # reader can tell the fact apart from an earlier turn's.
-        #
-        # Written OR cleared every turn, which is what actually makes it
-        # turn-scoped: the index alone would only be enough if it never went
-        # backwards, and `Session.clear()` (what `/new` calls) resets it while
-        # `undo_last_turn` rewinds it, neither touching metadata. An old marker
-        # could then sit at an index a later turn's own start satisfies, and
-        # that turn would be reported as cut -- a false fact, which is worse
-        # than the missing one this exists to supply. Cleared here rather than
-        # at those two call sites because every turn passes through here, and a
-        # third way to move the index would not.
-        if turn_hook_meta.get("output_limited"):
-            session.metadata["output_limit_turn_at"] = prev_len
-        else:
-            # None rather than dropping the key: a save merges its metadata
-            # over the record on disk, so a key left unsaid is kept rather than
-            # cleared (SessionManager._metadata_to_write). The reader asks
-            # whether this is an int, which None is not.
-            session.metadata["output_limit_turn_at"] = None
         self._save_turn(session, all_msgs, persist_from)
         self.sessions.save(session)
         await self.harness.memory.after_turn(
@@ -3009,6 +3053,11 @@ class TurnPathMixin:
 
         streamed = False
         hook_sink: dict[str, str] = {}
+        # Whether a tool's answer has already reached the reader through this
+        # turn's own routing. Kept here rather than asked of the tool, because
+        # it is this method that does the delivering: the tool hands back a
+        # receipt, and only the callback below knows the answer went out.
+        delivered_sink: dict[str, bool] = {}
 
         async def on_token(text: str) -> None:
             nonlocal streamed
@@ -3112,7 +3161,12 @@ class TurnPathMixin:
                         return
                     if kind == "progress":
                         await emit(Reasoning(content=text))
-                    elif stream:
+                        return
+                    # Recorded where the answer actually leaves: the model may
+                    # then say nothing at all, and a turn whose answer the reader
+                    # already has is silent rather than answerless.
+                    delivered_sink["answer"] = True
+                    if stream:
                         await on_token(text)
                     else:
                         await emit(Text(content=text))
@@ -3176,6 +3230,7 @@ class TurnPathMixin:
                         origin=req.origin,
                         drain=drain,
                         hook_sink=hook_sink,
+                        delivered_sink=delivered_sink,
                     )
                 except AnswerlessTurnError:
                     # A turn the loop gave up on is not a crash: the executor and
