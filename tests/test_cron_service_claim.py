@@ -127,6 +127,32 @@ async def test_admitting_a_channel_wakes_the_sleeping_loop(tmp_path: Path) -> No
         svc.stop()
 
 
+async def test_retiring_a_channel_drops_it_from_the_partition_and_wakes_the_loop(tmp_path: Path) -> None:
+    """The mirror of admission: a channel stopped from the page leaves the partition
+    at once, and the loop is nudged so its next wake is computed without that
+    channel's jobs."""
+    svc = CronService(tmp_path / "jobs.json", allowed_channels={"tui", "weixin"})
+    svc._wake_event.clear()
+
+    svc.retire_channel("tui")
+
+    assert svc.allowed_channels == {"weixin"}
+    assert svc._wake_event.is_set()
+
+
+async def test_admit_and_retire_do_nothing_without_a_partition(tmp_path: Path) -> None:
+    """``allowed_channels is None`` is the CLI's service, which claims everything;
+    there is no set to mutate and no reason to wake it."""
+    svc = CronService(tmp_path / "jobs.json", allowed_channels=None)
+    svc._wake_event.clear()
+
+    svc.admit_channel("weixin")
+    svc.retire_channel("weixin")
+
+    assert svc.allowed_channels is None
+    assert not svc._wake_event.is_set()
+
+
 async def test_foreign_channel_skip_logs_once_per_job(tmp_path: Path) -> None:
     from loguru import logger
 
