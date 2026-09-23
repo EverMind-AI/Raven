@@ -73,12 +73,26 @@ class PerModelProvider(LLMProvider):
 
     @property
     def provider_name(self) -> str:
-        """The fallback's section, read through the wrapper the way ``EndpointRotorProvider`` does.
+        """The one section this provider serves from, or ``""`` when there is no one.
 
-        Without it the parent binding a sub-agent launch carries names a model
-        and no provider, and the child derives one from the id -- another
-        section's credential when the id's head matches a configured vendor.
+        A caller asks this to name the credential behind a model -- the parent
+        binding a sub-agent launch carries is the one here, and without a name
+        the child derives one from the model id's head, which is another
+        section's credential whenever that head matches a configured vendor.
+
+        The fallback's name is that answer only while this wrapper routes
+        nothing. A routed model is served by an endpoint of its own
+        (``_endpoint_provider``: a ``custom`` gateway with its own address and
+        key), so naming the fallback would hand the child a section that does
+        not serve that model -- and the child cannot be told an endpoint at all,
+        since ``config.set model`` takes a provider NAME and binds through
+        ``ProviderPool.bind``, which does not reapply ``build_model_routing``.
+        With a routing table in hand this provider has no single section, which
+        is precisely what ``EndpointRotorProvider`` can answer for: every
+        endpoint of a rotor is one section, and these are not.
         """
+        if self._by_model:
+            return ""
         return getattr(self._fallback, "provider_name", "") or ""
 
     def get_default_model(self) -> str:

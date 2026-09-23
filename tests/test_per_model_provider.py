@@ -51,14 +51,20 @@ def test_default_falls_back_when_no_models():
     assert p.get_default_model() == "fallback-model"
 
 
-def test_provider_name_is_the_fallbacks():
+def test_provider_name_is_the_fallbacks_only_while_nothing_is_routed():
     # The parent binding a sub-agent launch carries reads this; a wrapper that
-    # hid it sent the child a model with no provider to route it by.
+    # hid it sent the child a model with no provider to route it by. With a
+    # routing table there is no one section to name: a routed model is served by
+    # an endpoint of its own, and the child binds a provider by NAME, so the
+    # fallback's would move it to a section that does not serve that model.
     fb = _fallback()
     fb.provider_name = "openrouter"
     assert PerModelProvider([], fallback=fb).provider_name == "openrouter"
     bare = SimpleNamespace(get_default_model=lambda: "m", generation=GenerationSettings())
     assert PerModelProvider([], fallback=bare).provider_name == ""
+
+    routed = [ModelEndpoint(model="small", api_base="http://a/v1", api_key="KA")]
+    assert PerModelProvider(routed, fallback=fb).provider_name == ""
 
 
 def test_generation_propagates_to_sub_providers():

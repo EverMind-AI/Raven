@@ -957,13 +957,29 @@ class AcpAgentBackend:
 
     @property
     def _follows_parent(self) -> bool:
-        """Whether this agent is raven's own, and so runs on the parent's providers.
+        """Whether this agent runs on the parent's providers, and so on its model.
 
-        The handshake's answer, the same one the roster reads for ``own`` and
-        the listing for its model rule: a product built on ``raven acp`` names
-        itself ``raven`` there whatever its row is called here.
+        Two conditions, and they are the two the listing draws its model rule
+        from (``raven.rpc.methods.subagents._model_rule``) -- deliberately the
+        same pair, because a row saying its model is managed elsewhere while
+        every dispatch moves it is worse than either answer on its own.
+
+        The handshake names raven: a product built on ``raven acp`` says so
+        whatever its row is called here.
+
+        And its folder lends it no chat credential of its own. One that does is
+        launched on that key with the provider and model beside it, and pushing
+        the host's model at it is not merely pointless: a product keying the
+        same vendor the host uses (Raven-Research files its key under
+        ``providers.openrouter``) takes the switch and answers on the host's
+        model, paid for by its own key -- which is the one thing its folder's
+        configuration exists to decide.
         """
-        return getattr(self._snapshot, "agent_name", "") == "raven"
+        if getattr(self._snapshot, "agent_name", "") != "raven":
+            return False
+        from raven.agent.subagent.vendored_agents import product_llm_key
+
+        return not product_llm_key(self.name)
 
     @property
     def pool(self) -> Any:

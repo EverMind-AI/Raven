@@ -234,11 +234,15 @@ def product_llm_key(row_name: str, root: Path | None = None) -> str:
     name they read it under.
 
     ``""`` means the product follows the host, which is the common case and the
-    one every shipped folder ships in. Raven-Design is the exception in the
-    other direction: it drops its own model, provider and provider table before
-    inheriting, so it follows whatever its folder holds -- it names no
-    ``DESIGN_API_KEY`` in its ``.env.example`` and never reads one, so nothing
-    puts a value here for it to be wrong about.
+    one every shipped folder ships in.
+
+    This reads a convention rather than the branch itself, so the two are held
+    equal by a contract test over the shipped tree
+    (``tests/test_subagent_vendored_agents.py``): a folder offering
+    ``<PREFIX>_API_KEY`` in its ``.env.example`` must be one whose launcher
+    branches on it, and a launcher that branches must offer it. A product that
+    starts taking its own key, or stops, therefore fails that test in its own
+    folder rather than quietly disagreeing with this.
     """
     folder = product_folder(row_name, root)
     return "" if folder is None else _folder_setting(folder, "API_KEY")
