@@ -738,3 +738,180 @@ async def test_login_returns_once_the_bridge_reports_a_paired_session(tmp_path, 
         await fake.stop()
 
     assert proc.terminated is True
+
+
+# ---------------------------------------------------------------------------
+# bridge process helpers and the adapter's branches around them
+# ---------------------------------------------------------------------------
+
+
+async def test_spawn_bridge_runs_node_with_the_bridge_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The child gets the shared token, its auth dir and the port from ``bridge_url``
+    through the environment; the bridge reads nothing else."""
+    seen: dict[str, Any] = {}
+
+    async def _exec(*argv, cwd=None, env=None):
+        seen.update(argv=argv, cwd=cwd, env=env)
+        return _FakeProcess()
+
+    monkeypatch.setattr(wb.shutil, "which", lambda name: "/usr/bin/node" if name == "node" else None)
+    monkeypatch.setattr(wb.asyncio, "create_subprocess_exec", _exec)
+
+    proc = await wb.spawn_bridge(tmp_path / "bridge", "t0k", str(tmp_path / "auth"), 3007)
+
+    assert isinstance(proc, _FakeProcess)
+    assert seen["argv"] == ("/usr/bin/node", "dist/index.js")
+    assert seen["cwd"] == tmp_path / "bridge"
+    assert seen["env"]["BRIDGE_TOKEN"] == "t0k"
+    assert seen["env"]["AUTH_DIR"] == str(tmp_path / "auth")
+    assert seen["env"]["BRIDGE_PORT"] == "3007"
+
+
+async def test_spawn_bridge_refuses_without_node(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wb.shutil, "which", lambda name: None)
+    with pytest.raises(RuntimeError, match="node not found"):
+        await wb.spawn_bridge(tmp_path / "bridge", "t0k", str(tmp_path / "auth"), 3001)
+
+
+class _StubbornProcess:
+    """A child that ignores SIGTERM and only exits when killed."""
+
+    pid = 4243
+
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+        self.terminated = False
+        self.killed = False
+        self._gone = asyncio.Event()
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+        self._gone.set()
+
+    async def wait(self) -> int | None:
+        await self._gone.wait()
+        return self.returncode
+
+
+async def test_terminate_bridge_kills_a_child_that_ignores_the_request() -> None:
+    proc = _StubbornProcess()
+    await wb.terminate_bridge(proc, timeout=0.05)
+    assert proc.terminated is True
+    assert proc.killed is True
+    assert proc.returncode == -9
+
+
+async def test_terminate_bridge_leaves_a_finished_child_alone() -> None:
+    proc = _FakeProcess()
+    proc.returncode = 0
+    await wb.terminate_bridge(proc)
+    assert proc.terminated is False
+
+
+async def test_ensure_bridge_process_reuses_a_live_child_or_a_listening_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two reasons not to spawn: our own child is still up, or something else
+    already serves the port (the CLI login, an operator's bridge)."""
+
+    async def _never(*_a, **_k):
+        raise AssertionError("nothing must be spawned here")
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url="ws://127.0.0.1:3009")
+    monkeypatch.setattr(wb, "spawn_bridge", _never)
+    monkeypatch.setattr(wb, "ensure_bridge_dir", _never)
+
+    ch._bridge_proc = _FakeProcess()
+    assert await ch._ensure_bridge_process() is True
+
+    ch._bridge_proc = None
+
+    async def _open(host, port, timeout=1.0):
+        return True
+
+    monkeypatch.setattr(wb, "port_is_open", _open)
+    assert await ch._ensure_bridge_process() is True
+    assert ch._bridge_proc is None
+
+
+async def test_ensure_bridge_process_discards_the_child_when_cancelled_while_waiting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gateway's shutdown sweep cancels the start task while the bridge is
+    still coming up; the child it just spawned must not outlive that."""
+    fake = _FakeProcess()
+
+    async def _spawn(bridge_dir, token, auth_dir, port):
+        return fake
+
+    async def _closed(host, port, timeout=1.0):
+        return False
+
+    async def _cancelled(host, port, timeout):
+        raise asyncio.CancelledError
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url="ws://127.0.0.1:3010")
+    monkeypatch.setattr(wb, "ensure_bridge_dir", lambda: tmp_path / "bridge")
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+    monkeypatch.setattr(wb, "port_is_open", _closed)
+    monkeypatch.setattr(wb, "wait_for_port", _cancelled)
+
+    with pytest.raises(asyncio.CancelledError):
+        await ch._ensure_bridge_process()
+    assert fake.terminated is True
+    assert ch._bridge_proc is None
+
+
+async def test_login_reports_a_client_that_crashed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ch = _make_channel(monkeypatch, tmp_path)
+
+    async def _boom() -> None:
+        raise RuntimeError("bridge client exploded")
+
+    monkeypatch.setattr(ch, "start", _boom)
+    assert await ch.login() is False
+    assert ch.is_running is False
+
+
+async def test_start_reconnects_after_a_dropped_socket_and_stops_on_cancel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused socket is a wait-and-retry, a cancellation is the end; and a stop
+    that lands while the bridge is coming up ends the loop before a connect."""
+    import websockets
+
+    from raven.channels.adapters.whatsapp import channel as wc
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url="ws://127.0.0.1:3011")
+    attempts: list[str] = []
+
+    async def _bridge_ok() -> bool:
+        return True
+
+    def _connect(url):
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise ConnectionRefusedError("nobody there yet")
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(ch, "_ensure_bridge_process", _bridge_ok)
+    monkeypatch.setattr(wc, "_RECONNECT_SECONDS", 0)
+    monkeypatch.setattr(websockets, "connect", _connect)
+
+    await ch.start()
+    assert attempts == ["ws://127.0.0.1:3011", "ws://127.0.0.1:3011"]
+    assert ch._bridge_up is False
+    assert ch._ws is None
+
+    async def _bridge_ok_but_stopped() -> bool:
+        ch._running = False
+        return True
+
+    attempts.clear()
+    monkeypatch.setattr(ch, "_ensure_bridge_process", _bridge_ok_but_stopped)
+    await ch.start()
+    assert attempts == [], "stopped while the bridge came up: no connect is attempted"
