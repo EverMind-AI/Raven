@@ -61,7 +61,7 @@ class Asker(Protocol):
         *,
         index: int = 0,
         total: int = 1,
-        batch: list[dict[str, str]] | None = None,
+        batch: list[dict[str, Any]] | None = None,
     ) -> str | None: ...
 
 
@@ -85,6 +85,7 @@ class QuestionResponder(Protocol):
         timeout_s: float | None = None,
         header: str = "",
         recommended: str = "",
+        multi_select: bool = False,
         index: int = 0,
         total: int = 1,
         batch: list[dict[str, Any]] | None = None,
@@ -112,7 +113,7 @@ class SupportsDirectAsk(Protocol):
         *,
         index: int = 0,
         total: int = 1,
-        batch: list[dict[str, str]] | None = None,
+        batch: list[dict[str, Any]] | None = None,
     ) -> str | None: ...
 
 

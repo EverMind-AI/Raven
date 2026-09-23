@@ -5205,6 +5205,7 @@ export interface ClarifyRespondParams {
   answer: string;
   request_id?: string;
   conversation_id?: string;
+  answers?: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

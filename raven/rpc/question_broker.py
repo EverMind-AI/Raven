@@ -13,6 +13,15 @@ fail-safe path (timeout, cancel, internal error, connection EOF via
 :meth:`cancel_all`, and a surface that reports the question as undeliverable)
 resolves to the prompt's ``default`` rather than raising — the agent loop must
 always get a string back.
+
+A batch answer is a separate concern from a single question's answer: a page
+that renders a whole ``ask_user`` batch as one stepped form answers it in one
+``clarify.respond``, but the tool loop on the other end still awaits the
+batch's questions one at a time. So :meth:`reply` can carry the later
+questions' answers alongside the current one, and the broker stashes them; the
+loop's later :meth:`await_question` calls for the same conversation and batch
+are then answered straight from the stash, with no further ``clarify.request``
+round trip.
 """
 
 from __future__ import annotations
@@ -53,6 +62,23 @@ class _PendingQuestion:
     future: asyncio.Future
     request_id: str
     default: str
+    index: int
+    questions: list[str]
+
+
+@dataclass
+class _Stash:
+    """Later answers a surface gave while resolving the batch's earlier questions.
+
+    ``questions`` is the batch's question texts (the same list every pending
+    question in the batch carries), and ``answers[i]`` is that batch position's
+    answer, or ``None`` once a stashed answer has been handed out -- a retry of
+    the same question then falls through to a normal round trip rather than
+    replaying it.
+    """
+
+    questions: list[str]
+    answers: list[str | None]
 
 
 class QuestionBroker:
@@ -74,6 +100,10 @@ class QuestionBroker:
         # Reverse index request_id -> conversation_id so :meth:`reply` can
         # accept either handle.
         self._by_request: dict[str, str] = {}
+        # A surface's answers for a batch's later questions, stashed at the
+        # earlier question's reply and consulted by the later await_question
+        # calls -- see the module docstring.
+        self._stash: dict[str, _Stash] = {}
         # Kept by reference: asyncio holds only a weak reference to a task, and
         # an unrefed one can be collected mid-send.
         self._close_tasks: set[asyncio.Task] = set()
@@ -88,6 +118,7 @@ class QuestionBroker:
         timeout_s: float | None = None,
         header: str = "",
         recommended: str = "",
+        multi_select: bool = False,
         index: int = 0,
         total: int = 1,
         batch: list[dict[str, Any]] | None = None,
@@ -100,15 +131,45 @@ class QuestionBroker:
 
         ``timeout_s`` of ``None`` takes :attr:`default_timeout_s`, and is echoed
         in the notification so a surface can show how long the question
-        stands. ``recommended`` is the option label to mark. ``header``,
+        stands. ``recommended`` is the option label to mark, and
+        ``multi_select`` whether more than one may be chosen. ``header``,
         ``index``, ``total`` and ``batch`` describe the question's place in a
         batch so a surface can render the whole set and its progress while
         still collecting one answer at a time.
+
+        Before anything is sent, a stash left by an earlier :meth:`reply` in
+        this batch is checked: at ``index == 0`` any stash for this
+        conversation is dropped (a new batch, or a lone question, invalidates
+        whatever a previous batch left behind); past that, a stash whose
+        question text at this index matches ``prompt`` and still holds an
+        answer is consumed and returned directly, with no ``clarify.request``
+        emitted and no pending question registered. A mismatch on any of
+        those counts drops the stash and falls through to the normal round
+        trip below.
 
         A turn is serial, so a second pending question for the same
         conversation is a programming error: we drop the stale one (fail-safe
         to its default) and replace it, logging the overlap.
         """
+        batch_questions = [str(entry.get("question", "")) for entry in batch] if batch else [prompt]
+        if index == 0:
+            self._stash.pop(conversation_id, None)
+        else:
+            stash = self._stash.get(conversation_id)
+            if (
+                stash is not None
+                and index < len(stash.questions)
+                and stash.questions[index] == prompt
+                and index < len(stash.answers)
+                and stash.answers[index] is not None
+            ):
+                stashed_answer = stash.answers[index]
+                stash.answers[index] = None
+                if index == total - 1:
+                    self._stash.pop(conversation_id, None)
+                return stashed_answer or default
+            self._stash.pop(conversation_id, None)
+
         existing = self._pending.get(conversation_id)
         if existing is not None:
             logger.error(
@@ -122,7 +183,9 @@ class QuestionBroker:
         request_id = uuid4().hex
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
-        self._pending[conversation_id] = _PendingQuestion(future=future, request_id=request_id, default=default)
+        self._pending[conversation_id] = _PendingQuestion(
+            future=future, request_id=request_id, default=default, index=index, questions=batch_questions
+        )
         self._by_request[request_id] = conversation_id
         if timeout_s is None:
             timeout_s = self.default_timeout_s
@@ -143,6 +206,7 @@ class QuestionBroker:
                         "choices": choices or [],
                         "header": header,
                         "recommended": recommended,
+                        "multi_select": multi_select,
                         "timeout_s": timeout_s,
                         "index": index,
                         "total": total,
@@ -217,10 +281,18 @@ class QuestionBroker:
         pending = self._pending.get(conversation_id)
         return pending.request_id if pending is not None else None
 
-    def reply(self, key: str, answer: str) -> bool:
+    def reply(self, key: str, answer: str, *, answers: list[str] | None = None) -> bool:
         """Resolve a pending question by conversation_id OR request_id.
 
-        Idempotent: unknown key / already-resolved → ``False``.
+        Idempotent: unknown key / already-resolved → ``False``, and in that
+        case ``answers`` is not stashed either -- there is no pending index to
+        anchor it to.
+
+        ``answers`` is the surface's whole-batch answers, aligned with the
+        pending question's batch; when it reaches past the question just
+        answered, the later positions are stashed for this conversation so
+        the batch's later :meth:`await_question` calls can consume them
+        without another round trip.
         """
         conversation_id = key if key in self._pending else self._by_request.get(key)
         if conversation_id is None:
@@ -229,6 +301,8 @@ class QuestionBroker:
         if pending is None or pending.future.done():
             return False
         pending.future.set_result(answer)
+        if answers is not None and len(answers) > pending.index + 1:
+            self._stash[conversation_id] = _Stash(questions=list(pending.questions), answers=[str(a) for a in answers])
         return True
 
     def cancel_all(self) -> None:
@@ -236,6 +310,7 @@ class QuestionBroker:
         for pending in list(self._pending.values()):
             if not pending.future.done():
                 pending.future.set_result(pending.default)
+        self._stash.clear()
 
 
 class RoutingQuestionBroker:
@@ -274,6 +349,7 @@ class RoutingQuestionBroker:
         timeout_s: float | None = None,
         header: str = "",
         recommended: str = "",
+        multi_select: bool = False,
         index: int = 0,
         total: int = 1,
         batch: list[dict[str, Any]] | None = None,
@@ -286,6 +362,7 @@ class RoutingQuestionBroker:
             timeout_s=timeout_s,
             header=header,
             recommended=recommended,
+            multi_select=multi_select,
             index=index,
             total=total,
             batch=batch,
@@ -294,8 +371,8 @@ class RoutingQuestionBroker:
     def pending_req(self, conversation_id: str) -> str | None:
         return self._page.pending_req(conversation_id) or self._channel.pending_req(conversation_id)
 
-    def reply(self, key: str, answer: str) -> bool:
-        return self._page.reply(key, answer) or self._channel.reply(key, answer)
+    def reply(self, key: str, answer: str, *, answers: list[str] | None = None) -> bool:
+        return self._page.reply(key, answer, answers=answers) or self._channel.reply(key, answer, answers=answers)
 
     def cancel_all(self) -> None:
         self._page.cancel_all()

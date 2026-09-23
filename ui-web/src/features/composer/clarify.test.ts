@@ -11,6 +11,8 @@ import { mountPageRoot } from '../../test/pageRoot'
 import { open as approveOpen, openApproval } from './approve'
 import { close, open } from './clarify'
 
+import type { ClarifyRequest } from './clarify'
+
 
 function wire(): void {
   setTranslator((key) => key)
@@ -39,6 +41,29 @@ const type = (v: string): void => {
   field().value = v
   field().dispatchEvent(new Event('input'))
 }
+const chips = (): HTMLButtonElement[] =>
+  [...rack().querySelectorAll<HTMLButtonElement>('.cp-steps .cp-step')]
+const back = (): HTMLButtonElement => rack().querySelector<HTMLButtonElement>('.foot .cp-back')!
+const skipper = (): HTMLButtonElement =>
+  rack().querySelector<HTMLButtonElement>('.foot .btn:not(.key):not(.cp-back)')!
+const asked = (): string => rack().querySelector('.hd .q')!.textContent!
+const on = (): boolean[] => opts().map((o) => o.classList.contains('cp-on'))
+
+const SKIPPED = 'gui.clarify.skipped_msg'
+
+/* What `ask_user` sends for three questions asked in one call: every one of
+   them carries its own options, which is what makes the sheet a form. */
+const BATCH = [
+  { question: 'which build?', header: 'build', choices: ['debug', 'release'] },
+  { question: 'which targets?', header: 'targets', choices: ['mac', 'linux'], multi_select: true },
+  { question: 'anything else?', header: 'notes', choices: ['no'], recommended: 'no' },
+]
+
+/* The frame for one of those questions: its own fields on top, the batch under
+   them, the way the broker sends it. */
+const frame = (at = 0): ClarifyRequest => ({
+  ...BATCH[at]!, batch: BATCH, index: at, request_id: 'q1', total: BATCH.length,
+})
 
 beforeEach(() => {
   sessionReset()
@@ -98,7 +123,7 @@ describe('the clarify sheet', () => {
        server, and until it said so the sheet stayed up offering an answer
        nothing was waiting for any more. */
     const said: string[] = []
-    open({ question: 'q', request_id: 'q1' }, (a) => said.push(a))
+    open({ question: 'q', request_id: 'q1' }, (a) => said.push(...a))
     expect(sheets().length).toBe(1)
 
     close('q1')
@@ -138,7 +163,7 @@ describe('the clarify sheet', () => {
 
   it('answers with the chosen option and takes the sheet down', () => {
     const said: string[] = []
-    open({ question: 'q', choices: ['one', 'two'] }, (a) => said.push(a))
+    open({ question: 'q', choices: ['one', 'two'] }, (a) => said.push(...a))
     opts()[1]!.click()
     expect(said).toEqual(['two'])
     expect(sheets()).toEqual([])
@@ -146,7 +171,7 @@ describe('the clarify sheet', () => {
 
   it('answers with the typed text, trimmed, and not before there is any', () => {
     const said: string[] = []
-    open({ question: 'q' }, (a) => said.push(a))
+    open({ question: 'q' }, (a) => said.push(...a))
     expect(submit().disabled).toBe(true)
     submit().click()
     expect(said).toEqual([])
@@ -158,7 +183,7 @@ describe('the clarify sheet', () => {
 
   it('answers on Enter in the field', () => {
     const said: string[] = []
-    open({ question: 'q' }, (a) => said.push(a))
+    open({ question: 'q' }, (a) => said.push(...a))
     type('typed')
     field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     expect(said).toEqual(['typed'])
@@ -168,10 +193,10 @@ describe('the clarify sheet', () => {
      what it hears is this sheet's own wording for "no answer". */
   it('skips with its own wording, from either control', () => {
     const said: string[] = []
-    open({ question: 'q' }, (a) => said.push(a))
+    open({ question: 'q' }, (a) => said.push(...a))
     rack().querySelector<HTMLElement>('.hd .ic:last-child')!.click()
     expect(said).toEqual(['gui.clarify.skipped_msg'])
-    open({ question: 'q2' }, (a) => said.push(a))
+    open({ question: 'q2' }, (a) => said.push(...a))
     rack().querySelector<HTMLElement>('.foot .btn:not(.key)')!.click()
     expect(said).toEqual(['gui.clarify.skipped_msg', 'gui.clarify.skipped_msg'])
   })
@@ -182,7 +207,7 @@ describe('the clarify sheet', () => {
      tells the two cases apart. */
   it('picks a choice by number once the focus has left the field', () => {
     const said: string[] = []
-    open({ question: 'q', choices: ['one', 'two'] }, (a) => said.push(a))
+    open({ question: 'q', choices: ['one', 'two'] }, (a) => said.push(...a))
     field().blur()
     key('1')
     expect(said).toEqual(['one'])
@@ -192,7 +217,7 @@ describe('the clarify sheet', () => {
      and puts the caret in it rather than answering anything. */
   it('sends the number past the last choice to the field', () => {
     const said: string[] = []
-    open({ question: 'q', choices: ['one'] }, (a) => said.push(a))
+    open({ question: 'q', choices: ['one'] }, (a) => said.push(...a))
     field().blur()
     rack().querySelector<HTMLElement>('.hd .ic')!.click()
     expect(sheets()[0]!.dataset.fold).toBe('true')
@@ -205,7 +230,7 @@ describe('the clarify sheet', () => {
   /* A number typed into the field is part of the answer, not a pick. */
   it('leaves the number keys alone while the field has the caret', () => {
     const said: string[] = []
-    open({ question: 'q', choices: ['one'] }, (a) => said.push(a))
+    open({ question: 'q', choices: ['one'] }, (a) => said.push(...a))
     field().focus()
     key('1')
     expect(said).toEqual([])
@@ -216,7 +241,7 @@ describe('the clarify sheet', () => {
      composer's own field does (features/composer/store.ts). */
   it('leaves an input method alone in the field', () => {
     const said: string[] = []
-    open({ question: 'q' }, (a) => said.push(a))
+    open({ question: 'q' }, (a) => said.push(...a))
     type('typed')
     field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true }))
     field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, keyCode: 229 }))
@@ -246,7 +271,7 @@ describe('the clarify sheet', () => {
      because the rack detaches the element rather than destroying it. */
   it('is not answerable by number while it is parked', () => {
     const said: string[] = []
-    open({ question: 'q', choices: ['one'] }, (a) => said.push(a))
+    open({ question: 'q', choices: ['one'] }, (a) => said.push(...a))
     field().blur()
     setCurrent('b')
     sync()
@@ -260,7 +285,7 @@ describe('the clarify sheet', () => {
   it('keeps the half-typed answer in the draft store', () => {
     open({ question: 'q', request_id: 'q1' }, () => {})
     type('half a sen')
-    expect(read(slot('a', 'q1')).text).toBe('half a sen')
+    expect(read(slot('a', 'q1')).steps?.[0]?.text).toBe('half a sen')
   })
 
   it('still has the half-typed answer after a conversation switch and back', () => {
@@ -363,5 +388,241 @@ describe('the clarify sheet', () => {
       document.addEventListener = realAdd
       document.removeEventListener = realRemove
     }
+  })
+})
+
+/* A batch whose questions all brought their options: one sheet the reader steps
+   through, answered in one report. */
+describe('the clarify sheet as a form', () => {
+  it('draws a chip per question of the batch and asks the first', () => {
+    open(frame(), () => {})
+
+    expect(chips().map((c) => c.textContent)).toEqual(['build', 'targets', 'notes'])
+    expect(asked()).toBe('which build?')
+    expect(chips()[0]!.classList.contains('cp-on')).toBe(true)
+    expect(chips()[0]!.getAttribute('aria-current')).toBe('step')
+    expect(chips()[0]!.getAttribute('aria-label')).toBe('gui.clarify.step_aria')
+    /* Nothing further along may be jumped to before the reader has been there. */
+    expect(chips().map((c) => c.disabled)).toEqual([false, true, true])
+  })
+
+  /* The first answer used to reach the server the moment it was picked, which
+     is what made going back impossible. */
+  it('carries a pick on a middle step forward and reports nothing yet', () => {
+    const said: string[][] = []
+    open(frame(), (a) => said.push(a))
+
+    opts()[0]!.click()
+
+    expect(said).toEqual([])
+    expect(asked()).toBe('which targets?')
+    expect(chips()[0]!.classList.contains('cp-done')).toBe(true)
+    expect(chips()[1]!.classList.contains('cp-on')).toBe(true)
+    expect(sheets().length).toBe(1)
+  })
+
+  it('goes back to a step holding what was picked there, and forward again on a new pick', () => {
+    const said: string[][] = []
+    open(frame(), (a) => said.push(a))
+    opts()[0]!.click()
+
+    back().click()
+
+    expect(asked()).toBe('which build?')
+    expect(on()).toEqual([true, false])
+    opts()[1]!.click()
+    expect(asked()).toBe('which targets?')
+    back().click()
+    expect(on()).toEqual([false, true])
+    expect(said).toEqual([])
+  })
+
+  it('jumps by chip to a step the reader has already been to', () => {
+    open(frame(), () => {})
+    opts()[0]!.click()
+
+    chips()[0]!.click()
+
+    expect(asked()).toBe('which build?')
+    expect(on()).toEqual([true, false])
+    chips()[1]!.click()
+    expect(asked()).toBe('which targets?')
+  })
+
+  it('toggles a multi-select step rather than moving on, and joins what it holds', () => {
+    const said: string[][] = []
+    open(frame(), (a) => said.push(a))
+    opts()[0]!.click()
+
+    expect(rack().querySelector('.body .cp-hint')!.textContent).toBe('gui.clarify.multi_hint')
+    expect(submit().textContent).toBe('gui.clarify.next')
+    expect(submit().disabled).toBe(true)
+    opts()[0]!.click()
+    opts()[1]!.click()
+    expect(asked()).toBe('which targets?')
+    expect(on()).toEqual([true, true])
+    expect(submit().disabled).toBe(false)
+    opts()[0]!.click()
+    expect(on()).toEqual([false, true])
+
+    opts()[0]!.click()
+    submit().click()
+    opts()[0]!.click()
+    submit().click()
+
+    expect(said).toEqual([['debug', 'mac, linux', 'no']])
+  })
+
+  it('holds a pick on the last step until Submit, and reports it against the batch', () => {
+    const said: string[][] = []
+    open(frame(), (a) => said.push(a))
+    opts()[0]!.click()
+    opts()[0]!.click()
+    submit().click()
+
+    expect(submit().textContent).toBe('gui.clarify.submit')
+    opts()[0]!.click()
+
+    expect(said).toEqual([])
+    expect(sheets().length).toBe(1)
+    expect(on()).toEqual([true])
+
+    submit().click()
+
+    expect(said).toEqual([['debug', 'mac', 'no']])
+    expect(sheets()).toEqual([])
+  })
+
+  it('skips one step of the form and reports the rest', () => {
+    const said: string[][] = []
+    open(frame(), (a) => said.push(a))
+
+    skipper().click()
+
+    expect(asked()).toBe('which targets?')
+    expect(chips()[0]!.classList.contains('cp-skip')).toBe(true)
+    opts()[0]!.click()
+    submit().click()
+    skipper().click()
+
+    expect(said).toEqual([[SKIPPED, 'mac', SKIPPED]])
+  })
+
+  it('picks by number and walks the batch with the arrows', () => {
+    const said: string[][] = []
+    open(frame(), (a) => said.push(a))
+    field().blur()
+
+    key('1')
+    expect(asked()).toBe('which targets?')
+    key('1')
+    key('2')
+    expect(on()).toEqual([true, true])
+
+    key('ArrowLeft')
+    expect(asked()).toBe('which build?')
+    key('ArrowRight')
+    expect(asked()).toBe('which targets?')
+    expect(said).toEqual([])
+  })
+
+  /* The composer is one element below the sheet, and a reader typing into it is
+     not answering: an arrow key there moves their caret, not the form. */
+  it('leaves the keys alone while any field has the caret', () => {
+    const said: string[][] = []
+    open(frame(), (a) => said.push(a))
+    field().blur()
+    key('1')
+    const box = document.createElement('textarea')
+    document.body.appendChild(box)
+    box.focus()
+
+    key('ArrowLeft')
+    expect(asked()).toBe('which targets?')
+
+    key('1')
+    expect(on()).toEqual([false, false])
+
+    expect(said).toEqual([])
+    box.remove()
+  })
+
+  /* A producer that sends the question texts alone -- the elicitor -- has no
+     form to fill in: the sheet answers the one question it was sent, and the
+     chips only say how far along the batch is. */
+  it('asks a batch without options one question at a time', () => {
+    const said: string[][] = []
+    open({
+      question: 'second?', request_id: 'q1', index: 1, total: 3,
+      batch: [{ question: 'first?' }, { question: 'second?' }, { question: 'third?' }],
+    }, (a) => said.push(a))
+
+    expect(chips().map((c) => c.textContent)).toEqual(['1', '2', '3'])
+    expect(chips().map((c) => c.disabled)).toEqual([true, false, true])
+    expect(submit().textContent).toBe('gui.clarify.submit')
+    type('later')
+    submit().click()
+
+    expect(said).toEqual([['', 'later']])
+  })
+
+  /* A question answered before this sheet was raised is not this sheet's to
+     answer again: its position is reported empty and the caller drops it. */
+  it('reports an empty answer for the positions it did not ask', () => {
+    const said: string[][] = []
+    open(frame(1), (a) => said.push(a))
+
+    expect(chips()[0]!.disabled).toBe(true)
+    expect(chips()[0]!.classList.contains('cp-done')).toBe(true)
+    expect(asked()).toBe('which targets?')
+    opts()[0]!.click()
+    submit().click()
+    opts()[0]!.click()
+    submit().click()
+
+    expect(said).toEqual([['', 'mac', 'no']])
+  })
+
+  it('comes back to the step and the picks the reader left', () => {
+    open(frame(), () => {})
+    opts()[0]!.click()
+    opts()[1]!.click()
+    type('and bsd')
+
+    setCurrent('b')
+    sync()
+    setCurrent('a')
+    sync()
+
+    expect(asked()).toBe('which targets?')
+    expect(on()).toEqual([false, true])
+    expect(field().value).toBe('and bsd')
+    back().click()
+    expect(on()).toEqual([true, false])
+  })
+
+  it('marks the option the tool would pick itself', () => {
+    open({ question: 'q', choices: ['one', 'two'], recommended: 'two' }, () => {})
+
+    expect(opts()[1]!.querySelector('.cp-rec')!.textContent).toBe('gui.clarify.recommended')
+    expect(opts()[0]!.querySelector('.cp-rec')).toBe(null)
+  })
+
+  /* One question, several answers: the pick cannot report on its own, so this
+     is the shape that needs the button even without a batch behind it. */
+  it('waits for Submit on a single multi-select question', () => {
+    const said: string[][] = []
+    open({ question: 'which targets?', choices: ['a', 'b'], multi_select: true }, (a) => said.push(a))
+
+    opts()[0]!.click()
+    opts()[1]!.click()
+
+    expect(said).toEqual([])
+    expect(chips()).toEqual([])
+    expect(sheets().length).toBe(1)
+
+    submit().click()
+
+    expect(said).toEqual([['a, b']])
   })
 })

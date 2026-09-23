@@ -6530,6 +6530,17 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "name": "answers",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "The whole batch's answers, aligned with the request's `batch`, from a surface that collected them as one form. The entry at the pending question's index repeats `answer`; entries before it are ignored; entries after it answer the batch's later questions without another round trip. Omitted by a surface that answers one question at a time."
         }
       ],
       "result": {
