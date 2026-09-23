@@ -894,6 +894,7 @@ def _supervise(port: int) -> None:
     delay = 1.0
     fast_failures = 0
     target = port
+    proc = None
     try:
         # Recorded inside the guard rather than before it. The handler above is
         # armed the moment it is installed, so a SIGTERM arriving between the
@@ -947,9 +948,47 @@ def _supervise(port: int) -> None:
                 time.sleep(delay)
             except KeyboardInterrupt:
                 return
+    except KeyboardInterrupt:
+        # The stop can land anywhere in the loop, not only in the two waits
+        # above: learning the bound port polls for up to fifteen seconds after
+        # every launch, and `raven web` followed by `--stop` lands right there.
+        return
     finally:
+        # A second SIGTERM would raise out of this block half done, and the
+        # `raven web --stop` that sent the first one also signals the gateway;
+        # from here on the only signal that ends this process is SIGKILL.
+        with suppress(ValueError):
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        _stop_child(proc)
+        # Only now: `web.json` is how the next `raven web` knows a supervisor is
+        # up, so removing it while the gateway still held the lock is what let a
+        # second supervisor start beside it -- one whose gateway could only come
+        # up on `serve`, with no channels.
         _web_state_path().unlink(missing_ok=True)
         sys.stdout.flush()
+
+
+def _stop_child(proc: object) -> None:
+    """End the gateway this supervisor started, SIGKILL after ``_CHILD_STOP_S``.
+
+    A child that already exited is left alone; so is one never started.
+    """
+    import subprocess
+
+    if proc is None or getattr(proc, "poll", lambda: 0)() is not None:
+        return
+    with suppress(OSError):
+        proc.terminate()  # type: ignore[attr-defined]
+    try:
+        proc.wait(timeout=_CHILD_STOP_S)  # type: ignore[attr-defined]
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    print(f"raven web: the gateway ignored SIGTERM for {_CHILD_STOP_S:.0f}s; killing it", flush=True)
+    with suppress(OSError):
+        proc.kill()  # type: ignore[attr-defined]
+    with suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=_KILL_WAIT_S)  # type: ignore[attr-defined]
 
 
 _STOP_WAIT_S = 20.0
@@ -962,6 +1001,21 @@ thing to report rather than to paper over with a longer sleep; the cost of
 waiting is paid only when something is genuinely wedged."""
 
 _STOP_POLL_S = 0.05
+
+_KILL_WAIT_S = 5.0
+"""How long ``--stop`` waits after SIGKILL before calling a process unkillable.
+
+SIGKILL cannot be caught or ignored, so this only has to cover the kernel
+reaping the group; a process still there after it is stuck in the kernel, which
+no signal fixes and a relaunch must not paper over."""
+
+_CHILD_STOP_S = 15.0
+"""How long a stopping supervisor gives its gateway before killing it.
+
+Shorter than ``_STOP_WAIT_S`` on purpose: the supervisor finishes stopping its
+own child, and removes ``web.json`` only after that child is gone, inside the
+wait ``--stop`` gives the supervisor. The other way round, ``--stop`` would
+escalate against a supervisor that was about to finish cleanly."""
 
 
 def _await_exit(pid: int, timeout_s: float) -> bool:
@@ -981,6 +1035,57 @@ def _await_exit(pid: int, timeout_s: float) -> bool:
             return False
         time.sleep(_STOP_POLL_S)
     return True
+
+
+def _force_kill(pid: int) -> None:
+    """SIGKILL ``pid``, and its whole process group when it leads one.
+
+    The group is what makes this a stop rather than an orphaning: the supervisor
+    runs in a session of its own (``_spawn_supervisor``), so its pid is its
+    group's id, and the gateway it starts -- with whatever that gateway started
+    without a session of its own -- is in the group. Killing the supervisor's pid
+    alone would leave the gateway holding the lock with nothing supervising it.
+
+    Only a group the target leads, and never the caller's own: a gateway run
+    from a terminal is in that shell's job group, and signalling the group of a
+    process that does not lead one signals whatever else the shell put there.
+    """
+    import os
+    import signal
+    import sys
+
+    if sys.platform == "win32":  # pragma: no cover - no process groups, no SIGKILL
+        os.kill(pid, signal.SIGTERM)
+        return
+    try:
+        group = os.getpgid(pid)
+    except OSError:
+        group = None
+    if group == pid and group != os.getpgrp():
+        os.killpg(group, signal.SIGKILL)
+    else:
+        os.kill(pid, signal.SIGKILL)
+
+
+def _stop_one(label: str, pid: int, unresponsive: list[str]) -> None:
+    """SIGTERM, wait out the grace, then SIGKILL the group and wait again.
+
+    ``unresponsive`` collects what outlived both, which is reported by the
+    caller: at that point a relaunch would land beside a live gateway.
+    """
+    import os
+    import signal
+
+    os.kill(pid, signal.SIGTERM)
+    if _await_exit(pid, _STOP_WAIT_S):
+        return
+    typer.echo(f"{label} (pid {pid}) still running after {_STOP_WAIT_S:.0f}s; killing its process group")
+    try:
+        _force_kill(pid)
+    except ProcessLookupError:
+        return
+    if not _await_exit(pid, _KILL_WAIT_S):
+        unresponsive.append(f"{label} (pid {pid})")
 
 
 def _stop_resident() -> bool:
@@ -1005,30 +1110,35 @@ def _stop_resident() -> bool:
 
     Waiting for the supervisor before signalling the gateway also replaces a
     0.4s guess at how long it takes to stop restarting things.
-    """
-    import os
-    import signal
 
+    A process that outlives its grace is killed with its process group
+    (``_stop_one``) rather than reported and left: the gateway ignores a second
+    SIGTERM once its teardown has begun, so a stop that only reports leaves the
+    wedged gateway holding the lock, and the next ``raven web`` starts a second
+    supervisor whose gateway can only come up on ``serve``, without channels.
+    A ``web.json`` the killed supervisor could not remove is removed here, once
+    its pid is gone.
+    """
     stopped = False
     unresponsive: list[str] = []
 
     supervisor = _read_web_state()
     if supervisor is not None:
         try:
-            os.kill(supervisor, signal.SIGTERM)
             stopped = True
-            if not _await_exit(supervisor, _STOP_WAIT_S):
-                unresponsive.append(f"supervisor (pid {supervisor})")
+            _stop_one("supervisor", supervisor, unresponsive)
+        except ProcessLookupError:
+            pass
         except OSError as exc:
             typer.echo(f"warning: could not stop the supervisor (pid {supervisor}): {exc}")
+        if not _pid_alive(supervisor):
+            _web_state_path().unlink(missing_ok=True)
 
     gateway = _read_serve_pid()
     if gateway is not None and gateway != supervisor:
         try:
-            os.kill(gateway, signal.SIGTERM)
             stopped = True
-            if not _await_exit(gateway, _STOP_WAIT_S):
-                unresponsive.append(f"gateway (pid {gateway})")
+            _stop_one("gateway", gateway, unresponsive)
         except ProcessLookupError:
             pass
         except OSError as exc:
@@ -1037,7 +1147,7 @@ def _stop_resident() -> bool:
     if unresponsive:
         # Reported, not swallowed: a relaunch from here lands on `serve` and the
         # page comes up without channels, which is worse than refusing to start.
-        typer.echo(f"error: still running after {_STOP_WAIT_S:.0f}s: {', '.join(unresponsive)}")
+        typer.echo(f"error: still running after SIGKILL: {', '.join(unresponsive)}")
         raise typer.Exit(1)
     return stopped
 
@@ -1167,6 +1277,18 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
     # restarts, so waiting is the right move -- starting a second supervisor
     # would leave two racing to own the same port.
     if _read_web_state() is None:
+        # No supervisor, yet the process that last wrote serve.json is alive and
+        # did not answer the attach above: a gateway wedged or still tearing
+        # down, holding the lock. A supervisor started beside it can only run
+        # `serve`, the engine with no channels -- the second supervisor this
+        # refusal exists to prevent. `--stop` kills it; this does not guess.
+        lingering = _read_serve_pid()
+        if lingering is not None:
+            typer.echo(
+                f"error: a gateway (pid {lingering}) is still running but not answering; "
+                "run `raven web --stop`, then `raven web`"
+            )
+            raise typer.Exit(1)
         _spawn_supervisor(port)
     try:
         url = _await_attach()

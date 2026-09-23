@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sys
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -384,6 +386,23 @@ class TestTheCommand:
         assert exit_info.value.exit_code == 1
         assert opened == []
 
+    def test_a_live_gateway_that_will_not_answer_is_not_joined_by_a_second_supervisor(
+        self, home: Path, a_built_page, opened: list[str], supervised: list[int], monkeypatch, capsys
+    ) -> None:
+        """09-20: the supervisor had exited and removed web.json while its gateway,
+        tearing down, still held the lock. The next `web` saw no supervisor and
+        started one, whose gateway could only come up on `serve` -- no channels."""
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: 4321)
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._web(port=18999)
+
+        assert exit_info.value.exit_code == 1
+        assert supervised == [] and opened == []
+        said = capsys.readouterr().out
+        assert "pid 4321" in said and "raven web --stop" in said
+
     def test_a_token_mismatch_stops_rather_than_doubling_up(
         self, home: Path, a_built_page, opened: list[str], started: list[int], supervised: list[int], monkeypatch
     ) -> None:
@@ -528,6 +547,84 @@ class TestTheSupervisor:
 
         assert seen == [True], "it did not record itself before running the gateway"
         assert not (home / "web.json").exists(), "it left a pid behind that nothing is listening on"
+
+    def test_a_stopped_supervisor_ends_its_gateway_before_it_stops_claiming_to_run(
+        self, home: Path, instant, monkeypatch
+    ) -> None:
+        """Removing web.json while the gateway still held the lock is what let a
+        second supervisor start beside it. The gateway ignores a repeated SIGTERM
+        once its teardown begins, so one that outlives its grace is killed."""
+        import subprocess
+
+        calls: list[tuple[str, bool]] = []
+
+        class _Stubborn:
+            pid = 4242
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                if timeout is None:
+                    raise KeyboardInterrupt  # the SIGTERM `--stop` sent the supervisor
+                calls.append(("wait", (home / "web.json").exists()))
+                if len(calls) == 2:
+                    raise subprocess.TimeoutExpired("gateway", timeout)
+                return -9
+
+            def terminate(self):
+                calls.append(("terminate", (home / "web.json").exists()))
+
+            def kill(self):
+                calls.append(("kill", (home / "web.json").exists()))
+
+        monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: _Stubborn())
+        monkeypatch.setattr(serve_commands, "_bound_port_of", lambda _proc: None)
+
+        serve_commands._supervise(18999)
+
+        assert [name for name, _ in calls] == ["terminate", "wait", "kill", "wait"], calls
+        assert all(recorded for _, recorded in calls), "web.json went before the gateway did"
+        assert not (home / "web.json").exists()
+
+    def test_a_stop_while_it_learns_the_bound_port_still_exits_cleanly(self, home: Path, instant, monkeypatch) -> None:
+        """That poll runs for up to fifteen seconds after every launch, and a
+        SIGTERM there used to escape as a traceback with the gateway left up."""
+        import subprocess
+
+        stopped: list[str] = []
+
+        class _Running:
+            pid = 4242
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                stopped.append("terminate")
+
+            def wait(self, timeout=None):
+                return 0
+
+        def _interrupted(_proc):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: _Running())
+        monkeypatch.setattr(serve_commands, "_bound_port_of", _interrupted)
+
+        serve_commands._supervise(18999)
+
+        assert stopped == ["terminate"]
+        assert not (home / "web.json").exists()
+
+    def test_a_gateway_that_already_exited_is_not_signalled(self, home: Path, instant, monkeypatch) -> None:
+        import subprocess
+
+        proc = _FakeProc(4242, 0)
+        proc.terminate = lambda: pytest.fail("signalled a gateway that had already exited")  # type: ignore[attr-defined]
+        monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: proc)
+
+        serve_commands._supervise(18999)
 
     def test_the_gateway_is_run_through_the_interpreter_not_a_shim(self, monkeypatch) -> None:
         """The supervisor outlives the working directory it was started from, and
@@ -821,11 +918,95 @@ class TestStopping:
         reported = capsys.readouterr().out
         assert "supervisor (pid 111)" in reported
         assert "gateway (pid 222)" in reported
-        assert f"{serve_commands._STOP_WAIT_S:.0f}s" in reported
-        # At least the budget each, since the poll that gives up is the first one
-        # at or past the deadline, and at most one poll of overshoot on top.
-        assert clock.now >= 2 * serve_commands._STOP_WAIT_S
-        assert clock.now < 2 * (serve_commands._STOP_WAIT_S + serve_commands._STOP_POLL_S)
+        assert f"still running after {serve_commands._STOP_WAIT_S:.0f}s" in reported
+        assert "error: still running after SIGKILL" in reported
+        # Each process: the grace, then the wait after SIGKILL, each at most one
+        # poll over, since the poll that gives up is the first at or past it.
+        per_process = serve_commands._STOP_WAIT_S + serve_commands._KILL_WAIT_S
+        assert clock.now >= 2 * per_process
+        assert clock.now < 2 * (per_process + 2 * serve_commands._STOP_POLL_S)
+
+    @staticmethod
+    def _signals(monkeypatch, groups: dict[int, int], *, own_group: int = 1) -> tuple[list, set[int]]:
+        """Record every signal, and let a pid die only once it is SIGKILLed.
+
+        ``groups`` maps a pid to the group ``os.getpgid`` reports for it; a pid
+        stays alive through SIGTERM, which is the process this is about.
+        """
+        import os
+        import signal
+
+        sent: list[tuple[str, int, int]] = []
+        dead: set[int] = set()
+
+        def _kill(pid: int, sig: int) -> None:
+            sent.append(("kill", pid, sig))
+            if sig == signal.SIGKILL:
+                dead.add(pid)
+
+        def _killpg(group: int, sig: int) -> None:
+            sent.append(("killpg", group, sig))
+            dead.update(pid for pid, g in groups.items() if g == group)
+
+        monkeypatch.setattr(os, "kill", _kill)
+        monkeypatch.setattr(os, "killpg", _killpg)
+        monkeypatch.setattr(os, "getpgid", lambda pid: groups[pid])
+        monkeypatch.setattr(os, "getpgrp", lambda: own_group)
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda pid: pid not in dead)
+        return sent, dead
+
+    def test_a_supervisor_that_ignores_sigterm_is_killed_with_its_whole_group(self, home: Path, monkeypatch) -> None:
+        """Its gateway is in its group; killing the supervisor's pid alone would
+        leave that gateway holding the lock with nothing supervising it."""
+        import signal
+
+        self._resident(home)
+        self._Clock(monkeypatch)
+        sent, _dead = self._signals(monkeypatch, {111: 111, 222: 111})
+
+        assert serve_commands._stop_resident() is True
+
+        assert sent == [("kill", 111, signal.SIGTERM), ("killpg", 111, signal.SIGKILL)], sent
+        assert not (home / "web.json").exists(), "a killed supervisor's web.json names a pid nothing answers on"
+
+    def test_a_gateway_that_leads_no_group_is_killed_alone(self, home: Path, monkeypatch) -> None:
+        """A gateway run from a terminal is in the shell's job group: signalling
+        that group would signal whatever else the shell put there."""
+        import signal
+
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+        self._Clock(monkeypatch)
+        sent, _dead = self._signals(monkeypatch, {222: 900})
+
+        assert serve_commands._stop_resident() is True
+        assert sent == [("kill", 222, signal.SIGTERM), ("kill", 222, signal.SIGKILL)], sent
+
+    def test_its_own_process_group_is_never_the_one_killed(self, home: Path, monkeypatch) -> None:
+        import signal
+
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+        self._Clock(monkeypatch)
+        sent, _dead = self._signals(monkeypatch, {222: 222}, own_group=222)
+
+        assert serve_commands._stop_resident() is True
+        assert ("killpg", 222, signal.SIGKILL) not in sent
+        assert sent[-1] == ("kill", 222, signal.SIGKILL)
+
+    def test_a_process_that_exits_within_the_grace_is_never_killed(self, home: Path, monkeypatch) -> None:
+        import signal
+
+        self._resident(home)
+        sent: list[tuple[int, int]] = []
+        import os
+
+        monkeypatch.setattr(os, "kill", lambda pid, sig: sent.append((pid, sig)))
+        monkeypatch.setattr(os, "killpg", lambda *_a: pytest.fail("killed a process that stopped on its own"))
+        monkeypatch.setattr(serve_commands, "_pid_alive", self._liveness({}))
+
+        assert serve_commands._stop_resident() is True
+        assert all(sig == signal.SIGTERM for _pid, sig in sent)
 
     def test_nothing_running_is_not_an_error(self, home: Path) -> None:
         assert serve_commands._stop_resident() is False
@@ -1703,3 +1884,99 @@ class TestPageBehindSources:
             logger.remove(token)
 
         assert [m for m in said if "make build-ui" in m], said
+
+
+_STUBBORN = """
+import json, os, signal, sys, time
+home = sys.argv[1]
+signal.signal(signal.SIGTERM, lambda *_: open(os.path.join(home, "gw-sigterm"), "w").write(
+    str(os.path.exists(os.path.join(home, "web.json")))))
+with open(os.path.join(home, "serve.json"), "w") as f:
+    json.dump({"port": 18999, "token": "t", "pid": os.getpid()}, f)
+while True:
+    time.sleep(0.05)
+"""
+
+
+def _wait_for(path: Path, timeout_s: float = 20.0) -> None:
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while not path.exists():
+        assert time.monotonic() < deadline, f"{path.name} never appeared"
+        time.sleep(0.02)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups and SIGKILL are POSIX")
+class TestStoppingARealTree:
+    """The fakes above say what is signalled; these say it actually ends."""
+
+    def test_stop_ends_a_supervisor_and_gateway_that_both_ignore_sigterm(self, home: Path, monkeypatch) -> None:
+        """Detached the way `_spawn_supervisor` detaches it -- its own session,
+        with the launcher gone -- so nothing here is left a zombie of the test."""
+        import os
+        import signal
+        import subprocess
+
+        from raven.utils.pid import pid_alive
+
+        home.mkdir(parents=True, exist_ok=True)
+        supervisor = (
+            "import json, os, signal, subprocess, sys, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            f"subprocess.Popen([sys.executable, '-c', {_STUBBORN!r}, sys.argv[1]])\n"
+            "json.dump({'pid': os.getpid(), 'port': 18999}, open(os.path.join(sys.argv[1], 'web.json'), 'w'))\n"
+            "while True:\n    time.sleep(0.05)\n"
+        )
+        launcher = (
+            "import subprocess, sys\n"
+            f"subprocess.Popen([sys.executable, '-c', {supervisor!r}, sys.argv[1]], start_new_session=True)\n"
+        )
+        subprocess.run([sys.executable, "-c", launcher, str(home)], check=True, timeout=30)
+        _wait_for(home / "web.json")
+        _wait_for(home / "serve.json")
+        sup = json.loads((home / "web.json").read_text())["pid"]
+        gw = json.loads((home / "serve.json").read_text())["pid"]
+        monkeypatch.setattr(serve_commands, "_STOP_WAIT_S", 0.5)
+        try:
+            assert serve_commands._stop_resident() is True
+            assert not pid_alive(sup) and not pid_alive(gw)
+            assert not (home / "web.json").exists()
+        finally:
+            with suppress(OSError):
+                os.killpg(sup, signal.SIGKILL)
+            with suppress(OSError):
+                os.kill(gw, signal.SIGKILL)
+
+    def test_a_real_supervisor_kills_its_stubborn_gateway_before_removing_web_json(self, home: Path) -> None:
+        import os
+        import signal
+        import subprocess
+
+        from raven.utils.pid import pid_alive
+
+        home.mkdir(parents=True, exist_ok=True)
+        script = (
+            "import sys\n"
+            "from raven.cli import serve_commands as sc\n"
+            f"sc._gateway_argv = lambda port: [sys.executable, '-c', {_STUBBORN!r}, {str(home)!r}]\n"
+            "sc._CHILD_STOP_S = 0.5\n"
+            "sc._supervise(18999)\n"
+        )
+        env = {**os.environ, "RAVEN_HOME": str(home)}
+        proc = subprocess.Popen([sys.executable, "-c", script], env=env)
+        try:
+            # Signalled as soon as the gateway is up, so usually while the
+            # supervisor still polls serve.json for the port it bound; the unit
+            # test above pins that window, this one that the tree really ends.
+            _wait_for(home / "serve.json")
+            gw = json.loads((home / "serve.json").read_text())["pid"]
+            _wait_for(home / "web.json")
+            proc.send_signal(signal.SIGTERM)
+            assert proc.wait(timeout=20) == 0
+            assert not pid_alive(gw), "the supervisor exited and left its gateway running"
+            assert not (home / "web.json").exists()
+            assert (home / "gw-sigterm").read_text() == "True", "web.json was gone before the gateway was"
+        finally:
+            with suppress(OSError):
+                proc.kill()
