@@ -141,6 +141,8 @@ export default defineConfig(({ command, mode }) => {
        otherwise transform every one of them, which is enough to push the
        slowest session tests past their timeout. Pre-bundled, it is one file. */
     test: {
+      // Let happy-dom provide storage instead of Node's native Web Storage.
+      execArgv: ['--no-experimental-webstorage'],
       deps: { optimizer: { client: { enabled: true, include: ['@hugeicons/core-free-icons'] } } },
     },
   }
