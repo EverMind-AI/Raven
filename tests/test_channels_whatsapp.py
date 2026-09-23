@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+import subprocess
 import threading
 import time
 from contextlib import suppress
@@ -332,12 +333,116 @@ async def test_send_emits_ws_payload(tmp_path, monkeypatch):
 from raven.channels.adapters.whatsapp import bridge as wb  # noqa: E402
 
 
+def _bridge_source_tree(root: Path) -> Path:
+    (root / "src").mkdir(parents=True)
+    for name in ("package.json", "package-lock.json", "tsconfig.json"):
+        (root / name).write_text("{}", encoding="utf-8")
+    (root / "src" / "index.ts").write_text("export const version = 1\n", encoding="utf-8")
+    return root
+
+
+def _installed_build(root: Path, fingerprint: str | None) -> Path:
+    (root / "dist").mkdir(parents=True)
+    (root / "dist" / "index.js").write_text("//", encoding="utf-8")
+    if fingerprint is not None:
+        (root / wb._FINGERPRINT_FILE).write_text(fingerprint, encoding="utf-8")
+    return root
+
+
+def _refuse_to_build(*args, **kwargs):
+    raise AssertionError("rebuilt a bridge that already matches the packaged source")
+
+
 def test_ensure_bridge_dir_returns_prebuilt(tmp_path, monkeypatch):
-    built = tmp_path / "installed"
-    (built / "dist").mkdir(parents=True)
-    (built / "dist" / "index.js").write_text("//", encoding="utf-8")
+    source = _bridge_source_tree(tmp_path / "source")
+    built = _installed_build(tmp_path / "installed", wb.source_fingerprint(source))
+    monkeypatch.setattr(wb, "_find_bridge_source", lambda: source)
     monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: built)
+    monkeypatch.setattr(wb.subprocess, "run", _refuse_to_build)
     assert wb.ensure_bridge_dir() == built
+
+
+@pytest.mark.parametrize("installed_fingerprint", [None, "a build from other sources"], ids=["absent", "different"])
+def test_ensure_bridge_dir_rebuilds_a_build_that_does_not_match_the_source(
+    tmp_path, monkeypatch, installed_fingerprint
+):
+    """An upgraded raven ships new bridge sources; the old dist must not stay."""
+    source = _bridge_source_tree(tmp_path / "source")
+    built = _installed_build(tmp_path / "installed", installed_fingerprint)
+    runs: list[list[str]] = []
+    monkeypatch.setattr(wb, "_find_bridge_source", lambda: source)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: built)
+    monkeypatch.setattr(wb.shutil, "which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(wb.subprocess, "run", lambda cmd, **kwargs: runs.append(list(cmd[1:])))
+
+    assert wb.ensure_bridge_dir() == built
+    assert runs == [["install"], ["run", "build"]]
+    assert (built / wb._FINGERPRINT_FILE).read_text(encoding="utf-8") == wb.source_fingerprint(source)
+    assert (built / "src" / "index.ts").exists()
+
+
+def test_source_fingerprint_follows_a_changed_src_file(tmp_path):
+    source = _bridge_source_tree(tmp_path / "source")
+    before = wb.source_fingerprint(source)
+    (source / "src" / "index.ts").write_text("export const version = 2\n", encoding="utf-8")
+    assert wb.source_fingerprint(source) != before
+
+
+def test_source_fingerprint_skips_a_manifest_the_source_does_not_carry(tmp_path):
+    source = _bridge_source_tree(tmp_path / "source")
+    (source / "package-lock.json").unlink()
+    assert wb.source_fingerprint(source)
+
+
+def test_ensure_bridge_dir_rebuilds_when_the_fingerprint_cannot_be_read(tmp_path, monkeypatch):
+    """A fingerprint truncated mid-write is as good as an absent one, not a crash."""
+    source = _bridge_source_tree(tmp_path / "source")
+    built = _installed_build(tmp_path / "installed", None)
+    (built / wb._FINGERPRINT_FILE).write_bytes(b"\xff\xfe not utf-8")
+    runs: list[list[str]] = []
+    monkeypatch.setattr(wb, "_find_bridge_source", lambda: source)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: built)
+    monkeypatch.setattr(wb.shutil, "which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(wb.subprocess, "run", lambda cmd, **kwargs: runs.append(list(cmd[1:])))
+
+    assert wb.ensure_bridge_dir() == built
+    assert runs == [["install"], ["run", "build"]]
+
+
+def test_ensure_bridge_dir_keeps_the_working_build_when_a_rebuild_fails(tmp_path, monkeypatch):
+    """npm can fail on a machine whose stale build still runs; it must survive."""
+    source = _bridge_source_tree(tmp_path / "source")
+    built = _installed_build(tmp_path / "installed", "a build from other sources")
+    monkeypatch.setattr(wb, "_find_bridge_source", lambda: source)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: built)
+    monkeypatch.setattr(wb.shutil, "which", lambda _name: "/usr/bin/npm")
+
+    def fail(cmd, **kwargs):
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(wb.subprocess, "run", fail)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        wb.ensure_bridge_dir()
+    assert (built / "dist" / "index.js").exists()
+    assert (built / wb._FINGERPRINT_FILE).read_text(encoding="utf-8") == "a build from other sources"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["installed", "source"]
+
+
+def test_ensure_bridge_dir_keeps_a_build_it_cannot_check(tmp_path, monkeypatch):
+    """Without the packaged source there is nothing to compare or rebuild from."""
+    built = _installed_build(tmp_path / "installed", None)
+    monkeypatch.setattr(wb, "_find_bridge_source", lambda: None)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: built)
+    monkeypatch.setattr(wb.subprocess, "run", _refuse_to_build)
+    assert wb.ensure_bridge_dir() == built
+
+
+def test_ensure_bridge_dir_raises_without_the_packaged_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(wb, "_find_bridge_source", lambda: None)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: tmp_path / "absent")
+    with pytest.raises(RuntimeError, match="bridge source not found"):
+        wb.ensure_bridge_dir()
 
 
 def test_ensure_bridge_dir_raises_without_npm(tmp_path, monkeypatch):

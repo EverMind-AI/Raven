@@ -10,6 +10,7 @@ integration/manual tested.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import secrets
 import shutil
@@ -24,6 +25,10 @@ from loguru import logger
 
 DEFAULT_BRIDGE_PORT = 3001
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+# What an installed build was compiled from, written next to it after a build.
+_FINGERPRINT_FILE = ".source-fingerprint"
+_FINGERPRINT_INPUTS = ("package.json", "package-lock.json", "tsconfig.json")
 
 # How a long step (npm install, tsc) shows progress. The adapter owns no terminal;
 # the CLI login command installs a spinner here, everything else gets log lines.
@@ -59,21 +64,7 @@ def load_or_create_bridge_token(path: Path) -> str:
     return token
 
 
-def ensure_bridge_dir() -> Path:
-    """Return the built bridge directory, installing/compiling it on first use.
-
-    Raises RuntimeError if npm is missing or the bridge source can't be found.
-    """
-    from raven.config.paths import get_bridge_install_dir
-
-    install_dir = get_bridge_install_dir()
-    if (install_dir / "dist" / "index.js").exists():
-        return install_dir
-
-    npm = shutil.which("npm")
-    if not npm:
-        raise RuntimeError("npm not found. Please install Node.js >= 18.")
-
+def _find_bridge_source() -> Path | None:
     here = Path(__file__).resolve()
     # here = raven/channels/adapters/whatsapp/bridge.py. The bridge source lives
     # at <package>/bridge in a built wheel (parents[3]) but at the repo root's
@@ -82,24 +73,88 @@ def ensure_bridge_dir() -> Path:
         here.parents[3] / "bridge",  # raven/bridge (packaged wheel)
         here.parents[4] / "bridge",  # <repo-root>/bridge (editable / source)
     ]
-    source = next((c for c in candidates if (c / "package.json").exists()), None)
+    return next((c for c in candidates if (c / "package.json").exists()), None)
+
+
+def source_fingerprint(source: Path) -> str:
+    """Digest the bridge sources a build is made of: its manifests and ``src/``."""
+    digest = hashlib.sha256()
+    files = [source / name for name in _FINGERPRINT_INPUTS]
+    files += sorted(p for p in (source / "src").rglob("*") if p.is_file())
+    for path in files:
+        if not path.is_file():
+            continue
+        digest.update(path.relative_to(source).as_posix().encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _installed_fingerprint(install_dir: Path) -> str | None:
+    try:
+        return (install_dir / _FINGERPRINT_FILE).read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _build_bridge(npm: str, source: Path, install_dir: Path, fingerprint: str) -> None:
+    """Compile a copy of ``source`` beside ``install_dir`` and swap it in once it works.
+
+    npm needs a reachable registry and a compiler that agrees with the sources,
+    so a rebuild can fail on a machine whose current build runs fine. Staging it
+    keeps that failure at "still on the stale build" rather than leaving the
+    machine with no ``dist/`` at all until npm works again.
+    """
+    staging = install_dir.with_name(install_dir.name + ".rebuild")
+    shutil.rmtree(staging, ignore_errors=True)
+    try:
+        shutil.copytree(source, staging, ignore=shutil.ignore_patterns("node_modules", "dist"))
+
+        logger.info("  Installing dependencies...")
+        with progress("npm install (first run: 30-120s)..."):
+            subprocess.run([npm, "install"], cwd=staging, check=True, capture_output=True)
+
+        logger.info("  Building...")
+        with progress("tsc compile..."):
+            subprocess.run([npm, "run", "build"], cwd=staging, check=True, capture_output=True)
+
+        (staging / _FINGERPRINT_FILE).write_text(fingerprint, encoding="utf-8")
+        if install_dir.exists():
+            shutil.rmtree(install_dir)
+        staging.rename(install_dir)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def ensure_bridge_dir() -> Path:
+    """Return the built bridge directory, installing/compiling it on first use
+    and whenever the installed build came from other sources than this raven
+    ships — an upgrade leaves the old ``dist/`` in place otherwise.
+
+    Raises RuntimeError if npm is missing or the bridge source can't be found.
+    """
+    from raven.config.paths import get_bridge_install_dir
+
+    install_dir = get_bridge_install_dir()
+    built = (install_dir / "dist" / "index.js").exists()
+    source = _find_bridge_source()
     if not source:
+        if built:
+            return install_dir  # nothing to compare it against, and nothing to rebuild from
         raise RuntimeError("WhatsApp bridge source not found. Try reinstalling: pip install --force-reinstall raven")
+
+    fingerprint = source_fingerprint(source)
+    if built:
+        if _installed_fingerprint(install_dir) == fingerprint:
+            return install_dir
+        logger.info("The installed WhatsApp bridge was built from other sources than this raven ships; rebuilding")
+
+    npm = shutil.which("npm")
+    if not npm:
+        raise RuntimeError("npm not found. Please install Node.js >= 18.")
 
     logger.info("Setting up WhatsApp bridge...")
     install_dir.parent.mkdir(parents=True, exist_ok=True)
-    if install_dir.exists():
-        shutil.rmtree(install_dir)
-    shutil.copytree(source, install_dir, ignore=shutil.ignore_patterns("node_modules", "dist"))
-
-    logger.info("  Installing dependencies...")
-    with progress("npm install (first run: 30-120s)..."):
-        subprocess.run([npm, "install"], cwd=install_dir, check=True, capture_output=True)
-
-    logger.info("  Building...")
-    with progress("tsc compile..."):
-        subprocess.run([npm, "run", "build"], cwd=install_dir, check=True, capture_output=True)
-
+    _build_bridge(npm, source, install_dir, fingerprint)
     logger.info("WhatsApp bridge ready")
     return install_dir
 
