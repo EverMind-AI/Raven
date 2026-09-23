@@ -21,6 +21,9 @@ from raven.agent.tools.connection_add import ConnectionAddTool
 from raven.ops import connection_add as adder
 from raven.ops import connections
 
+# Taken before the autouse fixture below replaces it for every test.
+_REAL_STORE_PATH = connections.store_path
+
 
 @pytest.fixture(autouse=True)
 def _home(tmp_path, monkeypatch):
@@ -233,3 +236,148 @@ def test_the_ask_is_one_text_the_on_call_listing_and_the_tool_share():
         sys.path.remove(str(plugin_dir))
     assert adder.ASK_OWNER in plugin._REQUEST
     assert "ops_connection_add" in adder.ASK_OWNER
+
+
+# ---- the probe, through a stand-in ssh on PATH ------------------------------
+
+
+def _fake_ssh(tmp_path, monkeypatch, body: str):
+    """Put an executable named ssh first on PATH; the runners call it by name."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    script = bin_dir / "ssh"
+    script.write_text("#!/bin/sh\n" + body + "\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+
+
+SSH_ROW = {"id": "box", "transport": "ssh", "host": "203.0.113.7", "port": 58717, "user": "root", "key": "~/k"}
+
+
+@pytest.mark.parametrize("isolate_key", [False, True], ids=["as-work-reaches-it", "candidate-key-alone"])
+def test_a_machine_that_answers_and_then_goes_silent_is_given_up_on(tmp_path, monkeypatch, isolate_key):
+    """The reviewed hole (2026-09-23): ConnectTimeout is over once the session
+    is up, and the ssh runner had no deadline of its own, so a probe against a
+    machine that accepted and then stopped answering never returned. The old
+    CLI capped the call at 30 s; the shared probe keeps that cap on both of
+    its ssh paths, and nothing is written on a machine that went quiet."""
+    import time
+
+    _fake_ssh(tmp_path, monkeypatch, "sleep 30")
+    started = time.monotonic()
+    reached, message, found = adder.probe(dict(SSH_ROW), timeout=0.5, isolate_key=isolate_key)
+    assert time.monotonic() - started < 10
+    assert (reached, found) == (False, {})
+    assert "no answer within" in message
+
+
+def test_a_machine_that_refuses_says_what_ssh_said(tmp_path, monkeypatch):
+    _fake_ssh(tmp_path, monkeypatch, "echo 'Permission denied (publickey).' >&2; exit 255")
+    reached, message, _ = adder.probe(dict(SSH_ROW), timeout=5)
+    assert not reached and "Permission denied" in message
+
+
+def test_no_ssh_client_on_this_computer_is_a_refusal_not_a_crash(tmp_path, monkeypatch):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    reached, message, _ = adder.probe(dict(SSH_ROW), timeout=5)
+    assert not reached and "ssh not found" in message
+
+
+def test_a_row_with_no_address_is_refused_by_the_transport():
+    reached, message, _ = adder.probe({"id": "box", "transport": "ssh", "port": 22}, timeout=5)
+    assert not reached and "no address" in message
+
+
+def test_ssh_defaults_reads_what_ssh_resolves_and_keeps_only_keys_that_exist(tmp_path, monkeypatch):
+    real = tmp_path / "id_real"
+    real.write_text("")
+    _fake_ssh(
+        tmp_path,
+        monkeypatch,
+        f"printf 'user cfd\\nport 58717\\nidentityfile {real}\\nidentityfile {tmp_path}/id_gone\\n'",
+    )
+    assert adder.ssh_defaults("203.0.113.7") == {"user": "cfd", "port": 58717, "keys": [str(real)]}
+
+
+def test_ssh_defaults_is_empty_when_ssh_cannot_answer(tmp_path, monkeypatch):
+    _fake_ssh(tmp_path, monkeypatch, "exit 255")
+    assert adder.ssh_defaults("203.0.113.7", port=22, user="root") == {}
+
+
+def test_the_probe_reads_the_c_library_line_into_the_note():
+    assert adder.parse_probe("CORES=8\nLIBC=ldd (GNU libc) 2.31\n")["note"] == "ldd (GNU libc) 2.31"
+
+
+# ---- the tool's refusals and remarks --------------------------------------
+
+
+def test_a_machine_with_no_name_is_refused():
+    assert add(name="  ").startswith("REFUSED")
+
+
+def test_a_local_machine_is_probed_here_and_written_without_an_alias(_home, reached):
+    out = add(transport="local", host="", note="the lab mac")
+    row = json.loads((_home / "connections.json").read_text())["connections"][0]
+    assert row["transport"] == "local" and row["note"] == "the lab mac"
+    assert "ssh alias" not in out
+
+
+def test_no_key_to_try_is_a_question_for_the_owner(_home, monkeypatch):
+    monkeypatch.setattr(adder, "ssh_defaults", lambda host, **kw: {"keys": []})
+    out = add(key="")
+    assert out.startswith("REFUSED") and "key path" in out
+
+
+def test_candidates_that_all_fail_name_the_keys_tried_and_why_an_alias_is_out(_home, monkeypatch):
+    monkeypatch.setattr(adder, "ssh_defaults", lambda host, **kw: {"keys": ["~/.ssh/a", "~/.ssh/b"]})
+    monkeypatch.setattr(adder, "probe", lambda row, **kw: (False, "refused", {}))
+    out = add(key="")
+    assert out.startswith("REFUSED") and "~/.ssh/a, ~/.ssh/b" in out and "jump host" in out
+
+
+def test_a_row_the_readers_could_not_use_is_not_written(_home, reached):
+    out = add(id="Not An Id")
+    assert out.startswith("REFUSED") and "lowercase" in out
+    assert not (_home / "connections.json").exists()
+
+
+def test_an_id_already_listed_is_refused_rather_than_overwritten(_home, reached):
+    add()
+    out = add()
+    assert out.startswith("REFUSED") and "already listed" in out
+
+
+def test_what_is_worth_the_owners_attention_is_said_without_refusing(_home, reached):
+    out = add(software="")
+    assert "wrote my-cpu-box" in out and "Worth telling the owner" in out and "'software' is not set" in out
+
+
+def test_concurrency_is_kept_only_where_nothing_else_says_how_many_jobs_fit(_home, monkeypatch):
+    monkeypatch.setattr(adder, "probe", lambda row, **kw: (True, "reached it", {}))
+    add(concurrency=3)
+    assert json.loads((_home / "connections.json").read_text())["connections"][0]["concurrency"] == 3
+
+
+def test_an_alias_that_cannot_be_written_is_a_warning_not_a_refusal(_home, reached, monkeypatch):
+    def refuse(row):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(adder, "write_ssh_alias", refuse)
+    out = add()
+    assert "wrote my-cpu-box" in out and "ssh alias not written (read-only file system)" in out
+
+
+def test_with_no_config_path_to_stand_beside_the_home_is_the_answer(tmp_path, monkeypatch):
+    """The autouse fixture stands a scratch store in; this one needs the real
+    resolution, so it calls the function the fixture replaced."""
+    import raven.config.paths as paths
+
+    def no_config():
+        raise RuntimeError("no config")
+
+    monkeypatch.setattr(paths, "get_config_path", no_config)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv(connections.CONNECTIONS_ENV, raising=False)
+    assert _REAL_STORE_PATH() == tmp_path / "home" / "connections.json"

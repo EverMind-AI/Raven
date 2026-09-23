@@ -156,8 +156,19 @@ def make_ssh_runner(
     user: str = "root",
     connect_timeout: int = 15,
     identities_only: bool = False,
+    cap_seconds: float | None = None,
 ) -> CommandRunner:
     """Run a command over ssh. ``identities_only`` narrows auth to ``key`` alone.
+
+    ``cap_seconds`` bounds the whole call, not only the connect: a machine that
+    accepts the session and then stops answering held the caller forever,
+    because ``ConnectTimeout`` is over once the connection is up (reviewed
+    2026-09-23 -- the registry probe lost the 30 s the old CLI enforced when
+    it moved onto this runner). A cap that fires returns ``TIMED_OUT_RC`` with
+    whatever arrived, the code the local runner uses, so a caller reads one
+    code however the machine is reached. The local ssh client is what gets
+    killed; bounding the far side is the caller's to do (the machine channel
+    wraps its command for that).
 
     Off by default, which is how work reaches its machine: whatever the owner's
     ssh would use gets to work, an agent included. Turned on only where the
@@ -187,7 +198,11 @@ def make_ssh_runner(
             f"{user}@{host}",
             cmd,
         ]
-        proc = subprocess.run(argv, capture_output=True, text=True)
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=cap_seconds)
+        except subprocess.TimeoutExpired as exc:
+            got = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            return TIMED_OUT_RC, got
         tail = f"\n{proc.stderr}" if proc.stderr and proc.returncode != 0 else ""
         return proc.returncode, proc.stdout + tail
 
@@ -223,4 +238,5 @@ def runner_from(row: dict[str, Any], *, cap_seconds: float | None = None) -> Com
         # A connection names the account to log in as. Dropping it would make
         # that field one more setting that is written, accepted and does nothing.
         user=str(row.get("user") or "root"),
+        cap_seconds=cap_seconds,
     )

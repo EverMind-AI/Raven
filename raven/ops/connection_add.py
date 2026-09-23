@@ -113,7 +113,7 @@ def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = Fal
     authenticated, and the registry would then hold a path that stops working
     the day that agent or config changes.
     """
-    from raven.ops.transport import TransportError, make_ssh_runner, runner_from
+    from raven.ops.transport import TIMED_OUT_RC, TransportError, make_ssh_runner, runner_from
 
     where = "this computer" if transport_of(row) == LOCAL else f"{row.get('user')}@{row.get('host')}:{row.get('port')}"
     try:
@@ -124,6 +124,7 @@ def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = Fal
                 os.path.expanduser(str(row.get("key") or "")),
                 user=str(row.get("user") or "root"),
                 identities_only=True,
+                cap_seconds=timeout,
             )
         else:
             runner = runner_from(row, cap_seconds=timeout)
@@ -132,6 +133,10 @@ def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = Fal
         return False, f"could not reach {where}: {exc}", {}
     except FileNotFoundError:
         return False, f"could not reach {where}: ssh not found on this computer", {}
+    if code == TIMED_OUT_RC:
+        # Reached and then silent, or never answering at all: either way a row
+        # is not written on it, and the owner is told how long was waited.
+        return False, f"could not reach {where}: no answer within {timeout:.0f}s", {}
     if code != 0:
         return False, f"could not reach {where}: {out.strip() or f'exit {code}'}", {}
     return True, f"reached {where}", parse_probe(out)
