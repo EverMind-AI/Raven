@@ -40,12 +40,18 @@ describe('callSubject', () => {
   })
 })
 
+// The catalogue sentence with no reason to name, spelled out rather than read
+// back through the helper under test.
+const TURN_FAILED = 'Turn failed'
+
 describe('foldDirectTurns', () => {
   it('says so when the trailing prompt was interrupted with its session', () => {
     const msgs = foldDirectTurns([turn({ content: 'dig in', interrupted: true, role: 'user' })])
 
     expect(msgs.map(m => m.role)).toEqual(['user', 'system'])
-    expect(msgs[msgs.length - 1]!.text).toContain('interrupted')
+    // The sentence every other lane ends an answerless turn with, not a fifth
+    // spelling of it.
+    expect(msgs[msgs.length - 1]!.text).toBe(TURN_FAILED)
   })
 
   it('adds no marker to a conversation whose turns all answered', () => {
@@ -54,7 +60,7 @@ describe('foldDirectTurns', () => {
       turn({ content: 'answer', role: 'assistant' })
     ])
 
-    expect(msgs.some(m => m.text.includes('interrupted'))).toBe(false)
+    expect(msgs.some(m => m.text === TURN_FAILED)).toBe(false)
   })
 
   it('carries a steer row into the turn instead of opening one', () => {

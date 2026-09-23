@@ -23,8 +23,19 @@ import type { Msg } from '../types.js'
 import type { FoldRow } from './episodeFold.js'
 
 import { FAILED_MARKER, foldRowsIntoEpisodes } from './episodeFold.js'
+import { failedTurnLine } from './messages.js'
 
 export { callSubject } from './episodeFold.js'
+
+/**
+ * The line a turn that died with its session reads by -- the same sentence the
+ * main lane and a live direct turn say for a turn that ended without an
+ * answer, rather than a fifth spelling of it. It carries no reason because
+ * nothing recorded one: the process the turn was running in is gone. A fresh
+ * row per fold is fine: `replaceRows` keeps a row's identity by its content,
+ * and the sentence follows the locale on the first read after it changes.
+ */
+const interruptedNotice = (): Msg => ({ kind: 'slash', role: 'system', text: failedTurnLine('') })
 
 /**
  * Fold an instance's stored rows into transcript messages.
@@ -37,14 +48,6 @@ export { callSubject } from './episodeFold.js'
  * prefix still has to be stripped here too, against the same exported literal
  * rather than a second copy that could drift from it.
  */
-/** One shared object, not one per fold: the view keeps row identity across
- *  re-reads (`replaceRows`), and the marker never varies. */
-const INTERRUPTED_ROW: Msg = {
-  kind: 'slash',
-  role: 'system',
-  text: 'interrupted — this turn ended with its session before it answered'
-}
-
 export const foldDirectTurns = (turns: DirectTurn[]): Msg[] => {
   const msgs = foldRowsIntoEpisodes(
     turns.map((turn): FoldRow => {
@@ -67,5 +70,5 @@ export const foldDirectTurns = (turns: DirectTurn[]): Msg[] => {
   // The server marks a trailing prompt whose turn died with its session --
   // nothing running now, no reply on record. One muted line says so, where a
   // bare unanswered question read as the view having lost the reply.
-  return turns.some(t => t.interrupted) ? [...msgs, INTERRUPTED_ROW] : msgs
+  return turns.some(t => t.interrupted) ? [...msgs, interruptedNotice()] : msgs
 }

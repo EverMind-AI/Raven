@@ -22,6 +22,7 @@ import {
   STREAM_TYPING_BATCH_MS
 } from '../config/timing.js'
 import { foldDagEvent, foldDagSnapshot, withPromptTemplates } from '../domain/dagRun.js'
+import { haltedLine } from '../domain/messages.js'
 import { foldSpawnStatus, spawnRunSettled } from '../domain/spawnRun.js'
 import { appendToolShelfMessage, isToolShelfMessage } from '../lib/liveProgress.js'
 import { hasMeaningfulReasoning, hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
@@ -314,6 +315,33 @@ class TurnController {
       }
     }
 
+    // Whether this call put any of the turn's output back on screen, which is
+    // what picks between the two stop sentences. Tracked as the rows go out
+    // rather than asked of the transcript afterwards: the sink is a callback,
+    // and what it already holds is the caller's business.
+    let kept = false
+    const keep = (msg: Msg) => {
+      kept = true
+      appendMessage(msg)
+    }
+
+    // The stop line, drawn after the output it speaks about and before the
+    // runtime's closing word, so a live cancel reads row for row like the
+    // replay of the marker the runtime files for the same turn. A turn that
+    // failed says so through the error frame that reported it instead, and a
+    // re-entrant call has already had its say.
+    const closeAborted = () => {
+      if (marker === 'interrupted' && !reentrant) {
+        if (kept) {
+          appendMessage({ role: 'system', text: haltedLine(true) })
+        } else {
+          sys?.(haltedLine(false))
+        }
+      }
+
+      closeNotice()
+    }
+
     const interruptedText = partial ? `${partial}\n\n*[${marker}]*` : `*[${marker}]*`
 
     // Episodes mode: never dump the raw expanded segments. Commit the accrued
@@ -321,7 +349,7 @@ class TurnController {
     // with nothing accrued yet, fall back to the bare interrupted indicator.
     if (episodesMode) {
       if (workEpisodes.length) {
-        appendMessage({
+        keep({
           episodes: workEpisodes,
           foldId: this.turnFoldId,
           kind: 'episodes',
@@ -329,7 +357,7 @@ class TurnController {
           text: interruptedText
         })
 
-        closeNotice()
+        closeAborted()
 
         return
       }
@@ -340,54 +368,46 @@ class TurnController {
       // never loses history the completion path would have preserved.
       if (segments.length || tools.length) {
         for (const msg of segments) {
-          appendMessage(msg)
+          keep(msg)
         }
 
-        appendMessage({
+        keep({
           role: 'assistant',
           text: interruptedText,
           ...(tools.length && { tools })
         })
 
-        closeNotice()
+        closeAborted()
 
         return
       }
 
       if (partial) {
-        appendMessage({ role: 'assistant', text: interruptedText })
-      } else if (!reentrant) {
-        if (marker === 'interrupted') {
-          sys?.('interrupted')
-        }
+        keep({ role: 'assistant', text: interruptedText })
       }
 
-      closeNotice()
+      closeAborted()
 
       return
     }
 
     for (const msg of segments) {
-      appendMessage(msg)
+      keep(msg)
     }
 
     // Always surface an interruption indicator — if there's an in-flight
     // `partial` or pending tools, fold them into a single assistant message;
-    // otherwise emit a sys note so the transcript always records that the
-    // turn was cancelled, even when only prior `segments` were preserved.
+    // the stop line below records the cancel either way, including when only
+    // prior `segments` were preserved.
     if (partial || tools.length) {
-      appendMessage({
+      keep({
         role: 'assistant',
         text: interruptedText,
         ...(tools.length && { tools })
       })
-    } else if (!reentrant) {
-      if (marker === 'interrupted') {
-        sys?.('interrupted')
-      }
     }
 
-    closeNotice()
+    closeAborted()
   }
 
   interruptTurn({ appendMessage, gw, sid, sys }: InterruptDeps) {

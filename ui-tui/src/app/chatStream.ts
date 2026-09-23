@@ -36,7 +36,14 @@ import type { Msg, TurnArtifacts } from '../types.js'
 import type { DirectTargetRef } from './directChatStore.js'
 
 import { TOOL_PREVIEW_TRUNCATED_SUFFIX } from '../domain/episodeFold.js'
-import { deliveredMessageKey, failedTurnLine, noticeLine } from '../domain/messages.js'
+import {
+  deliveredMessageKey,
+  failedTurnLine,
+  haltedLine,
+  keptOutput,
+  noticeLine,
+  turnErrorLine
+} from '../domain/messages.js'
 import { addUnique, artifactMessage, changedFile, deliveryFiles } from '../domain/turnArtifacts.js'
 import { t } from '../i18n/index.js'
 import { argPreview, dagPromptTemplates } from '../lib/toolArgs.js'
@@ -48,6 +55,7 @@ import {
   directKey,
   disarmEscape,
   getDirectChat,
+  getDirectTranscript,
   MAIN_VIEW_KEY,
   markRunning,
   viewKeyOf
@@ -210,18 +218,20 @@ const dispatchDirect = (
     case 'error': {
       state.turns.delete(viewKeyOf(target))
       clearRunning(target)
-      const { code, message, reason, detail } = event.payload
-      const line = detail ? detail.split('\n')[0].slice(0, 200) : ''
-      const said =
-        reason === 'cancelled_by_client'
-          ? 'interrupted'
-          : message === 'turn_failed'
-            ? failedTurnLine(line)
-            : `error: ${message} (code=${code})${line ? `: ${line}` : ''}`
-      appendDirectMessage(key, { role: 'system', text: said })
+      // The same reading the main lane's `onError` gets, so one frame cannot
+      // be worded two ways depending on which view it belongs to.
+      appendDirectMessage(key, {
+        role: 'system',
+        text: turnErrorLine(event.payload, keptOutput(getDirectTranscript(key)))
+      })
       disarmEscape(target)
       patchUiState({ status: 'ready' })
-      sys?.(`${target.agent}/${target.handle}: ${message}`)
+      // Kept, and now in the same words: the main view is where the user is
+      // looking when a direct turn they left dies, and the settled read that
+      // follows a turn's end replaces the instance's own rows, not this one.
+      // The main transcript never holds the instance's output, so the echo of
+      // a stop makes no promise about what is kept above it.
+      sys?.(`${target.agent}/${target.handle}: ${turnErrorLine(event.payload)}`)
       // As `message.complete` does: this end of a turn moves the instance's
       // registry row too -- the manager writes `cancelled` or `failed` where a
       // clean turn writes `completed`. Without the re-read the strip keeps the
@@ -537,7 +547,7 @@ const onError = (
   sys?: (msg: string) => void,
   appendMessage?: (msg: Msg) => void
 ): void => {
-  const { reason, message, code, detail } = ev.payload
+  const { reason, message } = ev.payload
   state.turns.delete(MAIN_VIEW_KEY)
   clearRunning(null)
   if (reason === 'cancelled_by_client') {
@@ -552,10 +562,9 @@ const onError = (
   // the live anchor so the user can submit again. A turn that died reads by
   // the line a resumed transcript gives it, with the real failure detail (e.g.
   // the underlying exception); any other code keeps its own name and detail.
-  const line = detail ? detail.split('\n')[0].slice(0, 200) : ''
   const died = message === 'turn_failed'
   if (sys) {
-    sys(died ? failedTurnLine(line) : `error: ${message} (code=${code})${line ? `: ${line}` : ''}`)
+    sys(turnErrorLine(ev.payload))
   }
   turnController.recordError({ appendMessage })
   patchUiState({ status: (died ? failedTurnLine('') : `error: ${message}`).slice(0, 80) })
@@ -646,7 +655,9 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
       // The instance's own transcript, where dispatchDirect writes a cancelled
       // turn's marker. Not restoreInputPrompt: that commits turnController's
       // buffer into the main transcript, and a direct turn never filled it.
-      appendDirectMessage(directKey(active.agent, active.handle), { role: 'system', text: 'interrupted' })
+      const key = directKey(active.agent, active.handle)
+
+      appendDirectMessage(key, { role: 'system', text: haltedLine(keptOutput(getDirectTranscript(key))) })
       disarmEscape(active)
       patchUiState({ status: 'ready' })
 
