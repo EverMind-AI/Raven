@@ -1586,10 +1586,9 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
       </button>
       {/* A shut body is not built, which is where the weight was: a forty-turn
           session built 7361 nodes of which 6400 sat in shut fold bodies. On the
-          conversation's lane the runtime opens at most one fold -- the turn a
-          reopened conversation ends on (`openLastFold`); a turn that just
-          finished shuts its own (`collapse`) -- so at most one body IS built,
-          and one is not a session's worth.
+          conversation's lane the runtime opens none: a turn that just finished
+          shuts its own (`collapse`) and a replayed one arrives shut, so the only
+          bodies built are the ones the reader opened.
 
           A delegated pane opens every turn's, and is a different size of thing:
           measured on the two largest instance records on hand, 55 messages in
