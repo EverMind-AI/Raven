@@ -1681,7 +1681,11 @@ async def channels_configure(params: dict, *, agent_loop_factory=None) -> dict:
         from raven.gateway.live_probe import channel_start, reset_cache
 
         try:
-            outcome = await channel_start(name, enabled=enabled)
+            # A credential written onto a channel that is already running
+            # reaches config and nothing else: the adapter holds the slice it
+            # was built with and re-reads none of it, so the corrected value
+            # only takes effect once the gateway rebuilds it.
+            outcome = await channel_start(name, enabled=enabled, restart=bool(payload) and enabled)
         except Exception:
             outcome = None
         # Nobody answered, or the gateway refused to say: the config write

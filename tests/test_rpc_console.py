@@ -1340,10 +1340,10 @@ async def test_channels_configure_asks_the_gateway_to_start_the_adapter(isolated
     here did nothing until the next launch -- for a scan-login entrance that
     meant no QR could ever be fetched and nobody could sign in from the UI.
     """
-    asked: list[tuple[str, bool]] = []
+    asked: list[tuple[str, bool, bool]] = []
 
-    async def fake_start(name: str, *, enabled: bool = True) -> str:
-        asked.append((name, enabled))
+    async def fake_start(name: str, *, enabled: bool = True, restart: bool = False) -> str:
+        asked.append((name, enabled, restart))
         return "started" if enabled else "stopped"
 
     import raven.gateway.live_probe as probe
@@ -1351,15 +1351,26 @@ async def test_channels_configure_asks_the_gateway_to_start_the_adapter(isolated
     probe_start = probe.channel_start
     probe.channel_start = fake_start
     try:
+        # Credentials came with the switch, so an adapter that is already up has
+        # to be rebuilt: it holds the slice it was built with, and the corrected
+        # token would sit in config while the live one kept the rejected one.
         r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "1:a"}, "enabled": True})
-        assert asked == [("telegram", True)]
+        assert asked == [("telegram", True, True)]
         assert r == {"applied": True, "outcome": "started"}
         r = await console_module.channels_configure({"name": "telegram", "fields": {}, "enabled": False})
-        assert asked == [("telegram", True), ("telegram", False)]
+        assert asked[-1] == ("telegram", False, False)
         assert r == {"applied": True, "outcome": "stopped"}
+        # The bare switch is not a rebuild: flipping on what is already on must
+        # leave a working adapter where it is.
+        await console_module.channels_configure({"name": "telegram", "fields": {}, "enabled": True})
+        assert asked[-1] == ("telegram", True, False)
+        # Nor is a form whose boxes were all left blank -- nothing was written,
+        # so there is nothing the adapter is out of date with.
+        await console_module.channels_configure({"name": "telegram", "fields": {"token": "   "}, "enabled": True})
+        assert asked[-1] == ("telegram", True, False)
         # A credential correction with no switch in it does not restart anything.
         r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "2:b"}})
-        assert asked == [("telegram", True), ("telegram", False)]
+        assert len(asked) == 4
         assert r == {"applied": True}, "no switch, nothing started: no outcome to report"
     finally:
         probe.channel_start = probe_start
@@ -1374,7 +1385,7 @@ async def test_channels_configure_still_applies_when_no_gateway_answers(isolated
     import raven.gateway.live_probe as probe
     from raven.config.loader import get_config_path
 
-    async def boom(name: str, *, enabled: bool = True) -> str:
+    async def boom(name: str, *, enabled: bool = True, restart: bool = False) -> str:
         raise OSError("no gateway here")
 
     probe_start = probe.channel_start

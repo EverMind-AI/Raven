@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities, ChannelSpec
 from raven.config.schema import ProvidersConfig
 from raven.gateway.manager import ChannelManager, missing_dep_hint
@@ -424,8 +425,10 @@ async def test_start_one_answers_rather_than_raising_for_every_refusal(monkeypat
 
 @pytest.mark.asyncio
 async def test_start_one_is_idempotent(monkeypatch):
-    """The page writes the flag and asks to start on every apply, including one
-    that only corrected a credential."""
+    """Turning on an entrance that is already on changes nothing: the page asks
+    to start on every apply, and a working adapter must survive the second one.
+    A write that changed what the adapter was built with asks for a restart
+    instead -- that is `restart_one`, below, not this."""
     mgr = _hot(
         monkeypatch,
         {"fake": _spec(_FakeChannel)},
@@ -508,6 +511,143 @@ async def test_start_one_leaves_an_adapter_that_is_still_coming_up_alone(monkeyp
     # And the record does not outlive the start it describes: a finished task
     # left in the table is a channel that looks like it is still coming up.
     assert "fake" not in mgr._tasks
+
+
+@pytest.mark.asyncio
+async def test_restart_one_rebuilds_a_running_adapter(monkeypatch):
+    """A credential corrected on a channel that is running reaches config and
+    nothing else: the adapter holds the slice it was built with and re-reads
+    none of it, so the page's save was a write to disk and a silent no-op on the
+    entrance it was meant to fix."""
+    mgr = _hot(
+        monkeypatch,
+        {"fake": _spec(_FakeChannel)},
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+    )
+    first = mgr.channels["fake"]
+    await first.start()
+    started: list[object] = []
+    retired: list[str] = []
+    mgr.on_started = started.append
+    mgr.on_stopped = _async_collect(retired)
+
+    assert await mgr.restart_one("fake") == "started"
+    rebuilt = mgr.channels["fake"]
+    assert rebuilt is not first, "it handed back the adapter that still holds the old credential"
+    assert first.is_running is False
+    # The old adapter's outlet goes with it and the new one's is registered:
+    # the hub's worker is resident, so a rebuild that skipped either would
+    # receive on one adapter and reply through the other.
+    assert retired == ["fake"]
+    assert started == [rebuilt]
+    await mgr.stop_one("fake")
+
+
+@pytest.mark.asyncio
+async def test_a_start_that_raises_leaves_the_adapter_stopped_and_restartable(monkeypatch):
+    """Adapters raise from inside start() -- a rejected token, a refused socket
+    -- after the running flag is already up, and the manager used only to log
+    it: the object stayed in the table reading as running, so the row drew green
+    on a channel that had never started and every later attempt met "already".
+    """
+
+    class _Refused(ChannelBase):
+        name = "fake"
+
+        def __init__(self, config):
+            super().__init__(config)
+            self.stopped = False
+
+        async def start(self) -> None:
+            self._running = True
+            raise RuntimeError("the token was rejected by the server")
+
+        async def stop(self) -> None:
+            # A half-built adapter's teardown, which is the usual shape of one:
+            # it refuses before it reaches anything, the flag included.
+            self.stopped = True
+            raise RuntimeError("this updater is not running")
+
+        async def send(self, chat_id, content, media=None) -> None:  # pragma: no cover
+            pass
+
+    mgr = _hot(
+        monkeypatch,
+        {"fake": _spec(_Refused)},
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+    )
+    refused = mgr.channels["fake"]
+
+    await mgr.start_all()
+
+    assert refused.stopped is True, "the manager never asked it to stand down"
+    assert refused.is_running is False
+    assert await mgr.start_one("fake") == "started"
+    assert mgr.channels["fake"] is not refused
+    await mgr.stop_one("fake")
+
+
+@pytest.mark.asyncio
+async def test_a_stop_and_a_start_arriving_together_do_not_cross(monkeypatch):
+    """Both hops arrive as their own task -- the page's transport dispatches
+    each frame, and the row's switch is fire-and-forget -- so a reader
+    double-tapping it had them overlap. The stop resumed after the start had
+    installed a new adapter and retired the outlet it had just registered, by
+    name: a channel reading as running with nothing listening, every reply
+    dropped for want of an outlet.
+    """
+    import asyncio
+
+    entered = asyncio.Event()
+    stopping_now = asyncio.Event()
+
+    class _SlowStop(_FakeChannel):
+        async def start(self) -> None:
+            self._running = True
+            entered.set()
+            await asyncio.Event().wait()
+
+        async def stop(self) -> None:
+            self._running = False
+            stopping_now.set()
+            await asyncio.sleep(0.05)
+
+    mgr = _hot(
+        monkeypatch,
+        {"fake": _spec(_SlowStop)},
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+    )
+    first = mgr.channels["fake"]
+    # One list for both hooks: what went wrong is the order, and two lists
+    # cannot see it.
+    events: list[str] = []
+    mgr.on_started = lambda _ch: events.append("started")
+
+    async def retire(_name: str) -> None:
+        events.append("stopped")
+
+    mgr.on_stopped = retire
+
+    launch = asyncio.create_task(mgr.start_all())
+    await asyncio.wait_for(entered.wait(), timeout=2)
+    stop = asyncio.create_task(mgr.stop_one("fake"))
+    await asyncio.wait_for(stopping_now.wait(), timeout=2)
+    start = asyncio.create_task(mgr.start_one("fake"))
+    assert await asyncio.wait_for(asyncio.gather(stop, start), timeout=2) == ["stopped", "started"]
+
+    assert events == ["stopped", "started"], "the stop retired the outlet the start had just registered"
+    survivor = mgr.channels["fake"]
+    assert survivor is not first
+    # The cancelled task's done callback runs a tick after the cancel, and that
+    # tick is where a record kept by name alone took the new start's with it.
+    await asyncio.sleep(0.01)
+    alive = mgr._tasks.get("fake")
+    assert alive is not None and not alive.done()
+    await mgr.stop_one("fake")
+    await asyncio.wait_for(launch, timeout=2)
 
 
 def _async_collect(sink: list[str]):

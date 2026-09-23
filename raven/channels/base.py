@@ -40,6 +40,17 @@ class ChannelBase:
     def is_running(self) -> bool:
         return self._running
 
+    def mark_stopped(self) -> None:
+        """Clear the running flag without a teardown.
+
+        The manager's last word after a start that raised: adapters raise it
+        from inside ``start()``, after the flag is up, and whether a half-built
+        one clears the flag on the way out is each adapter's own business. The
+        invariant that a channel not running never reads as running is this
+        class's.
+        """
+        self._running = False
+
     def is_allowed(self, sender_id: str) -> bool:
         """Deny-by-default allowlist check (empty = deny all; ``"*"`` = allow
         all). Override for bespoke matching; the override flows into Intake."""
