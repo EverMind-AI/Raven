@@ -729,6 +729,15 @@ function OrderTab({ row, node, roster, rec }: {
    slack the transcript's own thought box allows a reader. */
 const TAIL_SLACK_PX = 40
 
+/* What the reader can do to a scroller, as the events that say they did it. */
+const GESTURES = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const
+
+/* How long a scroller has to sit still before the reader's hand counts as
+   off it. Momentum outlives the wheel that started it and a dragged bar
+   reports nothing between press and release, so what ends a reader's scroll
+   is the scrolling stopping, not the gesture event. */
+const SETTLE_MS = 150
+
 /* Keeps a reader at the end of a record that is still being written.
  *
  * `useNodeRecord` re-reads a running node every second and the card re-renders
@@ -737,42 +746,125 @@ const TAIL_SLACK_PX = 40
  * clamps `scrollTop` against it, and nothing hands it back when the content
  * returns: measured on the page, one such paint left a reader parked at the
  * end of a 5,090px record sitting at 0. What that looked like was dragging to
- * the bottom of a running step and being thrown back up a block, once per
- * trip down.
+ * the bottom of a running step and being thrown back up a block, once per trip
+ * down.
  *
- * So the box re-pins itself when a read lands, for a reader who asked to be at
- * the end and only for them. A `scroll` event is the honest source for that:
- * re-rendering the record does not fire one, so the flag holds whatever the
- * reader last did. It starts false, because a record opens at its beginning,
- * and `key` resets it -- another node, or the work order, is a different thing
- * to read rather than a continuation of this one.
+ * Following is what the reader asked for, so only the reader may end it. A
+ * `scroll` event alone cannot say who scrolled: measured in Safari against a
+ * running node, the browser moved the offset up by itself -- 48px, 146px, and
+ * once 1,025px -- with the content the same height before and after and no
+ * write from this code at all. Read as the reader walking away, each of those
+ * ended the follow for good, which is the bug this carries. So a scroll only
+ * means something while the reader's hand is on the box: a gesture -- wheel,
+ * touch, a press on the bar, a key -- arms the scrolls that follow it, and the
+ * scrolling stopping for `SETTLE_MS` disarms them again. Whatever the browser
+ * does in between is undone rather than obeyed.
  *
- * `record` is the whole gate on when to pin, rather than every render: this
- * panel reads the task store, and every fold in the record writes to it
- * (`store.setFold`), so a pin on each render would answer a reader opening a
- * step above with a jump to the end -- away from the thing they just opened.
- * `useNodeRecord` hands back a fresh object per read and keeps the old one
- * while the next read is in flight, so this fires on the reads that move the
- * content and on nothing else, the settling read included. */
-function useTailFollow(key: string, record: NodeRecord | null) {
+ * And undone promptly, which is why the content is watched rather than only
+ * the reads: a nudge two seconds before the next read would otherwise sit
+ * there, which is exactly how long it looked wrong for.
+ *
+ * It starts not following, because a record opens at its beginning, and `key`
+ * resets it -- another node, or the work order, is a different thing to read
+ * rather than a continuation of this one. The pin runs off `record` rather
+ * than off every render: this panel reads the task store, and every fold in
+ * the record writes to it (`store.setFold`), so a pin on each render would
+ * answer a reader opening a step above with a jump to the end. */
+function useTailFollow(key: string, record: NodeRecord | null, live: boolean) {
   const box = useRef<HTMLDivElement>(null)
   const wantsTail = useRef(false)
+  const gestured = useRef(0)
   /* Declared before the pin below, because layout effects run in order and a
      reset that landed after it would pin the new thing to its end first. */
   useLayoutEffect(() => { wantsTail.current = false }, [key])
   useEffect(() => {
     const el = box.current
     if (!el) return
+    let settle: ReturnType<typeof setTimeout> | null = null
+    const mark = (): void => { gestured.current = 1 }
+    const pin = (): void => { if (wantsTail.current) el.scrollTop = el.scrollHeight }
     const note = (): void => {
+      /* Nothing the reader did, so nothing about what they want -- this is the
+         browser moving the box, and a follow it interrupts is a follow to
+         resume. Measured in Safari: the content is 172px shorter for an
+         instant inside a paint, the browser clamps to the end that implies,
+         and the height coming back leaves the offset where the clamp put it.
+         Both heights are the same before and after, so there is nothing for a
+         `ResizeObserver` to report; the move itself is the only evidence, and
+         answering it is what puts the reader back. Pinning an offset that is
+         already at the end scrolls nothing and fires nothing, so this settles
+         rather than loops. */
+      if (!gestured.current) {
+        pin()
+        return
+      }
       wantsTail.current = el.scrollHeight - el.scrollTop - el.clientHeight < TAIL_SLACK_PX
+      if (settle) clearTimeout(settle)
+      settle = setTimeout(() => { gestured.current = 0 }, SETTLE_MS)
     }
+    /* The box itself as well as what is in it. Measured in Safari: a repaint
+       takes the box's own height up by 74px for an instant, the browser clamps
+       `scrollTop` against the smaller end that implies, and the height coming
+       back does not bring the offset with it -- the reader is left exactly
+       those 74px short, pinned there again by every read that follows. What
+       moves under a reader at the end is a height, whichever of the two it
+       is. */
+    const seen = new ResizeObserver(pin)
+    const kids = new MutationObserver(() => {
+      seen.disconnect()
+      seen.observe(el)
+      for (const kid of el.children) seen.observe(kid)
+      pin()
+    })
+    seen.observe(el)
+    for (const kid of el.children) seen.observe(kid)
+    kids.observe(el, { childList: true })
+    for (const name of GESTURES) el.addEventListener(name, mark, { passive: true })
     el.addEventListener('scroll', note, { passive: true })
-    return () => el.removeEventListener('scroll', note)
-  }, [])
-  /* In the layout phase, so the box is never painted at the clamped offset. */
+    /* And then, while the record is still being written, every frame.
+     *
+     * Nothing else catches what Safari does to this box. Measured there: a
+     * paint takes the content down to the height of the viewport -- the whole
+     * record gone for an instant -- and the browser clamps `scrollTop` to 0
+     * against it. Pinning during that moment scrolls to 0 too, and when the
+     * content comes back the offset stays where it is: no scroll fires,
+     * because nothing moved, and both heights read the same before and after,
+     * so no observer has anything to report. The reader was left at the top of
+     * a record they had been reading the end of.
+     *
+     * A frame is the shortest interval that outlasts any of it. Pinning an
+     * offset already at the end writes the same number, which scrolls nothing
+     * and fires nothing, so the cost is one measurement a frame while a run is
+     * live and the reader is at its end -- and nothing at all once either
+     * stops being true. The reader's own gesture suspends it, or they could
+     * never scroll away. */
+    let frame = 0
+    const keep = (): void => {
+      if (!gestured.current) pin()
+      frame = requestAnimationFrame(keep)
+    }
+    if (live) frame = requestAnimationFrame(keep)
+    return () => {
+      if (frame) cancelAnimationFrame(frame)
+      if (settle) clearTimeout(settle)
+      seen.disconnect()
+      kids.disconnect()
+      for (const name of GESTURES) el.removeEventListener(name, mark)
+      el.removeEventListener('scroll', note)
+    }
+  }, [live])
+  /* In the layout phase, so the box is never painted at the clamped offset,
+     and again on the frame after it: a height that settles between the two is
+     the whole defect above, and the second pin is what the reader would not
+     have to do by hand. */
   useLayoutEffect(() => {
     const el = box.current
-    if (el && wantsTail.current) el.scrollTop = el.scrollHeight
+    if (!el || !wantsTail.current) return
+    el.scrollTop = el.scrollHeight
+    const again = requestAnimationFrame(() => {
+      if (box.current && wantsTail.current) box.current.scrollTop = box.current.scrollHeight
+    })
+    return () => cancelAnimationFrame(again)
   }, [record])
   return box
 }
@@ -783,7 +875,7 @@ function NodePanel({ row, node, paneId, onClose, roster }: {
   useSyncExternalStore(store.subscribe, store.get)
   const rec = useNodeRecord(row, node)
   const pinned = store.tabOf(paneId)
-  const body = useTailFollow(`${paneId}:${node.node_id}:${pinned ?? ''}`, rec.record)
+  const body = useTailFollow(`${paneId}:${node.node_id}:${pinned ?? ''}`, rec.record, node.status === 'running')
   /* A skipped step opens on the context tab too -- it has no order to
      dispatch, but it does have a reason it never ran, and that reason is
      what the context tab reads first (`nodeWhyText`). Only a step still
