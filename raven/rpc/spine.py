@@ -239,9 +239,7 @@ class RpcTurnRunner(AgentTurnRunner):
                 self._readback_texts[req.conversation] = text
             return outcome
         usage_sink: dict[str, Any] = {}
-        outcome = await self._loop.run_turn(
-            req, emit, drain, stream=True, inline_tool_stream=True, usage_sink=usage_sink
-        )
+        outcome = await self._loop.run_turn(req, emit, drain, stream=True, usage_sink=usage_sink)
 
         # A synthetic tool.complete when the message tool fired (the loop
         # skips it on the general tool path), so the UI records the agent acted —
@@ -562,7 +560,7 @@ def _make_rpc_sink(
         """Whether the ending turn is the one ``turn.send`` bound this lane to.
 
         A lane is serial but its slots are per-lane, so a turn the runtime
-        submitted itself (a sub-agent announce, a deep-research delivery) can end
+        submitted itself (a sub-agent announce, a verbatim delivery) can end
         while a client's turn is still QUEUED behind it on the same lane.
         Releasing the slots there opens the -32003 guard for a second send and
         leaves the queued turn's own end with no binding to report against.
@@ -644,7 +642,7 @@ def _make_rpc_sink(
                 # A turn the runtime opened (a delegated result re-entering the
                 # conversation) gets NO message.start -- that event belongs to
                 # turn.send. The delegated identity is the gate: another
-                # SUBAGENT shape, deep research's deliver_text turn, persists
+                # SUBAGENT shape -- a deliver_text turn with no delegated identity -- persists
                 # only an assistant entry -- no user entry opens this turn on
                 # reload, so emitting a live boundary here would advance the
                 # workspace counter in a way the stored history does not. But the client's live bookkeeping advances one

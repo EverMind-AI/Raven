@@ -29,7 +29,6 @@ from raven.spine import (
     TurnRequest,
 )
 from raven.spine.delivery import Capabilities, DeliveryHub, make_hub_sink
-from raven.spine.events import Reasoning
 
 
 def _fmt_tokens(n: int) -> str:
@@ -210,13 +209,11 @@ class CliOutlet:
     """Renders a turn's deliverables to the terminal. Runs non-streaming (run_turn
     stream=False), so the reply arrives as one Text; MediaOut is eaten.
 
-    ``render_notice`` is opt-in progress rendering: when set, a Notice (and the
-    Reasoning a long tool like deep_research streams, see ``deliver``) renders as
+    ``render_notice`` is opt-in progress rendering: when set, a Notice renders as
     a progress line, gated by ``send_progress`` (PROGRESS) and ``send_tool_hints``
-    (TOOL_HINT). The one-shot ``-m`` path wires it so deep_research progress is
-    visible; note this also surfaces the model's per-tool progress hint on every
-    tool call, gated by the same flags. A surface that omits it eats Notice /
-    Reasoning as before."""
+    (TOOL_HINT). The one-shot ``-m`` path wires it so the model's per-tool
+    progress hint is visible on every tool call, gated by the same flags. A
+    surface that omits it eats Notice as before."""
 
     def __init__(
         self,
@@ -248,11 +245,6 @@ class CliOutlet:
                 self._render_notice(out.detail or "")
             elif out.kind is NoticeKind.TOOL_HINT and self._send_tool_hints:
                 self._render_notice(out.detail or "")
-        elif isinstance(out, Reasoning):
-            # A long tool (deep_research) streams coarse progress as Reasoning; the
-            # model itself never emits Reasoning here (this path runs non-streaming).
-            if self._render_notice is not None and self._send_progress and out.content:
-                self._render_notice(out.content)
         elif isinstance(out, ToolEvent) and out.phase is ToolPhase.COMPLETE:
             delivery = (out.metadata or {}).get("raven_delivery")
             if not isinstance(delivery, dict):
@@ -311,7 +303,7 @@ def build_one_shot_spine(
             summary=summary,
         )
     )
-    inner: Any = _OneShotTurnRunner(agent_loop, stream=False, inline_tool_stream=True)
+    inner: Any = _OneShotTurnRunner(agent_loop, stream=False)
     runner: Any = inner
     if summary is not None:
         runner = _SummaryTurnRunner(runner, summary)

@@ -57,10 +57,6 @@ UNIMPLEMENTED_METHODS = frozenset(
 
 AVAILABLE_COMMANDS: tuple[tuple[str, str], ...] = (
     (
-        "deep-research",
-        "Run MiroThinker-backed deep research over multiple sources and return a cited report.",
-    ),
-    (
         "playbook",
         "Run a stored orchestration (playbook library) for a reusable procedure, or list the library.",
     ),
@@ -75,7 +71,7 @@ A deliberate white-list, not a reflection of the Typer app: the CLI surface
 includes verbs whose meaning is internal to a terminal (`acp`, `gateway`
 plumbing) or that a command panel has no business offering as a quick action,
 and reflecting it would put those in front of a reader and drift with every new
-verb. These six are the user-facing actions raven can start or inspect from a
+verb. These five are the user-facing actions raven can start or inspect from a
 conversation; each is announced once per session as
 ``available_commands_update``."""
 

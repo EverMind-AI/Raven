@@ -34,7 +34,7 @@ class RpcStack:
     # host that mounts this stack beside its own spines needs it to build a
     # second outlet over the same emitter (see raven/cli/_gateway_page.py).
     direct_targets: dict[str, dict[str, str]] = field(default_factory=dict)
-    # The page's ask_user / deep-research broker. A host with a question
+    # The page's ask_user broker. A host with a question
     # surface of its own (the gateway's IM channels) needs the handle to build
     # a per-conversation routing shim over both (see RoutingQuestionBroker).
     question_broker: Any = None
@@ -161,8 +161,8 @@ async def build_rpc_stack(
     they queue behind the page's own turns instead of running beside them),
     and this stack's teardown then stops only what it built (its brokers and
     its turn spine). The page-facing sinks and brokers are applied either way; a host
-    with a question surface of its own then re-binds ask_user / deep-research
-    through a per-conversation routing shim over this stack's broker (exposed
+    with a question surface of its own then re-binds ask_user through a
+    per-conversation routing shim over this stack's broker (exposed
     as ``RpcStack.question_broker``) and its own, so the page answers its own
     sessions' questions without swallowing the host's -- see
     ``RoutingQuestionBroker`` and the gateway's page mount.
@@ -254,7 +254,6 @@ async def build_rpc_stack(
     if agent_loop is not None:
         if (ask_tool := agent_loop.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
             ask_tool.set_broker(question_broker)
-        agent_loop.set_deep_research_broker(question_broker)
         # The TUI path wires this too. Without it a DAG run streams nothing
         # while it works, which reads as a hang rather than as progress.
         agent_loop.set_dag_progress_sink(make_dag_progress_sink(emitter))

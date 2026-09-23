@@ -36,7 +36,6 @@ const OVERRIDES: Record<string, VerbRule> = {
   exec: { verb: 'ran', unit: 'commands', style: 'target' },
   edit_file: { verb: 'edited', unit: 'files', style: 'target' },
   write_file: { verb: 'wrote', unit: 'files', style: 'target' },
-  deep_research: { verb: 'researched', unit: '', style: 'target' },
   cron: { verb: 'scheduled', unit: '', style: 'target' },
   ask_user: { verb: 'asked', unit: '', style: 'target' },
   spawn: { verb: 'delegated', unit: 'subagents', style: 'count' }

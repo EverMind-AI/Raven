@@ -14,7 +14,6 @@ from raven.agent.loop._shared import (
     Any,
     AskUserTool,
     Callable,
-    DeepResearchManager,
     EditFileTool,
     ExecTool,
     FindTool,
@@ -34,7 +33,6 @@ from raven.agent.loop._shared import (
     WebSearchTool,
     WriteFileTool,
     active_binding,
-    deep_research_mode,
     image_search_vendor,
     logger,
     resolve_vendor_key,
@@ -53,7 +51,6 @@ if TYPE_CHECKING:
     from raven.agent.tools.deliverables import DeliverableStore
     from raven.config.raven import SkillForgeRouterConfig
     from raven.config.schema import PlaybookConfig
-    from raven.contracts.asking import QuestionResponder
     from raven.providers.pool import ProviderPool
     from raven.skill_hub import SkillHubClient
 
@@ -1015,23 +1012,6 @@ class WiringMixin:
             )
             self.tools.register(tool)
             self._config_gated_tools[tool.name] = tool
-        # Deep research (MiroThinker) is a paid, minute-scale HTTP engine, so it is
-        # never a plain default tool. Two modes: ``real`` (key configured) is the
-        # working tool + async manager; ``offer`` (no key) is a same-named stand-in
-        # that, on a research query, asks the user deep-vs-regular and guides setup.
-        self.deep_research_manager: DeepResearchManager | None = None
-        # The async-delivery submit handle (gateway-wired, post-construction). Kept
-        # on the loop so a manager built later by promotion inherits it too, rather
-        # than only the startup manager -- see ``set_deep_research_submit``.
-        self._deep_research_submit: Callable[[Any], Any] | None = None
-        # The deep-vs-regular ask broker (transport-wired, post-construction). Kept
-        # on the loop for the same reason: a tool built later by promotion must
-        # inherit it, else it silently skips the ask -- see ``set_deep_research_broker``.
-        self._deep_research_broker: QuestionResponder | None = None
-        if deep_research_mode(self.deep_research_config) == "real":
-            self._register_real_deep_research(self.deep_research_config)
-        else:
-            self._register_deep_research_offer()
         self.tools.register(MessageTool())
         # Not registered at all for a sub-agent, rather than hidden from the
         # schema: hiding leaves the tool in the registry, which is exactly how the
@@ -1743,7 +1723,6 @@ class WiringMixin:
             "message",
             "spawn",
             "cron",
-            "deep_research",
             "run_subagent_dag",
             "deliver_files",
             "dag_status",
@@ -1757,7 +1736,6 @@ class WiringMixin:
                     tool.set_context(channel, chat_id, message_id)
                 elif name in (
                     "spawn",
-                    "deep_research",
                     "run_subagent_dag",
                     "deliver_files",
                     "dag_status",

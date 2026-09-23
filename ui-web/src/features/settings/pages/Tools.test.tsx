@@ -55,13 +55,13 @@ describe('tools page', () => {
     expect(dag.classList.contains('settings-swi-fixed')).toBe(false)
     expect(TOOL_GROUPS.collab).toContain('cancel_dag')
     expect(TOOL_GROUPS.search).not.toContain('cancel_dag')
-    /* Eight known tools, none of them meta: read_file, exec, spawn, web_fetch
+    /* Seven known tools, none of them meta: read_file, exec, spawn, web_fetch
        (Jina reads without a key) and cancel_dag are on and unblocked;
-       web_search lacks its key; deep_research and image_generate are switched
-       off. cancel_dag counts because its switch works -- while it was drawn as
-       built in the counter left it out, so the total under-reported what the
-       reader can actually turn off. */
-    expect(screen.getByText('gui.settings.tools.counter {"on":5,"total":8}')).toBeTruthy()
+       web_search lacks its key; image_generate is switched off. cancel_dag
+       counts because its switch works -- while it was drawn as built in the
+       counter left it out, so the total under-reported what the reader can
+       actually turn off. */
+    expect(screen.getByText('gui.settings.tools.counter {"on":5,"total":7}')).toBeTruthy()
   })
 
   /* No "built in" label beside a meta tool: the row already draws a control
@@ -93,12 +93,12 @@ describe('tools page', () => {
     const { calls } = install()
     await mount('tools')
     await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'exec' })) })
-    expect(calls).toEqual([['set', { key: 'tools.disabledTools', value: ['image_generate', 'deep_research', 'exec'] }]])
+    expect(calls).toEqual([['set', { key: 'tools.disabledTools', value: ['image_generate', 'write_file', 'exec'] }]])
     calls.length = 0
-    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'deep_research' })) })
-    expect(calls).toEqual([['set', { key: 'tools.disabledTools', value: ['image_generate'] }]])
-    expect(store.get().toolOpen).toBe('deep_research')
-    expect(screen.getByText('gui.settings.tools.vendor_key {"name":"MiroThinker"}')).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'image_generate' })) })
+    expect(calls).toEqual([['set', { key: 'tools.disabledTools', value: ['write_file'] }]])
+    expect(store.get().toolOpen).toBe('image_generate')
+    expect(screen.getByText('gui.settings.tools.model')).toBeTruthy()
   })
 
   it('the web search panel writes the vendor and its own key slot, and a clear retires the legacy leaf too', async () => {

@@ -67,7 +67,7 @@ function actIco(name: string): string {
     case 'list_dir': return ACT_ICO.folder as string
     case 'grep': case 'find': case 'tool_search': return ACT_ICO.find as string
     case 'exec': return ACT_ICO.term as string
-    case 'web_search': case 'web_fetch': case 'deep_research': return ACT_ICO.globe as string
+    case 'web_search': case 'web_fetch': return ACT_ICO.globe as string
     case 'understand_media': return ACT_ICO.doc as string
     case 'image_generate': return ACT_ICO.image as string
     case 'video_generate': return ACT_ICO.video as string
@@ -89,7 +89,7 @@ const ACT_HUGE: Record<string, IconSvgElement> = {
   use_skill: Wrench01Icon,
   exec: DocumentCodeIcon,
   write_file: PencilEdit01Icon, edit_file: PencilEdit01Icon,
-  web_fetch: InternetIcon, deep_research: InternetIcon,
+  web_fetch: InternetIcon,
 }
 
 function ActIco({ name, bad }: { name: string; bad?: boolean }): ReactElement {

@@ -310,7 +310,6 @@ def test_a_mounted_page_takes_the_relays_that_belong_to_its_sessions() -> None:
     mounted = src.split("if page_mount is not None:", 1)[1].split("# Channel inbound runs through", 1)[0]
     assert "route_submit(page=page_mount.submit, channel=pro_submit)" in mounted
     assert "agent.subagents.set_submit(routed_submit)" in mounted
-    assert "agent.set_deep_research_submit(routed_submit)" in mounted
     # The gateway-spine binding still precedes it, for a gateway without a page.
     before_mount = src.split("if page_mount is not None:", 1)[0]
     assert "agent.subagents.set_submit(pro_submit)" in before_mount

@@ -103,7 +103,7 @@ describe('the wait a settings section draws', () => {
 
   it('waits on the tool and plugin pages as their switch rows', async () => {
     await waiting('tools')
-    expect(count('.settings-xrow')).toBe(23)
+    expect(count('.settings-xrow')).toBe(22)
     cleanup()
     store._resetForTests()
     await waiting('plugins')

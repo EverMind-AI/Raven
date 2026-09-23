@@ -65,7 +65,7 @@ function actIco(name: string): string {
     case 'list_dir': return ACT_ICO.folder as string
     case 'grep': case 'find': case 'tool_search': return ACT_ICO.find as string
     case 'exec': return ACT_ICO.term as string
-    case 'web_search': case 'web_fetch': case 'deep_research': return ACT_ICO.globe as string
+    case 'web_search': case 'web_fetch': return ACT_ICO.globe as string
     case 'image_generate': return ACT_ICO.image as string
     case 'video_generate': return ACT_ICO.video as string
     case 'text_to_speech': return ACT_ICO.sound as string

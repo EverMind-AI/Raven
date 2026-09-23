@@ -84,7 +84,7 @@ describe('model roles', () => {
     await pick('gui.settings.roles.image', 'gemini-2.5-flash-image')
     expect(sets(calls)).toEqual([
       { key: 'tools.media.image', value: { model: 'google/gemini-2.5-flash-image', quality: '' } },
-      { key: 'tools.disabledTools', value: ['deep_research'] },
+      { key: 'tools.disabledTools', value: ['write_file'] },
     ])
   })
 
@@ -96,7 +96,7 @@ describe('model roles', () => {
     await act(async () => { fireEvent.click(screen.getByLabelText('gui.settings.roles.clear {"role":"gui.settings.roles.speech"}')) })
     expect(sets(calls)).toEqual([
       { key: 'tools.media.speech', value: { model: '', quality: '' } },
-      { key: 'tools.disabledTools', value: ['image_generate', 'deep_research', 'text_to_speech'] },
+      { key: 'tools.disabledTools', value: ['image_generate', 'write_file', 'text_to_speech'] },
     ])
   })
 

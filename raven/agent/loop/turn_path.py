@@ -1957,7 +1957,6 @@ class TurnPathMixin:
         origin: Origin | None = None,
         drain: Drain | None = None,
         hook_sink: dict[str, str] | None = None,
-        delivered_sink: dict[str, bool] | None = None,
     ) -> tuple[str | None, list[str]] | None:
         """Process a single turn request and return its reply.
 
@@ -1968,12 +1967,6 @@ class TurnPathMixin:
         ``"appended"`` whatever the ``after_send`` chain added to the end of the
         reply: a streamed reply has already left as deltas by then, so the
         caller has to send that tail itself.
-
-        ``delivered_sink`` is the caller's record that one of this turn's tools
-        already put an answer in front of the reader -- ``run`` writes
-        ``"answer"`` into it when it streams an inline research result. Without
-        it only the message tool can say so, and a turn the model then ends in
-        silence would be failed for having no answer when it has one.
         """
         from raven.agent.hook import AgentHookContext
 
@@ -2507,13 +2500,9 @@ class TurnPathMixin:
                 # The loop gave up on the model. Its ladder, its rerun and its
                 # salvage have all had their say, so what is left is a turn with
                 # no answer: the failure the handler below files and the lane
-                # reports, not a reply for the outlets to deliver. A turn whose
-                # answer a tool already put in front of the reader is not
-                # answerless, and keeps ending the way it always has.
+                # reports, not a reply for the outlets to deliver.
                 mt = self.tools.get("message")
-                answered = (isinstance(mt, MessageTool) and mt.sent_in_turn) or bool(
-                    delivered_sink and delivered_sink.get("answer")
-                )
+                answered = isinstance(mt, MessageTool) and mt.sent_in_turn
                 if not answered:
                     if outcome.error:
                         raise AnswerlessTurnError(outcome.error)
@@ -2897,14 +2886,13 @@ class TurnPathMixin:
             session.record(entry)
         session.updated_at = self._now_fn()
 
-    async def _run_turn(  # noqa: C901 (cc 41: pre-existing, above the ceiling)
+    async def _run_turn(
         self,
         req: TurnRequest,
         emit: Emit,
         drain: Drain,
         *,
         stream: bool = True,
-        inline_tool_stream: bool = False,
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
     ) -> "TurnOutcome":
@@ -3027,7 +3015,7 @@ class TurnPathMixin:
         # emit, mirroring the normal turn's save-then-reply order, so a save
         # failure never leaves the user a delivered message no turn recorded.
         # The after-turn work a normal turn does in _process_message is reduced
-        # to what a no-model delivery needs: backend.store indexes the report;
+        # to what a no-model delivery needs: backend.store indexes the message;
         # after_turn is a no-op without a turn_id; consolidation is the curator's
         # job on its next assemble.
         if req.deliver_text is not None:
@@ -3053,11 +3041,6 @@ class TurnPathMixin:
 
         streamed = False
         hook_sink: dict[str, str] = {}
-        # Whether a tool's answer has already reached the reader through this
-        # turn's own routing. Kept here rather than asked of the tool, because
-        # it is this method that does the delivering: the tool hands back a
-        # receipt, and only the callback below knows the answer went out.
-        delivered_sink: dict[str, bool] = {}
 
         async def on_token(text: str) -> None:
             nonlocal streamed
@@ -3147,32 +3130,6 @@ class TurnPathMixin:
 
             message_tool.set_send_callback(_route_to_stream)
 
-        # deep_research (streaming surfaces only): stream its progress live and
-        # deliver its finished answer inline, so the tool returns a compact
-        # receipt and the model relays instead of re-emitting/rewriting. Progress
-        # rides Reasoning (TUI thinking.delta / CLI progress line); the answer
-        # follows the same stream switch as the main reply.
-        if inline_tool_stream:
-            dr_tool = self.tools.get("deep_research")
-            if dr_tool is not None and hasattr(dr_tool, "set_stream_callback"):
-
-                async def _route_deep_research(kind: str, text: str) -> None:
-                    if not text:
-                        return
-                    if kind == "progress":
-                        await emit(Reasoning(content=text))
-                        return
-                    # Recorded where the answer actually leaves: the model may
-                    # then say nothing at all, and a turn whose answer the reader
-                    # already has is silent rather than answerless.
-                    delivered_sink["answer"] = True
-                    if stream:
-                        await on_token(text)
-                    else:
-                        await emit(Text(content=text))
-
-                dr_tool.set_stream_callback(_route_deep_research)
-
         # A CRON turn must not let the agent schedule new cron jobs mid-run. The
         # CronTool guards via a ContextVar; set it here, in the lane task that runs
         # the turn, so it propagates to the tool — the cron callback sets it in a
@@ -3230,7 +3187,6 @@ class TurnPathMixin:
                         origin=req.origin,
                         drain=drain,
                         hook_sink=hook_sink,
-                        delivered_sink=delivered_sink,
                     )
                 except AnswerlessTurnError:
                     # A turn the loop gave up on is not a crash: the executor and

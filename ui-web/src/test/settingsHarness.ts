@@ -78,7 +78,7 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     raw: {
       agents: { defaults: { model: 'claude-opus-4-5', provider: 'anthropic', reasoningEffort: 'low', maxToolIterations: 40 } },
       context: { curatorModel: 'anthropic/claude-sonnet-4-5', curatorProvider: 'openrouter' },
-      tools: { disabledTools: ['image_generate', 'deep_research'], web: { search: { provider: 'serper' } } },
+      tools: { disabledTools: ['image_generate', 'write_file'], web: { search: { provider: 'serper' } } },
       skillForge: { blocklist: ['sql-style'] },
       sessions: { autoArchiveAfterDays: null },
       providers: { anthropic: { modelOverlay: { 'claude-opus-4-5': { label: 'Opus', description: 'the big one' } } } },
@@ -104,7 +104,6 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       { id: 'exec', name: 'exec', group: 'run', reach: 'local', one: 'runs', on: true, danger: true },
       { id: 'web_search', name: 'search', group: 'net', reach: 'net', one: 'searches', on: true },
       { id: 'web_fetch', name: 'fetch', group: 'net', reach: 'net', one: 'fetches', on: true },
-      { id: 'deep_research', name: 'research', group: 'net', reach: 'net', one: 'researches', on: false },
       { id: 'image_generate', name: 'draw', group: 'generate', reach: 'net', one: 'draws', on: false },
       { id: 'spawn', name: 'spawn', group: 'collab', reach: 'local', one: 'spawns', on: true },
       /* The two sides `builtin` tells apart. `tool_search` is a meta-tool, so

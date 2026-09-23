@@ -570,8 +570,8 @@ def _no_real_raven_home(tmp_path, monkeypatch):
     assembled through one of those reads (``LiveConfig``, so an off switch takes
     effect on the next turn rather than the next restart), which makes the
     developer who has actually used that switch the one whose suite fails: a home
-    config carrying ``tools.disabledTools: ["deep_research"]`` reds three tests in
-    ``test_deep_research_tool.py`` and nothing in the failure points at the cause.
+    config carrying ``tools.disabledTools: ["web_search"]`` reds tests in
+    ``test_tool_capabilities.py`` and nothing in the failure points at the cause.
 
     ``_current_config_path`` is reset alongside it because it wins over both and
     is module-global: one test calling ``set_config_path`` otherwise aims every

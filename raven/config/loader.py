@@ -19,7 +19,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 9
+CURRENT_CONFIG_VERSION = 10
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -42,6 +42,7 @@ _VENDORED_TREE_MIGRATION = 6
 _RESEARCH_RENAME_MIGRATION = 7
 _EMBEDDING_HOME_MIGRATION = 8
 _EMBEDDING_SHAPE_MIGRATION = 9
+_RETIRED_DEEP_RESEARCH_MIGRATION = 10
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -381,6 +382,8 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
                 changed = _migrate_embedding_home(raw, config_path=path) or changed
             if from_version < _EMBEDDING_SHAPE_MIGRATION:
                 changed = _migrate_embedding_shape(raw, config_path=path) or changed
+            if from_version < _RETIRED_DEEP_RESEARCH_MIGRATION:
+                changed = _migrate_retired_deep_research(raw) or changed
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -1014,13 +1017,50 @@ def _migrate_embedding_home(data: dict, *, notify: bool = False, config_path: Pa
     return changed
 
 
-def _migrate_config(  # noqa: C901 (cc 42: pre-existing, above the ceiling)
+def _migrate_retired_deep_research(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Drop the retired ``deep_research`` tool's own config section.
+
+    The tool is gone: research runs on the Raven-Research agent and the
+    MiroThinker sub-agent, which carry their own settings. What it leaves
+    behind is a section nothing reads -- and it held an API key, the more
+    reason to clear it. A ``deep_research`` entry in ``tools.disabledTools``
+    is left alone on purpose: that list is the general name denylist and a
+    plugin tool may carry the name (plugin tools register last so one can
+    shadow a built-in), so dropping the entry would put such a tool back on
+    offer.
+
+    Silent, and False, when it changes nothing. This one has to be: the
+    research rename parks the stamp below its own floor, so for those configs
+    every later migration re-runs on each load, and ``raven.config.raven``
+    calls it a third time without ever writing the stamp.
+    """
+    tools = data.get("tools")
+    if not isinstance(tools, dict):
+        return False
+
+    changed = False
+    for spelling in ("deepResearch", "deep_research"):
+        if spelling in tools:
+            tools.pop(spelling)
+            changed = True
+            notice = (
+                f"Removed `tools.{spelling}` from your config: the deep_research tool is retired. "
+                "Research now runs through the Raven-Research agent and the MiroThinker sub-agent, "
+                "each configured in its own right."
+            )
+            if notify and notice not in _migration_notices:
+                _migration_notices.append(notice)
+
+    return changed
+
+
+def _migrate_config(  # noqa: C901 (cc 44: pre-existing, above the ceiling)
     data: dict,
     *,
     pop_extension_keys: bool = True,
     from_version: int = CURRENT_CONFIG_VERSION,
     config_path: Path | None = None,
-) -> dict:  # noqa: C901 (cc 46: pre-existing, above the ceiling)
+) -> dict:
     """Migrate old config formats to current.
 
     ``pop_extension_keys``: when True (default, used by ``load_config``),
@@ -1108,6 +1148,8 @@ def _migrate_config(  # noqa: C901 (cc 42: pre-existing, above the ceiling)
         _migrate_embedding_home(data, notify=True, config_path=config_path)
     if from_version < _EMBEDDING_SHAPE_MIGRATION:
         _migrate_embedding_shape(data, notify=True, config_path=config_path)
+    if from_version < _RETIRED_DEEP_RESEARCH_MIGRATION:
+        _migrate_retired_deep_research(data, notify=True)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts

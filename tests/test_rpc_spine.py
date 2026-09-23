@@ -80,9 +80,7 @@ class _RunTurnLoop:
         self.tools = tools if tools is not None else {}
         self.last_stream = None
 
-    async def run_turn(
-        self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None, text_sink=None
-    ) -> TurnOutcome:
+    async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None) -> TurnOutcome:
         self.last_stream = stream
         for ev in self._events:
             await emit(ev)
@@ -438,7 +436,7 @@ async def test_runner_emits_eve22_synthetic_tool_complete_when_message_tool_fire
     message_tool = MessageTool()
     loop = _RunTurnLoop(tools={"message": message_tool})
 
-    async def _run_turn(req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None):
+    async def _run_turn(req, emit, drain, *, stream, usage_sink=None):
         # the message tool replied this turn (turn-local sent flag)
         message_tool._turn.set(replace(message_tool._cur(), sent=True))
         return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
@@ -1092,9 +1090,9 @@ async def test_a_runtime_turn_emits_the_boundary_and_no_message_start():
 
 
 async def test_a_subagent_turn_without_delegated_identity_emits_no_boundary():
-    """The reviewer's shape: deep research's deliver_text turn is Origin.
-    SUBAGENT but persists only an assistant entry -- no delegated user entry
-    opens it on reload. Emitting a live boundary for it would advance the
+    """The reviewer's shape: a deliver_text turn with no delegated identity is
+    Origin.SUBAGENT but persists only an assistant entry -- no delegated user
+    entry opens it on reload. Emitting a live boundary for it would advance the
     workspace counter in a way the stored history does not, so it must not."""
     emitter = FakeEmitter()
     loop = _RunTurnLoop(events=[StreamDelta(delta="answer")])
@@ -1258,7 +1256,7 @@ async def test_cron_turn_deliverables_key_to_dead_conversation_not_user_session(
 
 async def test_failed_turn_emits_error():
     class _BoomLoop:
-        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None) -> TurnOutcome:
+        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
             raise RuntimeError("boom")
 
     emitter = FakeEmitter()
@@ -1281,7 +1279,7 @@ async def test_cancelled_turn_does_not_emit_error():
     started = asyncio.Event()
 
     class _HangLoop:
-        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None) -> TurnOutcome:
+        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
             started.set()
             await asyncio.sleep(3600)
             return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
@@ -1306,11 +1304,11 @@ async def test_cancelled_turn_does_not_emit_error():
 
 async def test_an_internally_submitted_turns_completion_carries_its_own_id():
     """A lane is serial, so a turn the runtime submits itself (a sub-agent
-    announce, a deep-research delivery) can end while a client's turn is still
-    QUEUED behind it on the same lane. Stamping the completion from the lane's
-    slot names the queued turn instead, and the client reads its own turn as
-    ended -- losing that turn's whole content. The completion must name the turn
-    that actually ended.
+    announce) can end while a client's turn is still QUEUED behind it on the
+    same lane. Stamping the completion from the lane's slot names the queued
+    turn instead, and the client reads its own turn as ended -- losing that
+    turn's whole content. The completion must name the turn that actually
+    ended.
     """
     emitter = FakeEmitter()
     loop = _RunTurnLoop(events=[Text(content="announce")])

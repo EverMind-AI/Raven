@@ -13,7 +13,7 @@ export const PARAMS = {
   'config.get': { keys: ['language', 'permissions.mode'] },
   'config.set': { key: 'language', value: 'en' },
   'config.unset': { key: 'language' },
-  'settings.set': { key: 'tools.disabledTools', value: ['deep_research'] },
+  'settings.set': { key: 'tools.disabledTools', value: ['write_file'] },
   'settings.usage': { session_key: null },
   'settings.everosSet': { section: 'memory', clear: true },
   'session.list': { channels: ['tui', 'cron'] },
