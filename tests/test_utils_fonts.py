@@ -33,6 +33,7 @@ def test_a_path_with_an_ampersand_keeps_the_configuration_well_formed(
     face_dir = tmp_path / "fonts & co"
     _face_in(face_dir)
     monkeypatch.setenv(fonts.ENV_FONT_DIR, str(face_dir))
+    monkeypatch.setattr(fonts, "unconfigured_font_dirs", tuple)
 
     env = fonts.render_env(base={}, scratch=tmp_path / "scratch")
     text = Path(env["FONTCONFIG_FILE"]).read_text(encoding="utf-8")
@@ -65,6 +66,7 @@ def test_nothing_is_added_where_there_is_no_face_to_add(tmp_path: Path, monkeypa
     empty = tmp_path / "empty"
     empty.mkdir()
     monkeypatch.setenv(fonts.ENV_FONT_DIR, str(empty))
+    monkeypatch.setattr(fonts, "unconfigured_font_dirs", tuple)
 
     assert fonts.render_env(base={}, scratch=tmp_path / "scratch") == {}
 
@@ -95,22 +97,56 @@ def test_the_face_raven_brought_outranks_whatever_the_host_has(tmp_path: Path, m
     assert fonts.can_draw_han() is True
 
 
-def test_a_stock_mac_is_not_taken_for_a_host_that_can_set_chinese(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PingFang sits on every Mac and LibreOffice still does not draw from it --
-    that is the failure this module exists for. A face list naming it would
-    answer "yes, this host sets Chinese" for precisely the host that does not.
+def test_a_macs_own_face_answers_because_the_conversion_is_told_where_it_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Mac is never short of a Han face; what it lacked was a configuration
+    naming one, and render_env writes that. So the stock faces count here -- but
+    only because the two lists agree, which the test below pins.
 
-    The list is left intact rather than emptied: its contents are what is under
-    test, and a test that replaces them tests nothing.
+    The face list is left intact rather than replaced: its contents are what is
+    under test.
     """
     monkeypatch.setattr(fonts.sys, "platform", "darwin")
-    monkeypatch.setattr(fonts.shutil, "which", lambda name: None)
+    monkeypatch.setattr(fonts.shutil, "which", lambda name: "/opt/homebrew/bin/fc-list")
     monkeypatch.setattr(fonts, "bundled_face", lambda: None)
     monkeypatch.setattr(fonts, "user_han_faces", list)
-    monkeypatch.setattr(fonts.Path, "is_file", lambda self: str(self) == "/System/Library/Fonts/PingFang.ttc")
+    monkeypatch.setattr(fonts, "_fc_listed_han", lambda: None)
+    stock = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
+    monkeypatch.setattr(fonts.Path, "is_file", lambda self: str(self) == stock)
 
-    assert fonts.han_face() is None, "a Mac's own PingFang was taken for a face the renderer can use"
-    assert fonts.can_draw_han() is False
+    assert fonts.han_face() == Path(stock)
+    assert fonts.can_draw_han() is True
+
+
+def test_every_mac_face_that_answers_sits_in_a_directory_the_conversion_is_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two lists are one mechanism: han_face promises a face the renderer
+    reaches, and the only thing making a Mac's face reachable is render_env
+    naming its directory. A path in one list and not the other is a promise of
+    Chinese that comes back as boxes."""
+    monkeypatch.setattr(fonts.sys, "platform", "darwin")
+    named = set(fonts.unconfigured_font_dirs())
+
+    for path in fonts._SYSTEM_HAN_FACES:
+        if path.startswith("/System/") or path.startswith("/Library/"):
+            assert Path(path).parent in named, f"{path} is offered but its directory is never named"
+
+
+def test_a_mac_gets_its_own_font_directories_named_for_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The converter's bundled fontconfig starts with no configuration, so a Mac
+    reaches none of its own fonts until this file names the directories. Without
+    it the conversion succeeds and draws nothing, which nothing reports."""
+    monkeypatch.setattr(fonts.sys, "platform", "darwin")
+    monkeypatch.setattr(fonts, "bundled_face", lambda: None)
+    monkeypatch.setattr(fonts, "unconfigured_font_dirs", lambda: (tmp_path / "System", tmp_path / "absent"))
+    (tmp_path / "System").mkdir()
+
+    env = fonts.render_env(base={}, scratch=tmp_path / "scratch")
+    root = ElementTree.fromstring(Path(env["FONTCONFIG_FILE"]).read_text(encoding="utf-8"))
+
+    assert [element.text for element in root.findall("dir")] == [str(tmp_path / "System")]
 
 
 def test_a_linux_package_path_still_answers_where_fontconfig_cannot_be_asked(
@@ -171,6 +207,7 @@ def test_a_broken_fc_list_answers_empty_rather_than_raising(monkeypatch: pytest.
     """This runs on the render path. A probe that raises would turn "cannot say
     which fonts exist" into a failed conversion, which is a worse answer than
     the boxes it was checking for."""
+    monkeypatch.setattr(fonts.sys, "platform", "linux")
     monkeypatch.setattr(fonts.shutil, "which", lambda name: "/usr/bin/fc-list")
 
     def _explode(*args: object, **kwargs: object) -> object:
@@ -188,6 +225,7 @@ def test_a_broken_fc_list_answers_empty_rather_than_raising(monkeypatch: pytest.
 def test_the_host_families_come_back_deduplicated(monkeypatch: pytest.MonkeyPatch) -> None:
     """fc-list prints one line per face, so a family with several weights repeats;
     what a caller wants to know is which families exist."""
+    monkeypatch.setattr(fonts.sys, "platform", "linux")
     monkeypatch.setattr(fonts.shutil, "which", lambda name: "/usr/bin/fc-list")
     output = "Noto Sans CJK SC,Noto Sans CJK SC Regular\nNoto Sans CJK SC,Bold\nPingFang SC\n\n"
     monkeypatch.setattr(fonts.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, output, ""))
@@ -200,6 +238,7 @@ def test_the_file_fontconfig_names_is_used_when_it_exists(tmp_path: Path, monkey
     missing font into a crash."""
     real = tmp_path / "NotoSansCJK-Regular.ttc"
     real.write_bytes(b"x")
+    monkeypatch.setattr(fonts.sys, "platform", "linux")
     monkeypatch.setattr(fonts.shutil, "which", lambda name: "/usr/bin/fc-list")
 
     listed = f"/gone/StaleEntry.ttc\n{real}\n"

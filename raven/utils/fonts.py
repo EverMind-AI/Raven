@@ -4,30 +4,38 @@ A .pptx carries font *names*, never fonts. So whether a deck's Chinese appears
 as characters or as boxes is decided entirely by the machine doing the
 rendering, and raven used to decide it by luck:
 
-* macOS ships PingFang, yet a stock Mac still renders a Chinese deck as boxes.
-  On every Mac here that drew them correctly, the face LibreOffice actually
-  reached was one somebody had installed into ``~/Library/Fonts`` by hand.
+* macOS ships PingFang, yet a stock Mac renders a Chinese deck as boxes -- and
+  so does a Mac somebody has installed a CJK face onto by hand, which is what
+  made this look like a font problem for so long. LibreOffice's mac build reads
+  fonts through the fontconfig it bundles, and that library was built for a
+  ``/usr/local`` prefix. On an Apple Silicon host ``/usr/local/etc/fonts`` does
+  not exist, so fontconfig starts with no configuration at all and the
+  converter sees only the faces inside LibreOffice's own app bundle, none of
+  which carries Han. The ``fc-list`` on such a host reads a different
+  configuration and cheerfully names Chinese families the converter cannot
+  reach.
 * ``apt-get install libreoffice`` recommends the Latin Noto packages and never
   ``fonts-noto-cjk``, so a Linux host installed the way this project's own
   installer installed it had no Han face either.
 * The container image does install one, which is why that path always worked,
   and why the failure looked like it could not be ours.
 
-Every host that worked, worked because somebody had installed a CJK font by
-hand. That is not a property a product can rely on, and the failure is silent:
-LibreOffice reports success, the PDF is well formed, and the boxes are visible
-only to whoever looks at the picture -- including the model that renders a deck
-to check its own work, which was reviewing a page it could not read.
+The failure is silent either way: LibreOffice reports success, the PDF is well
+formed, and the boxes are visible only to whoever looks at the picture --
+including the model that renders a deck to check its own work, which was
+reviewing a page it could not read.
 
-Installing the face belongs to the installer, not here: ``install.sh`` asks
-this platform's own package manager for one. That is the only mechanism that
-puts a font where every program on the machine finds it, needs no digest of
-ours, and leaves the font maintained by whoever maintains the rest of the
-system.
+The two halves of the problem want different remedies. Where fontconfig is
+configured, the host genuinely has no Han face and one has to be installed;
+that belongs to the installer, and ``install.sh`` asks the platform's own
+package manager. On a Mac no font is missing, so no download helps: what is
+missing is a configuration, and :func:`render_env` writes one naming the
+directories the Mac already keeps its fonts in. ``Arial Unicode.ttf``, stock in
+``/System/Library/Fonts/Supplemental``, then draws the page.
 
-What is here is the part an installer cannot do, because it happens on a
-machine the installer never ran on: asking at render time whether this host can
-draw Han, so that a page about to come out as boxes says so rather than being
+The rest is the part an installer cannot do, because it happens on a machine
+the installer never ran on: asking at render time whether this host can draw
+Han, so that a page about to come out as boxes says so rather than being
 rendered, measured and approved unread. A deployment that manages its own fonts
 points :data:`ENV_FONT_DIR` at them and a conversion sees them, without
 touching the system's configuration or needing privileges.
@@ -39,6 +47,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -106,19 +115,36 @@ def _fontconfig_xml(directories: list[Path], cache: Path, *, inherit: str) -> st
     )
 
 
-def render_env(base: dict[str, str] | None = None, *, scratch: Path | None = None) -> dict[str, str]:
-    """The environment a conversion runs in, with raven's own faces reachable.
+def unconfigured_font_dirs() -> tuple[Path, ...]:
+    """Directories holding fonts the converter would otherwise never be told about.
 
-    Returns the environment unchanged where there is nothing to add -- no face
-    placed, or macOS, which reads fonts through CoreText and takes no
-    configuration file -- so a caller passes the result straight to ``Popen``
-    without asking whether anything happened.
+    Empty everywhere but macOS, where the converter's own fontconfig starts with
+    no configuration and so reaches none of the machine's fonts. These are the
+    four places a Mac keeps faces; naming them is what turns the host's Han
+    coverage, stock or installed, into something a conversion can draw with.
+    """
+    if sys.platform != "darwin":
+        return ()
+    return (Path("/System/Library/Fonts"), Path("/System/Library/Fonts/Supplemental"), *user_font_dirs())
+
+
+def render_env(base: dict[str, str] | None = None, *, scratch: Path | None = None) -> dict[str, str]:
+    """The environment a conversion runs in, with the faces it needs reachable.
+
+    Returns the environment unchanged where there is nothing to add, so a caller
+    passes the result straight to ``Popen`` without asking whether anything
+    happened.
     """
     env = dict(os.environ if base is None else base)
     face = bundled_face()
-    if face is None or sys.platform == "darwin":
+    directories = [face.parent] if face is not None else []
+    directories += [directory for directory in unconfigured_font_dirs() if directory.is_dir()]
+    if not directories:
         return env
-    where = scratch or face.parent
+    # The configuration and its cache have to land somewhere writable, which
+    # rules out the system directories above; a conversion passes its own
+    # scratch so the pair is thrown away with the run.
+    where = scratch or (face.parent if face is not None else Path(tempfile.gettempdir()) / "raven-fontconfig")
     where.mkdir(parents=True, exist_ok=True)
     config = where / "fonts.conf"
     # Inherit whatever configuration was already in force, not the system
@@ -126,9 +152,24 @@ def render_env(base: dict[str, str] | None = None, *, scratch: Path | None = Non
     # and silently swapping that for /etc/fonts would undo the choice while
     # appearing to respect it.
     inherit = env.get("FONTCONFIG_FILE") or SYSTEM_FONTCONFIG
-    config.write_text(_fontconfig_xml([face.parent], where / "fc-cache", inherit=inherit), encoding="utf-8")
+    config.write_text(_fontconfig_xml(directories, where / "fc-cache", inherit=inherit), encoding="utf-8")
     env["FONTCONFIG_FILE"] = str(config)
     return env
+
+
+def fontconfig_speaks_for_the_renderer() -> bool:
+    """Whether what fontconfig lists is what a conversion will draw from.
+
+    Everywhere but macOS, yes: LibreOffice and fc-list read the same
+    configuration there, so a family fc-list names is a family a page can be set
+    in. On a Mac they read different ones -- the converter's bundled fontconfig
+    has none, the host's fc-list comes from Homebrew and has its own -- and
+    measured here (macOS 15, LibreOffice 26.8) a conversion drew no Han while
+    fc-list named twenty-nine Chinese families. Reading that list as an answer
+    is how a Mac is taken for a host whose font situation has been settled, when
+    what settles it is :func:`render_env` naming the directories instead.
+    """
+    return sys.platform != "darwin"
 
 
 def host_han_faces() -> list[str]:
@@ -137,8 +178,10 @@ def host_han_faces() -> list[str]:
     Only fontconfig answers this cheaply, so a host without it answers with an
     empty list -- which is not the same as having none, and is why
     :func:`can_draw_han` does not treat an empty answer as a verdict on its own.
+    A Mac answers empty for the reason
+    :func:`fontconfig_speaks_for_the_renderer` gives.
     """
-    fc_list = shutil.which("fc-list")
+    fc_list = shutil.which("fc-list") if fontconfig_speaks_for_the_renderer() else None
     if not fc_list:
         return []
     try:
@@ -153,12 +196,13 @@ def host_han_faces() -> list[str]:
 _HAN_NAME_HINTS = ("cjk", "notosanssc", "notosanstc", "notoserifsc", "sourcehan", "pingfang", "heiti", "msyh", "simsun")
 
 _SYSTEM_HAN_FACES = (
-    # Package paths, for a host that has the fontconfig library but not the
-    # fc-list binary: there a file on disk does mean the renderer reaches it.
-    # macOS is deliberately absent. PingFang is present on every Mac and
-    # LibreOffice still does not draw from it -- that is the failure this
-    # module exists for, so naming it here would answer "yes, this host can set
-    # Chinese" for exactly the host that cannot.
+    # Paths a file on disk really does mean the renderer reaches: on a host with
+    # the fontconfig library but not the fc-list binary, and on macOS, where
+    # render_env names the directory these two sit in. Arial Unicode leads
+    # because it is a plain TrueType and measurement has to open what it gets;
+    # PingFang is a collection and answers only where that one is gone.
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/System/Library/Fonts/PingFang.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-VF.otf.ttc",
     "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
@@ -206,7 +250,7 @@ def _fc_listed_han() -> Path | None:
     Latin font -- which would then be taken for a Han face and used to measure
     Chinese. fc-list names only fonts that carry the language.
     """
-    fc_list = shutil.which("fc-list")
+    fc_list = shutil.which("fc-list") if fontconfig_speaks_for_the_renderer() else None
     if not fc_list:
         return None
     try:
@@ -239,11 +283,12 @@ def han_face() -> Path | None:
     matched = _fc_listed_han()
     if matched is not None:
         return matched
-    # The hardcoded paths answer only where fontconfig could not be asked at
-    # all, which in practice means macOS. Where it could be asked and said no,
-    # a font file sitting on disk is not a face the renderer will reach, and
-    # answering with one would promise Chinese that comes out as boxes.
-    if shutil.which("fc-list"):
+    # Where fontconfig could be asked and said no, a font file sitting on disk
+    # is not a face the renderer will reach, and answering with one would
+    # promise Chinese that comes out as boxes. The hardcoded paths are for the
+    # hosts where it could not be asked -- and for macOS, where the answer comes
+    # from render_env naming the directory rather than from fc-list.
+    if fontconfig_speaks_for_the_renderer() and shutil.which("fc-list"):
         return None
     for path in _SYSTEM_HAN_FACES:
         if Path(path).is_file():

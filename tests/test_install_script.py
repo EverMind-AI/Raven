@@ -609,3 +609,85 @@ def test_the_font_check_says_no_on_a_host_that_has_none(tmp_path: Path) -> None:
         check=False,
     )
     assert done.returncode != 0, "an empty font directory reported a font"
+
+
+def _han_font_check(text: str, *, node_os: str, home: Path, macos_root: Path, fc_list: Path | None) -> int:
+    """Run install.sh's `have_han_font` alone, against directories this test owns.
+
+    `fc-list` is a real executable on PATH rather than a shell function, because
+    a name with a hyphen is not a function name POSIX sh will accept -- and
+    because what is under test is whether the check consults it at all.
+    """
+    path = os.environ.get("PATH", "/usr/bin:/bin")
+    if fc_list is not None:
+        fc_list.parent.mkdir(parents=True, exist_ok=True)
+        fc_list.write_text("#!/bin/sh\nprintf 'Noto Sans CJK SC\\n'\n", encoding="utf-8")
+        fc_list.chmod(0o755)
+        path = f"{fc_list.parent}{os.pathsep}{path}"
+    script = "\n".join(
+        [
+            "set -eu",
+            'have() { command -v "$1" >/dev/null 2>&1; }',
+            f"NODE_OS={node_os}",
+            'HAN_FONT_NAME="NotoSansSC-Regular.otf"',
+            f'MACOS_FONT_ROOT="{macos_root}"',
+            _sh_function(text, "han_font_dir"),
+            _sh_function(text, "have_han_font"),
+            "have_han_font",
+        ]
+    )
+    return subprocess.run(  # noqa: S603 - /bin/sh with a script this test built
+        ["/bin/sh", "-c", script],
+        capture_output=True,
+        text=True,
+        env={"HOME": str(home), "PATH": path},
+        check=False,
+    ).returncode
+
+
+def test_a_mac_needs_no_font_because_it_already_ships_one(tmp_path: Path) -> None:
+    """Nothing is missing on a Mac: what kept LibreOffice from drawing Chinese
+    was an unconfigured fontconfig, which raven now configures per conversion.
+    Fetching 8MB here would fix nothing and would still be fetched on every
+    install, because the file it writes is not what the renderer was short of.
+    """
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    home = tmp_path / "home"
+    (home / "Library" / "Fonts").mkdir(parents=True)
+    root = tmp_path / "System" / "Library" / "Fonts"
+    (root / "Supplemental").mkdir(parents=True)
+    (root / "Supplemental" / "Arial Unicode.ttf").write_bytes(b"true placeholder")
+
+    assert _han_font_check(text, node_os="darwin", home=home, macos_root=root, fc_list=None) == 0
+
+
+def test_a_mac_is_not_talked_out_of_its_own_faces_by_homebrews_fc_list(tmp_path: Path) -> None:
+    """fc-list arrives with plenty of brew formulae and describes a configuration
+    the converter never reads, so its answer says nothing about this Mac either
+    way. Consulting it is how a Mac stripped of its own faces gets told it has
+    one, and the deck then renders as boxes with nothing reporting it."""
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    home = tmp_path / "home"
+    (home / "Library" / "Fonts").mkdir(parents=True)
+    bare = tmp_path / "System" / "Library" / "Fonts"
+    bare.mkdir(parents=True)
+
+    fc_list = tmp_path / "bin" / "fc-list"
+    assert _han_font_check(text, node_os="darwin", home=home, macos_root=bare, fc_list=fc_list) != 0
+
+
+def test_the_installer_and_the_renderer_agree_on_what_a_mac_already_has() -> None:
+    """Two answers to one question, and a disagreement is silent both ways: a
+    face the installer counts but the renderer does not leaves a Mac with no
+    download and no Chinese, and one the renderer counts but the installer does
+    not fetches 8MB that were never needed."""
+    from raven.utils import fonts
+
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    checked = re.findall(r'\[ -f "\$MACOS_FONT_ROOT(/[^"]+)" \]', text)
+    assert checked, "install.sh no longer checks any of the faces macOS ships"
+
+    root = "/System/Library/Fonts"
+    assert [f"{root}{suffix}" for suffix in checked] == [
+        path for path in fonts._SYSTEM_HAN_FACES if path.startswith(root)
+    ]

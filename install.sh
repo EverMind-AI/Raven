@@ -587,18 +587,18 @@ install_office() {
 # comes out as characters or as boxes is decided by this machine rather than by
 # the file -- the same deck that renders here as boxes opens correctly in
 # PowerPoint. Nothing else installs one: apt's libreoffice recommends the Latin
-# Noto packages and never the CJK one, and macOS ships PingFang in a form
-# LibreOffice does not draw from. The failure is silent, which is what makes it
-# worth its own step rather than a note in the docs: the conversion succeeds,
-# the PDF is well formed, and the boxes are visible only to whoever looks at the
-# page -- including the model that renders a deck to check its own work, which
-# was reviewing pages it could not read.
+# Noto packages and never the CJK one. A Mac is the exception and needs nothing
+# from this step, for the reason `have_han_font` gives. The failure is silent,
+# which is what makes it worth its own step rather than a note in the docs: the
+# conversion succeeds, the PDF is well formed, and the boxes are visible only to
+# whoever looks at the page -- including the model that renders a deck to check
+# its own work, which was reviewing pages it could not read.
 #
 # So this step ends with a Han face present, not with advice about one. The
 # package manager is asked first because a system font serves every program on
 # the machine, and where that cannot happen -- no brew, no sudo, no apt -- the
 # font is fetched into the user's own font directory, which needs no privileges
-# and which both fontconfig and CoreText already read.
+# and which a conversion is told to read.
 
 # Pinned to a tag rather than a branch: a branch moves, and a font that changes
 # under a recorded digest turns every later install into a failed checksum.
@@ -615,6 +615,10 @@ han_font_hint() {
   esac
 }
 
+# The root the faces macOS itself ships sit under, named so a test can point the
+# check at a directory it controls.
+MACOS_FONT_ROOT="/System/Library/Fonts"
+
 # Where this platform reads a font installed by a user who is not root.
 han_font_dir() {
   case "$NODE_OS" in
@@ -627,15 +631,26 @@ have_han_font() {
   # the one check that does not depend on how the host reports its fonts, and it
   # is what makes a second install a no-op instead of another 8MB download.
   [ -f "$(han_font_dir)/$HAN_FONT_NAME" ] && return 0
-  # fontconfig answers the general question wherever it exists.
-  if have fc-list; then
+  # A Mac is asked first and separately, because nothing is missing there: it
+  # ships Arial Unicode, and what kept LibreOffice from drawing with it was a
+  # bundled fontconfig left unconfigured, which raven now configures per
+  # conversion. Downloading a face would not have helped and is not needed. The
+  # host's own fc-list must not be consulted here either -- brew installs it
+  # alongside plenty of formulae, and it describes a configuration the converter
+  # does not read.
+  if [ "$NODE_OS" = darwin ]; then
+    [ -f "$MACOS_FONT_ROOT/Supplemental/Arial Unicode.ttf" ] && return 0
+    [ -f "$MACOS_FONT_ROOT/PingFang.ttc" ] && return 0
+  elif have fc-list; then
+    # Everywhere else LibreOffice and fc-list read the same configuration, so
+    # this answers the general question.
     [ -n "$(fc-list :lang=zh family 2>/dev/null)" ] && return 0
     return 1
   fi
-  # A Mac has no fc-list, and its own PingFang does not settle the question, so
-  # ask the directories a font can be installed into without privileges -- under
-  # both namings that can appear there: the cask writes NotoSansCJK, the
-  # fallback writes NotoSansSC, and either may sit in either directory.
+  # Left: a Mac stripped of its own faces, and a host whose fontconfig cannot be
+  # asked. Look at the directories a font can be installed into without
+  # privileges, under both namings that can appear there -- the cask writes
+  # NotoSansCJK, the fallback writes NotoSansSC, and either may sit in either.
   for face in "$HOME/Library/Fonts"/*CJK* "$HOME/Library/Fonts"/*NotoSans[ST]C* \
               "/Library/Fonts"/*CJK* "/Library/Fonts"/*NotoSans[ST]C* \
               "${XDG_DATA_HOME:-$HOME/.local/share}/fonts"/*CJK* \
