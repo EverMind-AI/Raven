@@ -32,10 +32,10 @@ export interface TasksState {
   tabByPane: Record<string, 'context' | 'order'>
   /* Bumped once per live event that names one node, keyed by that node's own
      (kind, id, node_id) -- what `TasksPage.tsx`'s `useNodeRecord` reads to
-     refetch a running node's record. `dag.node_updated` fires once per tool
-     call while a node runs (its payload carries `tool_call_id`), not only on
-     a status transition, so a value that only changed on transitions would
-     miss every step in between. */
+     refetch a node's record the moment a frame moves it, ahead of its next
+     beat. `dag.node_updated` marks a node's transitions (its `tool_call_id`
+     is the parent turn's `run_subagent_dag` call, not a step of the node's
+     own); the steps between transitions reach the panel on the beat. */
   nodeVersions: Record<string, number>
   /* Every fold inside a node's own record -- the dispatch's "show all", the
      process fold, a thought, a step's calls, one call's own card -- keyed by
@@ -262,6 +262,11 @@ export function onSubagentStatus(p: live.SubagentStatusPayload): void {
     count the same item the pane's own chip opens. */
 export const taskChangeKey = (row: TaskRow, node: TaskNode, file: TaskFile): string =>
   `task:${row.kind}:${row.id}:${node.node_id}:${file.path}`
+
+/* A task file's row is keyed by the node that touched it, not by a path on
+   disk -- two nodes of one run can write the same file -- so a door that would
+   read a change's key as a path has to ask first. */
+export const isTaskChangeKey = (key: string): boolean => key.startsWith('task:')
 
 /* The lane already folded every touch of this path into one verdict (add,
    write, edit or delete), so the row draws what it was told. Deriving it from

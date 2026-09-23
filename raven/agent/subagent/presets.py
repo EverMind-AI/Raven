@@ -69,7 +69,7 @@ mechanism. For an acp preset they are not spelled out because they are not
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
 from raven.agent.subagent.acp_registry_presets import (
     ACP_REGISTRY_INSTALL_HINTS,
@@ -317,6 +317,62 @@ def install_hint_for(cfg: Any) -> str | None:
     return ACP_REGISTRY_INSTALL_HINTS.get(preset) if preset else None
 
 
+class SignIn(NamedTuple):
+    """Two spellings of one sign-in, and the executable that decides which.
+
+    A shim-launched row runs on machines that never installed the agent's CLI
+    globally -- that is the setup ``SHIM_REQUIRED_EXECUTABLES`` deliberately
+    does not hold these rows to, because the adapter carries its own copy as a
+    per-platform dependency and never links it onto PATH. So the obvious
+    command is unavailable on exactly the setup this preset supports, and
+    naming it there would answer a credential failure with a second one.
+
+    ``local`` is what to run where the reader installed the CLI themselves --
+    their build, their version. ``anywhere`` needs no install at all. Both end
+    at the same place: the credential is the machine's, not the copy's, which
+    is what makes the second one an answer rather than a detour. Measured --
+    the adapter's own bundled binary and the published CLI fetched fresh report
+    the same `auth status` on one machine.
+    """
+
+    exe: str
+    local: str
+    anywhere: str
+
+
+SIGN_IN_HINTS: dict[str, SignIn] = {
+    "claude_code": SignIn(
+        exe="claude",
+        local="claude auth login",
+        anywhere="npx -y @anthropic-ai/claude-code auth login",
+    ),
+}
+"""How to sign in to the agent a row defers to, by preset key.
+
+For the failure the tables above cannot catch. ``SHIM_REQUIRED_EXECUTABLES``
+answers "the agent is not installed", which the probe can see before it spends
+anything; this answers "it is installed and has no credential", which only the
+agent itself can report, and which it reports as prose in whatever words its
+vendor chose.
+
+Only agents whose sign-in was read from the installed tool are listed. An
+unlisted agent gets the sentence without a command, which is still the
+difference between "go and sign in" and a JSON-RPC error code -- and a command
+that is not there to run is the same mistake as a guessed one.
+"""
+
+
+def sign_in_hint_for(cfg: Any) -> SignIn | None:
+    """How to sign in to the agent this row defers to, or ``None`` when unknown.
+
+    By provenance, like :func:`install_hint_for` and for the same reason: the
+    name is the owner's to edit, so a hand-written row wearing a preset's name
+    is not that agent and must not be told to run that agent's login.
+    """
+    preset = getattr(cfg, "preset", None)
+    return SIGN_IN_HINTS.get(preset) if preset else None
+
+
 def shim_requirement_for(cfg: Any) -> tuple[str, str] | None:
     """The agent a shim-launched row needs installed, with its install, or ``None``.
 
@@ -331,8 +387,11 @@ def shim_requirement_for(cfg: Any) -> tuple[str, str] | None:
 __all__ = [
     "SHIM_LAUNCHED_PRESETS",
     "SHIM_REQUIRED_EXECUTABLES",
+    "SIGN_IN_HINTS",
+    "SignIn",
     "install_hint_for",
     "shim_requirement_for",
+    "sign_in_hint_for",
     "THIRD_PARTY_SUBAGENT_PRESETS",
     "session_mcp_for",
     "third_party_subagent_presets",

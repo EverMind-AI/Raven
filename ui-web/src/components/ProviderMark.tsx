@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 
+import { assetStamp } from '../lib/assetStamp'
 import { open as openUrl } from '../lib/openUrl'
 
 import type { JSX } from 'react'
@@ -140,22 +141,7 @@ const VENDOR_ICONS: Record<string, string> = {
   'zhipu': 'zhipu',
 }
 
-/* The asset tree's digest, appended to every asset URL.
- *
- * These files live at one unversioned path each, so a replaced drawing lands at
- * exactly the URL its predecessor is cached under -- and a client that decided
- * the old copy was fresh keeps showing it through a rebuild, a server restart
- * and a hard reload. A digest in the query makes a changed file a different
- * URL, which no cache can answer from what it already holds.
- *
- * Absent outside the built page (tests, the vite dev server), where the plain
- * path is what the assertions and the loader both expect. */
-const stamp = (): string => {
-  const v = (window as unknown as { __ASSETV?: string }).__ASSETV
-  return v && v !== '__ASSETV__' ? `?v=${v}` : ''
-}
-
-const assetUrl = (icon: string): string => `assets/providers/${icon}.svg${stamp()}`
+const assetUrl = (icon: string): string => `assets/providers/${icon}.svg${assetStamp()}`
 
 /* Marks that ship a second drawing for the dark theme, and marks that instead
    lean on a filter.
@@ -195,7 +181,7 @@ const TONES: Record<string, 'mono' | 'hybrid' | 'mono-white'> = {
 }
 
 const darkUrl = (icon: string): string | null =>
-  DARK_PAIRED.has(icon) ? `assets/providers/${icon}-dark.svg${stamp()}` : null
+  DARK_PAIRED.has(icon) ? `assets/providers/${icon}-dark.svg${assetStamp()}` : null
 
 /* Which vendor made a model, read off its name.
  *
@@ -265,7 +251,7 @@ export function providerIconPath(id: string): string | null {
    Not under `providers/` -- it is not one -- but it wants the same digest, or
    a replaced drawing stays cached under the URL its predecessor held. */
 export function ravenIconPath(): string {
-  return `assets/raven.svg${stamp()}`
+  return `assets/raven.svg${assetStamp()}`
 }
 
 /* An icon that degrades instead of breaking.

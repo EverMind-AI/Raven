@@ -175,6 +175,9 @@ const hubText = (v: unknown): string =>
 interface AuthContribution {
   kind: string
   auth?: { fields?: AuthField[] }
+  /* An http or sse server carries a url; a stdio one carries the command. */
+  connection?: { url?: string; command?: string; args?: string[] }
+  tools_preview?: string[]
 }
 
 const settingsErr = (e: unknown): string => {
@@ -299,16 +302,24 @@ export const settingsSource: SettingsSource = {
   openSkillFile: (name, file) => run(gateway().call('skills.manage', { action: 'open', query: name, file })
     .then(() => undefined)),
   uninstallSkill: (name) => run(gateway().call('skillhub.remove', { name }).then(afterExt)),
-  serverAuthFields: (name) => gateway().call('plughub.detail', { id: name })
+  serverDetail: (name) => gateway().call('plughub.detail', { id: name })
     .then((r) => {
       const entry = r.item as unknown as { contributes?: AuthContribution[] }
       const mcp = (entry.contributes || []).find((c) => c.kind === 'mcp')
-      return ((mcp && mcp.auth && mcp.auth.fields) || []).map((f) => ({ ...f, label: hubText(f.label) }))
+      const conn = (mcp && mcp.connection) || {}
+      const command = conn.command ? [conn.command, ...(conn.args || [])].join(' ') : undefined
+      return {
+        known: true,
+        fields: ((mcp && mcp.auth && mcp.auth.fields) || []).map((f) => ({ ...f, label: hubText(f.label) })),
+        address: conn.url || command,
+        tools: (mcp && mcp.tools_preview) || [],
+      }
     })
-    /* A server the catalogue does not carry is the ordinary case, not a
-       failure to report: the panel says so itself when the list comes back
-       empty. */
-    .catch(() => []),
+    /* A server the catalogue does not carry is ordinary -- anything added by
+       hand is one -- so this is a miss, not a failure. It is reported as a
+       miss rather than as an empty entry because the panel must not read it
+       as "takes no credential". */
+    .catch(() => ({ known: false, fields: [], tools: [] })),
   toggleServer: (name, on) => run(gateway().call('plug.toggle', { name, enabled: on }).then(afterExt)),
   retryServer: (name) => run(gateway().call('plug.retry', { name }).then(afterExt)),
   revokeServer: (name) => run(gateway().call('plug.revoke', { name }).then(afterExt)),

@@ -251,13 +251,13 @@ class ExecTool(Tool):
                     "split the work. Nothing was run."
                 )
             from raven.agent.tools import background_exec
-            from raven.sandbox.direct_executor import _baseline_env
+            from raven.sandbox.direct_executor import baseline_env
 
             # The same environment hygiene as the synchronous path: the child
             # gets the executor's baseline allowlist, never the full host
             # environment, so a detached download cannot read credentials the
             # capped path already withholds.
-            bg_env = _baseline_env()
+            bg_env = baseline_env()
             if self.path_append:
                 bg_env["PATH"] = bg_env.get("PATH", "") + os.pathsep + self.path_append
             try:
@@ -375,6 +375,18 @@ class ExecTool(Tool):
     def _cwd_for(self, working_dir: str | None) -> str:
         bound = str(workdir.current() or "") if self.follow_binding else ""
         return working_dir or bound or self.working_dir or os.getcwd()
+
+    def listing_root(self, params: dict[str, Any]) -> Path | None:
+        """Where this call's files land, as far as this host can see.
+
+        The directory the command runs in, resolved the way ``execute`` will --
+        a per-call ``working_dir`` moves it off the bound one -- or ``None`` for
+        a command run on a registered machine, whose files are not on this disk
+        and would be described by nothing a listing here could find.
+        """
+        if str(params.get("machine") or "").strip():
+            return None
+        return Path(self._cwd_for(str(params.get("working_dir") or "") or None))
 
     def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any]:
         """The command and where it would run, resolved the way ``execute`` will."""
@@ -550,9 +562,9 @@ class ExecTool(Tool):
         started in: this command's ``$PWD`` is the workspace, whatever this
         process inherited.
         """
-        from raven.sandbox.direct_executor import _baseline_env
+        from raven.sandbox.direct_executor import baseline_env
 
-        env = _baseline_env()
+        env = baseline_env()
         env["PWD"] = str(cwd)
         return env
 

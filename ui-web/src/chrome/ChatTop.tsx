@@ -15,10 +15,11 @@
  *   - h1#title's text. Seven modules write it -- features/rail/source.ts and
  *     store.ts when a row is renamed, state/session/registry.ts and runtime.ts
  *     as a conversation opens, loads and streams -- and features/rail/store.ts
- *     swaps the whole heading for an input while the reader renames it. The
- *     literal here is what the page is served with and this never changes it,
- *     so React never writes it again: it diffs against the props it rendered
- *     last rather than against the document.
+ *     swaps the whole heading for an input while the reader renames it, which
+ *     a click on the heading starts. The literal here is what the page is
+ *     served with and this never changes it, so React never writes it again:
+ *     it diffs against the props it rendered last rather than against the
+ *     document.
  *   - #wsBtn's aria-expanded, and #wsBdg's count and hidden (state/ws.ts's
  *     setOpen and bump). Its tooltip and label have two writers, which is the
  *     behaviour: state/ws.ts names them for the state the pane is in, and the
@@ -41,29 +42,31 @@ import { rename as renameSession } from '../features/rail/store'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import { Banner } from './Banner'
+import { WorkdirTag } from './WorkdirTag'
 
 import type { JSX } from 'react'
 
-/* The session header. Its two buttons say their words in a tooltip and a label
-   rather than in text, so each takes its key through lang.attr -- which is
+/* The session header. The panel toggle says its words in a tooltip and a
+   label rather than in text, so it takes its key through lang.attr -- which is
    absent until a pick lands, the way the served markup carried neither -- and
    #title has no key at all, because its text is a conversation's name rather
-   than a phrase from the catalogue. */
+   than a phrase from the catalogue. The workspace tag beside it renders the
+   whole of state/workdir.ts's paint.
+
+   The name is edited by clicking it: no pencil, the heading itself is the
+   control, and the stylesheet gives it a text cursor and a frame on hover. The
+   click is taken on the row rather than on the heading, because the rename
+   swaps the heading for an input and puts a fresh heading back
+   (features/rail/store.ts), and a handler on the node React rendered would
+   be gone with it after the first edit. */
 function Header(): JSX.Element {
   return (
     <>
       <h1 id="title">新任务</h1>
-      <button
-        className="ghost-ic tipdn"
-        id="renameBtn"
-        data-tip={lang.attr('gui.rename_session')}
-        aria-label={lang.attr('gui.rename_session')}
-        onClick={() => renameSession()}
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
-          <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z" /><path d="M14.5 6.5 17.5 9.5" />
-        </svg>
-      </button>
+      {/* The folder this conversation runs in, said once beside its name: the
+          composer's workspace chip is gone once a conversation starts
+          (src/chrome/WorkdirTag.tsx). */}
+      <WorkdirTag />
       <span className="spacer" />
       <button
         className="ghost-ic wstog tipdn"
@@ -106,7 +109,12 @@ export function ChatTop(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <>
-      <div className="top"><Header /></div>
+      <div
+        className="top"
+        onClick={(e) => { if ((e.target as Element).closest('#title')) renameSession() }}
+      >
+        <Header />
+      </div>
       <div className="scroll" id="scroll"><Scroll /></div>
       <button className="backpill" id="backpill" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13M6.5 12.5l5.5 5.5 5.5-5.5" /></svg>
@@ -123,7 +131,7 @@ export function ChatTop(): JSX.Element {
         aria-label={lang.attr('gui.resize_ws')}
       />
       <div id="brand" aria-hidden="true">
-        <span className="mk"><RavenMark height={52} /></span>
+        <span className="mk"><RavenMark size={52} /></span>
         <span className="wl">{t('gui.brand.hi')}</span>
       </div>
     </>

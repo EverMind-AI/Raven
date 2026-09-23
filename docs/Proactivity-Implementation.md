@@ -645,13 +645,28 @@ The default timeout bounds the worst case, so a forgotten question cannot wedge
 the gateway indefinitely.
 
 The `clarify.request` wire payload carries `{question, choices, header,
-recommended, timeout_s, index, total, batch}`. `header` is a short chip label,
-`recommended` names the option the agent would pick, and `index` / `total` /
-`batch` place the question in its call so a surface can show the whole set and
-its progress while still collecting one answer at a time. ClarifyPrompt renders
-a single-select prompt, marks the recommended option, counts the budget down,
-and takes a free-form answer or a note alongside a selection; multi-select is
-not offered.
+recommended, multi_select, timeout_s, index, total, batch}`. `header` is a
+short chip label, `recommended` names the option the agent would pick, and
+`multi_select` says whether more than one choice may apply; `index` / `total`
+/ `batch` place the question in its call so a surface can show the whole set
+and its progress while still collecting one answer at a time. `batch`'s
+entries carry `{question, header}` from a producer that predates the richer
+shape (an ACP elicitation form), or the fuller `{question, header, choices,
+recommended, multi_select}` from `ask_user` itself, which is what lets a
+surface render every question in the batch up front rather than one at a
+time. ClarifyPrompt renders a single-select prompt, marks the recommended
+option, counts the budget down, and takes a free-form answer or a note
+alongside a selection; multi-select is not offered.
+
+`clarify.respond` also accepts an optional `answers`: the whole batch's
+answers, aligned with the request's `batch`, from a surface that rendered the
+batch as one form and is answering it in a single call. The broker resolves
+the question it was actually waiting on from `answer` as always, and stashes
+whatever `answers` holds past that question's position; the tool loop's later
+`await_question` calls for the same conversation then consume those stashed
+answers directly, with no further `clarify.request` emitted. The TUI and the
+IM channels still answer one question at a time and never send `answers`; a
+multi-select question reaches them as a single-select or free-form one.
 
 One `ask_user` call shares one budget (`tools.ask_user.timeout`, 600s by
 default) across every question in it, so the paragraph above holds for a batch

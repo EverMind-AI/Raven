@@ -170,6 +170,7 @@ class _Question:
     header: str
     options: list[str]
     recommended: str
+    multi_select: bool
 
 
 def _dedup(labels: list[str]) -> list[str]:
@@ -225,6 +226,10 @@ def _prepare(entries: list[dict[str, Any]]) -> tuple[list["_Question"], str]:
                 header=str(entry.get("header", "")).strip()[:_MAX_HEADER_CHARS],
                 options=options,
                 recommended=recommended,
+                # Meaningless without options to choose among, so a model that
+                # set it on a free-form question is silently corrected rather
+                # than reaching the broker with a flag the surface cannot use.
+                multi_select=bool(entry.get("multi_select")) and bool(options),
             )
         )
     return prepared, ""
@@ -276,7 +281,7 @@ class AskUserTool(Tool):
         *,
         index: int = 0,
         total: int = 1,
-        batch: list[dict[str, str]] | None = None,
+        batch: list[dict[str, Any]] | None = None,
     ) -> str | None:
         """One host-side question outside a model tool call.
 
@@ -324,7 +329,8 @@ class AskUserTool(Tool):
             "for low-stakes or reversible choices, pick a sensible default instead. "
             "When you can name a few likely answers, pass them as 'options' -- two or "
             "more, or none at all for a free-form question (the user can always type an "
-            "answer instead). Point at the one you would pick with 'recommended'. Batch "
+            "answer instead). Point at the one you would pick with 'recommended'. Set "
+            "'multi_select' when more than one option can apply at once. Batch "
             f"related questions into one call, up to {MAX_QUESTIONS}; they share one deadline."
         )
 
@@ -368,6 +374,14 @@ class AskUserTool(Tool):
                                 "description": (
                                     "0-based index into 'options' of the option you recommend. "
                                     "Omit when you have no preference."
+                                ),
+                            },
+                            "multi_select": {
+                                "type": "boolean",
+                                "description": (
+                                    "Allow the user to choose more than one option; the answer "
+                                    "arrives as the chosen options joined with ', '. Only "
+                                    "meaningful with 'options'."
                                 ),
                             },
                         },
@@ -452,7 +466,16 @@ class AskUserTool(Tool):
         budget = float(self._timeout_s or getattr(self._broker, "default_timeout_s", DEFAULT_TIMEOUT_S))
         loop = asyncio.get_running_loop()
         deadline = loop.time() + budget
-        batch = [{"question": item.question, "header": item.header} for item in prepared]
+        batch = [
+            {
+                "question": item.question,
+                "header": item.header,
+                "choices": item.options,
+                "recommended": item.recommended,
+                "multi_select": item.multi_select,
+            }
+            for item in prepared
+        ]
 
         told: list[str] = []  # model-facing
         # Human-facing display: one "question -> answer" line per question, so a
@@ -478,6 +501,7 @@ class AskUserTool(Tool):
                         timeout_s=remaining,
                         header=item.header,
                         recommended=item.recommended,
+                        multi_select=item.multi_select,
                         index=index,
                         total=len(prepared),
                         batch=batch,

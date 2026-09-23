@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection
 from uuid import uuid4
 
 from loguru import logger
@@ -68,7 +69,7 @@ from raven.agent.tools.web import (
 )
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.llm_provider import LLMProvider, LLMResponse
-from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation, ToolOutput
+from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation, FileRemoval, ToolOutput
 from raven.memory_engine import MemoryConsolidator, MemoryStore, StorePipeline
 from raven.observability import semconv
 from raven.providers.base import send_max_tokens
@@ -222,10 +223,13 @@ class LoopOutcome:
     ``edited_files`` carry the shadow-git snapshot info used to build the
     next turn's recovery prompt.
 
-    ``error`` is the loop's own account of a model call it gave up on, in the
-    words a reader is shown; None when the call succeeded or a hook salvaged
-    an answer. The caller fails the turn on it unless the message tool already
-    answered in this turn.
+    ``error`` is the loop's own account of why this turn has no answer, in the
+    words a reader is shown: a model call it gave up on, or an empty-response
+    recovery that spent every budget without a word coming back. None when the
+    turn produced an answer or a hook salvaged one, and also when the turn
+    returned no text at all with the recovery switched off, which the caller
+    fails on by itself. The caller fails the turn on it unless one of the
+    turn's tools has already put an answer in front of the reader.
     """
 
     status: str = "completed"  # "completed" | "interrupted" | "error"
@@ -577,6 +581,70 @@ def _file_removed_payload(removals: Any) -> list[dict[str, Any]] | None:
             budget -= len(before)
         out.append(entry)
     return out or None
+
+
+#: A file the listing found is counted in lines only when it is text this size
+#: or under. Past it the count is unknown rather than wrong: reading a gigabyte
+#: to number it would cost the turn more than the row it draws is worth.
+_FILE_WRITTEN_TEXT_MAX_BYTES = 256 * 1024
+
+
+def _file_written_payload(
+    created: Collection[str],
+    modified: Collection[str],
+    after: dict[str, tuple[int, int]] | None,
+    *,
+    already: Collection[str] = (),
+) -> list[dict[str, Any]] | None:
+    """The files a command left behind, as plain mappings, or ``None`` for none.
+
+    The other half of ``_file_change_payload``: a file tool reports what it
+    wrote, a command reports its output and nothing else, so this is read off
+    two listings of the working directory instead of off a result. Sizes and a
+    line count rather than contents -- one command can write a hundred files,
+    and what a row draws is that they were written and how big they are.
+
+    ``lines`` belongs to a created file alone, and ``None`` there means unknown:
+    too large to read, or not text. A rewritten file has no count at all, since
+    the listing never held the old content and a number against nothing would
+    read as a change nobody measured.
+
+    ``already`` are the paths this same call accounted for by name. The listing
+    sees those too, and reporting one again would draw a single write twice.
+    """
+    accounted = {os.path.realpath(path) for path in already if isinstance(path, str) and path}
+    out: list[dict[str, Any]] = []
+    for path in created:
+        if os.path.realpath(path) in accounted:
+            continue
+        size = (after or {}).get(path, (0, 0))[0]
+        out.append({"path": path, "created": True, "size": size, "lines": _text_line_count(path, size)})
+    for path in modified:
+        if os.path.realpath(path) in accounted:
+            continue
+        out.append({"path": path, "created": False, "size": (after or {}).get(path, (0, 0))[0], "lines": None})
+    return out or None
+
+
+def _text_line_count(path: str, size: int) -> int | None:
+    """Lines in a file the listing found, or ``None`` when it cannot be counted."""
+    if size > _FILE_WRITTEN_TEXT_MAX_BYTES:
+        return None
+    try:
+        return len(Path(path).read_text(encoding="utf-8").splitlines())
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _listing_removals(deleted: Collection[str], *, already: Collection[str] = ()) -> list[FileRemoval]:
+    """Files a listing says went, for the deletions no tool reported itself.
+
+    Without a body: the file was gone before anything read it, and the turn only
+    knows it was there when the command started. ``already`` are the removals
+    the call reported by name, which the listing sees as well.
+    """
+    accounted = {os.path.realpath(path) for path in already if isinstance(path, str) and path}
+    return [FileRemoval(path=path) for path in deleted if os.path.realpath(path) not in accounted]
 
 
 def monotonic() -> float:

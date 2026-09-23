@@ -277,10 +277,13 @@ class WsGateway:
         except OSError as exc:
             raise web.HTTPBadRequest(reason=str(exc)) from None
         render = request.query.get("render")
+        pages: int | None = None
         if render == "pdf":
             path = await self._rendered_pdf(path, workspace)
         elif render == "thumb":
             path = await self._rendered(path, workspace, thumb=True)
+        elif render == "page":
+            path, pages = await self._rendered_page(path, workspace, request.query.get("p"))
         if path.stat().st_size > MAX_VIEW_BYTES:
             raise web.HTTPRequestEntityTooLarge(max_size=MAX_VIEW_BYTES, actual_size=path.stat().st_size)
         return web.FileResponse(
@@ -294,8 +297,46 @@ class WsGateway:
                 "Content-Security-Policy": sandbox_for(path, run=request.query.get("run") == "1"),
                 "X-Content-Type-Options": "nosniff",
                 "Cache-Control": "no-store",
+                # How many pages there are to ask for, answered on the picture
+                # of any one of them: the viewer asks for the first page and
+                # learns from it how many more to draw, so one round trip both
+                # proves the rendering works and sizes the rest of it.
+                **({} if pages is None else {"X-Raven-Pdf-Pages": str(pages)}),
             },
         )
+
+    async def _rendered_page(self, path: Path, workspace: Path | None, asked: str | None) -> tuple[Path, int]:
+        """One page of a rendering as a PNG, and how many pages it has.
+
+        The viewer draws a PDF as pictures of its pages rather than framing the
+        document, because Safari does not draw a framed PDF served under the
+        sandbox policy these files carry -- and that policy is what keeps an
+        agent's document away from the page's cookie and socket, so it stays.
+
+        The same three codes ``_rendered`` maps, plus 400 for a page number
+        that is not one: a page past the end is the viewer asking for what it
+        was told exists, which is this route's answer to get right rather than
+        the reader's mistake to report.
+        """
+        from raven.rpc import pdf_preview
+
+        if not pdf_preview.has_thumb(path):
+            raise web.HTTPBadRequest(text=f"{path.suffix or path.name} cannot be rendered as a PDF")
+        try:
+            page = int(asked) if asked is not None else 1
+        except ValueError:
+            raise web.HTTPBadRequest(text=f"{asked!r} is not a page number") from None
+        try:
+            count = await pdf_preview.pages_of(path, workspace=workspace)
+            if not 1 <= page <= count:
+                raise web.HTTPBadRequest(text=f"{path.name} has {count} pages, not a page {page}")
+            return await pdf_preview.page_png_for(path, page, workspace=workspace), count
+        except pdf_preview.PdfPreviewUnavailableError as exc:
+            raise web.HTTPServiceUnavailable(text=str(exc)) from None
+        except pdf_preview.PdfPreviewTimeoutError as exc:
+            raise web.HTTPGatewayTimeout(text=str(exc)) from None
+        except pdf_preview.PdfPreviewError as exc:
+            raise web.HTTPInternalServerError(text=str(exc)) from None
 
     async def _rendered_pdf(self, path: Path, workspace: Path | None = None) -> Path:
         return await self._rendered(path, workspace)
@@ -560,7 +601,13 @@ def build_app(
     if static_dir is not None and (static_dir / "index.html").exists():
 
         async def index(_request: web.Request) -> web.FileResponse:
-            return web.FileResponse(static_dir / "index.html")
+            # `no-cache` is "keep it, but ask every time", not "do not keep it":
+            # the ETag still saves the transfer when nothing changed. Without it
+            # the response carries no caching header at all, browsers fall back
+            # to heuristic freshness, and a rebuilt page is served from cache
+            # without revalidating -- which looks exactly like a server that did
+            # not pick up the change, and is indistinguishable from one.
+            return web.FileResponse(static_dir / "index.html", headers={"Cache-Control": "no-cache"})
 
         app.router.add_get("/", index)
         assets = static_dir / "assets"

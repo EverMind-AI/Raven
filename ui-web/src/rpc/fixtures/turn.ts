@@ -59,7 +59,8 @@ export type ScriptEvent = { d?: number } & (
   | { t: 'answer'; x: string }
   | { t: 't+'; id: number; n: string; a?: string | ToolArgs }
   | { t: 't-'; id: number; r: string; ok?: boolean; ms?: number; diff?: string[]; meta?: DeliveryMeta;
-      removed?: Array<{ path: string; before: string }> }
+      removed?: Array<{ path: string; before: string }>;
+      wrote?: Array<{ path: string; created: boolean; size: number; lines: number | null }> }
   | DagEntry
   | { t: 'end' }
 )
@@ -151,6 +152,13 @@ const GTM_FILE_EVENTS: ScriptEvent[] = [
   { t:'t+', d:140, id:11, n:'exec', a:'rm research/gtm-notes.md' },
   { t:'t-', d:110, id:11, ok:true, r:'', ms:110,
     removed:[{ path:'~/work/raven/research/gtm-notes.md', before: GTM_SUPERSEDED }] },
+  /* A command the runtime has no result to read: what it left on disk is known
+     only from listing the directory before and after it, which is where a
+     created file's line count comes from and why the rewritten one has none. */
+  { t:'t+', d:150, id:12, n:'exec', a:'python3 scripts/tally.py > research/tally.txt && date >> research/run.log' },
+  { t:'t-', d:260, id:12, ok:true, r:'', ms:260,
+    wrote:[{ path:'~/work/raven/research/tally.txt', created:true, size:96, lines:4 },
+      { path:'~/work/raven/research/run.log', created:false, size:412, lines:null }] },
 ];
 
 const ANSWER_GTM = `## GTM Agent 赛道速览
@@ -433,7 +441,8 @@ function framesOf(run: Run, websearchOn: boolean, turnId: string): Frame[] {
         tool_call_id: String(e.id), result_preview: e.r, truncated: false,
         ok: e.ok !== false, ...(e.meta ? { metadata: e.meta } : {}),
         ...(e.diff ? { diff: e.diff.join('\n') } : {}),
-        ...(e.removed ? { file_removed: e.removed.map((f) => ({ path: f.path, before: f.before })) } : {}) } } })
+        ...(e.removed ? { file_removed: e.removed.map((f) => ({ path: f.path, before: f.before })) } : {}),
+        ...(e.wrote ? { file_written: e.wrote } : {}) } } })
     } else if (e.t === 'dag') {
       frames.push({ after, event: dagFrame(e) })
     } else if (e.t === 'answer') {
@@ -486,7 +495,10 @@ function historyOf(run: Run, websearchOn: boolean, at: number): ResultOf<'sessio
         tool_call_id: String(e.id), text: e.r, timestamp: String(at),
         /* The stored shape, not the live one: a conversation on disk keeps how
            many lines a removed file held, never its contents. */
-        ...(e.removed ? { file_removed: e.removed.map((f) => ({ path: f.path, del: lineCount(f.before) })) } : {}) })
+        ...(e.removed ? { file_removed: e.removed.map((f) => ({ path: f.path, del: lineCount(f.before) })) } : {}),
+        /* Unlike a removal, stored as the live event carried it: a size and a
+           line count are all the listing ever knew. */
+        ...(e.wrote ? { file_written: e.wrote } : {}) })
     } else if (e.t === 'answer') {
       flush()
       messages.push({ role: 'assistant', text: e.x, timestamp: String(at), duration_ms: run.use.wall })

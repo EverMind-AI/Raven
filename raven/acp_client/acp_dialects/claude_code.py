@@ -66,6 +66,9 @@ def _custom_answer_for(field: Any) -> str | None:
 class ClaudeCodeDialect(AcpDialect):
     key = "claude-agent-acp"
     plan_tool_name = "TodoWrite"
+    # Measured on 0.79.0: every `Write` is announced with `oldText: null`,
+    # whether or not the file existed, so the block cannot say it was new.
+    missing_old_text_is_creation = False
 
     def tool_name(self, update: dict[str, Any]) -> str:
         named = _dict(_dict(update.get("_meta")).get("claudeCode")).get("toolName")

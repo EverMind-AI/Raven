@@ -56,6 +56,7 @@ from raven.agent.subagent.mcp_grant import (
     resolve_grant,
 )
 from raven.agent.subagent.role import subagent_role_env
+from raven.agent.tools.snapshot import take as take_snapshot
 from raven.spine.message import Media
 
 if TYPE_CHECKING:
@@ -648,7 +649,45 @@ class CliAgentBackend:
     ) -> str:
         skey = session_key or "default"
         cwd = self.cwd or str(workspace)
+        # Here rather than beside either launch: this lane sees nothing of what
+        # the child did between them -- no tool results, no protocol -- so its
+        # whole account of the files is the directory before the process started
+        # against the directory after it exited, taken once for the run.
+        before_files = take_snapshot(cwd)
 
+        try:
+            return await self._launch(
+                task,
+                task_id,
+                cwd,
+                skey=skey,
+                handle=handle,
+                resumable=resumable,
+                attempts=attempts,
+                on_delta=on_delta,
+                notice_sink=notice_sink,
+                runtime_env=runtime_env,
+                mcp_file=mcp_file,
+            )
+        finally:
+            activity.record_snapshot_changes(before_files, take_snapshot(cwd), cwd)
+
+    async def _launch(
+        self,
+        task: str,
+        task_id: str,
+        cwd: str,
+        *,
+        skey: str,
+        handle: str,
+        resumable: bool,
+        attempts: list[dict[str, Any]],
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+        notice_sink: Callable[[str], Awaitable[None]] | None = None,
+        runtime_env: dict[str, str] | None = None,
+        mcp_file: str | None = None,
+    ) -> str:
+        """Run the child, resuming this handle's session when it has one."""
         if self.is_stateful:
             # Held across lookup, run and commit: the whole sequence is what
             # binds a handle to one CLI session, and a concurrent spawn or DAG

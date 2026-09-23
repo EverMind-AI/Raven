@@ -402,40 +402,61 @@ describe('workspace island', () => {
   /* The render is asked for first and framed second; once the answer is good
      the frame gets the same URL, without the sandbox attribute a PDF frame
      must not carry, and the note about rendering stays up until it loads. */
-  it('frames the rendered PDF of a deck once the gateway has it', async () => {
+  it('draws a deck as pictures of its pages once the gateway has them', async () => {
     install(emptyWs({ file: { ...deckFile } }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
     const cancel = vi.fn()
     const asked: Array<[string, RequestInit | undefined]> = []
     vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
       asked.push([url, init])
-      return Promise.resolve({ ok: true, status: 200, statusText: 'OK', body: { cancel } })
+      return Promise.resolve({
+        ok: true, status: 200, statusText: 'OK', body: { cancel },
+        headers: { get: (h: string) => (h === 'X-Raven-Pdf-Pages' ? '3' : null) },
+      })
     })
     await mount()
     await act(async () => { await Promise.resolve() })
-    expect(asked.map((a) => a[0])).toEqual(['/file?path=%2Frepo%2Fdeck.pptx&render=pdf'])
+    /* One round trip, for the first page: it proves the rendering can be made
+       and says how many pages there are to ask for. */
+    expect(asked.map((a) => a[0])).toEqual(['/file?path=%2Frepo%2Fdeck.pptx&render=page&p=1'])
     expect(cancel).toHaveBeenCalled()
-    const frame = document.querySelector('.fview iframe') as HTMLIFrameElement
-    expect(frame).not.toBeNull()
-    /* Framed without the browser viewer's toolbar: the bar above is the deck's
-       one set of controls. */
-    expect(frame.getAttribute('src')).toBe('/file?path=%2Frepo%2Fdeck.pptx&render=pdf#toolbar=0&navpanes=0&view=FitH')
-    expect(frame.hasAttribute('sandbox')).toBe(false)
-    expect(frame.closest('.fview')!.classList.contains('workspace-fill')).toBe(true)
-    expect(screen.queryByText('gui.ws.file_rendering')).not.toBeNull()
-    await act(async () => { frame.dispatchEvent(new Event('load')) })
+    /* Not framed. Safari does not draw a framed PDF served under the sandbox
+       policy these files carry, and that policy is what keeps an agent's
+       document away from the page's cookie and socket, so the pictures are
+       what changed rather than the header. */
+    expect(document.querySelector('.fview iframe')).toBeNull()
+    const pages = [...document.querySelectorAll('img.workspace-page')]
+    expect(pages.map((i) => i.getAttribute('src'))).toEqual([
+      '/file?path=%2Frepo%2Fdeck.pptx&render=page&p=1',
+      '/file?path=%2Frepo%2Fdeck.pptx&render=page&p=2',
+      '/file?path=%2Frepo%2Fdeck.pptx&render=page&p=3',
+    ])
+    /* The first is already fetched; the rest arrive as the reader reaches them,
+       and each one is a render on the gateway the first time it is asked for. */
+    expect(pages.map((i) => i.getAttribute('loading'))).toEqual(['eager', 'lazy', 'lazy'])
+    expect(document.querySelector('.workspace-pages')!.closest('.fview')!
+      .classList.contains('workspace-fill')).toBe(true)
     expect(screen.queryByText('gui.ws.file_rendering')).toBeNull()
-    /* Two controls, in words: the deck's own bytes, and its folder. */
-    expect(screen.queryByLabelText('gui.ws.file_newtab')).toBeNull()
-    const save = screen.getByText('gui.ws.download') as HTMLAnchorElement
-    expect(save.getAttribute('href')).toBe('/file?path=%2Frepo%2Fdeck.pptx')
-    expect(save.getAttribute('download')).toBe('deck.pptx')
-    expect(screen.getByRole('button', { name: /gui\.ws\.reveal_/ })).toBeTruthy()
-    expect(screen.queryByText('gui.ws.open')).toBeNull()
   })
 
-  it('reframes a deck delivered again under the same path', async () => {
+  it('says it is rendering until the gateway answers, and quotes a refusal', async () => {
     install(emptyWs({ file: { ...deckFile } }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
-    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, status: 200, statusText: 'OK', body: { cancel: vi.fn() } }))
+    vi.stubGlobal('fetch', () => Promise.resolve({
+      ok: false, status: 503, statusText: 'Service Unavailable',
+      text: () => Promise.resolve('LibreOffice is not installed on the gateway host'),
+    }))
+    await mount()
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    expect(document.querySelectorAll('img.workspace-page')).toHaveLength(0)
+    expect(screen.queryByText(/LibreOffice is not installed/)).not.toBeNull()
+  })
+
+  it('redraws a deck delivered again under the same path', async () => {
+    install(emptyWs({ file: { ...deckFile } }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    vi.stubGlobal('fetch', () => Promise.resolve({
+      ok: true, status: 200, statusText: 'OK', body: { cancel: vi.fn() },
+      headers: { get: () => '1' },
+    }))
     const delivered = (token: string, size: number, at: number): unknown => ({ raven_delivery: {
       files: [{ path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck', download_path: `/files/download?token=${token}`, size }],
       delivered_at: at,
@@ -443,34 +464,33 @@ describe('workspace island', () => {
     deliveries.record(deliveries.SESSION, 1, delivered('one', 9, 1000))
     await mount()
     await act(async () => { await Promise.resolve() })
-    const first = (document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('src')
-    expect(first).toContain('&v=1000#')
+    expect(document.querySelector('img.workspace-page')!.getAttribute('src')).toContain('&v=1000')
     await act(async () => {
       deliveries.record(deliveries.SESSION, 2, delivered('two', 11, 2000))
       await Promise.resolve()
     })
     await act(async () => { await Promise.resolve() })
-    const again = (document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('src')
-    expect(again).toContain('&v=2000#')
+    expect(document.querySelector('img.workspace-page')!.getAttribute('src')).toContain('&v=2000')
   })
 
-  it('prefers the delivery route for saving a delivered deck', async () => {
+  it('gives a delivered deck the same bar as any other file', async () => {
     install(emptyWs({ file: { ...deckFile } }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
     deliveries.seed([{ path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck',
                        download_path: '/files/download?token=deck', size: 9 }])
     await mount()
-    const save = screen.getByText('gui.ws.download') as HTMLAnchorElement
-    expect(save.getAttribute('href')).toBe('/files/download?token=deck')
+    expect(screen.queryByLabelText('gui.ws.download')).toBeNull()
+    expect(document.querySelector('.fbar .kseg')).not.toBeNull()
   })
 
-  it('keeps the deck bar to download and the folder even when the gateway is this desktop', async () => {
+  it('keeps the deck bar as it is even when the gateway is this desktop', async () => {
     install(emptyWs({ file: { ...deckFile } }), {
       canBrowse: true,
       hostIsLocal: () => true,
       openIn: async () => ({}),
     }, { tab: 'file', open: true, picked: true })
     await mount()
-    expect(screen.getByText('gui.ws.download')).toBeTruthy()
+    expect(screen.queryByLabelText('gui.ws.download')).toBeNull()
+    expect(document.querySelector('.fbar .kseg')).not.toBeNull()
     expect(screen.getByRole('button', { name: /gui\.ws\.reveal_/ })).toBeTruthy()
     expect(screen.queryByText('gui.ws.open')).toBeNull()
     expect(screen.queryByLabelText('gui.ws.open_with_pick')).toBeNull()

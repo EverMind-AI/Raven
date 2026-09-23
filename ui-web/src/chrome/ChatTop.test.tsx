@@ -73,7 +73,7 @@ describe('the chat column chrome', () => {
     render()
     expect(Array.from(top().children).map((child) => child.id || child.className)).toEqual([
       'title',
-      'renameBtn',
+      'wdTag',
       'spacer',
       'wsBtn',
     ])
@@ -91,7 +91,7 @@ describe('the chat column chrome', () => {
 
   it('renders every id the chrome, the islands and the writers reach for, once each', () => {
     render()
-    for (const id of ['title', 'renameBtn', 'wsBtn', 'wsBdg', 'bannerHost', 'flash', 'stage']) {
+    for (const id of ['title', 'wdTag', 'wsBtn', 'wsBdg', 'bannerHost', 'flash', 'stage']) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
   })
@@ -129,16 +129,30 @@ describe('the chat column chrome', () => {
     }
   })
 
-  it('renames from the header button, and leaves it exactly one handler', () => {
+  it('renames on a click on the name itself, and on nothing else in the row', () => {
     render()
     act(() => {
-      el('renameBtn').click()
+      el('title').click()
     })
     expect(renames.n).toBe(1)
-    /* React leaves an empty onclick on every element it takes a click of (the
-       trap that makes clicks fire on iOS), so a second, imperative handler
-       would run beside this one rather than replace it. */
-    expect(el('renameBtn').onclick).not.toBe(null)
+    /* The row takes the click, not the heading: the rename swaps the heading
+       for an input and puts a fresh one back, and a handler on the node React
+       rendered would be gone with it after the first edit. */
+    expect(el('title').onclick).toBe(null)
+    expect(typeof document.querySelector<HTMLElement>('.top')!.onclick).toBe('function')
+    act(() => {
+      el('wsBtn').click()
+    })
+    expect(renames.n).toBe(1)
+    /* A heading put back by the rename is still the control. */
+    const again = document.createElement('h1')
+    again.id = 'title'
+    again.textContent = 'renamed'
+    el('title').replaceWith(again)
+    act(() => {
+      el('title').click()
+    })
+    expect(renames.n).toBe(2)
   })
 })
 

@@ -256,6 +256,10 @@ export interface TranscriptMessage {
    * The files that call made vanish, on its role='tool' entry. Absent when it removed none.
    */
   file_removed?: TranscriptFileRemoval[];
+  /**
+   * The files a stored command left behind, on its role='tool' entry. The same shape the live event carried: a size and a line count are what a reloaded page needs, so unlike a removal there is nothing to reduce.
+   */
+  file_written?: FileWritten[];
   turn_ended?: TranscriptTurnEnded;
   notice?: TranscriptNotice;
   /**
@@ -292,6 +296,30 @@ export interface TranscriptFileRemoval {
    * Lines the file held when it went; 0 when unknown.
    */
   del: number;
+}
+/**
+ * One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FileWritten".
+ */
+export interface FileWritten {
+  /**
+   * Absolute path of the file the command wrote.
+   */
+  path: string;
+  /**
+   * Whether the file was new. False means it was there before the command and is different after, which a client draws as a rewrite rather than an addition.
+   */
+  created: boolean;
+  /**
+   * The file's size in bytes after the command.
+   */
+  size: number;
+  /**
+   * Lines in a created file, when it could be counted. Null, not absent: the key is always sent, and null says the count is unknown. Too large to read, not text, or a file that already existed, whose change therefore has no number.
+   */
+  lines?: number | null;
 }
 /**
  * Why a turn's transcript stops where it does.
@@ -1084,6 +1112,10 @@ export interface ModelOptionProvider {
    * The registry's is_gateway: resells other vendors' models under vendor/model ids. The catalogue's gateway filter reads this; absent means false.
    */
   gateway?: boolean;
+  /**
+   * Every model-id prefix that names this provider: its own name plus the ones it used to answer to (ProviderSpec.route_names). A client comparing two spellings of one model strips any of them, the way providers/wire.py's merge_key does. Absent means the provider's own name alone.
+   */
+  route_names?: string[];
   platforms?: {
     label: string;
     api_base: string;
@@ -1507,13 +1539,18 @@ export interface NoticeEvent {
   type: 'notice';
   payload: {
     /**
-     * Which runtime decision this reports; `action_blocked` today.
+     * Which runtime decision this reports: `action_blocked`, `llm_retry` or `organ_degraded`.
      */
     kind: string;
     /**
-     * The blocking tool's own first line, when it gave one.
+     * What `kind` says it is: the blocking tool's own first line, the failed call's error category, or the organ that dropped out.
      */
     detail?: string;
+    /**
+     * True when the turn is still running and the next frame of output replaces this: draw it as a status, not as a row. False means it stands in for the answer.
+     */
+    transient?: boolean;
+    target?: DirectTarget;
   };
 }
 /**
@@ -1629,6 +1666,10 @@ export interface ToolCompleteEvent {
      * The files this call made vanish. Absent on every call that removed nothing, which is nearly all of them.
      */
     file_removed?: FileRemoval[];
+    /**
+     * The files a command left behind, which no tool result names. Absent on every call that is not a command, and on a command that changed no file.
+     */
+    file_written?: FileWritten[];
   };
 }
 /**
@@ -1868,6 +1909,18 @@ export interface DagNodeDetail {
 export interface DagRunStartedEvent {
   type: 'dag.run_started';
   payload: {
+    /**
+     * The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.
+     */
+    stint_id?: string;
+    /**
+     * Which round of that run this graph is, counting from one.
+     */
+    round_index?: number;
+    /**
+     * Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening the run. Absent when the dispatcher did not say.
+     */
+    round_budget?: number;
     run_id: string;
     /**
      * The call this run belongs to. Absent on hosts that do not correlate progress with a tool row.
@@ -1901,6 +1954,18 @@ export interface DagRunStartedEvent {
 export interface DagNodeUpdatedEvent {
   type: 'dag.node_updated';
   payload: {
+    /**
+     * The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.
+     */
+    stint_id?: string;
+    /**
+     * Which round of that run this graph is, counting from one.
+     */
+    round_index?: number;
+    /**
+     * Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening the run. Absent when the dispatcher did not say.
+     */
+    round_budget?: number;
     run_id: string;
     tool_call_id?: string;
     node: string;
@@ -1949,6 +2014,18 @@ export interface DagNodeStalledEvent {
 export interface DagRunCompletedEvent {
   type: 'dag.run_completed';
   payload: {
+    /**
+     * The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.
+     */
+    stint_id?: string;
+    /**
+     * Which round of that run this graph is, counting from one.
+     */
+    round_index?: number;
+    /**
+     * Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening the run. Absent when the dispatcher did not say.
+     */
+    round_budget?: number;
     run_id: string;
     tool_call_id?: string;
     dir: string;
@@ -2094,7 +2171,7 @@ export interface PlaybookRow {
   name: string;
   description: string;
   task_summary: string;
-  mode: 'dag' | 'prompt';
+  mode: 'dag' | 'prompt' | 'stint';
   confirm: boolean;
   origin: string;
   disabled: boolean;
@@ -2139,9 +2216,7 @@ export interface PlaybookNode {
   };
 }
 /**
- * One whole playbook: its identity, its runtime inputs, and either the graph
- * (``mode: dag``) or the assembly guidance a model turns into one
- * (``mode: prompt``). ``path`` is the file this was read from.
+ * One whole playbook: its identity, its runtime inputs, and the shape it runs as -- the graph (``mode: dag``), the assembly guidance a model turns into one (``mode: prompt``), or the roles and stopping rules of a multi-round run (``mode: stint``, under ``rounds``). ``path`` is the file this was read from.
  *
  * ``version`` is the spec format version the file declares, not a revision of
  * the playbook's content.
@@ -2154,7 +2229,7 @@ export interface PlaybookDetail {
   description: string;
   task_summary: string;
   version: number;
-  mode: 'dag' | 'prompt';
+  mode: 'dag' | 'prompt' | 'stint';
   confirm: boolean;
   origin: string;
   disabled: boolean;
@@ -2168,6 +2243,7 @@ export interface PlaybookDetail {
   mcp_servers?: {
     [k: string]: PlaybookMcpServer;
   };
+  stint?: PlaybookStint;
 }
 /**
  * One MCP server the playbook itself carries, as the file declares it. Carries every field the runtime reads to decide what the server is and whether it runs. `env` and `headers` are declarations rather than resolved values: a carried server references a credential through `{{ params.X }}` and the run supplies it, so nothing here is ever a secret's value, and `has_oauth_config` says only whether the file declares OAuth endpoints, never what they are.
@@ -2190,6 +2266,65 @@ export interface PlaybookMcpServer {
   enabled?: boolean;
   auth?: 'none' | 'apikey' | 'oauth';
   has_oauth_config?: boolean;
+}
+/**
+ * What `mode: stint` adds to a playbook, and what a person approving one has to be able to read: who runs, what each may write, which commands run, and when it stops. Absent on every other mode.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybookStint".
+ */
+export interface PlaybookStint {
+  roles: PlaybookRole[];
+  carried: PlaybookCarried[];
+  checks: PlaybookCheck[];
+  max_rounds: number;
+  until: string;
+  report: 'round' | 'end';
+}
+/**
+ * One role of a `mode: stint` playbook: who plays it, what it waits on, and the paths it is judged against. `terminal` marks a role nothing else waits on -- the only kind whose output the plan reads when deciding whether to open another round, and so the only kind that can end one early.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybookRole".
+ */
+export interface PlaybookRole {
+  label: string;
+  agent: string;
+  node_summary: string;
+  depends_on: string[];
+  owns: string[];
+  appends: string[];
+  reads: string[];
+  enforce_read: 'soft' | 'hard';
+  enforce_write: 'soft' | 'hard';
+  journal_section: string;
+  verify_after: string[];
+  max_handbacks: number;
+  terminal: boolean;
+}
+/**
+ * A file rounds hand to each other. `append` marks the journal: the one that may only grow, and the one a window of `recent_rounds` is read back from.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybookCarried".
+ */
+export interface PlaybookCarried {
+  path: string;
+  append: boolean;
+  recent_rounds: number;
+  max_chars: number;
+}
+/**
+ * One objective check a round may run. `run` is a real shell command, which is why a playbook that declares any must be approved before it starts.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybookCheck".
+ */
+export interface PlaybookCheck {
+  name: string;
+  run: string;
+  timeout_sec: number;
+  needs_display: boolean;
 }
 /**
  * One `secret` param of a playbook and whether this machine holds a value for it. Never the value.
@@ -2396,6 +2531,97 @@ export interface TaskRow {
   handle?: string | null;
   counts: TaskCounts;
   nodes: TaskNode[];
+}
+/**
+ * One round of a plan, as the list needs it.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "StintRoundRow".
+ */
+export interface StintRoundRow {
+  index: number;
+  run_id: string;
+  attempt: number;
+  status: string;
+  checks: string[];
+  violations: string[];
+}
+/**
+ * Something a round asked a person, and what came back.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "StintQuestionRow".
+ */
+export interface StintQuestionRow {
+  round: number;
+  role: string;
+  text: string;
+  answer: string;
+}
+/**
+ * One multi-round run a rounds playbook started.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "StintRow".
+ */
+export interface StintRow {
+  stint_id: string;
+  playbook: string;
+  round_index: number;
+  max_rounds: number;
+  status: string;
+  live: boolean;
+  /**
+   * Not over: running, interrupted or paused. What `stop` acts on.
+   */
+  unfinished: boolean;
+  stop_reason: string;
+  workdir: string;
+  branch: string;
+  started_at_ms: number;
+  ended_at_ms: number;
+  open_questions: number;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "StintDetail".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsGetResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsStopResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsAnswerResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsPauseResult".
+ */
+export interface StintDetail {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+}
+/**
+ * A stint after a verb opened a round in this engine, with what the driver said about it.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "StintTakeUp".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsResumeResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsExtendResult".
+ */
+export interface StintTakeUp {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+  reply: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4576,6 +4802,25 @@ export interface FsDirsResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsPickDirParams".
+ */
+export interface FsPickDirParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsPickDirResult".
+ */
+export interface FsPickDirResult {
+  /**
+   * The folder chosen, absolute and resolved; absent when the dialog was dismissed.
+   */
+  path?: string;
+  /**
+   * Whether a session may be pinned to the chosen folder (see raven.agent.workdir); false with no path.
+   */
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "FsReadParams".
  */
 export interface FsReadParams {
@@ -5186,6 +5431,7 @@ export interface ClarifyRespondParams {
   answer: string;
   request_id?: string;
   conversation_id?: string;
+  answers?: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -6359,6 +6605,67 @@ export interface ImportStopParams {}
 export interface ImportStopResult {
   stopped: boolean;
 }
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsListParams".
+ */
+export interface PlaybooksStintsListParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsListResult".
+ */
+export interface PlaybooksStintsListResult {
+  stints: StintRow[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsGetParams".
+ */
+export interface PlaybooksStintsGetParams {
+  stint_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsStopParams".
+ */
+export interface PlaybooksStintsStopParams {
+  stint_id: string;
+  /**
+   * Cut the round in flight short instead of letting it finish. Reaches only a round this process is running.
+   */
+  now?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsAnswerParams".
+ */
+export interface PlaybooksStintsAnswerParams {
+  stint_id: string;
+  question: number;
+  text: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsPauseParams".
+ */
+export interface PlaybooksStintsPauseParams {
+  stint_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsResumeParams".
+ */
+export interface PlaybooksStintsResumeParams {
+  stint_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsExtendParams".
+ */
+export interface PlaybooksStintsExtendParams {
+  stint_id: string;
+  rounds: number;
+}
 
 // ---- Schema-name aliases for structurally-deduplicated types ----
 export type BrowserManageResult = StubResult;
@@ -6368,6 +6675,12 @@ export type ImageAttachResult = StubResult;
 export type PlaybooksCredentialsClearResult = OkResult;
 export type PlaybooksCredentialsSetResult = OkResult;
 export type PlaybooksOauthClearResult = OkResult;
+export type PlaybooksStintsAnswerResult = StintDetail;
+export type PlaybooksStintsExtendResult = StintTakeUp;
+export type PlaybooksStintsGetResult = StintDetail;
+export type PlaybooksStintsPauseResult = StintDetail;
+export type PlaybooksStintsResumeResult = StintTakeUp;
+export type PlaybooksStintsStopResult = StintDetail;
 export type ProcessStopResult = StubResult;
 export type PromptBackgroundResult = StubResult;
 export type PromptSubmitResult = StubResult;

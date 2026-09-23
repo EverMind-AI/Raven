@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from raven.agent.tools.registry import ToolRegistry
@@ -961,3 +963,14 @@ def test_the_exec_prompt_shows_the_command_where_it_would_run(tmp_path) -> None:
     assert tool.approval_evidence({"command": "rm a"}) == {"command": "rm a", "cwd": str(tmp_path)}
     assert tool.approval_evidence({"command": "rm a", "working_dir": "/srv"}) == {"command": "rm a", "cwd": "/srv"}
     assert tool.approval_evidence({"command": "rm a", "machine": "prod"}) == {"command": "rm a", "machine": "prod"}
+
+
+def test_the_listing_root_is_where_the_command_would_run(tmp_path) -> None:
+    """The directory listed around a command has to be the one the command ran
+    in, or the listing describes a tree the command never touched: a per-call
+    ``working_dir`` moves it, and a registered machine takes it off this disk."""
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    assert tool.listing_root({"command": "make"}) == tmp_path
+    assert tool.listing_root({"command": "make", "working_dir": "/srv"}) == Path("/srv")
+    assert tool.listing_root({"command": "make", "machine": "prod"}) is None

@@ -2,16 +2,15 @@
 /* Everything that sits at the body rather than inside a page, and the order it
  * sits in.
  *
- * Two steps of the `--z` ladder in src/styles/page.css are deliberate ties --
- * `--z-shade` with `--z-tip` at 90, and `--z-picker` with the inline 46 the two
- * composer popovers set -- so for those four elements the DOM order at the body
- * is the whole of the stacking decision. The order is declared in
+ * One step of the `--z` ladder in src/styles/page.css is a deliberate tie --
+ * `--z-shade` with `--z-tip` at 90 -- so for those two elements the DOM order
+ * at the body is the whole of the stacking decision. The order is declared in
  * src/state/portals.ts, which is also what hands out the four standing layers,
- * and if that table says one thing while the page does another the ties flip
+ * and if that table says one thing while the page does another the tie flips
  * with no test and no pixel to catch it. This file reads the table against the
- * page: the boot goldens, the markup, the two popovers that reparent
- * themselves, and the body while every overlay is up. The table's own accessor
- * has its own test beside it (src/state/portals.test.ts).
+ * page: the boot goldens, the markup, the popover that stays in its card, and
+ * the body while every overlay is up. The table's own accessor has its own
+ * test beside it (src/state/portals.test.ts).
  */
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
@@ -21,16 +20,15 @@ import { resetTranslator, setTranslator } from '../i18n/t'
 import * as session from '../lib/session'
 import * as confirm from '../state/confirm'
 import * as menu from '../state/menu'
+import * as perm from '../state/perm'
 import { BOOT_BODY_ORDER, LAYERS, PORTALS, _resetForTests as resetLayers, host } from '../state/portals'
-import { resetSources, setSources } from '../state/sources'
-import * as tier from '../state/tier'
+import { resetSources } from '../state/sources'
 import * as toast from '../state/toast'
 import * as tip from '../state/tooltip'
 import * as upgrade from '../state/upgradeShade'
 import { bodySiblings } from './domSnapshot'
 import { mountPageRoot } from './pageRoot'
 
-import type { TierReply, TierSource } from '../state/tier'
 
 const source = (path: string): string => readFileSync(path, 'utf8') as string
 
@@ -79,9 +77,9 @@ function bootedPage(): { doc: Document; unmount: () => void } {
 }
 
 describe('the portal table', () => {
-  it('lists thirteen hosts and no two of them twice', () => {
-    expect(PORTALS).toHaveLength(13)
-    expect(new Set(PORTALS.map((p) => p.id)).size).toBe(13)
+  it('lists eleven hosts and no two of them twice', () => {
+    expect(PORTALS).toHaveLength(11)
+    expect(new Set(PORTALS.map((p) => p.id)).size).toBe(11)
   })
 
   /* Standing hosts: at the body from the page root's first commit, and the
@@ -164,12 +162,12 @@ describe('the portal table', () => {
     }
   })
 
-  it('gives the model picker a place before the two popovers, breaking the tie at 46', () => {
+  it('gives the model picker its place among the standing layers, and reparents nothing', () => {
     const picker = PORTALS.find((p) => p.id === 'pickHost')!
     expect(picker.at).toBe(11)
-    for (const id of ['#permPop', '#tierPop']) {
-      expect(PORTALS.find((p) => p.id === id)!.at).toBe('last')
-    }
+    /* The composer's popovers hang off their chips with the stylesheet now, so
+       no portal leaves the card it was born in. */
+    expect(PORTALS.filter((p) => p.kind === 'reparent')).toEqual([])
   })
 
   /* The page's own root appends its regions to the body, after the three
@@ -224,48 +222,34 @@ describe('the portal table', () => {
     }
   })
 
-  it('starts the two popovers inside the composer card', () => {
+  it('renders the permission popover inside the composer card, beside its chip', () => {
     const { doc, unmount } = bootedPage()
     try {
-      for (const id of ['permPop', 'tierPop']) {
-        const el = doc.getElementById(id)
-        expect(el, `#${id} is not rendered`).toBeTruthy()
-        expect(el!.parentElement!.className).toBe('dock-in')
-      }
+      const el = doc.getElementById('permPop')
+      expect(el, '#permPop is not rendered').toBeTruthy()
+      expect(el!.closest('.dock-in')).not.toBeNull()
+      expect(el!.previousElementSibling!.id).toBe('permChip')
     } finally {
       unmount()
     }
   })
 })
 
-/* The reparenting itself, on the live module rather than on the markup: the
-   fixture is tier.test.ts's, which is the band the popover is rendered into
-   (src/chrome/TierPopover.tsx) -- the composer card comes with it, and the card is
-   what the popover has to open clear of. */
+/* The popover stays put, on the live module rather than on the markup: the
+   permission popover is rendered beside its chip (src/chrome/PermPopover.tsx)
+   and hangs off it with the stylesheet, so an open moves nothing. */
 describe('a popover that has been opened', () => {
-  const MENU = [
-    { id: 'medium', name: 'Medium', description: 'The least effort a sub-agent is asked for.' },
-    { id: 'high', name: 'High', description: 'The middle amount of effort, between the other two.' },
-    { id: 'max', name: 'Max', description: 'The most effort a sub-agent is asked for.' },
-  ]
-
   let unmount = (): void => {}
 
   async function open(): Promise<HTMLElement> {
     setTranslator((key) => key)
     document.body.innerHTML = '<div class="dock"></div>'
-    tier._resetForTests()
+    perm._resetForTests()
     session._resetForTests()
     session.setCurrent('cli:one')
-    const src: TierSource = {
-      read: async (): Promise<TierReply> => ({ mode: 'high', availableModes: MENU }),
-      set: async (mode): Promise<TierReply> => ({ mode: mode ?? 'high', availableModes: MENU }),
-    }
-    setSources({ tier: src })
     unmount = mountPageRoot()
-    await tier.load()
-    tier.open()
-    return document.getElementById('tierPop')!
+    perm.open()
+    return document.getElementById('permPop')!
   }
 
   function reset(): void {
@@ -273,27 +257,19 @@ describe('a popover that has been opened', () => {
     unmount = () => {}
     resetTranslator()
     document.body.innerHTML = ''
-    tier._resetForTests()
+    perm._resetForTests()
     session._resetForTests()
     resetSources()
   }
 
-  it('hangs off the body, last of its children', async () => {
+  it('stays in the card, open and closed, and adds nothing to the body', async () => {
     try {
       const pop = await open()
-      expect(pop.parentElement).toBe(document.body)
-      expect(document.body.lastElementChild).toBe(pop)
-      expect(bodySiblings()).toContain('div#tierPop.pop[data-open=true]')
-    } finally {
-      reset()
-    }
-  })
-
-  it('stays there when it closes -- the move is once, not per open', async () => {
-    try {
-      const pop = await open()
-      tier.close()
-      expect(pop.parentElement).toBe(document.body)
+      expect(pop.dataset.open).toBe('true')
+      expect(pop.closest('.dock-in')).not.toBeNull()
+      expect(bodySiblings().some((line) => line.startsWith('div#permPop'))).toBe(false)
+      perm.close()
+      expect(pop.closest('.dock-in')).not.toBeNull()
       expect(pop.dataset.open).toBe('false')
     } finally {
       reset()

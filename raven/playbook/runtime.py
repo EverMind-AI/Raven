@@ -311,6 +311,11 @@ class PlaybookRuntime:
         return self._executor.dag_tool
 
     @property
+    def rounds(self) -> Any:
+        """The multi-round driver, for a host verb that takes a stint up in this process."""
+        return self._executor.rounds
+
+    @property
     def empty(self) -> bool:
         """Whether there is anything to offer. Disabled entries do not count:
         the tool exists to be called, and one that can only answer "that is
@@ -403,6 +408,7 @@ class PlaybookRuntime:
         *,
         allow_disabled: bool = False,
         confirmed: bool = False,
+        max_rounds: int | None = None,
     ) -> ExecutionPlan | None:
         """Load one playbook and act on it; ``None`` if the name is unknown.
 
@@ -416,7 +422,8 @@ class PlaybookRuntime:
         decision anyone downstream should be making.
 
         ``allow_disabled`` is for the CLI, where the user named the playbook
-        themselves.
+        themselves. ``max_rounds`` is for the caller who was told how long to
+        keep going; it means something only to a ``rounds`` playbook.
 
         ``confirmed`` is relayed to the executor, whose gate reads it as "this
         caller already put the run to the user". Passed through rather than
@@ -429,7 +436,9 @@ class PlaybookRuntime:
             return None
         cid = self._context.get("session_key") or ""
         key = (cid, name)
-        plan = await self._executor.execute(spec, params or {}, fills=fills or {}, confirmed=confirmed)
+        plan = await self._executor.execute(
+            spec, params or {}, fills=fills or {}, confirmed=confirmed, max_rounds=max_rounds
+        )
         if plan.kind == "gaps":
             rounds = self._gap_rounds.get(key, 0) + 1
             self._gap_rounds[key] = rounds

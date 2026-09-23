@@ -364,6 +364,43 @@ All notable changes to Raven are documented here.
   image model (Nano Banana and its kind) is asked for the requested frame through
   OpenRouter's `image_config.aspect_ratio`; before, it answered in its own default
   frame whatever ratio the caller asked for.
+- `mode: stint`: a playbook that takes many rounds instead of one. It declares
+  roles rather than nodes, and one round is one sub-agent graph, so a thirty-round
+  run is thirty graphs on the shared dispatch path -- each validated and charged
+  to the same hourly dispatch budget an ordinary graph is, approved once at the
+  start, and resumable by any process because the stint is a file. Roles hand over
+  through files in the project, not through a conversation: each opens a fresh one
+  every round.
+
+  What a role may write is declared in the playbook (`owns`, `appends`), rendered
+  into its prompt, and undone afterwards, with the file it
+  wrote kept under `violations/`. The undo reads the stage's own commits as well
+  as the worktree, so a role that commits a stray write is caught too.
+
+  `verify[]` runs real commands -- a build, a test run -- and a failure goes back
+  to the role that caused it with the failure text, up to `maxHandbacks`. Once
+  that budget is spent the round moves on with the failure on the record -- a
+  failed node would skip every role downstream, and a reviewer has to see a
+  failed build -- and the next round's prompt carries it.
+
+  A stint runs in a checkout of its own, cut from the project's head, so hours of
+  its commits do not collide with the conversation that started it.
+  `stop.maxRounds` defaults to 10 and is capped at 99; `stop.until` lets a role
+  end a stint early by reporting a marker on a line of its own. A round the
+  dispatch budget turns down pauses the stint rather than ending it, and says so.
+  A person can watch, extend, pause, stop, resume and answer questions from
+  `raven playbook stints ...`, the RPC surface and the page.
+
+- `raven playbook stint`: lay a project out for a stint (`init` writes `.stint/`:
+  a guard file per role, the shared prose, a link to the project's own
+  specification), and work the backlog its roles share (`task`, `ask`, `confirm`).
+
+- `raven agent --message-file` reads the turn's message from a file instead of
+  argv, and `raven agent --permission-mode ask|smart|full` binds the turn's
+  reading of the ask tier. Both are what an unattended driver needs: a prompt on
+  the command line is readable by every process on the box, and a one-shot has
+  nobody to ask when a tool call routes to approval.
+
 - The research agent's three modes are three stop rules rather than three sizes
   of one budget. `medium` may answer a settled general-knowledge question
   without searching: the first model call has the web tools withheld and a

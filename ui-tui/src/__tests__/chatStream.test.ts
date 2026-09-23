@@ -30,6 +30,12 @@ import { bindInstanceRefresh, resetInstanceRefresh, scheduleInstanceRefresh } fr
 import { turnController } from '../app/turnController.js'
 import { resetTurnState } from '../app/turnStore.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
+import { failedTurnLine } from '../domain/messages.js'
+
+// The catalogue sentences, spelled out rather than read back through the helper
+// under test: an expectation built from that helper moves with it.
+const STOPPED_BARE = 'Stopped by user'
+const STOPPED_KEPT = 'Stopped by user - the output above is kept'
 
 interface FakeRpc extends ChatStreamRpcClient {
   __pushEvent: (event: TurnEvent) => void
@@ -335,7 +341,7 @@ describe('createChatStream — cancel preserves streamed content', () => {
       payload: { code: -32000, message: 'cancelled', reason: 'cancelled_by_client' },
       type: 'error'
     })
-    expect(getUiState().status).toBe('interrupted')
+    expect(getUiState().status).toBe(STOPPED_BARE)
 
     // A second prompt inside the 800ms cooldown: the window must not outlive
     // the idle it was describing.
@@ -439,9 +445,10 @@ describe('createChatStream — cancel preserves streamed content', () => {
       payload: { code: -32000, message: 'cancelled', reason: 'cancelled_by_client' }
     })
 
-    // Content preserved exactly once; no spurious second interrupted sys note.
+    // Content preserved exactly once; the stop line said exactly once too.
     expect(appended.filter(m => m.role === 'assistant')).toHaveLength(1)
-    expect(sysCalls.filter(m => m === 'interrupted')).toHaveLength(0)
+    expect(appended.filter(m => m.text === STOPPED_KEPT)).toHaveLength(1)
+    expect(sysCalls.filter(m => m === STOPPED_BARE)).toHaveLength(0)
   })
 
   it('does not append an empty assistant message when nothing was streamed', async () => {
@@ -463,7 +470,9 @@ describe('createChatStream — cancel preserves streamed content', () => {
     stream.forceReset()
 
     expect(appended.some(m => m.role === 'assistant')).toBe(false)
-    expect(sysCalls).toContain('interrupted')
+    // The bare sentence: there is no output above for the other one to promise.
+    expect(sysCalls).toContain(STOPPED_BARE)
+    expect(sysCalls).not.toContain(STOPPED_KEPT)
   })
 })
 
@@ -905,7 +914,7 @@ describe('createChatStream — direct-chat routing', () => {
 
       stream.forceReset()
 
-      expect(getDirectTranscript(directKey(target.agent, target.handle)).map(m => m.text)).toContain('interrupted')
+      expect(getDirectTranscript(directKey(target.agent, target.handle)).map(m => m.text)).toContain(STOPPED_BARE)
       expect(appended).toHaveLength(0)
       expect(stream.isTurnActive()).toBe(false)
       expect(getDirectChat().running).toEqual([])
@@ -919,6 +928,65 @@ describe('createChatStream — direct-chat routing', () => {
     // silent and lands on whichever test schedules next.
     afterEach(() => {
       resetInstanceRefresh()
+    })
+
+    const failing = async () => {
+      const appended: Msg[] = []
+      const sysCalls: string[] = []
+      const fake = makeFakeRpc()
+      const stream = createChatStream({
+        appendMessage: m => appended.push(m),
+        rpcClient: fake,
+        sessionKey: 'tui:default',
+        sys: m => sysCalls.push(m)
+      })
+      await stream.attach()
+      const target = { agent: 'Raven-Code', handle: 'refactor-auth' }
+      enterDirect(target.agent, target.handle)
+      await stream.sendTo(target, 'fix it')
+
+      return { appended, fake, key: directKey(target.agent, target.handle), sysCalls, target }
+    }
+
+    it('words a failure the way the main lane does, on both transcripts', async () => {
+      const { fake, key, sysCalls, target } = await failing()
+      const detail = 'Error calling LLM (auth): 401 invalid api key'
+
+      fake.__pushEvent({ type: 'error', payload: { code: -32000, detail, message: 'turn_failed', target } })
+
+      const said = failedTurnLine(detail)
+
+      expect(getDirectTranscript(key).at(-1)).toMatchObject({ role: 'system', text: said })
+      // The main view is where the user is looking when a direct turn they left
+      // dies, so it gets the sentence rather than the wire code.
+      expect(sysCalls).toEqual([`${target.agent}/${target.handle}: ${said}`])
+      expect(sysCalls.join('')).not.toContain('turn_failed')
+    })
+
+    it('says whether a stopped direct turn kept what it had streamed', async () => {
+      const { fake, key, sysCalls, target } = await failing()
+
+      fake.__pushEvent({ type: 'token.delta', payload: { target, text: 'half an answer' } })
+      fake.__pushEvent({
+        type: 'error',
+        payload: { code: 499, message: 'cancelled', reason: 'cancelled_by_client', target }
+      })
+
+      expect(getDirectTranscript(key).at(-1)).toMatchObject({ role: 'system', text: STOPPED_KEPT })
+      // The main transcript holds none of the instance's output, so its echo
+      // must not promise that anything above it is kept.
+      expect(sysCalls).toEqual([`${target.agent}/${target.handle}: ${STOPPED_BARE}`])
+    })
+
+    it('makes no promise about output a stopped direct turn never produced', async () => {
+      const { fake, key, target } = await failing()
+
+      fake.__pushEvent({
+        type: 'error',
+        payload: { code: 499, message: 'cancelled', reason: 'cancelled_by_client', target }
+      })
+
+      expect(getDirectTranscript(key).at(-1)).toMatchObject({ role: 'system', text: STOPPED_BARE })
     })
 
     it('reads the record back, so the steps it just ran appear', async () => {

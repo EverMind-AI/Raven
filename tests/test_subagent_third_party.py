@@ -466,6 +466,27 @@ async def test_cli_backend_publishes_stdout_to_the_live_console(tmp_path: Path) 
     assert "watch me work" in did.console
 
 
+async def test_cli_backend_records_the_files_its_child_left_behind(tmp_path: Path) -> None:
+    """This lane sees nothing of what the child did -- no tool results, no
+    protocol -- so the only account of the files is the directory before the
+    process started against the directory after it exited."""
+    from raven.agent.subagent import activity
+
+    work = tmp_path / "ws"
+    work.mkdir()
+    (work / "seed.md").write_text("one\n", encoding="utf-8")
+    command = "sh -c \"printf 'a\\nb\\n' > made.txt; rm seed.md; echo done\""
+    be = CliAgentBackend(name="maker", command=command)
+    with activity.collecting() as did:
+        out = await be.run("make it", task_id="t-files", workspace=work, executor=None)
+
+    assert out == "done"
+    assert did.files == [
+        {"path": "made.txt", "op": "add", "add": 2, "del": 0, "size": 4},
+        {"path": "seed.md", "op": "delete", "add": 0, "del": 0, "size": None},
+    ]
+
+
 async def test_cli_backend_publishes_stderr_logs_to_the_live_console(tmp_path: Path) -> None:
     from raven.agent.subagent import activity
 
@@ -4205,3 +4226,91 @@ def test_the_modes_a_manager_reports_are_the_probes(tmp_path: Path, monkeypatch)
     assert [m.id for m in mgr.agent_modes("Researcher")] == ["fast", "deep"]
     assert mgr.agent_modes("claude_code") == ()
     assert mgr.agent_modes("nobody") == ()
+
+
+def test_a_credential_refusal_is_named_as_one_with_its_command() -> None:
+    """The connect path says what the reader can act on, not only what the agent said.
+
+    The agent's own words arrive as whatever prose its vendor chose inside a
+    JSON-RPC code, and the fact a reader needs -- installed, no credential -- is
+    never in them. This is the message measured from a live adapter against a
+    CLI whose own ``auth status`` reported ``loggedIn: false``.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.probe import _refusal_detail
+
+    said = (
+        "request failed: [-32603] Internal error: "
+        "Failed to authenticate: OAuth session expired and could not be refreshed."
+    )
+
+    known = _refusal_detail(SimpleNamespace(preset="claude_code"), said)
+    assert "no usable credential" in known
+    assert "auth login" in known, "the command is the whole point for a row that has one"
+    assert said in known, "the agent's own words stay as the evidence"
+
+    # A row whose sign-in command this repo does not know still gets the fact.
+    unknown = _refusal_detail(SimpleNamespace(preset="hermes"), said)
+    assert "no usable credential" in unknown
+    assert "sign in to it" in unknown
+    assert "`" not in unknown, "no command is better than a guessed one"
+
+
+def test_a_failure_that_is_not_about_credentials_keeps_its_own_words() -> None:
+    """Only the refusals that read as credential ones are renamed.
+
+    Everything else is reported as it came: a guess about what an unclassified
+    failure means would send a reader to fix the wrong thing.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.probe import _refusal_detail
+
+    for said in ("it started and then answered nothing", "connection ended (exit 127)"):
+        out = _refusal_detail(SimpleNamespace(preset="claude_code"), said)
+        assert out == said
+        assert "credential" not in out
+
+
+def test_the_connect_path_and_the_roster_ask_one_question() -> None:
+    """Both read the same rule, so they cannot disagree about one failure.
+
+    They did: the roster marked such a row "go and sign in" while the connect
+    button printed the raw error, because only one of them classified it.
+    """
+    from raven.acp_client.capabilities import looks_like_auth
+
+    said = "Failed to authenticate: OAuth session expired and could not be refreshed."
+    assert looks_like_auth(said)
+    assert not looks_like_auth("it started and then answered nothing")
+
+
+def test_the_sign_in_command_is_one_the_machine_can_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A shim row runs where the agent's CLI was never installed globally.
+
+    That setup is the one ``SHIM_REQUIRED_EXECUTABLES`` deliberately does not
+    hold these rows to: the adapter carries its own copy of the CLI as a
+    per-platform dependency and never links it onto PATH. Naming the bare
+    executable there would answer a credential failure with a second one --
+    ``command not found`` -- and leave the reader with no way out of the very
+    thing this message exists to explain. Both spellings end at the same
+    credential, which is the machine's rather than any one copy's.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.presets import SIGN_IN_HINTS
+
+    said = "Failed to authenticate: OAuth session expired and could not be refreshed."
+    hint = SIGN_IN_HINTS["claude_code"]
+    cfg = SimpleNamespace(preset="claude_code")
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/usr/local/bin/claude")
+    assert hint.local in probe_mod._refusal_detail(cfg, said)
+
+    # The supported clean setup: nothing of the agent's on PATH.
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    clean = probe_mod._refusal_detail(cfg, said)
+    assert hint.anywhere in clean
+    assert f"`{hint.local}`" not in clean, "a command that is not there to run is no better than a guess"

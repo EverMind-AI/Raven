@@ -493,8 +493,22 @@ class EpisodeStartEvent(_Strict):
 
 
 class NoticePayload(_Strict):
-    kind: str = Field(..., description="Which runtime decision this reports; `action_blocked` today.")
-    detail: str = Field("", description="The blocking tool's own first line, when it gave one.")
+    kind: str = Field(
+        ...,
+        description="Which runtime decision this reports: `action_blocked`, `llm_retry` or `organ_degraded`.",
+    )
+    detail: str = Field(
+        "",
+        description="What `kind` says it is: the blocking tool's own first line, the failed call's error category, or the organ that dropped out.",
+    )
+    transient: bool = Field(
+        False,
+        description=(
+            "True when the turn is still running and the next frame of output replaces this: "
+            "draw it as a status, not as a row. False means it stands in for the answer."
+        ),
+    )
+    target: DirectTarget | None = None
 
 
 class PermissionReviewPayload(_Strict):
@@ -620,6 +634,35 @@ class FileRemoval(_Strict):
     )
 
 
+class FileWritten(_Strict):
+    """One file a command left behind, found by listing its working directory.
+
+    Neither a :class:`FileChange` nor a :class:`FileRemoval`: a command reports
+    its output and nothing else, so what is known of the file is what two
+    listings of the directory said about it -- that it is there, how big it is,
+    and whether it was there before. No contents either way, because one command
+    can write a hundred files and a row draws none of their text.
+    """
+
+    path: str = Field(description="Absolute path of the file the command wrote.")
+    created: bool = Field(
+        description=(
+            "Whether the file was new. False means it was there before the command and is "
+            "different after, which a client draws as a rewrite rather than an addition."
+        )
+    )
+    size: int = Field(description="The file's size in bytes after the command.")
+    lines: int | None = Field(
+        default=None,
+        description=(
+            "Lines in a created file, when it could be counted. Null, not absent: the key is "
+            "always sent, and null says the count is unknown -- too large to read, not text, or "
+            "a file that already existed, whose old contents the listing never held and whose "
+            "change therefore has no number."
+        ),
+    )
+
+
 class ToolCompletePayload(_Strict):
     tool_call_id: str
     result_preview: str
@@ -645,6 +688,13 @@ class ToolCompletePayload(_Strict):
             "The files this call made vanish. Absent on every call that removed nothing, "
             "which is nearly all of them; nothing else on the wire records a deletion, "
             "since the file a command unlinked is gone by the time anyone can look."
+        ),
+    )
+    file_written: list[FileWritten] | None = Field(
+        default=None,
+        description=(
+            "The files a command left behind, which no tool result names. Absent on every "
+            "call that is not a command, and on a command that changed no file."
         ),
     )
 
@@ -794,6 +844,34 @@ class SubagentStatusEvent(_Strict):
 DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "exception"]
 
 
+class _FromAStint(_Strict):
+    """The three fields a round of a stint adds to a graph's progress.
+
+    A stint dispatches one ordinary graph a round, so every dag event it causes
+    is an ordinary dag event plus these. Absent on the graphs a tool call
+    dispatched, which is most of them -- a reader that does not know the fields
+    sees exactly what it saw before.
+    """
+
+    stint_id: str | None = Field(
+        default=None,
+        description=(
+            "The multi-round run this graph is one round of. Absent on an ordinary graph, "
+            "which is every graph a tool call dispatched."
+        ),
+    )
+    round_index: int | None = Field(
+        default=None, description="Which round of that run this graph is, counting from one."
+    )
+    round_budget: int | None = Field(
+        default=None,
+        description=(
+            'Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening '
+            "the run. Absent when the dispatcher did not say."
+        ),
+    )
+
+
 class DagRunStartedNode(_Strict):
     id: str
     subagent: str
@@ -802,7 +880,7 @@ class DagRunStartedNode(_Strict):
     node_summary: str | None = None
 
 
-class DagRunStartedPayload(_Strict):
+class DagRunStartedPayload(_FromAStint):
     run_id: str
     tool_call_id: str | None = None
     task_summary: str | None = Field(
@@ -820,7 +898,7 @@ class DagRunStartedEvent(_Strict):
     payload: DagRunStartedPayload
 
 
-class DagNodeUpdatedPayload(_Strict):
+class DagNodeUpdatedPayload(_FromAStint):
     run_id: str
     tool_call_id: str | None = None
     node: str
@@ -877,7 +955,7 @@ class DagRunFile(_Strict):
     error: str | None = None
 
 
-class DagRunCompletedPayload(_Strict):
+class DagRunCompletedPayload(_FromAStint):
     run_id: str
     tool_call_id: str | None = None
     dir: str
@@ -1738,6 +1816,13 @@ class ModelOptionProvider(_Strict):
     #: vendor/model ids. The catalogue's filter reads it; no client can derive
     #: it from a slug.
     gateway: bool = False
+    #: Every model-id prefix that names this provider: its own name plus the
+    #: ones it used to answer to (``ProviderSpec.route_names``). A client
+    #: comparing two spellings of one model has to strip any of them, the way
+    #: ``providers/wire.py``'s ``merge_key`` does, and that spec says to compare
+    #: against this set rather than rebuild it -- so it travels rather than
+    #: being mirrored per surface.
+    route_names: list[str] = Field(default_factory=list)
     #: Addresses to pick between, empty for the providers that have only one.
     #: A row that states these is drawn with the list in place of a host field.
     platforms: list[ModelOptionPlatform] = Field(default_factory=list)
@@ -3174,6 +3259,14 @@ class TranscriptMessage(_Strict):
         default=None,
         description="The files that call made vanish, on its role='tool' entry. Absent when it removed none.",
     )
+    file_written: list[FileWritten] | None = Field(
+        default=None,
+        description=(
+            "The files a stored command left behind, on its role='tool' entry. The same shape "
+            "the live event carried: a size and a line count are what a reloaded page needs, so "
+            "unlike a removal there is nothing to reduce."
+        ),
+    )
     turn_ended: TranscriptTurnEnded | None = Field(
         default=None,
         description="Present on the closing entry of a turn that was cancelled or died: why the transcript stops.",
@@ -3718,6 +3811,20 @@ class FsDirsResult(_Strict):
     )
 
 
+class FsPickDirParams(_Strict):
+    pass
+
+
+class FsPickDirResult(_Strict):
+    path: str | None = Field(
+        None, description="The folder chosen, absolute and resolved; absent when the dialog was dismissed."
+    )
+    ok: bool = Field(
+        ...,
+        description="Whether a session may be pinned to the chosen folder (see raven.agent.workdir); false with no path.",
+    )
+
+
 class FsReadParams(_Strict):
     path: str
     max_bytes: int | None = None
@@ -3960,6 +4067,14 @@ class ClarifyRespondParams(_Strict):
     answer: str
     request_id: str | None = None
     conversation_id: str | None = None
+    answers: list[str] | None = Field(
+        default=None,
+        description=(
+            "The whole batch's answers, aligned with the request's `batch`, from a surface that "
+            "collected them as one form; entries after the pending question's index answer the "
+            "later questions without another round trip."
+        ),
+    )
 
 
 class ClarifyRespondResult(_Strict):
@@ -4526,7 +4641,7 @@ class PlaybookRow(_Strict):
     name: str
     description: str
     task_summary: str
-    mode: Literal["dag", "prompt"]
+    mode: Literal["dag", "prompt", "stint"]
     confirm: bool
     origin: str
     disabled: bool
@@ -4598,10 +4713,68 @@ class PlaybookNode(_Strict):
     inputs: dict[str, Any]
 
 
+class PlaybookRole(_Strict):
+    """One role of a ``mode: stint`` playbook: who plays it, what it waits on,
+    and the paths it is judged against. ``terminal`` marks a role nothing else
+    waits on -- the only kind whose output the plan reads when deciding whether
+    to open another round, and so the only kind that can end one early."""
+
+    label: str
+    agent: str
+    node_summary: str
+    depends_on: list[str]
+    owns: list[str]
+    appends: list[str]
+    reads: list[str]
+    enforce_read: Literal["soft", "hard"]
+    enforce_write: Literal["soft", "hard"]
+    journal_section: str
+    verify_after: list[str]
+    max_handbacks: int
+    terminal: bool
+
+
+class PlaybookCheck(_Strict):
+    """One objective check a round may run. ``run`` is a real shell command,
+    which is why a playbook that declares any must be approved before it
+    starts."""
+
+    name: str
+    run: str
+    timeout_sec: float
+    needs_display: bool
+
+
+class PlaybookCarried(_Strict):
+    """A file rounds hand to each other. ``append`` marks the journal: the one
+    that may only grow, and the one a window of ``recent_rounds`` is read back
+    from."""
+
+    path: str
+    append: bool
+    recent_rounds: int
+    max_chars: int
+
+
+class PlaybookStint(_Strict):
+    """What ``mode: stint`` adds to a playbook, and what a person approving one
+    has to be able to read: who runs, what each may write, which commands run,
+    and when it stops. Absent on every other mode."""
+
+    roles: list[PlaybookRole]
+    carried: list[PlaybookCarried]
+    checks: list[PlaybookCheck]
+    max_rounds: int
+    until: str
+    report: Literal["round", "end"]
+
+
 class PlaybookDetail(_Strict):
-    """One whole playbook: its identity, its runtime inputs, and either the graph
-    (``mode: dag``) or the assembly guidance a model turns into one
-    (``mode: prompt``). ``path`` is the file this was read from.
+    """One whole playbook: its identity, its runtime inputs, and the shape it
+    runs as -- the graph (``mode: dag``), the assembly guidance a model turns
+    into one (``mode: prompt``), or the roles and stopping rules of a
+    multi-round run (``mode: stint``, under ``stint``). ``path`` is the file
+    this was read from.
 
     ``version`` is the spec format version the file declares, not a revision of
     the playbook's content."""
@@ -4610,7 +4783,7 @@ class PlaybookDetail(_Strict):
     description: str
     task_summary: str
     version: int
-    mode: Literal["dag", "prompt"]
+    mode: Literal["dag", "prompt", "stint"]
     confirm: bool
     origin: str
     disabled: bool
@@ -4624,6 +4797,10 @@ class PlaybookDetail(_Strict):
 
     Empty for a playbook that names only servers the host configures, which is
     most of them."""
+    stint: PlaybookStint | None = None
+    """Present only on ``mode: stint``. Absent rather than empty: an empty one
+    reads as a plan with no roles, no checks and a budget of zero, which is
+    three statements about a plan that does not exist."""
 
 
 class PlaybooksListParams(_Strict):
@@ -4636,6 +4813,107 @@ class PlaybooksListResult(_Strict):
 
 class PlaybooksGetParams(_Strict):
     name: str
+
+
+class StintRoundRow(_Strict):
+    """One round of a plan, as the list needs it."""
+
+    index: int
+    run_id: str
+    attempt: int
+    status: str
+    checks: list[str]
+    """``<name>=<status>`` per check the round ran, in the order they ran."""
+    violations: list[str]
+
+
+class StintQuestionRow(_Strict):
+    """Something a round asked a person, and what came back."""
+
+    round: int
+    role: str
+    text: str
+    answer: str
+
+
+class StintRow(_Strict):
+    """One multi-round run, as the list needs it.
+
+    ``live`` rather than a status string alone, because "is anything still
+    happening here" is the question a list is read for and ``interrupted`` is a
+    live plan with nobody advancing it.
+    """
+
+    stint_id: str
+    playbook: str
+    round_index: int
+    max_rounds: int
+    status: str
+    live: bool
+    unfinished: bool
+    """Not over: running, interrupted or paused. What `stop` acts on."""
+    stop_reason: str
+    workdir: str
+    branch: str
+    started_at_ms: int
+    ended_at_ms: int
+    open_questions: int
+
+
+class StintDetail(_Strict):
+    """One stint, whole: every round it ran and everything it is waiting on."""
+
+    stint: StintRow
+    rounds: list[StintRoundRow]
+    questions: list[StintQuestionRow]
+
+
+class PlaybooksStintsListParams(_Strict):
+    pass
+
+
+class PlaybooksStintsListResult(_Strict):
+    stints: list[StintRow]
+
+
+class PlaybooksStintsGetParams(_Strict):
+    stint_id: str
+
+
+class PlaybooksStintsStopParams(_Strict):
+    stint_id: str
+    now: bool | None = None
+    """Cut the round in flight short instead of letting it finish."""
+
+
+class PlaybooksStintsPauseParams(_Strict):
+    stint_id: str
+
+
+class PlaybooksStintsResumeParams(_Strict):
+    stint_id: str
+
+
+class PlaybooksStintsExtendParams(_Strict):
+    stint_id: str
+    rounds: int
+
+
+class StintTakeUp(StintDetail):
+    """A stint after a verb that opened a round in this process, with what the driver said.
+
+    The detail alone would not say whether a round started: a resume that found
+    every role finished, or a stint something else is still working, answers
+    with a sentence and no round, and the sentence is the answer.
+    """
+
+    reply: str
+
+
+class PlaybooksStintsAnswerParams(_Strict):
+    stint_id: str
+    question: int
+    text: str
 
 
 class PlaybookCredentialParam(_Strict):
@@ -5002,6 +5280,14 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "playbooks.delete": (PlaybooksDeleteParams, PlaybooksDeleteResult),
     "playbooks.run": (PlaybooksRunParams, PlaybooksRunResult),
     "playbooks.create": (PlaybooksCreateParams, PlaybooksCreateResult),
+    # playbooks.stints.* -- the multi-round runs a `mode: stint` playbook started
+    "playbooks.stints.list": (PlaybooksStintsListParams, PlaybooksStintsListResult),
+    "playbooks.stints.get": (PlaybooksStintsGetParams, StintDetail),
+    "playbooks.stints.stop": (PlaybooksStintsStopParams, StintDetail),
+    "playbooks.stints.pause": (PlaybooksStintsPauseParams, StintDetail),
+    "playbooks.stints.resume": (PlaybooksStintsResumeParams, StintTakeUp),
+    "playbooks.stints.extend": (PlaybooksStintsExtendParams, StintTakeUp),
+    "playbooks.stints.answer": (PlaybooksStintsAnswerParams, StintDetail),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
     "plughub.detail": (PlughubDetailParams, PlughubDetailResult),
@@ -5066,6 +5352,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "channels.qr": (ChannelsQrParams, ChannelsQrResult),
     "fs.list": (FsListParams, FsListResult),
     "fs.dirs": (FsDirsParams, FsDirsResult),
+    "fs.pick_dir": (FsPickDirParams, FsPickDirResult),
     "fs.read": (FsReadParams, FsReadResult),
     "fs.upload": (FsUploadParams, FsUploadResult),
     "deck.templates.list": (DeckTemplatesListParams, DeckTemplatesListResult),
@@ -5294,7 +5581,11 @@ __all__ = [
     "CronMissedItem",
     "CronMissedPayload",
     # playbooks
+    "PlaybookCarried",
+    "PlaybookCheck",
     "PlaybookDetail",
+    "PlaybookRole",
+    "PlaybookStint",
     "PlaybookNode",
     "PlaybookNodeShape",
     "PlaybookParam",

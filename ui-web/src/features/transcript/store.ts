@@ -1322,11 +1322,10 @@ function shutAutoFolds(lane: Lane, except: FoldData | null): void {
  * A sub-agent still running under it does not keep it open: that run is
  * followed on the task rows, not here.
  *
- * Replay opens at most one -- see :func:`openLastFold`, the turn a reopened
- * conversation ends on -- and a live turn shuts any fold the runtime opened
- * before it, so at most one runtime-opened body is ever built. The weight is
- * what a SESSION accumulates: a forty-turn session built 7361 nodes and 6400 of
- * them sat in shut fold bodies. */
+ * Replay opens none: a reopened conversation arrives with every turn shut, the
+ * last one included, the same as a turn watched live ends. That is also what
+ * the weight asks for -- a forty-turn session built 7361 nodes and 6400 of them
+ * sat in shut fold bodies. */
 export function collapse(lane: Lane, time?: string | null, live = false): void {
   const segs = lane.segs
   const loose: StepData[] = []
@@ -1383,36 +1382,6 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
     f.steps.push(s)
   })
   bumpList(lane)
-}
-
-/* The fold over the turn a replayed conversation ends on, opened.
- *
- * Same reason as the live one -- the reader is looking at the bottom of the
- * conversation and that is the turn they came back for -- and the same limit:
- * ONE body built, not a session's worth, so the weight the shut default is for
- * is still not there.
- *
- * Only when the last turn is the one that fold belongs to. The scan stops at a
- * question or a delivery exactly as `collapse`'s does, because it is asking the
- * same thing from the other end: a conversation whose final turn answered with
- * no work of its own has its last fold one turn further back, and opening that
- * would open a turn the reader did not return to.
- *
- * Marked `auto`, so the reader's first question shuts it like any other -- it
- * is the runtime's, not theirs, until they touch it. */
-export function openLastFold(lane: Lane): void {
-  for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
-    const s = lane.segs[i] as Seg
-    /* Not an opening, same as in collapse: the fold this scan is after may be
-       the one over the work that came before the reader's correction. */
-    if (s.kind === 'ask' && (s as AskData).midTurn) continue
-    if (s.kind === 'ask' || s.kind === 'sdlv') return
-    if (s.kind !== 'fold') continue
-    s.open = true
-    s.auto = true
-    bump(lane, s)
-    return
-  }
 }
 
 const isSilent = (s: StepData): boolean =>

@@ -1044,9 +1044,9 @@ describe('transcript island, history', () => {
 /** Which fold is open, and who decided.
  *
  * Shut is the default, live and replayed alike: a finished turn's fold closes
- * over the steps as the answer lands, and only the turn a reopened
- * conversation ends on, or a fold still holding a running sub-agent, is
- * opened by the runtime. What the reader opens or shuts is theirs.
+ * over the steps as the answer lands, and a reopened conversation arrives with
+ * every turn shut, the last one included. What the reader opens or shuts is
+ * theirs.
  */
 /** Whether the thought box keeps up with the model, and whose choice that is.
  *
@@ -1226,10 +1226,9 @@ describe('a fold holding a run that has not finished', () => {
     expect(openFlags()).toEqual([false, false])
   })
 
-  it('does not hold a replay-opened fold open either', async () => {
-    /* The fold a reopened conversation ends on is the runtime's, and the next
-       turn takes it back whether or not a run is still going under it. The
-       restored card learns its run is still going from `subagent.list`. */
+  it('arrives shut on replay too, with the run still going under it', () => {
+    /* A reopened conversation opens no fold, the last turn's included, and a
+       run still in flight under it buys it nothing there either. */
     wire({
       spawnRecord: async () => ({ messages: [] }),
       spawnList: async () => [{
@@ -1249,13 +1248,7 @@ describe('a fold holding a run that has not finished', () => {
         { role: 'assistant', text: 'dispatching it now', timestamp: iso(t0 + 3000) },
       ])
     })
-    expect(openFlags()).toEqual([true])
-    /* A restored card asks the roster only once the reader opens its row. */
-    act(() => { ($('.tfold.open .tfb .wkin .wrow') as HTMLElement).click() })
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
-    /* The card now says the run is live -- what the old rule would have kept
-       the fold open for. */
-    expect($('.tfold.open .tfb .wrow.run')).toBeTruthy()
+    expect(openFlags()).toEqual([false])
 
     askAgain()
 
@@ -1306,11 +1299,10 @@ describe('the fold over a turn just finished', () => {
     expect($('.tfold .tfb')?.textContent).toContain('let me check the log')
   })
 
-  it('arrives shut for every replayed turn but the one the conversation ends on', () => {
-    /* The forty-turn session is the case the shut default exists for: 6400 of
-       its 7361 nodes sat in fold bodies nobody had asked for. Thirty-nine of
-       those forty stay shut; the reader came back to the bottom of the
-       conversation, and one body is not a session's worth. */
+  it('arrives shut for every replayed turn, the one the conversation ends on included', () => {
+    /* The same as a turn watched live ends: the answer on screen, the trail a
+       click away. It is also what a forty-turn session needs -- 6400 of its
+       7361 nodes sat in fold bodies nobody had asked for. */
     const t0 = Date.now() - 600000
     act(() => {
       mount.history([
@@ -1331,56 +1323,11 @@ describe('the fold over a turn just finished', () => {
       ])
     })
 
-    expect(openState()).toEqual([false, true])
-    /* One body built, and it is the last turn's. */
-    expect($$('.tfold .tfb .step')).toHaveLength(1)
-    expect($('.tfold.open .tfb')?.textContent).toContain('en:gui.act.v.read_file')
-  })
-
-  it('opens nothing when the replayed conversation ends on a turn with no work', () => {
-    /* The last fold is then one turn further back, and that turn is not the one
-       the reader returned to. The scan stops at the question above it, the way
-       `collapse` stops from the other end. */
-    const t0 = Date.now() - 600000
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'first', timestamp: iso(t0) },
-        {
-          role: 'assistant', reasoning_content: 'thinking', reasoning_ms: 500, text: '',
-          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }],
-        },
-        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'ok' },
-        { role: 'assistant', text: 'done one', timestamp: iso(t0 + 3000) },
-        { role: 'user', text: 'just say yes', timestamp: iso(t0 + 4000) },
-        { role: 'assistant', text: 'yes', timestamp: iso(t0 + 5000) },
-      ])
-    })
-
-    expect(openState()).toEqual([false])
-    expect($$('.tfold .tfb .step')).toHaveLength(0)
-  })
-
-  it('shuts the replay-opened fold as a live turn lands', () => {
-    /* The fold a reopened conversation ends on is the runtime's, and the
-       runtime opens one body at most: the next turn takes it back. */
-    const t0 = Date.now() - 600000
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'first', timestamp: iso(t0) },
-        {
-          role: 'assistant', reasoning_content: 'thinking', reasoning_ms: 500, text: '',
-          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }],
-        },
-        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'ok' },
-        { role: 'assistant', text: 'done one', timestamp: iso(t0 + 3000) },
-      ])
-    })
-    expect(openState()).toEqual([true])
-
-    liveTurn('and the other one', 'now the other log', 'the disk is full', '3s')
-
     expect(openState()).toEqual([false, false])
+    /* No body built at all until the reader opens one. */
     expect($$('.tfold .tfb .step')).toHaveLength(0)
+    clickFold(1)
+    expect($('.tfold.open .tfb')?.textContent).toContain('en:gui.act.v.read_file')
   })
 
   it('leaves a fold the reader opened open when the next turn arrives', () => {
@@ -1388,8 +1335,7 @@ describe('the fold over a turn just finished', () => {
        reader reached for is theirs from then on -- shutting it under them is
        the same rudeness in the other direction.
 
-       Two replayed turns, and the reader opens the FIRST: the last one is the
-       runtime's own doing and would prove nothing about ownership. */
+       Two replayed turns, both shut, and the reader opens the FIRST. */
     const t0 = Date.now() - 600000
     act(() => {
       mount.history([
@@ -1410,11 +1356,11 @@ describe('the fold over a turn just finished', () => {
       ])
     })
     clickFold(0)
-    expect(openState()).toEqual([true, true])
+    expect(openState()).toEqual([true, false])
 
     liveTurn('and now this', 'working on it', 'all set', '4s')
 
-    /* The reader's stays. The replay's own -- still the runtime's -- shuts. */
+    /* The reader's stays; the rest stay shut. */
     expect(openState()).toEqual([true, false, false])
   })
 
@@ -1863,6 +1809,26 @@ describe("the turn's delivered files and file changes", () => {
     })
     await act(async () => { await Promise.resolve() })
     expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.edit'])
+  })
+
+  /* A file a command left behind rather than a tool: the runtime listed the
+     directory around the command, so the row has a verdict and a count and no
+     contents at all. The card draws it like any other creation, and the head it
+     would preview is simply absent rather than an error. */
+  it('calls a file a command created new, with its count and nothing to preview', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    PRODUCED.set(1, [{ key: '/w/tally.txt', dir: '/w/', name: 'tally.txt', kind: 'add',
+      add: 4, del: 0, hunks: [], turn: 0 }])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'run it', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.new'])
+    expect($('.achange .ca')?.textContent).toBe('+4')
+    expect($('.achange .cd')?.textContent).toBe('\u22120')
   })
 
   /* The third verdict a change row can carry, and the one no tool argument can

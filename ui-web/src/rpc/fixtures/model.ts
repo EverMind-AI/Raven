@@ -36,6 +36,17 @@ interface Entry {
   kinds?: Record<string, ModelLabel['kind']>
 }
 
+/* What each vendor lists and this install has NOT added, per slug. Kept apart
+   from `models` because that field is what the provider carries; this is what
+   the add-a-model list has to offer. */
+const UNADDED: Record<string, string[]> = {
+  anthropic: ['claude-haiku-4-5', 'claude-opus-4-1'],
+  openai: ['gpt-5', 'o4-mini'],
+  deepseek: ['deepseek-r2'],
+  minimax: ['minimax/MiniMax-Text-01'],
+  openrouter: ['meta-llama/llama-4-maverick', 'qwen/qwen3-max', 'mistralai/mistral-large-3'],
+}
+
 const PROVIDERS: Entry[] = [
   { slug: 'minimax', name: 'MiniMax (Global)', homepage: 'https://platform.minimax.io/',
     models: ['minimax/MiniMax-M3', 'minimax/MiniMax-M2'], authenticated: true, auth_type: 'key' },
@@ -102,6 +113,9 @@ const wire = (e: Entry, current: string): Provider => ({
   key_url: e.key_url ?? null,
   extra_headers: {},
   gateway: !!e.gateway,
+  /* The prefixes this provider answers to. Canned rows are named once and
+     never renamed, so that is the slug itself. */
+  route_names: [e.slug],
   /* One label per model, because the live reply carries a kind on every row it
      describes and the surfaces file a model by it. */
   model_labels: Object.fromEntries(
@@ -147,12 +161,23 @@ export function createModel(_env: FixtureEnv): ModelFixture {
       },
       /* Nothing to ask: the drawer's list is whatever the row already
          declares, which is the honest answer with no provider behind it. */
-      'model.fetch_models': (p) => ({
-        models: (find((p as { slug: string }).slug) || { models: [] }).models.map((id) => ({
-          id, label: id, kind: 'chat', added: true,
-        })),
-        status: 'ok',
-      }),
+      /* A vendor lists more than any one install has added -- that gap is the
+         whole content of the add-a-model list, and returning the configured
+         rows back verbatim left the offline page unable to show it at all:
+         every row came back `added` and the list had nothing to offer. The
+         catalogue is the row's own models plus a few of this vendor's that
+         nobody added. */
+      'model.fetch_models': (p) => {
+        const row = find((p as { slug: string }).slug)
+        const extra = row ? (UNADDED[row.slug] || []) : []
+        return {
+          models: [...(row ? row.models : []), ...extra].map((id) => ({
+            id, label: id, kind: (row && row.kinds && row.kinds[id]) || 'chat',
+            added: !!row && row.models.includes(id),
+          })),
+          status: 'ok',
+        }
+      },
       'model.add_models': (p) => {
         const row = find(p.slug)
         for (const m of p.models) if (row && !row.models.includes(m)) row.models.push(m)

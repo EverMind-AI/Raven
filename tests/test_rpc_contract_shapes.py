@@ -478,7 +478,7 @@ async def test_approval_respond() -> None:
 async def test_clarify_respond() -> None:
     from raven.rpc.methods.question import question_respond
 
-    broker = type("B", (), {"reply": lambda self, *a: False})()
+    broker = type("B", (), {"reply": lambda self, *a, **k: False})()
     _check("clarify.respond", await question_respond({"request_id": "r", "answer": "y"}, question_broker=broker))
 
 

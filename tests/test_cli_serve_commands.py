@@ -763,6 +763,70 @@ class TestStopping:
             serve_commands._stop_resident()
         assert excinfo.value.exit_code == 1
 
+    class _Clock:
+        """A clock that moves only when the code under test sleeps.
+
+        Each wait here is twenty seconds by design, so a real clock would make
+        these tests take that long to measure what a fake one settles at once.
+        """
+
+        def __init__(self, monkeypatch) -> None:
+            import time
+
+            self.now = 0.0
+            monkeypatch.setattr(time, "monotonic", lambda: self.now)
+            monkeypatch.setattr(time, "sleep", self._advance)
+
+        def _advance(self, seconds: float) -> None:
+            self.now += seconds
+
+    def test_the_gateway_gets_a_wait_of_its_own(self, home: Path, monkeypatch) -> None:
+        """The two waits run in sequence -- the supervisor has to be gone before
+        the gateway is signalled, or it restarts it -- so one budget spanning both
+        is spent by whichever goes first. A supervisor that took nearly all of it
+        left the gateway too little to exit in, and the stop failed against a
+        process that was on its way out."""
+        import os
+
+        self._resident(home)
+        clock = self._Clock(monkeypatch)
+        monkeypatch.setattr(os, "kill", lambda _pid, _sig: None)
+        polls = round(serve_commands._STOP_WAIT_S / serve_commands._STOP_POLL_S)
+        # Each count is one higher than the polls that pid is waited out for:
+        # `_read_web_state` and `_read_serve_pid` each spend a probe deciding the
+        # recorded pid counts as running. The supervisor then takes all but one
+        # poll of a budget, and the gateway needs half a second it cannot have if
+        # the two are charged to the same one.
+        lingering = {111: polls, 222: 11}
+        monkeypatch.setattr(serve_commands, "_pid_alive", self._liveness(lingering))
+
+        assert serve_commands._stop_resident() is True
+        assert lingering == {111: 0, 222: 0}, "returned while a signalled process was still alive"
+        assert clock.now > serve_commands._STOP_WAIT_S, "the stop stayed inside one budget, so it proves nothing"
+
+    def test_both_processes_it_names_waited_the_time_it_reports(self, home: Path, monkeypatch, capsys) -> None:
+        """One number is printed for the whole list, which makes it a claim about
+        every name in it. Sharing a deadline made the second name a claim about a
+        wait that had already been spent on the first."""
+        import os
+
+        self._resident(home)
+        clock = self._Clock(monkeypatch)
+        monkeypatch.setattr(os, "kill", lambda _pid, _sig: None)
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: True)
+
+        with pytest.raises(typer.Exit):
+            serve_commands._stop_resident()
+
+        reported = capsys.readouterr().out
+        assert "supervisor (pid 111)" in reported
+        assert "gateway (pid 222)" in reported
+        assert f"{serve_commands._STOP_WAIT_S:.0f}s" in reported
+        # At least the budget each, since the poll that gives up is the first one
+        # at or past the deadline, and at most one poll of overshoot on top.
+        assert clock.now >= 2 * serve_commands._STOP_WAIT_S
+        assert clock.now < 2 * (serve_commands._STOP_WAIT_S + serve_commands._STOP_POLL_S)
+
     def test_nothing_running_is_not_an_error(self, home: Path) -> None:
         assert serve_commands._stop_resident() is False
 

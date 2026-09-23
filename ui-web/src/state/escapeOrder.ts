@@ -1,6 +1,6 @@
 /* What Escape takes back, and in which order.
  *
- * Fifteen layers can be on screen at once, and one key closes one of them.
+ * Ten layers can be on screen at once, and one key closes one of them.
  * Which one was a fourteen-branch if chain in the page's chrome: a list of
  * selectors read top to bottom, each branch returning so the ones below it
  * never ran.
@@ -13,12 +13,12 @@
  * when the key arrives, so nothing here remembers a sequence.
  *
  * `id` is the text the chain tested, which is what the gate on this order
- * compares against (escapeOrder.test.ts): a selector for the twelve layers with
- * an element, the predicate's own name for the two without one. `isOpen` is that
- * same test -- the attribute for the twelve, because that is what the chain
+ * compares against (escapeOrder.test.ts): a selector for the seven layers with
+ * an element, the predicate's own name for the three without one. `isOpen` is
+ * that same test -- the attribute for the seven, because that is what the chain
  * read and what the four islands and three stores that raise them write, and
  * the module's own answer for the settings dialog, which has been a flag in
- * state/settings.ts since C4, and for the running turn.
+ * state/settings.ts since C4, for the desk, and for the running turn.
  *
  * The three capture-phase handlers each open sheet registers run before this
  * table and two of them act on Escape without stopping propagation, so one
@@ -31,8 +31,11 @@ import * as extAgents from '../features/extAgents/store'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
 import { byEscape } from './pages'
+import * as perm from './perm'
+import * as plus from './plus'
 import * as settingsDialog from './settings'
 import { ds } from './sources'
+import * as workdir from './workdir'
 
 import type { PageId } from './pages'
 
@@ -98,8 +101,9 @@ export function _resetForTests(): void {
   deskLayer = null
 }
 
-/* And the two beneath every page: the settings dialog, which is a flag rather
-   than an element, and the running turn. */
+/* And what lies beneath every page: the settings dialog, which is a flag rather
+   than an element, the desk's own retreat, the composer bar's three popovers,
+   and the running turn. */
 const BELOW: readonly EscapeLayer[] = [
   { id: 'setIsOpen()', isOpen: settingsDialog.isOpen, close: settingsDialog.close },
   {
@@ -107,12 +111,22 @@ const BELOW: readonly EscapeLayer[] = [
     isOpen: () => deskLayer?.isOpen() ?? false,
     close: () => deskLayer?.close(),
   },
+  /* The composer bar's three, which have no close button of their own. They sit
+     under everything above because every one of those covers the bar: --z-pop is
+     15, beneath --z-page 24, --z-detail 26, --z-desk 34, --z-veil 40 and
+     --z-lightbox 95. They sit above the turn because a popover standing over a
+     running turn is what the reader means to take back, not the work behind it.
+     Read by the flag the component writes, closed through the store it writes
+     it from. */
+  { id: '#permPop', isOpen: flagged('permPop'), close: () => perm.close() },
+  { id: '#plusPop', isOpen: flagged('plusPop'), close: () => plus.close() },
+  { id: '#wdPop', isOpen: flagged('wdPop'), close: () => workdir.close() },
   /* The last resort: with nothing on screen to take back, Escape interrupts
      the running turn. */
   { id: 'turn.busy()', isOpen: turnBusy, close: () => ds('composer').stop() },
 ]
 
-/** The fifteen, in the order Escape reaches them. */
+/** The ten, in the order Escape reaches them. */
 export const ESCAPE_ORDER: readonly EscapeLayer[] = [
   ...ABOVE,
   ...byEscape().map((page) => ({

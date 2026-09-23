@@ -48,11 +48,11 @@ describe('the catalogue', () => {
     expect(new Set(CHANNELS.map((c) => c.id)).size).toBe(12)
   })
 
-  /* Two spellings: a catalogue key for the channels whose names differ by
-     language, a brand name used verbatim for the rest. */
-  it('names a row by whichever of the two spellings it carries', () => {
+  /* One spelling: a brand whose name is the same in both languages is still
+     named through the message catalogue, not written into the row. */
+  it('names every row through the message catalogue', () => {
     expect(chanName(row('feishu'))).toBe('gui.chan.feishu')
-    expect(chanName(row('slack'))).toBe('Slack')
+    expect(chanName(row('slack'))).toBe('gui.chan.slack')
   })
 
   it('marks the two that sign in by scanning a code', () => {

@@ -7,6 +7,7 @@ import * as confirm from '../../../state/confirm'
 import { refreshList } from '../../../state/session/registry'
 import { whenLabel } from '../../rail/source'
 import { Card, Row, Rov, Switch } from '../Fields'
+import { ArchiveWait } from '../Skeletons'
 import * as store from '../store'
 
 import type { ArchivedSession } from '../types'
@@ -50,7 +51,7 @@ export function Archive(): JSX.Element {
   return (
     <>
       <Card title={t('gui.settings.archive.title')}>
-        {rows === null && <Row><Rov>{t('gui.settings.loading')}</Rov></Row>}
+        {rows === null && <ArchiveWait />}
         {rows && rows.length === 0 && <Row><Rov>{t('gui.settings.archive.empty')}</Rov></Row>}
         {rows && rows.map((r) => (
           <Row key={r.id} label={<>{rowTitle(r)} <span className="settings-kk">{whenLabel(r.updated_at)}</span></>}>

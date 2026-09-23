@@ -40,12 +40,20 @@ describe('settings root', () => {
     const opening = store.open()
     await settle()
     expect(settingsDialog.open).toHaveBeenCalled()
-    expect(document.querySelector('.settings-soonbox')!.textContent).toBe('gui.settings.loading')
+    /* The section's own shape, not a box with a word in it: the general
+       page is three settings, and the wait is those settings with bars where
+       the names, lines and controls will be. The word is still said, once, to
+       a reader who cannot see a bar. */
+    const wait = document.querySelector('.settings-wait')!
+    expect(wait.getAttribute('aria-label')).toBe('gui.settings.loading')
+    expect(wait.getAttribute('aria-busy')).toBe('true')
+    expect(wait.querySelectorAll('.settings-gen .settings-wbar').length).toBe(14)
 
     land!()
     await act(async () => { await opening })
-    expect(document.querySelector('.settings-soonbox')).toBeNull()
-    expect(document.querySelectorAll('.settings-row').length).toBeGreaterThan(0)
+    expect(document.querySelector('.settings-wait')).toBeNull()
+    expect(document.querySelectorAll('.settings-gen').length).toBe(3)
+    expect(document.querySelector('.settings-gen .settings-wbar')).toBeNull()
   })
 
   it('portals every nav entry into the shell and titles the header with the open section', async () => {

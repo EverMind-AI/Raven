@@ -232,8 +232,9 @@ frame at the end, and the view treats both identically. Each instance runs on it
 so several can be answering at once and you can talk to one while another writes; what is
 refused is a *second* prompt to the instance already mid-reply, which would serialise on that
 instance's handle anyway -- from the Agents Overlay's composer such words are *steered*
-into the running turn instead. A sub-agent's turn is not cancellable: Ctrl+C means the main
-agent's turn, as it always did.
+into the running turn instead. Ctrl+C means the turn of the view on screen: from a Direct
+Chat it sends `turn.cancel` with that instance's `target`, so the turn the user is watching
+is the one that stops.
 _Avoid_: "sub-agent session" - that is the CLI-side session a handle resumes, not this view.
 
 **New Instance Picker** (`ui-tui/src/components/newInstancePicker.tsx`):

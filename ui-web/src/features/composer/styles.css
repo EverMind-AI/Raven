@@ -14,11 +14,21 @@
 
 /* The deck template picker: a rack sheet (it wears page.css's `.csheet` too) whose body is a
    grid of covers, and behind any cover the template's pages in a strip that
-   snaps one at a time. */
-.cp-tpl-sheet { max-height: min(78vh, 720px); }
+   snaps one at a time.
+
+   The head and the line under it stay put and the GRID scrolls, capped at
+   about two rows of covers with a third just showing: a host with the template
+   pack lists dozens, and a sheet that grew with them stood as tall as the
+   window and scrolled its own title away. */
+.cp-tpl-sheet { max-height: none; overflow: hidden; display: flex; flex-direction: column; }
+/* One height for both views. The body is a fixed box: the grid fills it and
+   scrolls, and the open template's pages fit inside the same box, so going
+   in and coming back moves nothing around the sheet. */
+.cp-tpl-sheet .body { height: 356px; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
 .cp-tpl-sheet .cp-tpl-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows: max-content;
-  gap: 10px; margin-top: 8px;
+  gap: 10px; margin-top: 8px; min-height: 0; overflow-y: auto; padding: 2px 2px 6px; align-content: start;
+  scrollbar-width: thin;
 }
 .cp-tpl-sheet .cp-tpl-empty { color: var(--faint); font-size: 12px; margin-top: 8px; }
 .cp-tpl-card { display: block; padding: 0; border: 0; background: none; cursor: pointer; min-width: 0; }
@@ -31,7 +41,11 @@
 }
 .cp-tpl-card .cp-tpl-cover.cp-tpl-empty { display: grid; place-items: center; color: var(--faint); font-size: 11px; padding: 6px; text-align: center; }
 .cp-tpl-card:hover .cp-tpl-cover, .cp-tpl-card:focus-visible .cp-tpl-cover { border-color: var(--text); }
-.cp-tpl-sheet .cp-tpl-pages { display: grid; gap: 8px; }
+/* Spanning both of the body's rows: alone in the body, the pages would sit in
+   the `auto` row meant for the hint, and a percentage height of an auto row
+   is nothing -- which left the strip at the size of its placeholder text. */
+.cp-tpl-sheet .cp-tpl-pages { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; height: 100%; min-height: 0;
+  grid-row: 1 / -1; }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-bar { display: flex; align-items: center; gap: 10px; }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-back {
   display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: 12.5px;
@@ -45,19 +59,44 @@
   padding: 6px 14px; border-radius: 8px;
 }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-use:hover { opacity: .88; }
-.cp-tpl-sheet .cp-tpl-pages .cp-tpl-view { display: grid; grid-template-columns: 28px minmax(0, 1fr) 28px; align-items: center; gap: 4px; }
+/* The one row is a definite track, not `auto`: the strip's height is a
+   percentage of its grid area, and a percentage of an auto row is nothing. */
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-view { display: grid; grid-template-columns: 28px minmax(0, 1fr) 28px;
+  grid-template-rows: minmax(0, 1fr); align-items: center; gap: 4px; min-height: 0; height: 100%; }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-arrow { color: var(--faint); padding: 6px 2px; border-radius: 7px; display: grid; place-items: center; }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-arrow svg { width: 18px; height: 18px; }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-arrow:hover:not(:disabled) { color: var(--text); background: var(--raised); }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-arrow:disabled { opacity: .25; cursor: default; }
+/* Sized by the box's height, not the sheet's width: the strip takes the height
+   the body leaves it and its width follows the 16:9, centred, so the open
+   template is as tall as the grid was and no taller. */
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip {
   display: flex; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; scrollbar-width: none;
   border-radius: 10px; border: 1px solid var(--line-soft); background: var(--surface); aspect-ratio: 16 / 9; outline: 0;
+  height: 100%; max-width: 100%; justify-self: center;
 }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip::-webkit-scrollbar { display: none; }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip:focus-visible { border-color: var(--text); }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > img { flex: none; width: 100%; height: 100%; object-fit: contain; scroll-snap-align: start; user-select: none; }
 .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > .cp-tpl-cover.cp-tpl-empty { position: static; width: 100%; height: 100%; border: 0; }
+/* The wait for a template's pages, in the shape of the page that is coming.
+   The pages are rendered on the other end and it takes seconds, which the
+   strip used to spend holding the template's name, saying nothing about
+   whether anything was happening. A wash rather than a named surface, for the
+   reason the rail's skeleton gives: it has to hold its contrast on whatever
+   is behind it, in both themes. */
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > .cp-tpl-load {
+  flex: none; width: 100%; height: 100%; border-radius: 9px;
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--text) 5%, transparent) 30%,
+    color-mix(in oklab, var(--text) 12%, transparent) 50%,
+    color-mix(in oklab, var(--text) 5%, transparent) 70%);
+  background-size: 300% 100%; animation: cptplwait 1.3s linear infinite;
+}
+@keyframes cptplwait { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > .cp-tpl-load { animation: none; }
+}
 
 /* The permission sheet's own parts: why the agent is asking, the evidence
    block by kind, the landed line an answer leaves. The row of answers is laid
@@ -80,3 +119,51 @@
   cursor: pointer; padding: 2px 6px; border-radius: 6px;
 }
 .cp-undo:hover { text-decoration: underline; }
+
+/* The clarify sheet's stepper. The sheet wears the rack's `.csheet` clothes,
+   which are styles/page.css's -- the question, the numbered rows and the foot
+   are the same ones the approval sheet wears -- so what the form adds of its
+   own is this domain's vocabulary and lives here: the progress row over a
+   batch, the mark on a row the reader has chosen but not yet reported, and the
+   multi-select box. */
+.cp-ask .hd { flex-wrap: wrap; }
+/* A line of its own above the question: in the head's flex row the chips would
+   otherwise stand beside it and squeeze it. Gone when the sheet is folded,
+   which is one line by design. */
+.cp-ask .cp-steps { display: flex; flex-wrap: wrap; gap: 4px; flex-basis: 100%; margin-bottom: 6px; }
+.cp-ask[data-fold="true"] .cp-steps { display: none; }
+.cp-ask .cp-step {
+  font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--line-soft); background: var(--surface); color: var(--faint); cursor: pointer;
+}
+.cp-ask .cp-step.cp-done { color: var(--muted); }
+.cp-ask .cp-step.cp-skip { text-decoration: line-through; }
+.cp-ask .cp-step.cp-on { color: var(--text); border-color: var(--text); }
+.cp-ask .cp-step:disabled { cursor: default; opacity: .6; }
+/* A pick the reader can still take back: nothing is reported until the last
+   step, so a chosen row has to read as held rather than as spent. */
+.cp-ask .opt.cp-on { background: var(--raised); box-shadow: inset 0 0 0 1px var(--text); }
+.cp-ask .opt.cp-on .n { background: var(--text); color: var(--ink); }
+/* On a multi-select row the box is the mark, so the row itself only warms:
+   half a dozen ringed rows at once would read as a wall. */
+.cp-ask .opt.cp-multi.cp-on { box-shadow: none; }
+.cp-ask .cp-box {
+  margin-left: auto; width: 14px; height: 14px; border-radius: 4px;
+  border: 1px solid var(--faint); flex: none;
+}
+.cp-ask .opt.cp-on .cp-box { background: var(--text); border-color: var(--text); }
+.cp-ask .cp-rec { margin-left: auto; font-size: 10.5px; color: var(--faint); }
+.cp-ask .opt .cp-rec + .cp-box { margin-left: 8px; }
+.cp-ask .cp-hint { font-size: 11.5px; color: var(--faint); margin-top: 2px; }
+.cp-ask .foot .cp-back { margin-right: auto; }
+
+/* A staged file's type badge, and the remove button that takes its slot while
+   the pointer is on the tag (ComposerPage.tsx, AttChip). */
+.cp-ik { position: relative; display: grid; place-items: center; width: 14px; height: 14px; flex: none; color: var(--muted); }
+.cp-ik svg { display: block; }
+.cp-ik .rm {
+  position: absolute; inset: 0; display: none; place-items: center; padding: 0;
+  color: var(--muted); background: none;
+}
+.cp-ik .rm:focus-visible { display: grid; }
+.cp-ik .rm:hover { color: var(--composer-ink); background: none; }

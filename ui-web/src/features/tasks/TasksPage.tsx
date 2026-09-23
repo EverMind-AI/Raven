@@ -24,6 +24,7 @@ import { layout } from '../dag/graph'
 import * as desk from '../desk/store'
 import * as workspace from '../workspace/store'
 import { BoardCard } from './BoardCard'
+import { fitChips } from './chipFit'
 import { Answer, StepList } from './NodeRecord'
 import * as store from './store'
 
@@ -327,10 +328,10 @@ interface RecordLoad {
   retry: () => void
 }
 
-/* The beat a running spawn's record is re-read on: the one the transcript's
-   own spawn card reads `subagent.context` on (TranscriptPage.tsx), so the
-   two views of one run move together. */
-const SPAWN_READ_BEAT_MS = 1000
+/* The beat a running node's record is re-read on, whichever lane runs it:
+   the one the transcript's own spawn card reads `subagent.context` on
+   (TranscriptPage.tsx), so the two views of one run move together. */
+const READ_BEAT_MS = 1000
 
 /* Fetched once per (row, node) and shared by both tabs: the order tab's
    "instruction" is the same rendered prompt the context tab's dispatch is,
@@ -339,17 +340,21 @@ const SPAWN_READ_BEAT_MS = 1000
    dispatched -- there is nothing yet to read.
 
    Refetched on every live event that names this node (`store.nodeVersion`)
-   and on every status transition, on top of the (row, node) identity.
-   `dag.node_updated` fires once per tool call while a dag node runs, so a
-   dag node opened mid-run keeps reading its own steps and its answer as they
-   arrive rather than freezing at the first read. A spawn has no per-step
-   event -- `subagent.status` moves on pending, running and the terminal word
-   only -- so while one runs its record is re-read on a beat instead, skipping
-   a beat while a read is still out; the status key then covers the terminal
-   frame, so the answer lands without the reader closing and reopening the
-   node. A stale record is kept on screen through a refetch rather than
-   cleared back to `null` -- the reader is watching a node run, not watching
-   it flicker blank once a second. */
+   and on every status transition, on top of the (row, node) identity -- and,
+   while the node runs, on a beat. No lane sends a per-step event: a dag's
+   `dag.node_updated` marks a node's transitions (running, then the terminal
+   word; its `tool_call_id` is the parent turn's `run_subagent_dag` call, not
+   a step of the node's own), and a spawn's `subagent.status` moves on
+   pending, running and the terminal word only. The steps in between exist
+   only on the server's live account, which `dag.node` / `subagent.context`
+   already serve mid-run, so a running node of either kind is re-read on the
+   beat, skipping a beat while a read is still out -- the same read the TUI's
+   own dag node poll makes. Left to the frames alone, a dag node opened as it
+   started froze at its dispatch until it settled. The status key then covers
+   the terminal frame, so the answer lands without the reader closing and
+   reopening the node. A stale record is kept on screen through a refetch
+   rather than cleared back to `null` -- the reader is watching a node run,
+   not watching it flicker blank once a second. */
 function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
   const dispatched = node.status !== 'pending' && node.status !== 'skipped'
   const version = useSyncExternalStore(store.subscribe, () => store.nodeVersion(row.kind, row.id, node.node_id))
@@ -369,8 +374,8 @@ function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
     /* The row too, while the node runs: its usage and tool counts grow on the
        server as the lane reports them (`tasks.list` reads the live activity),
        and no frame carries them -- so the subtitle's token total moves with
-       the record. One row read out at a time: a dag node's frames arrive once
-       per tool call, and stacking a read per frame would multiply requests
+       the record. One row read out at a time: a beat and a frame can land
+       close together, and stacking a read per trigger would multiply requests
        the way the record's own `reading` guard exists to prevent. Once the
        node settles, the terminal frame's own reconcile brings the final copy. */
     if (node.status === 'running' && !reconciling.current) {
@@ -386,10 +391,10 @@ function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
   }, [row.kind, row.id, node.node_id, node.status, version, nonce])
   /* No source, no beat: with nothing to read from, a beat would only re-run
      the effect into its failed branch once a second. */
-  const beating = row.kind === 'spawn' && node.status === 'running' && !!store.source()
+  const beating = node.status === 'running' && !!store.source()
   useEffect(() => {
     if (!beating) return
-    const beat = setInterval(() => { if (!reading.current) setNonce((n) => n + 1) }, SPAWN_READ_BEAT_MS)
+    const beat = setInterval(() => { if (!reading.current) setNonce((n) => n + 1) }, READ_BEAT_MS)
     return () => clearInterval(beat)
   }, [beating])
   return { ...state, retry: () => setNonce((n) => n + 1) }
@@ -729,6 +734,19 @@ function OrderTab({ row, node, roster, rec }: {
    slack the transcript's own thought box allows a reader. */
 const TAIL_SLACK_PX = 40
 
+/* What the reader can do to a scroller, as the events that say they did it:
+   the ones over as they happen, and the presses that last until let go --
+   whose release is heard on the window, since a drag can end off the box. */
+const GESTURES = ['wheel', 'keydown'] as const
+const PRESSES = ['pointerdown', 'touchstart'] as const
+const RELEASES = ['pointerup', 'pointercancel', 'touchend', 'touchcancel'] as const
+
+/* How long a scroller has to sit still before the reader's hand counts as
+   off it. Momentum outlives the wheel that started it and a dragged bar
+   reports nothing between press and release, so what ends a reader's scroll
+   is the scrolling stopping, not the gesture event. */
+const SETTLE_MS = 150
+
 /* Keeps a reader at the end of a record that is still being written.
  *
  * `useNodeRecord` re-reads a running node every second and the card re-renders
@@ -737,42 +755,152 @@ const TAIL_SLACK_PX = 40
  * clamps `scrollTop` against it, and nothing hands it back when the content
  * returns: measured on the page, one such paint left a reader parked at the
  * end of a 5,090px record sitting at 0. What that looked like was dragging to
- * the bottom of a running step and being thrown back up a block, once per
- * trip down.
+ * the bottom of a running step and being thrown back up a block, once per trip
+ * down.
  *
- * So the box re-pins itself when a read lands, for a reader who asked to be at
- * the end and only for them. A `scroll` event is the honest source for that:
- * re-rendering the record does not fire one, so the flag holds whatever the
- * reader last did. It starts false, because a record opens at its beginning,
- * and `key` resets it -- another node, or the work order, is a different thing
- * to read rather than a continuation of this one.
+ * Following is what the reader asked for, so only the reader may end it. A
+ * `scroll` event alone cannot say who scrolled: measured in Safari against a
+ * running node, the browser moved the offset up by itself -- 48px, 146px, and
+ * once 1,025px -- with the content the same height before and after and no
+ * write from this code at all. Read as the reader walking away, each of those
+ * ended the follow for good, which is the bug this carries. So a scroll only
+ * means something while the reader's hand is on the box: a gesture -- wheel,
+ * touch, a press on the bar, a key -- arms the scrolls that follow it, and the
+ * scrolling stopping for `SETTLE_MS` disarms them again. Whatever the browser
+ * does in between is undone rather than obeyed.
  *
- * `record` is the whole gate on when to pin, rather than every render: this
- * panel reads the task store, and every fold in the record writes to it
- * (`store.setFold`), so a pin on each render would answer a reader opening a
- * step above with a jump to the end -- away from the thing they just opened.
- * `useNodeRecord` hands back a fresh object per read and keeps the old one
- * while the next read is in flight, so this fires on the reads that move the
- * content and on nothing else, the settling read included. */
-function useTailFollow(key: string, record: NodeRecord | null) {
+ * And undone promptly, which is why the content is watched rather than only
+ * the reads: a nudge two seconds before the next read would otherwise sit
+ * there, which is exactly how long it looked wrong for.
+ *
+ * It starts not following, because a record opens at its beginning, and `key`
+ * resets it -- another node, or the work order, is a different thing to read
+ * rather than a continuation of this one. The pin runs off `record` rather
+ * than off every render: this panel reads the task store, and every fold in
+ * the record writes to it (`store.setFold`), so a pin on each render would
+ * answer a reader opening a step above with a jump to the end. */
+function useTailFollow(key: string, record: NodeRecord | null, live: boolean) {
   const box = useRef<HTMLDivElement>(null)
   const wantsTail = useRef(false)
+  const gestured = useRef(0)
   /* Declared before the pin below, because layout effects run in order and a
      reset that landed after it would pin the new thing to its end first. */
   useLayoutEffect(() => { wantsTail.current = false }, [key])
   useEffect(() => {
     const el = box.current
     if (!el) return
-    const note = (): void => {
-      wantsTail.current = el.scrollHeight - el.scrollTop - el.clientHeight < TAIL_SLACK_PX
+    let settle: ReturnType<typeof setTimeout> | null = null
+    /* A press is the reader's for as long as it is held: a bar can be pressed
+       and held still before the drag, or paused mid-drag, and a scroll after
+       either is still theirs. So a held press never disarms, and letting go
+       starts the settle like any other gesture. */
+    let held = false
+    const disarmSoon = (): void => {
+      if (settle) clearTimeout(settle)
+      settle = setTimeout(() => { if (!held) gestured.current = 0 }, SETTLE_MS)
     }
+    /* A gesture that scrolls nothing -- a click on a fold, a key the page
+       handles -- has no scroll to disarm it, so it disarms itself. One that
+       does scroll has `note` push the deadline on for as long as it moves. */
+    const mark = (): void => {
+      gestured.current = 1
+      disarmSoon()
+    }
+    const press = (): void => {
+      held = true
+      mark()
+    }
+    const release = (): void => {
+      if (!held) return
+      held = false
+      disarmSoon()
+    }
+    const pin = (): void => { if (wantsTail.current) el.scrollTop = el.scrollHeight }
+    const note = (): void => {
+      /* Nothing the reader did, so nothing about what they want -- this is the
+         browser moving the box, and a follow it interrupts is a follow to
+         resume. Measured in Safari: the content is 172px shorter for an
+         instant inside a paint, the browser clamps to the end that implies,
+         and the height coming back leaves the offset where the clamp put it.
+         Both heights are the same before and after, so there is nothing for a
+         `ResizeObserver` to report; the move itself is the only evidence, and
+         answering it is what puts the reader back. Pinning an offset that is
+         already at the end scrolls nothing and fires nothing, so this settles
+         rather than loops. */
+      if (!gestured.current) {
+        pin()
+        return
+      }
+      wantsTail.current = el.scrollHeight - el.scrollTop - el.clientHeight < TAIL_SLACK_PX
+      disarmSoon()
+    }
+    /* The box itself as well as what is in it. Measured in Safari: a repaint
+       takes the box's own height up by 74px for an instant, the browser clamps
+       `scrollTop` against the smaller end that implies, and the height coming
+       back does not bring the offset with it -- the reader is left exactly
+       those 74px short, pinned there again by every read that follows. What
+       moves under a reader at the end is a height, whichever of the two it
+       is. */
+    const seen = new ResizeObserver(pin)
+    const kids = new MutationObserver(() => {
+      seen.disconnect()
+      seen.observe(el)
+      for (const kid of el.children) seen.observe(kid)
+      pin()
+    })
+    seen.observe(el)
+    for (const kid of el.children) seen.observe(kid)
+    kids.observe(el, { childList: true })
+    for (const name of GESTURES) el.addEventListener(name, mark, { passive: true })
+    for (const name of PRESSES) el.addEventListener(name, press, { passive: true })
+    for (const name of RELEASES) window.addEventListener(name, release, { passive: true })
     el.addEventListener('scroll', note, { passive: true })
-    return () => el.removeEventListener('scroll', note)
-  }, [])
-  /* In the layout phase, so the box is never painted at the clamped offset. */
+    /* And then, while the record is still being written, every frame.
+     *
+     * Nothing else catches what Safari does to this box. Measured there: a
+     * paint takes the content down to the height of the viewport -- the whole
+     * record gone for an instant -- and the browser clamps `scrollTop` to 0
+     * against it. Pinning during that moment scrolls to 0 too, and when the
+     * content comes back the offset stays where it is: no scroll fires,
+     * because nothing moved, and both heights read the same before and after,
+     * so no observer has anything to report. The reader was left at the top of
+     * a record they had been reading the end of.
+     *
+     * A frame is the shortest interval that outlasts any of it. Pinning an
+     * offset already at the end writes the same number, which scrolls nothing
+     * and fires nothing, so the cost is one measurement a frame while a run is
+     * live and the reader is at its end -- and nothing at all once either
+     * stops being true. The reader's own gesture suspends it, or they could
+     * never scroll away. */
+    let frame = 0
+    const keep = (): void => {
+      if (!gestured.current) pin()
+      frame = requestAnimationFrame(keep)
+    }
+    if (live) frame = requestAnimationFrame(keep)
+    return () => {
+      if (frame) cancelAnimationFrame(frame)
+      if (settle) clearTimeout(settle)
+      seen.disconnect()
+      kids.disconnect()
+      for (const name of GESTURES) el.removeEventListener(name, mark)
+      for (const name of PRESSES) el.removeEventListener(name, press)
+      for (const name of RELEASES) window.removeEventListener(name, release)
+      el.removeEventListener('scroll', note)
+    }
+  }, [live])
+  /* In the layout phase, so the box is never painted at the clamped offset,
+     and again on the frame after it: a height that settles between the two is
+     the whole defect above, and the second pin is what the reader would not
+     have to do by hand. */
   useLayoutEffect(() => {
     const el = box.current
-    if (el && wantsTail.current) el.scrollTop = el.scrollHeight
+    if (!el || !wantsTail.current) return
+    el.scrollTop = el.scrollHeight
+    const again = requestAnimationFrame(() => {
+      if (box.current && wantsTail.current) box.current.scrollTop = box.current.scrollHeight
+    })
+    return () => cancelAnimationFrame(again)
   }, [record])
   return box
 }
@@ -783,7 +911,7 @@ function NodePanel({ row, node, paneId, onClose, roster }: {
   useSyncExternalStore(store.subscribe, store.get)
   const rec = useNodeRecord(row, node)
   const pinned = store.tabOf(paneId)
-  const body = useTailFollow(`${paneId}:${node.node_id}:${pinned ?? ''}`, rec.record)
+  const body = useTailFollow(`${paneId}:${node.node_id}:${pinned ?? ''}`, rec.record, node.status === 'running')
   /* A skipped step opens on the context tab too -- it has no order to
      dispatch, but it does have a reason it never ran, and that reason is
      what the context tab reads first (`nodeWhyText`). Only a step still
@@ -947,48 +1075,137 @@ const DiffGlyph = (): JSX.Element => (
 function Chips({ row }: { row: TaskRow }): JSX.Element | null {
   const all: Array<{ node: TaskNode; file: TaskFile }> = []
   row.nodes.forEach((n) => n.files.forEach((f) => all.push({ node: n, file: f })))
-  if (!all.length) return null
   const writes = all.filter(({ file }) => file.op === 'write' || file.op === 'add')
   const edits = all.filter(({ file }) => file.op === 'edit')
   const gone = all.filter(({ file }) => file.op === 'delete')
+  const chips: JSX.Element[] = [
+    ...writes.map(({ node, file }) => (
+      <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => workspace.openPath(file.path)}>
+        <DocGlyph />
+        {nameOf(file)}{file.size != null ? <span className="tkkd">{humanSize(file.size)}</span> : null}
+      </button>
+    )),
+    ...edits.map(({ node, file }) => (
+      <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => void openNodeDiff(row, node, file)}>
+        <DiffGlyph />
+        {nameOf(file)}
+        <span className="tkdstat">
+          <b className="add">+{file.add}</b> <b className="del">&minus;{file.del}</b>
+        </span>
+      </button>
+    )),
+    ...gone.map(({ node, file }) => (
+      <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => void openNodeDiff(row, node, file)}>
+        <DiffGlyph />
+        {nameOf(file)}
+        {/* Nothing was added, so the `+0` half would only be noise. */}
+        <span className="tkdstat">
+          <b className="del">&minus;{file.del}</b>
+        </span>
+      </button>
+    )),
+  ]
+  return chips.length ? <ChipStrip chips={chips} /> : null
+}
+
+const nameOf = (file: TaskFile): string => file.path.split('/').pop() || file.path
+
+/* Folded, the strip holds this many lines and no more: a run that wrote forty
+   files would otherwise push the board below the fold of its own pane. */
+const CHIP_ROWS = 2
+/* Unfolded, it shows this many lines at once and scrolls the rest inside a box
+   that stops growing -- and the stylesheet caps that box again at a share of
+   the pane, so a short pane still keeps its board. */
+const CHIP_ROWS_OPEN = 6
+
+/* The chips past the fold stay mounted, out of flow and invisible
+   (`.tkover`), because their widths are what the next fit is computed from --
+   a chip that is not laid out has none. The `+N` chip is always mounted for
+   the same reason, hidden while nothing is folded away. Measured on every
+   render as well as on a resize: the embedded pane delivers no ResizeObserver
+   notifications (see dag/Board.tsx), and a strip that was `display: none`
+   while a node was picked comes back through a render, not a resize. */
+function ChipStrip({ chips }: { chips: JSX.Element[] }): JSX.Element {
+  const box = useRef<HTMLDivElement | null>(null)
+  const [open, setOpen] = useState(false)
+  const [fit, setFit] = useState(chips.length)
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    let frame = 0
+    let tries = 0
+    const measure = (): void => {
+      const avail = el.getBoundingClientRect().width
+      if (avail <= 0) {
+        if (tries++ < 60) frame = requestAnimationFrame(measure)
+        return
+      }
+      const kids = Array.from(el.children) as HTMLElement[]
+      const gap = parseFloat(getComputedStyle(el).rowGap) || 0
+      const tall = kids[0] ? kids[0].getBoundingClientRect().height : 0
+      if (tall) el.style.setProperty('--tkopen-h', `${tall * CHIP_ROWS_OPEN + gap * (CHIP_ROWS_OPEN - 1)}px`)
+      markEdges(el)
+      if (open) return
+      const more = kids.pop()
+      const widths = kids.map((k) => k.getBoundingClientRect().width)
+      setFit(fitChips(widths, avail, gap, more ? more.getBoundingClientRect().width : 0, CHIP_ROWS))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    if (ro) ro.observe(el)
+    return () => {
+      if (frame) cancelAnimationFrame(frame)
+      window.removeEventListener('resize', measure)
+      if (ro) ro.disconnect()
+    }
+  })
+  const shown = open ? chips.length : Math.min(fit, chips.length)
+  const rest = chips.length - shown
+  const flip = (): void => {
+    if (open && box.current) box.current.scrollTop = 0
+    setOpen(!open)
+  }
   return (
-    <div className="tkchips">
-      {writes.map(({ node, file }) => {
-        const name = file.path.split('/').pop() || file.path
-        return (
-          <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => workspace.openPath(file.path)}>
-            <DocGlyph />
-            {name}{file.size != null ? <span className="tkkd">{humanSize(file.size)}</span> : null}
+    <div className="tkchips" data-open={open || undefined}>
+      <div className="tkstrip" ref={box} onScroll={(e) => markEdges(e.currentTarget)}>
+        {chips.map((chip, i) => (i < shown ? chip : <span key={chip.key} className="tkover" aria-hidden="true">{chip}</span>))}
+        {open ? null : (
+          <button type="button" className={'wchip tkfold' + (rest ? '' : ' tkover')}
+            aria-expanded={false} tabIndex={rest ? undefined : -1}
+            aria-label={t('gui.tasks.files_more', { n: rest })} onClick={flip}>
+            {'+' + rest}
+            <ChipChev />
           </button>
-        )
-      })}
-      {edits.map(({ node, file }) => {
-        const name = file.path.split('/').pop() || file.path
-        return (
-          <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => void openNodeDiff(row, node, file)}>
-            <DiffGlyph />
-            {name}
-            <span className="tkdstat">
-              <b className="add">+{file.add}</b> <b className="del">&minus;{file.del}</b>
-            </span>
-          </button>
-        )
-      })}
-      {gone.map(({ node, file }) => {
-        const name = file.path.split('/').pop() || file.path
-        return (
-          <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => void openNodeDiff(row, node, file)}>
-            <DiffGlyph />
-            {name}
-            {/* Nothing was added, so the `+0` half would only be noise. */}
-            <span className="tkdstat">
-              <b className="del">&minus;{file.del}</b>
-            </span>
-          </button>
-        )
-      })}
+        )}
+      </div>
+      {/* Outside the scroller, so folding back never needs a scroll to the
+          end first. */}
+      {open ? (
+        <button type="button" className="tkless" aria-expanded={true} onClick={flip}>
+          {t('gui.tasks.files_less', { n: chips.length })}
+          <ChipChev />
+        </button>
+      ) : null}
     </div>
   )
+}
+
+const ChipChev = (): JSX.Element => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+    <path d="m7 10 5 5 5-5" />
+  </svg>
+)
+
+/* Which edges of the unfolded box still have chips past them, for the fade
+   that says so: the page hides every scrollbar, so without it a box cut
+   mid-list reads as the whole list. Written to the element rather than to
+   state -- a scroll is not a reason to render. */
+function markEdges(el: HTMLElement): void {
+  const below = el.scrollHeight - el.clientHeight - el.scrollTop > 1
+  const above = el.scrollTop > 1
+  el.toggleAttribute('data-below', below)
+  el.toggleAttribute('data-above', above)
 }
 
 export function TaskPane({ task, full = false }: { task: TaskRow; full?: boolean }): JSX.Element {

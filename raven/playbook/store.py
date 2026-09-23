@@ -71,6 +71,16 @@ class PlaybookStore:
         self._builtin_root = BUILTIN_ROOT if builtin_root is None else builtin_root
         self._shadow_warned: set[str] = set()
 
+    @property
+    def root(self) -> Path:
+        """The writable layer, for a caller that writes a file this class does not.
+
+        `save` is for a spec this class serialised; the stint skeleton is a file
+        with comments in it, and a round trip through the model would strip every
+        one of them -- the comments are the whole point of a skeleton.
+        """
+        return self._root
+
     def path_for(self, name: str) -> Path:
         """The playbook.md that ``load`` would read: user layer first."""
         user = self._root / name / "playbook.md"

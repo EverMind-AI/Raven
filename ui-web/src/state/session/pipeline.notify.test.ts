@@ -369,11 +369,30 @@ describe('the conversation a request is filed under', () => {
     h.pipeline.clarifyRequest({ request_id: 'q1', question: 'which one?', conversation_id: 'tui:asker' })
     expect(h.seen.turns).toEqual([['tui:asker', 'wait']])
 
-    h.sheet('clarify').answer('the second')
+    h.sheet('clarify').answer(['the second'])
     await h.tick()
 
     expect(h.seen.turns).toEqual([['tui:asker', 'wait'], ['tui:asker', 'resume']])
-    expect(h.seen.sent).toEqual([['clarify.respond', { request_id: 'q1', answer: 'the second' }]])
+    expect(h.seen.sent).toEqual([
+      ['clarify.respond', { answer: 'the second', answers: ['the second'], request_id: 'q1' }],
+    ])
+  })
+
+  /* The sheet answers a whole batch at once, and the broker stashes the rest:
+     `answer` is this frame's own, which is all a broker that never heard of a
+     batch reads, and it is the answer at the frame's own index. */
+  it('sends the whole form beside the answer to the question that was asked', async () => {
+    const h = await harness({ current: 'tui:open' })
+
+    h.pipeline.clarifyRequest({
+      request_id: 'q1', question: 'which targets?', index: 1, conversation_id: 'tui:asker',
+    })
+    h.sheet('clarify').answer(['', 'mac', 'no'])
+    await h.tick()
+
+    expect(h.seen.sent).toEqual([
+      ['clarify.respond', { answer: 'mac', answers: ['', 'mac', 'no'], request_id: 'q1' }],
+    ])
   })
 
   it('docks where the reader is when the frame names no conversation', async () => {
@@ -399,7 +418,7 @@ describe('the step a clarify answer marks', () => {
     h.live.st = openStep
 
     h.pipeline.clarifyRequest({ request_id: 'q1', question: 'which one?', conversation_id: 'tui:asker' })
-    h.sheet('clarify').answer('the second')
+    h.sheet('clarify').answer(['the second'])
     await h.tick()
 
     expect(openStep.hasQA).toBe(true)

@@ -69,6 +69,18 @@ afterEach(() => {
 })
 
 describe('memory island', () => {
+  it('waits as the rows it becomes rather than as a line of grey text', async () => {
+    let land: ((r: { items: MemItem[]; total: number }) => void) | null = null
+    install({ list: () => new Promise((resolve) => { land = resolve }) })
+    render(<MemoryApp />, { container: document.getElementById('memoryBody')! })
+    await act(async () => { store.setKind('episode'); void store.load(); await Promise.resolve() })
+    expect(document.querySelectorAll('.two-pane-wait .two-pane-row').length).toBe(7)
+
+    await act(async () => { land!({ items: [item()], total: 1 }); await Promise.resolve() })
+    expect(document.querySelector('.two-pane-wait')).toBeNull()
+    expect(row('shipped the island')).toBeTruthy()
+  })
+
   it('shows the rows and the stat band the source answers', async () => {
     install(
       { list: async () => ({ items: [item(), item({ id: 'm2', subject: 'fixed the flake' })], total: 2 }) },

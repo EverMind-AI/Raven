@@ -44,7 +44,7 @@ class AskViaTool:
         *,
         index: int = 0,
         total: int = 1,
-        batch: list[dict[str, str]] | None = None,
+        batch: list[dict[str, Any]] | None = None,
     ) -> str | None:
         return await self._tool.ask_direct(prompt, choices, conversation_id, index=index, total=total, batch=batch)
 

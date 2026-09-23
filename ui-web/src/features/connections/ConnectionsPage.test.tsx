@@ -17,11 +17,12 @@ import type { ConnChannel, ConnQr, ConnectionsSource } from './types'
 /* Slack's way in is a token, and the fixture has to say so: an entry with no
    required field is a scan-login entry by derivation, so a fieldless default
    would quietly make the standard row a different kind of channel than the
-   tests that use it mean. */
+   tests that use it mean. The stand-in translator hands a key back as its own
+   text, so a row keyed `Slack` reads as Slack. */
 function chan(over: Partial<ConnChannel> = {}): ConnChannel {
   return {
     id: 'slack',
-    name: 'Slack',
+    key: 'Slack',
     on: false,
     fields: [{ key: 'bot_token', required: true, set: true }],
     missing: [],
@@ -125,10 +126,26 @@ afterEach(() => {
 })
 
 describe('connections island', () => {
+  it('waits as the rows it becomes rather than as an empty column', async () => {
+    /* `!loaded && !rows.length` used to draw nothing, so the seconds before the
+       adapters answered looked exactly like "there are no channels". */
+    let land: ((r: ConnChannel[]) => void) | null = null
+    install([], { rows: () => new Promise((resolve) => { land = resolve }) })
+    render(<ConnectionsApp />, { container: document.getElementById('connectionsBody')! })
+    await act(async () => { void store.refresh(true); await Promise.resolve() })
+    const wait = side().querySelector('.two-pane-wait')!
+    expect(wait.getAttribute('aria-busy')).toBe('true')
+    expect(wait.querySelectorAll('.two-pane-row').length).toBe(7)
+
+    await act(async () => { land!([chan()]); await Promise.resolve() })
+    expect(document.querySelector('.two-pane-wait')).toBeNull()
+    expect(rowNamed('Slack')).toBeTruthy()
+  })
+
   it('lists every catalogue row, grouped by whether it is in service', async () => {
     install([
       chan({ on: true, running: true }),
-      chan({ id: 'telegram', name: 'Telegram' }),
+      chan({ id: 'telegram', key: 'Telegram' }),
       chan({ id: 'email', key: 'gui.chan.email' }),
     ])
     await mount()
@@ -148,7 +165,7 @@ describe('connections island', () => {
         { key: 'imap_host', required: true }, { key: 'imap_user', required: true },
         { key: 'smtp_host', required: true }, { key: 'smtp_user', required: true },
       ] }),
-      chan({ id: 'telegram', name: 'Telegram', fields: [{ key: 'token', required: true }] }),
+      chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true }] }),
       chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true }),
     ])
     await mount()
@@ -167,7 +184,7 @@ describe('connections island', () => {
   it('reads a scan-login entry off its schema, not off the live flag', async () => {
     install([
       chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: false, fields: [{ key: 'route_tag' }] }),
-      chan({ id: 'telegram', name: 'Telegram', fields: [{ key: 'token', required: true }] }),
+      chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true }] }),
     ])
     await mount()
     expect(await screen.findByText('gui.chan.weixin')).toBeTruthy()
@@ -184,11 +201,11 @@ describe('connections island', () => {
   describe('what the row says about its own state', () => {
     it('tells the five states apart, in words and in colour', async () => {
       install([
-        chan({ id: 'a', name: 'A', on: true, running: true, connected: true, who: 'me' }),
-        chan({ id: 'b', name: 'B', on: true, running: false }),
-        chan({ id: 'c', name: 'C', on: true, running: true, connected: false, qrLogin: true }),
-        chan({ id: 'd', name: 'D', on: true }),
-        chan({ id: 'e', name: 'E', on: false }),
+        chan({ id: 'a', key: 'A', on: true, running: true, connected: true, who: 'me' }),
+        chan({ id: 'b', key: 'B', on: true, running: false }),
+        chan({ id: 'c', key: 'C', on: true, running: true, connected: false, qrLogin: true }),
+        chan({ id: 'd', key: 'D', on: true }),
+        chan({ id: 'e', key: 'E', on: false }),
       ])
       await mount()
       expect(subOf('A')).toBe('gui.conn.as_you {"who":"me"}')
@@ -390,7 +407,7 @@ describe('connections island', () => {
   it('leaves the switch unavailable while a credential is still missing', async () => {
     install([
       chan({ fields: [{ key: 'bot_token', required: true }], missing: ['bot_token'] }),
-      chan({ id: 'telegram', name: 'Telegram', fields: [{ key: 'token', required: true, set: true }], missing: [] }),
+      chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true, set: true }], missing: [] }),
     ])
     await mount()
     expect(rowSwitch('Slack').hasAttribute('disabled')).toBe(true)
@@ -439,7 +456,7 @@ describe('connections island', () => {
   })
 
   it('narrows the list by what is typed in the search', async () => {
-    install([chan(), chan({ id: 'telegram', name: 'Telegram' })])
+    install([chan(), chan({ id: 'telegram', key: 'Telegram' })])
     await mount()
     await screen.findByText('Slack')
     const box = side().querySelector('input') as HTMLInputElement
@@ -578,7 +595,7 @@ describe('connections island', () => {
   /* Where the credentials come from, for the channels that have one place to
      get them. A mail host has no open platform to link to, so it has none. */
   it('links to the console that issues the credentials, where there is one', async () => {
-    install([chan({ id: 'telegram', name: 'Telegram', fields: [{ key: 'token', required: true }], missing: ['token'] })])
+    install([chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true }], missing: ['token'] })])
     await mount()
     await act(async () => { openRow('Telegram') })
     const jump = main().querySelector<HTMLAnchorElement>('#connDlgBody a.jump')!
@@ -700,6 +717,14 @@ describe('connections island', () => {
     await act(async () => { openRow('Slack') })
     expect(paneHead().querySelector('.two-pane-meta')!.textContent).toBe('gui.conn.st_live')
     expect(main().querySelector('#connDlgBody .sustate')).toBeNull()
+  })
+
+  it('wears the entrance s own app icon, in its row and in its header', async () => {
+    install([chan()])
+    await mount()
+    expect(rowNamed('Slack').querySelector('.channel-mark img')!.getAttribute('src')).toBe('assets/channels/slack.png')
+    await act(async () => { openRow('Slack') })
+    expect(paneHead().querySelector('.channel-mark img')!.getAttribute('src')).toBe('assets/channels/slack.png')
   })
 
   /* The note beside the save button used to be an empty span. */
@@ -855,7 +880,7 @@ describe('connections island', () => {
   it('keeps its rendered shape, list', async () => {
     install([
       chan({ on: true, running: true }),
-      chan({ id: 'telegram', name: 'Telegram' }),
+      chan({ id: 'telegram', key: 'Telegram' }),
       chan({ id: 'email', key: 'gui.chan.email' }),
     ])
     await mount()

@@ -23,14 +23,14 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 
-import { ModelTags, TagGlyph } from '../../../components/ModelTags'
+import { ModelTagDefs, ModelTags, TagGlyph } from '../../../components/ModelTags'
 import { t } from '../../../i18n/t'
 import { KIND_GLYPH, KIND_LABEL, KIND_ORDER, bareModel as bare, guessKind, modelKind, nextKind } from '../../model/types'
 import { Rov } from '../Fields'
+import { ModelListWait } from '../Skeletons'
 import * as store from '../store'
-import { roleName, rolesUsing } from './Roles'
 
-import type { Kind } from '../../model/types'
+import type { Kind, ModelHost } from '../../model/types'
 import type { Sheet } from '../store'
 import type { ModelCandidate, ProviderRow } from '../types'
 import type { JSX } from 'react'
@@ -38,19 +38,22 @@ import type { JSX } from 'react'
 /* Whether this row is on the provider already. `added` is the wire's own
    answer, computed with `merge_key`; the second test covers a row the vendor's
    list never named, which reaches us with no answer at all. */
-export const isAdded = (slug: string, m: ModelCandidate, configured: string[]): boolean =>
-  m.added || configured.some((c) => bare(slug, c) === bare(slug, m.id))
+export const isAdded = (host: ModelHost, m: ModelCandidate, configured: string[]): boolean =>
+  m.added || configured.some((c) => bare(host, c) === bare(host, m.id))
 
-/* Every row the popover may draw: what the vendor named, plus what is already
-   configured and the vendor did not name -- a model added by hand is only in
-   the second, and leaving it out would make it unremovable from here. */
+/* Every model this provider could serve: what the vendor named, plus what is
+   already configured and the vendor did not name. The second half is what
+   makes a hand-typed id count as present -- `exact` reads this list to decide
+   whether the search term is already on the provider, and without it typing an
+   id that is already there would offer to add it again.
+   What the popover DRAWS is the unadded part of this; see `shownRows`. */
 export function allRows(sheet: Sheet, configured: string[], labels?: ProviderRow['labels']): ModelCandidate[] {
-  const seen = new Set(sheet.items.map((m) => bare(sheet.slug, m.id)))
+  const seen = new Set(sheet.items.map((m) => bare({ id: sheet.slug }, m.id)))
   /* A model somebody added by hand is not in the vendor's list, and its kind is
      not text just because the list did not name it -- the provider row carries
      one, and filing it under Text would hide a hand-added embedding model from
      the tab that exists to find it. */
-  const extra = configured.filter((m) => !seen.has(bare(sheet.slug, m)))
+  const extra = configured.filter((m) => !seen.has(bare({ id: sheet.slug }, m)))
     .map((id): ModelCandidate => ({ id, label: id, kind: modelKind(labels?.[id]), added: true }))
   return [...sheet.items, ...extra]
 }
@@ -58,9 +61,17 @@ export function allRows(sheet: Sheet, configured: string[], labels?: ProviderRow
 const matches = (m: ModelCandidate, q: string): boolean =>
   !q || m.id.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q)
 
+/* What the popover draws: what is left to add. A model already on the provider
+   is not a choice here -- it was drawn ticked, taking a line each to say
+   nothing the reader can act on, and a vendor whose whole list is on already
+   opened as a full page of ticks with nothing to press. Taking one off is the
+   chip's job on the page behind (`ProviderDetail`, where the `x` also refuses
+   while a role is using it), which is where the models the provider HAS are
+   listed. */
 export function shownRows(sheet: Sheet, configured: string[], labels?: ProviderRow['labels']): ModelCandidate[] {
   const q = sheet.q.trim().toLowerCase()
   return allRows(sheet, configured, labels)
+    .filter((m) => !isAdded({ id: sheet.slug }, m, configured))
     .filter((m) => matches(m, q))
     .filter((m) => sheet.kind === 'all' || m.kind === sheet.kind)
 }
@@ -70,7 +81,9 @@ export function shownRows(sheet: Sheet, configured: string[], labels?: ProviderR
    promise of nothing. */
 export function kindCounts(sheet: Sheet, configured: string[], labels?: ProviderRow['labels']): Array<['all' | Kind, number]> {
   const q = sheet.q.trim().toLowerCase()
-  const matched = allRows(sheet, configured, labels).filter((m) => matches(m, q))
+  const matched = allRows(sheet, configured, labels)
+    .filter((m) => !isAdded({ id: sheet.slug }, m, configured))
+    .filter((m) => matches(m, q))
   const out: Array<['all' | Kind, number]> = [['all', matched.length]]
   for (const kind of KIND_ORDER) {
     const n = matched.filter((m) => m.kind === kind).length
@@ -82,10 +95,25 @@ export function kindCounts(sheet: Sheet, configured: string[], labels?: Provider
 /* A gateway's ids are `vendor/model`, so they group; a direct vendor's are not,
    so they do not. Rows with no prefix trail the labelled groups rather than
    sitting between two of them, where they read as the previous group's tail. */
-export function groups(rows: ModelCandidate[]): Array<[string, ModelCandidate[]]> {
+/* The id as this provider's own list would write it: without a leading prefix
+   naming the provider itself, case kept. A gateway's live list qualifies every
+   id with its own name -- `openrouter/anthropic/claude-opus-5.5` -- so grouping
+   on the first segment filed all of them under one head called "openrouter",
+   which is the provider the popover already belongs to. `bareModel` answers
+   the identity question and lowercases to do it; this one is for display. */
+export function ownId(host: ModelHost, id: string): string {
+  const lower = id.toLowerCase()
+  for (const head of host.routes?.length ? host.routes : [host.id]) {
+    if (lower.startsWith(`${head.toLowerCase()}/`)) return id.slice(head.length + 1)
+  }
+  return id
+}
+
+export function groups(rows: ModelCandidate[], host: ModelHost): Array<[string, ModelCandidate[]]> {
   const by = new Map<string, ModelCandidate[]>()
   for (const m of rows) {
-    const g = m.id.includes('/') ? m.id.split('/')[0]! : ''
+    const own = ownId(host, m.id)
+    const g = own.includes('/') ? own.split('/')[0]! : ''
     if (!by.has(g)) by.set(g, [])
     by.get(g)!.push(m)
   }
@@ -94,6 +122,18 @@ export function groups(rows: ModelCandidate[]): Array<[string, ModelCandidate[]]
      the control that adds the whole vendor. */
   if (by.size === 1 && [...by.keys()][0] === '') return [['', [...by.values()][0]!]]
   return [...by.entries()].sort((a, b) => (a[0] === '' ? 1 : b[0] === '' ? -1 : a[0].localeCompare(b[0])))
+}
+
+/* What a row is called. The vendor's display name when it gave one -- "DeepSeek
+   V4 Flash" -- and otherwise the id without the group's own prefix: the head
+   over the row already says `deepseek`, and the raw id beside a display name
+   read as the same vendor spelled twice, once capitalised and once not. */
+export function rowName(m: ModelCandidate, group: string, host: ModelHost): string {
+  /* A gateway's "display name" is often just its id less the gateway --
+     `anthropic/claude-opus-5.5` -- so the group's prefix comes off whichever of
+     the two is shown, not only off the id. */
+  const text = m.label && m.label !== m.id ? m.label : ownId(host, m.id)
+  return group && text.startsWith(`${group}/`) ? text.slice(group.length + 1) : text
 }
 
 function KindChip({ value, onCycle }: { value: Kind; onCycle(next: Kind): void }): JSX.Element {
@@ -138,9 +178,8 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
   const rows = shownRows(sheet, configured, p.labels)
   const counts = kindCounts(sheet, configured, p.labels)
   const q = sheet.q.trim()
-  const exact = allRows(sheet, configured, p.labels).some((m) => bare(p.id, m.id) === bare(p.id, q))
+  const exact = allRows(sheet, configured, p.labels).some((m) => bare(p, m.id) === bare(p, q))
   const typedKind = sheet.typed ?? guessKind(q)
-  const pending = rows.filter((m) => !isAdded(p.id, m, configured))
 
   /* Below the button it hangs off, flipping above only when the room below is
      too short to be useful and there is more of it above. The height follows
@@ -180,29 +219,41 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
     }
   }, [p.id])
 
-  const toggle = (m: ModelCandidate): void => {
-    const listed = isAdded(p.id, m, configured)
-    if (listed) {
-      /* The same refusal the tag list beside this popover makes: a model a role
-         runs on does not come off by a click here either. */
-      const used = rolesUsing(store.get().snap, p.id, m.id)
-      if (used.length) {
-        store.refuse(t('gui.settings.providers.model_in_use', { roles: used.map(roleName).join(', '), model: m.id }))
-        return
-      }
+  /* Tick, then add. A click on a row only marks it; the write is the footer's,
+     for the ticked set or for everything shown. A click that wrote at once
+     made each pick its own round trip and its own redraw, and gave no way to
+     look over what was about to land before it did. The picks are counted
+     against what is still addable, so one that was added some other way
+     meanwhile stops being counted rather than being written twice. */
+  const addable = allRows(sheet, configured, p.labels).filter((m) => !isAdded(p, m, configured))
+  const picked = new Set(sheet.picked.filter((id) => addable.some((m) => m.id === id)))
+  const flip = (ids: string[], on: boolean): void => {
+    const next = new Set(sheet.picked)
+    for (const id of ids) {
+      if (on) next.add(id)
+      else next.delete(id)
     }
-    void store.sheetToggleModel(p.id, m.id, listed)
+    store.sheetPatch({ picked: [...next] })
   }
+  const shownOn = rows.filter((m) => picked.has(m.id)).length
+  const shownState = shownOn === 0 ? 'false' : shownOn === rows.length ? 'true' : 'mixed'
+  const commit = (ids: string[]): void => {
+    if (!ids.length) return
+    void store.run(`prov:${p.id}`, () => store.source().addModels(p.id, ids))
+      .then((ok) => { if (ok) store.set({ sheet: null }) })
+  }
+  /* The typed row stays one press: it is an id the list does not carry, so
+     there is nothing in the list to tick. */
   const addTyped = (): void => {
     void store.sheetToggleModel(p.id, q, false, typedKind)
     store.sheetPatch({ q: '', typed: null })
   }
-  const addMany = (ids: string[]): void => {
-    if (ids.length) void store.run(`prov:${p.id}`, () => store.source().addModels(p.id, ids))
-  }
 
   return createPortal((
     <div className="settings-apop" ref={box} role="dialog" aria-label={t('gui.settings.providers.add_model')}>
+      {/* This popover opens with the picker shut, so it carries the sprite its
+          own rows reference rather than relying on the picker's. */}
+      <ModelTagDefs />
       <div className="settings-apsearch">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
         <input
@@ -215,9 +266,8 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
           onChange={(e) => store.sheetPatch({ q: e.currentTarget.value, typed: null })}
           onKeyDown={(e) => {
             if (e.key !== 'Enter') return
-            const first = pending[0]
-            if (first) toggle(first)
-            else if (q && !exact) addTyped()
+            if (q && !exact && !rows.length) addTyped()
+            else commit([...picked])
           }}
         />
       </div>
@@ -239,42 +289,43 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
         </div>
       )}
       <div className="settings-apbody">
-        {sheet.state === 'loading' && <div className="settings-apwait">{t('gui.settings.providers.fetching', { name: p.name })}</div>}
+        {sheet.state === 'loading' && (
+          <>
+            <div className="settings-apwait">{t('gui.settings.providers.fetching', { name: p.name })}</div>
+            <ModelListWait />
+          </>
+        )}
         {/* A vendor with no list endpoint still has models -- the ones somebody
             typed in. Saying so above them beats replacing them with the
             message, which is what hid a provider's own list behind its
             failure to enumerate one. */}
         {sheet.state === 'failed' && <div className="settings-apnote">{t('gui.settings.providers.no_list')}</div>}
-        {sheet.state !== 'loading' && groups(rows).map(([name, ids]) => {
-          const folded = !!sheet.folded[name]
-          const unadded = ids.filter((m) => !isAdded(p.id, m, configured))
+        {sheet.state !== 'loading' && groups(rows, p).map(([name, ids]) => {
+          /* A vendor's head is that vendor's select-all, drawn as the same box
+             its rows carry: all ticked, some (a dash), or none. It used to be a
+             fold on the name and a bare "+" at the far edge that wrote the whole
+             vendor at once -- a second way to add, with a different
+             commitment, that looked like neither a tick nor a button. */
+          const on = ids.filter((m) => picked.has(m.id)).length
+          const state = on === 0 ? 'false' : on === ids.length ? 'true' : 'mixed'
           return (
-            <div key={name || '_'}>
+            <div key={name || '_'} className={name ? 'settings-apgrp' : undefined}>
               {name && (
-                <div className="settings-mgroup">
-                  <button
-                    type="button"
-                    className="settings-gt"
-                    aria-expanded={!folded}
-                    onClick={() => store.sheetPatch({ folded: { ...sheet.folded, [name]: !folded } })}
-                  >
-                    <span className="settings-gn">{name}</span>
-                    <span className="settings-gc">{ids.length}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="settings-ga"
-                    aria-label={t('gui.model.add_group')}
-                    title={t('gui.model.add_group')}
-                    disabled={!unadded.length}
-                    onClick={() => addMany(unadded.map((m) => m.id))}
-                  >
-                    {'+'}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className="settings-mgroup"
+                  role="checkbox"
+                  aria-checked={state}
+                  aria-label={t('gui.settings.providers.pick_group', { name })}
+                  onClick={() => flip(ids.map((m) => m.id), state !== 'true')}
+                >
+                  <span className="settings-aptick">{state === 'true' ? '✓' : state === 'mixed' ? '–' : ''}</span>
+                  <span className="settings-gn">{name}</span>
+                  <span className="settings-gc">{ids.length}</span>
+                </button>
               )}
-              {!folded && ids.map((m) => {
-                const has = isAdded(p.id, m, configured)
+              {ids.map((m) => {
+                const has = picked.has(m.id)
                 return (
                   <button
                     key={m.id}
@@ -283,10 +334,10 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
                     role="menuitemcheckbox"
                     aria-checked={has}
                     title={m.id}
-                    onClick={() => toggle(m)}
+                    onClick={() => flip([m.id], !has)}
                   >
                     <span className="settings-aptick">{has ? '✓' : ''}</span>
-                    <span className="settings-apnm">{m.label || m.id}</span>
+                    <span className="settings-apnm">{rowName(m, name, p)}</span>
                     <ModelTags facts={m} />
                   </button>
                 )
@@ -305,16 +356,38 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
             </button>
           </>
         )}
+        {/* Nothing left to add is not the same as nothing to add: a provider
+            carrying every model its vendor lists would otherwise be told it
+            has no models at all. */}
         {sheet.state !== 'loading' && !rows.length && !q && (
-          <div className="settings-apwait">{t('gui.settings.providers.no_models_yet')}</div>
+          <div className="settings-apwait">
+            {t(configured.length ? 'gui.settings.providers.all_added' : 'gui.settings.providers.no_models_yet')}
+          </div>
         )}
       </div>
+      {/* One way to commit. "Select all" is a tick like every other on the list
+          -- over what is shown, so a search narrows what it takes -- and the
+          only button is the add. An "add all" button beside it was a second,
+          unreviewed way to write, and it did not look like the rest of a list
+          that is otherwise built by ticking. */}
       <div className="settings-apfoot">
-        <Rov>{t('gui.settings.providers.showing_added', { n: String(rows.length), m: String(configured.length) })}</Rov>
-        <span style={{ flex: 1 }} />
         {rows.length > 0 && (
-          <button type="button" className="mini ghost" disabled={!pending.length} onClick={() => addMany(pending.map((m) => m.id))}>
-            {t('gui.model.add_all', { n: String(pending.length) })}
+          <button
+            type="button"
+            className="settings-apall"
+            role="checkbox"
+            aria-checked={shownState}
+            onClick={() => flip(rows.map((m) => m.id), shownState !== 'true')}
+          >
+            <span className="settings-aptick">{shownState === 'true' ? '✓' : shownState === 'mixed' ? '–' : ''}</span>
+            {t('gui.settings.providers.pick_all')}
+            <Rov>{String(rows.length)}</Rov>
+          </button>
+        )}
+        <span style={{ flex: 1 }} />
+        {addable.length > 0 && (
+          <button type="button" className="mini go" disabled={!picked.size} onClick={() => commit([...picked])}>
+            {t('gui.settings.providers.add_picked', { n: String(picked.size) })}
           </button>
         )}
       </div>

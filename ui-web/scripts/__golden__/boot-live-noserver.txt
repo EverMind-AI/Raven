@@ -4,22 +4,33 @@ div.app[data-rail=on]
     div.railtop
       span.wordmark
         svg
-          rect
-          path
-          circle
-          ellipse
-          ellipse
-          circle
-          circle
-          path
-          path
+          g
+            rect
+            rect
+            path
+            path
+            path
+            circle
+            circle
+            circle
+            circle
+            circle
+            path
+            rect
+            rect
+          defs
+            lineargradient#rvm_r_0_g
+              stop
+              stop
+            clippath#rvm_r_0_c
+              rect
       button#railBtn.ghost-ic.tipdn
         svg
-          rect
+          path
           path
       button#findBtn.ghost-ic.tipdn
         svg
-          circle
+          path
           path
     nav.rail-nav
       button#newBtn.navi.newrun
@@ -28,14 +39,17 @@ div.app[data-rail=on]
         span
       button#agentsBtn.navi
         svg
-          rect
-          rect
-          path
+          g
+            path
+            path
+            path
+            path
         span
     div#findBox.find
-      svg.ic
-        circle
-        path
+      span.ic
+        svg
+          path
+          path
       input#sfind
       button#sclr.clr
     div#list.list
@@ -48,7 +62,7 @@ div.app[data-rail=on]
       button#meBtn.me
         span.av.anon
           svg
-            circle
+            path
             path
         span.who
           span.n
@@ -58,10 +72,10 @@ div.app[data-rail=on]
       div.chat
         div.top
           h1#title
-          button#renameBtn.ghost-ic.tipdn
+          span#wdTag.chrome-wd-tag
             svg
               path
-              path
+            span
           span.spacer
           button#wsBtn.ghost-ic.wstog.tipdn
             svg
@@ -79,15 +93,26 @@ div.app[data-rail=on]
         div#brand
           span.mk
             svg
-              rect
-              path
-              circle
-              ellipse
-              ellipse
-              circle
-              circle
-              path
-              path
+              g
+                rect
+                rect
+                path
+                path
+                path
+                circle
+                circle
+                circle
+                circle
+                circle
+                path
+                rect
+                rect
+              defs
+                lineargradient#rvm_r_1_g
+                  stop
+                  stop
+                clippath#rvm_r_1_c
+                  rect
           span.wl
         div.dock
           div#sheetRack.sheets
@@ -97,22 +122,24 @@ div.app[data-rail=on]
             div.field
               textarea#ta
             div.under
-              button#attBtn.tool-btn
-                svg
-                  path
-              button#tplBtn.tool-btn
-                svg
-                  rect
-                  path
-              button#permChip.chip
-                svg.pico
-                  path
-                  path
-                span#permName
-              button#wdChip.chip
-                svg.pico
-                  path
-                span#wdName
+              span.chrome-anch
+                button#plusBtn.plus
+                  svg
+                    path
+                div#plusPop.pop[data-open=false]
+              span.chrome-anch
+                button#wdChip.chip
+                  svg.pico
+                    path
+                  span#wdName
+                div#wdPop.pop[data-open=false][data-view=menu]
+              span.chrome-anch
+                button#permChip.chip
+                  svg.pico
+                    path
+                    path
+                  span#permName
+                div#permPop.pop[data-open=false]
               span#envChip.chip
                 span.led
                 span#envName
@@ -121,13 +148,11 @@ div.app[data-rail=on]
                 svg.ring
                   circle.bg
                   circle.fg
-              button#tierChip.chip
-                svg.pico
-                  path
-                  path
-                span#tierName
-              button#modelChip.chip
+              button#modelChip.chip.model
                 span#modelName
+                span.chrome-model-caret
+                  svg
+                    path
               button#go.go
                 svg
                   path
@@ -135,19 +160,6 @@ div.app[data-rail=on]
               div.hd
                 span.lab
               div#slashList
-            div#permPop.pop[data-open=false]
-              div.hd
-                span.lab
-              div#permList
-              div.note
-            div#tierPop.pop[data-open=false]
-              div.hd
-                span#tierPopLab.lab
-              div#tierList
-              div.note
-            div#wdPop.pop[data-open=false][data-view=menu]
-              div.hd
-                span.lab
       aside#ws.ws
         div.ws-top
           div#wsTabs.wseg
@@ -181,7 +193,7 @@ div.app[data-rail=on]
         div#wsBody.ws-body
 button#railShow.ghost-ic.tipdn
   svg
-    rect
+    path
     path
 section#extAgentsPage.page[data-open=false]
   header
@@ -221,6 +233,42 @@ div#setVeil.veil.setveil[data-open=false][data-section=usage]
                   path
                 input
             div.two-pane-list
+              div.two-pane-wait
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
+                div.two-pane-row
+                  span.two-pane-hit
+                    span.two-pane-txt
+                      span.two-pane-wbar
+                      span.two-pane-wbar
           div.two-pane-main
             div.two-pane-none
       div#cronBody.spanels[data-for=cron]

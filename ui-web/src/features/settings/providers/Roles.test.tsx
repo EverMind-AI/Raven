@@ -27,17 +27,16 @@ const role = (id: string) => ROLES.find((r) => r.id === id)!
 const pill = (roleName: string): HTMLElement => screen.getByLabelText(`gui.settings.roles.change {"role":"${roleName}"}`)
 /* One picker for the whole page since 2026-09-20: the composer's, at the body. */
 const picker = (): HTMLElement => document.querySelector('.mpick') as HTMLElement
-/* The provider row's hit area is a button beside the name, not around it, so a
-   click on the name selects nothing. */
-const selectProvider = (name: string): void => {
-  const row = [...picker().querySelectorAll<HTMLElement>('.provs .row')]
-    .find((r) => r.querySelector('.nm')?.textContent?.includes(name))!
-  fireEvent.click(row.querySelector('.model-provider-action')!)
-}
+/* The picker is one list grouped by provider, so a model is reached through
+   its group: the named provider's where one is given, the first group listing
+   it otherwise. */
+const group = (name: string): HTMLElement =>
+  [...picker().querySelectorAll<HTMLElement>('.model-group')]
+    .find((g) => g.querySelector('.model-group-hd .nm')?.textContent?.includes(name))!
 const pick = async (roleName: string, model: string, providerName?: string): Promise<void> => {
   await act(async () => { fireEvent.click(pill(roleName)) })
-  if (providerName) await act(async () => { selectProvider(providerName) })
-  await act(async () => { fireEvent.click(within(picker()).getByText(model)) })
+  const scope = providerName ? group(providerName) : picker()
+  await act(async () => { fireEvent.click(within(scope).getAllByText(model)[0]!) })
 }
 const sets = (calls: Array<[string, unknown]>) => calls.filter(([m]) => m === 'set').map(([, a]) => a)
 
@@ -315,5 +314,43 @@ describe('model roles', () => {
     await act(async () => { fireEvent.change(box, { target: { value: '512' } }); fireEvent.keyDown(box, { key: 'Enter' }) })
     expect(second.calls).toEqual([])
     expect(screen.getByRole('alert').textContent).toBe('gui.settings.roles.ctx_min {"n":1024}')
+  })
+
+  it('the closed disclosure reads out all three values, and opening it hands them to the drawer', async () => {
+    install()
+    await mount('model')
+    const disc = screen.getByText('gui.settings.roles.params').closest('button') as HTMLButtonElement
+    const chunks = (): string[] => [...disc.querySelectorAll('.settings-sv')].map((n) => n.textContent || '')
+    expect(disc.getAttribute('aria-expanded')).toBe('false')
+    expect(chunks()).toEqual([
+      'gui.settings.roles.sum_effortgui.settings.roles.effort_low',
+      'gui.settings.roles.sum_iters40 gui.settings.roles.times',
+      'gui.settings.roles.sum_ctxgui.settings.roles.ctx_auto',
+    ])
+    expect(document.querySelector('.settings-cfg')).toBeNull()
+    const row = disc.closest('.settings-row') as HTMLElement
+    expect(row.className).not.toContain('settings-open')
+    await act(async () => { fireEvent.click(disc) })
+    expect(disc.getAttribute('aria-expanded')).toBe('true')
+    expect(chunks()).toEqual([])
+    expect(document.querySelector('.settings-cfg')).toBeTruthy()
+    /* The row hands over its separator, which it only grows at all because the
+       drawer stopped it being the last child of its wrapper. */
+    expect(row.className).toContain('settings-open')
+  })
+
+  it('a pinned window is the value the closed disclosure shows, and the mode sits beside it when open', async () => {
+    const pinned = snap()
+    ;(pinned.raw.agents as { defaults: Record<string, unknown> }).defaults.contextWindowTokens = 300000
+    install(pinned)
+    await mount('model')
+    const disc = screen.getByText('gui.settings.roles.params').closest('button') as HTMLButtonElement
+    expect([...disc.querySelectorAll('.settings-sv')].map((n) => n.textContent)).toContain('gui.settings.roles.sum_ctx300,000 tok')
+    await act(async () => { fireEvent.click(disc) })
+    /* One row owns the window: the box that holds it and the two modes. */
+    const row = screen.getByLabelText('gui.settings.roles.ctx_fixed').closest('.settings-row') as HTMLElement
+    expect(row.querySelector('.settings-k')?.textContent).toBe('gui.settings.roles.ctx')
+    expect([...row.querySelectorAll('.settings-seg button')].map((b) => b.textContent))
+      .toEqual(['gui.settings.roles.ctx_auto', 'gui.settings.roles.ctx_pin'])
   })
 })

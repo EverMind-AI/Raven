@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SheetRack } from '../../chrome/SheetRack'
 import { setTranslator } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
+import * as plus from '../../state/plus'
 import * as sheetRack from '../../state/sheetRack'
 import { resetSources, setSources } from '../../state/sources'
 import { AttTray } from './ComposerPage'
@@ -93,13 +94,13 @@ describe('the deck template picker', () => {
     open()
     expect(document.querySelector('.cp-tpl-sheet')).toBeNull()
     store.goPaint()
-    expect((document.getElementById('tplBtn') as HTMLButtonElement).hidden).toBe(true)
+    expect(plus.get().template).toBe(false)
     wire({})
     expect(store.canPickTemplate()).toBe(true)
-    /* The dock is wired before the source is installed, so the button cannot
+    /* The dock is wired before the source is installed, so the "+" menu cannot
        decide at install time; the boot's repaint is when it learns. */
     store.goPaint()
-    expect((document.getElementById('tplBtn') as HTMLButtonElement).hidden).toBe(false)
+    expect(plus.get().template).toBe(true)
   })
 
   it('docks a sheet that says it is loading, then shows every template as a card', async () => {
@@ -134,7 +135,12 @@ describe('the deck template picker', () => {
     expect(sheet.querySelector('.q')!.textContent).toBe('Amber Wave Quarterly Summary')
     expect(sheet.querySelector('.cp-tpl-grid')).toBeNull()
     expect(sheet.querySelector('.cp-tpl-pages .cp-tpl-count')!.textContent).toBe('Loading the pages')
+    /* And the wait is carried in the shape of what is coming: the pages are
+       rendered on the other end, which takes seconds, and the strip held the
+       template's name doing nothing while it did. */
+    expect(sheet.querySelector('.cp-tpl-strip > .cp-tpl-load')).not.toBeNull()
     await act(async () => { release({ pages: PAGES }); await settle() })
+    expect(sheet.querySelector('.cp-tpl-load')).toBeNull()
     const strip = sheet.querySelector('.cp-tpl-pages .cp-tpl-strip') as HTMLElement
     expect(Array.from(strip.querySelectorAll('img')).map((i) => i.getAttribute('src'))).toEqual(PAGES)
     expect(sheet.querySelector('.cp-tpl-pages .cp-tpl-count')!.textContent).toBe('1 / 3')

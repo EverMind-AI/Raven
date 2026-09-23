@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import react from '@vitejs/plugin-react'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, type Plugin } from 'vitest/config'
 
 // Two shapes from one source tree.
 //
@@ -118,6 +118,13 @@ export default defineConfig(({ command, mode }) => {
       emptyOutDir: true,
       sourcemap: false,
       target: 'es2020',
+    },
+    /* The icon set ships as one module per icon behind a barrel -- twelve
+       thousand files -- and a test that loads the composer or the rail would
+       otherwise transform every one of them, which is enough to push the
+       slowest session tests past their timeout. Pre-bundled, it is one file. */
+    test: {
+      deps: { optimizer: { client: { enabled: true, include: ['@hugeicons/core-free-icons'] } } },
     },
   }
 })

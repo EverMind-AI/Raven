@@ -86,9 +86,11 @@ function claimFirstFrame(): void {
 /* Everything a first frame needs from the gateway, in the order it needs it.
  *
  * The language is not a step here any more: the store resolves it as it loads,
- * from the remembered pick and otherwise from what the document declares
- * (state/lang/store.ts), so the notice that explains a page which cannot
- * connect is already in the reader's language before this runs. */
+ * from the remembered pick, else the reader's own languages, else what the
+ * document declares (state/lang/store.ts), so the notice that explains a page
+ * which cannot connect is in the reader's language before this runs. The middle
+ * step is what makes that true for a reader the gateway has never answered for,
+ * the connect below returning before `loadLang` is reached. */
 async function sequence(): Promise<void> {
   /* The first connect is the one place where a socket that never opened really
      does mean the session is not welcome: nothing has been served to this page

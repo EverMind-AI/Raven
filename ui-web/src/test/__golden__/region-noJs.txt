@@ -1,2 +1,5 @@
 div#noJs
-  b
+  p
+    b
+  p
+    b

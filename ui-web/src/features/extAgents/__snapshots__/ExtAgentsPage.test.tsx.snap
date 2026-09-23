@@ -1,64 +1,64 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`the sheet > keeps its rendered shape, list 1`] = `
+exports[`the sheet > keeps its rendered shape, grid 1`] = `
 "div.pmhero
-  h3
-section.extAgents-sec
-  div.extAgents-hd
-    b
-    span.extAgents-n
-  div.extAgents-set
-    div.extAgents-row
+  div
+    h3
+    p
+div.extAgents-tabs
+  button.extAgents-tab
+    span.extAgents-tn
+  button.extAgents-tab
+    span.extAgents-tn
+  button.extAgents-tab
+    span.extAgents-tn
+  button.extAgents-tab
+    span.extAgents-tn
+div.extAgents-grid
+  div.extAgents-card
+    div.extAgents-ctop
       span.extAgents-tile.extAgents-tile-own
         span.agent-mark
           img
-      div.extAgents-who
-        div.extAgents-nm
-          span.extAgents-led
-          span.extAgents-t
-        div.extAgents-one
+      div.extAgents-nm
+        span.extAgents-t
+        span.extAgents-led
       div.extAgents-ctl
-    div.extAgents-row
+    div.extAgents-one
+  div.extAgents-card
+    div.extAgents-ctop
       span.extAgents-tile
         span.agent-mark
           img[data-agent=claude_code]
-      div.extAgents-who
-        div.extAgents-nm
-          span.extAgents-led
-          span.extAgents-t
-        div.extAgents-one
+      div.extAgents-nm
+        span.extAgents-t
+        span.extAgents-led
       div.extAgents-ctl
-        button.mini
-section.extAgents-sec
-  div.extAgents-hd
-    b
-    span.extAgents-n
-  div.extAgents-set
-    div.extAgents-row
+    div.extAgents-one
+  div.extAgents-card
+    div.extAgents-ctop
       span.extAgents-tile
         span.agent-mark
           img[data-agent=hermes][data-tone=mono]
-      div.extAgents-who
-        div.extAgents-nm
-          span.extAgents-t
-        div.extAgents-one
+      div.extAgents-nm
+        span.extAgents-t
       div.extAgents-ctl
-        button.mini.go
-section.extAgents-sec
-  div.extAgents-hd
-    b
-    span.extAgents-n
-  div.extAgents-set
-    div.extAgents-row
+        button.extAgents-cbtn
+          svg
+            path
+    div.extAgents-one
+  div.extAgents-card
+    div.extAgents-ctop
       span.extAgents-tile
         span.agent-mark
           img[data-agent=codex]
-      div.extAgents-who
-        div.extAgents-nm
-          span.extAgents-t
-        div.extAgents-one
+      div.extAgents-nm
+        span.extAgents-t
       div.extAgents-ctl
-        button.mini"
+        button.extAgents-cbtn
+          svg
+            path
+    div.extAgents-one"
 `;
 
 exports[`the sheet > keeps its rendered shape, sheet 1`] = `

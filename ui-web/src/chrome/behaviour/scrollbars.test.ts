@@ -15,9 +15,9 @@ interface Geom {
   left: number
 }
 
-function scroller(over: Partial<Geom> = {}): HTMLElement {
+function scroller(over: Partial<Geom> = {}, tag = 'div'): HTMLElement {
   const g: Geom = { clientHeight: 200, scrollHeight: 1000, clientWidth: 300, scrollWidth: 300, top: 10, left: 5, ...over }
-  const el = document.createElement('div')
+  const el = document.createElement(tag)
   document.body.appendChild(el)
   for (const k of ['clientHeight', 'scrollHeight', 'clientWidth', 'scrollWidth'] as const) {
     Object.defineProperty(el, k, { value: g[k], configurable: true })
@@ -102,6 +102,20 @@ describe('overlay scrollbars', () => {
     expect(vert()).toBeUndefined()
   })
 
+  it('draws no thumb over a one-line field, however far its text runs', () => {
+    /* A text input scrolls itself to the caret, so there is nothing to grab,
+       and the bar was laid across the bottom of a box one line tall: 6px of
+       thumb inside 27px of field, which is what renaming a long conversation
+       looked like. A textarea is a real scroller and keeps its bar. */
+    const field = scroller({ clientHeight: 27, clientWidth: 150, scrollWidth: 460 }, 'input')
+    show(field)
+    expect(thumbs()).toHaveLength(0)
+
+    const area = scroller({ clientHeight: 120, scrollHeight: 900 }, 'textarea')
+    show(area)
+    expect(vert()).toBeTruthy()
+  })
+
   it('shows the bar, then takes it back after SB_HIDE', () => {
     show(scroller())
     expect(vert()!.dataset.on).toBe('true')
@@ -145,6 +159,43 @@ describe('overlay scrollbars', () => {
     el.remove()
     sync()
     expect(thumbs()).toHaveLength(0)
+  })
+
+  it('takes the thumb down the moment its scroller leaves the page, not when the fade ends', async () => {
+    /* The model picker closing: its list goes with the panel, and the thumb,
+       parked in its own layer, stayed over the page for the whole of SB_HIDE
+       plus its fade. Nothing else scrolls meanwhile, so sync() never runs. */
+    const panel = document.createElement('div')
+    document.body.appendChild(panel)
+    const el = scroller()
+    panel.appendChild(el)
+    show(el)
+    expect(thumbs()).toHaveLength(1)
+    panel.remove()
+    await Promise.resolve()
+    expect(thumbs()).toHaveLength(0)
+  })
+
+  it('takes a faded thumb down too when its scroller leaves later', async () => {
+    /* The bar faded first and the picker closed after: the thumb was invisible
+       but stayed in the layer, one more for every picker opened. */
+    const el = scroller()
+    show(el)
+    vi.advanceTimersByTime(SB_HIDE)
+    expect(vert()!.dataset.on).toBe('false')
+    el.remove()
+    await Promise.resolve()
+    expect(thumbs()).toHaveLength(0)
+  })
+
+  it('removes a gone scroller\'s thumb when its timer runs, rather than only fading it', () => {
+    const el = scroller()
+    show(el)
+    const t = vert()!
+    /* Detached behind the observer's back: the timer is the second line. */
+    Object.defineProperty(el, 'isConnected', { value: false, configurable: true })
+    vi.advanceTimersByTime(SB_HIDE)
+    expect(t.isConnected).toBe(false)
   })
 
   it('drops everything on demand, timer included', () => {

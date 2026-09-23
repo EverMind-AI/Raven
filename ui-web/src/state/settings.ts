@@ -28,12 +28,12 @@ import { markNew as markNewCurrent } from '../features/rail/store'
  * draw and writes it when a reader picks a section, so the slot has to be
  * somewhere both sides can reach -- which used to mean window.sTab.
  *
- * `usage` is the section the page is served on, as the dialog's own install
- * seeded it. `null` is "nothing has asked for a section", which is what a reset
+ * `general` is the section a first open lands on: the dialog's front page,
+ * the one whose name says so. `null` is "nothing has asked for a section", which is what a reset
  * test starts from; the island then shows the tab its own state holds. `open`
  * below never touches it.
  */
-export const settingsTab: { id: string | null } = { id: 'usage' }
+export const settingsTab: { id: string | null } = { id: 'general' }
 
 /* What opens the dialog once a section is picked, filled by the page's wiring
    (src/app/install.ts) with the island's own open -- which draws, raises the
@@ -138,7 +138,7 @@ export function close(): void {
    are the module's. */
 export function _resetForTests(): void {
   up = false
-  settingsTab.id = 'usage'
+  settingsTab.id = 'general'
   opener = null
   slots.clear()
   enters.clear()

@@ -639,7 +639,6 @@ async def test_prompt_mode_capability_errors_enter_the_repair_loop():
     assert len(provider.calls) == 2
     repair = provider.calls[1][-1]["content"]
     assert "stateless agent" in repair
-    assert "does not support skill injection" in repair
     assert "cannot receive MCP injection" in repair
     assert "passes local file paths" in repair
 

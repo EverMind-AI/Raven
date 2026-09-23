@@ -92,8 +92,6 @@ export function install(): void {
       .catch(() => { toast(t('gui.perm.save_failed')); return false })
   })
 
-  chip.install()
-
   /* The plugins page draws each server's chip from the manager's word; a
      connect finishes after the toggle that started it returned, so the page
      re-reads when the manager says so rather than showing the state at the

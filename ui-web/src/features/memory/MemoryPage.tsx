@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 
 import {
-  TwoPane, TwoPaneFind, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow,
+  TwoPane, TwoPaneFind, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow, TwoPaneWait,
 } from '../../components/TwoPane'
 import { t } from '../../i18n/t'
 import { subscribe as langSubscribe, tag as langTag } from '../../state/lang'
@@ -120,7 +120,7 @@ function MemSide({ s }: { s: store.MemoryState }): JSX.Element {
             </button>
           </>
         ) : s.phase !== 'ready' && s.items.length === 0 ? (
-          <div className="empty-note">{t('gui.hub.reading')}</div>
+          <TwoPaneWait />
         ) : s.items.length === 0 ? (
           <div className="empty-note">{s.q ? t('gui.mem.none_found', { q: s.q }) : t('gui.mem.empty')}</div>
         ) : (

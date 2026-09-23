@@ -32,7 +32,9 @@ export function SheetRack(): JSX.Element {
 
 /* One numbered row, which all three get wear: the number the keyboard picks
    it by and the wording. Shared rather than drawn three times, for the reason
-   components/Ico.tsx gives about its glyphs. */
+   components/Ico.tsx gives about its glyphs. `cls` is the caller's own state on
+   the row -- chosen, multi-select -- which belongs to the domain that draws it
+   rather than to the rack. */
 export interface SheetOptionRow {
   readonly label: string
   readonly run: () => void
@@ -41,10 +43,10 @@ export interface SheetOptionRow {
 }
 
 export function SheetOption(
-  { n, row, children }: { n: number; row: SheetOptionRow; children?: ReactNode },
+  { n, row, cls, children }: { n: number; row: SheetOptionRow; cls?: string; children?: ReactNode },
 ): JSX.Element {
   return (
-    <button className={`opt${row.go ? ' go' : ''}`} onClick={row.run}>
+    <button className={`opt${row.go ? ' go' : ''}${cls ? ` ${cls}` : ''}`} onClick={row.run}>
       <span className="n">{n}</span>
       <span>{row.label}</span>
       {children}

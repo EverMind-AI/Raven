@@ -6,6 +6,7 @@ it replaces the dormant pub/sub ``bus``.
 """
 
 from raven.spine.events import (
+    TRANSIENT_NOTICE_KINDS,
     Deliverable,
     EpisodeStart,
     MediaOut,
@@ -47,6 +48,7 @@ __all__ = [
     "Text",
     "ToolEvent",
     "ToolPhase",
+    "TRANSIENT_NOTICE_KINDS",
     "TurnEnded",
     "TurnEvent",
     "TurnFailed",

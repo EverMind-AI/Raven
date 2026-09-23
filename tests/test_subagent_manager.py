@@ -2580,13 +2580,18 @@ async def test_a_file_written_then_removed_by_a_command_is_recorded_as_a_deletio
     from raven.agent.subagent import activity
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
-    (tmp_path / "scratch.md").write_text("older\n")
+    # A workspace of its own, not agent home: the suite points the trace store
+    # at ``tmp_path/traces``, and a run whose workspace is that same directory
+    # reads raven's own bookkeeping as files the node wrote.
+    work = tmp_path / "ws"
+    work.mkdir()
+    (work / "scratch.md").write_text("older\n")
     backend = RavenLoopBackend(provider=_WriteThenRemoveProvider(), model="stub", agent_home=tmp_path)
 
     with activity.collecting() as did:
-        await backend.run("write then remove", task_id="n7", workspace=tmp_path, executor=None)
+        await backend.run("write then remove", task_id="n7", workspace=work, executor=None)
 
-    assert not (tmp_path / "scratch.md").exists()
+    assert not (work / "scratch.md").exists()
     assert [f["path"] for f in did.files] == ["scratch.md"]
     assert did.files[0] == {"path": "scratch.md", "op": "delete", "add": 0, "del": 3, "size": None}
 
@@ -2597,10 +2602,12 @@ async def test_a_file_the_run_created_and_then_removed_leaves_no_entry(tmp_path)
     from raven.agent.subagent import activity
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
+    work = tmp_path / "ws"
+    work.mkdir()
     backend = RavenLoopBackend(provider=_WriteThenRemoveProvider(), model="stub", agent_home=tmp_path)
 
     with activity.collecting() as did:
-        await backend.run("write then remove", task_id="n8", workspace=tmp_path, executor=None)
+        await backend.run("write then remove", task_id="n8", workspace=work, executor=None)
 
     assert did.files == []
 
@@ -2647,6 +2654,110 @@ async def test_a_node_editing_a_file_it_did_not_create_records_an_edit_entry(tmp
         await backend.run("edit existing", task_id="n7", workspace=tmp_path, executor=None)
 
     assert did.files == [{"path": "notes.md", "op": "edit", "add": 2, "del": 1, "size": 20}]
+
+
+class _ExecProvider(LLMProvider):
+    """One ``exec`` call running the given command, then a final answer."""
+
+    def __init__(self, command: str, **arguments: Any) -> None:
+        super().__init__(api_key="test")
+        self.command = command
+        self.arguments = arguments
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(id="c1", name="exec", arguments={"command": self.command, **self.arguments})
+                ],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def _ran(command: str, workspace, **arguments: Any) -> list[dict]:
+    """What one ``exec`` command left in ``workspace``, as the run's own files."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_ExecProvider(command, **arguments), model="stub", agent_home=workspace.parent)
+    with activity.collecting() as did:
+        await backend.run("run it", task_id="nx", workspace=workspace, executor=None)
+    return did.files
+
+
+async def test_a_file_a_command_created_is_recorded_as_a_creation(tmp_path) -> None:
+    """``exec`` reports its output and nothing else, so the file it wrote is
+    visible only as a directory that changed around the call -- which is the
+    whole of what a deck-building or report-writing command produces."""
+    work = tmp_path / "ws"
+    work.mkdir()
+
+    files = await _ran("printf 'a\nb\n' > made.txt", work)
+
+    assert files == [{"path": "made.txt", "op": "add", "add": 2, "del": 0, "size": 4}]
+
+
+async def test_a_file_a_command_rewrote_is_a_write_without_counts(tmp_path) -> None:
+    """The listing never held the old content, so there are no line counts to
+    give -- and inventing them would be worse than showing none."""
+    work = tmp_path / "ws"
+    work.mkdir()
+    (work / "notes.md").write_text("one\n", encoding="utf-8")
+
+    files = await _ran("printf 'one\ntwo\n' > notes.md", work)
+
+    assert files == [{"path": "notes.md", "op": "write", "add": 0, "del": 0, "size": 8}]
+
+
+async def test_a_file_a_command_removed_is_recorded_as_a_deletion(tmp_path) -> None:
+    """The command named the path, so the shell tool's own fence read the file
+    before it went and the entry carries the lines it held. One entry, not two:
+    the listing saw the same removal and is told to skip a path already
+    accounted for."""
+    work = tmp_path / "ws"
+    work.mkdir()
+    (work / "old.md").write_text("one\ntwo\n", encoding="utf-8")
+
+    files = await _ran("rm old.md", work)
+
+    assert files == [{"path": "old.md", "op": "delete", "add": 0, "del": 2, "size": None}]
+
+
+async def test_a_command_run_in_another_directory_is_listed_there(tmp_path) -> None:
+    """``exec`` takes a ``working_dir`` of its own; a command sent to one leaves
+    its files there, where a listing of the workspace never looks, and the run
+    would say it made nothing. Outside the workspace the record keeps the
+    absolute path, as every entry for a file not under it does."""
+    work = tmp_path / "ws"
+    work.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    files = await _ran("printf 'a\nb\n' > out.txt", work, working_dir=str(elsewhere))
+
+    assert files == [{"path": str((elsewhere / "out.txt").resolve()), "op": "add", "add": 2, "del": 0, "size": 4}]
+
+
+async def test_a_removal_the_command_never_named_is_still_seen(tmp_path) -> None:
+    """A glob the shell expands names no path the fence could resolve, so the
+    listing is the only thing that saw the file go -- and a deletion nobody
+    records is a node that reports having changed nothing."""
+    work = tmp_path / "ws"
+    work.mkdir()
+    (work / "old.md").write_text("one\ntwo\n", encoding="utf-8")
+
+    files = await _ran("rm *.md", work)
+
+    assert files == [{"path": "old.md", "op": "delete", "add": 0, "del": 0, "size": None}]
 
 
 async def test_the_account_is_published_while_the_run_is_still_going(tmp_path) -> None:

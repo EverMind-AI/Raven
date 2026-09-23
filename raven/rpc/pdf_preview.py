@@ -259,6 +259,114 @@ async def png_for(source: Path, *, timeout_s: float | None = None) -> Path:
     return cached
 
 
+async def pages_of(source: Path, *, workspace: Path | None = None, timeout_s: float | None = None) -> int:
+    """How many pages the rendering of ``source`` has.
+
+    Through the same PDF the viewer would serve, so a deck is converted once
+    and counted from that -- the count and the pages the reader then sees come
+    from one rendering rather than from two that could disagree.
+    """
+    pdf = source if source.suffix.lower() == ".pdf" else await pdf_for(source, workspace=workspace, timeout_s=timeout_s)
+    return await asyncio.to_thread(_count_pages, pdf)
+
+
+def _count_pages(pdf: Path) -> int:
+    """The page count, read by whichever rasteriser this host has.
+
+    PyMuPDF answers from the document. ``pdfinfo`` is poppler's, and ships with
+    the ``pdftoppm`` the fallback already needs, so a host that can draw a page
+    can count them too. Neither present is the same unavailability drawing
+    reports, in the same words, since the reader's next step is the same one.
+    """
+    try:
+        import pymupdf  # type: ignore[import-not-found]
+    except ImportError:
+        try:
+            import fitz as pymupdf  # type: ignore[import-not-found, no-redef]
+        except ImportError:
+            pymupdf = None
+    if pymupdf is not None:
+        try:
+            with pymupdf.open(pdf) as doc:
+                return int(doc.page_count)
+        except Exception as exc:  # noqa: BLE001 - a document that cannot be opened has no count
+            raise PdfPreviewError(f"{pdf.name} could not be read: {exc}") from exc
+    pdfinfo = shutil.which("pdfinfo")
+    if pdfinfo is None:
+        raise PdfPreviewUnavailableError(
+            f"no PDF rasteriser on the gateway host, so {pdf.name} has no pages to show: "
+            "install a deck engine (PyMuPDF) or poppler (pdfinfo, pdftoppm)"
+        )
+    import subprocess
+
+    try:
+        out = subprocess.run(  # noqa: S603 - resolved above, argv is literals plus this file's path
+            [pdfinfo, str(pdf)], check=True, capture_output=True, timeout=CONVERT_TIMEOUT_S, text=True
+        ).stdout
+    except Exception as exc:  # noqa: BLE001 - every way pdfinfo fails is this route's 500
+        raise PdfPreviewError(f"{pdf.name} could not be read: {exc}") from exc
+    for line in out.splitlines():
+        if line.startswith("Pages:"):
+            return int(line.split(":", 1)[1].strip())
+    raise PdfPreviewError(f"{pdf.name} reported no page count")
+
+
+async def page_png_for(
+    source: Path, page: int, *, workspace: Path | None = None, timeout_s: float | None = None
+) -> Path:
+    """Page ``page`` of ``source``'s rendering as a PNG, drawn if not cached.
+
+    This is what the file viewer shows instead of framing the PDF itself.
+    Safari does not draw a PDF inside a frame when the response carries the
+    sandbox policy every artifact here is served under -- measured: the same
+    bytes, the same frame and the same fragment render when the header is
+    absent and stay blank when it is present, while a top-level tab is fine
+    either way. The header is not the thing to drop: it is what keeps a
+    document an agent produced away from the page's cookie and its socket.
+    Pictures of the pages need no such policy, are the same in every browser,
+    and cannot run anything at all.
+
+    A deck goes through its PDF, which is the cached rendering the viewer
+    already had. Keyed per page so pages are drawn as the reader reaches them
+    rather than all at once, and swept with the rest of the cache.
+    """
+    if page < 1:
+        raise PdfPreviewError(f"{source.name} has no page {page}")
+    budget = CONVERT_TIMEOUT_S if timeout_s is None else timeout_s
+    # Keyed on the SOURCE, never on the rendering. A deck's rendering is a
+    # cache entry, and `pdf_for` hands a cached entry back through `_touched`,
+    # which dates it by this use so the sweep cannot take a file still being
+    # served. That write moves the mtime `cache_key` hashes, so a key taken
+    # from the rendering was a different key on every read: the same page of
+    # the same deck was rasterised again for each one, and each drew its own
+    # file. The source's own stat is what "this deck's page 3" means anyway,
+    # and it moves when the deck is rebuilt, which is when the page should be
+    # drawn again. The cost is that a deck and its published sibling PDF no
+    # longer share the pages they happen to render to; they are two requests,
+    # and each keeps its own.
+    key = f"{cache_key(source)}-p{page}"
+    cached = cache_dir() / f"{key}.png"
+    if cached.is_file():
+        return _touched(cached)
+    lock = _locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        if cached.is_file():
+            return _touched(cached)
+        # The rendering is resolved here rather than above, so a page already
+        # drawn costs neither a conversion nor the lookup that would start one:
+        # a deck reopened is a file read, as its PDF has always been.
+        pdf = (
+            source if source.suffix.lower() == ".pdf" else await pdf_for(source, workspace=workspace, timeout_s=budget)
+        )
+        await asyncio.to_thread(_rasterise_pdf_page, pdf, cached, PAGE_WIDTH_PX, budget, page)
+    return cached
+
+
+#: The width a page is drawn at for the viewer. Wider than the tile's, because
+#: this one is read rather than glanced at, and a deck's slide fills the panel.
+PAGE_WIDTH_PX = 1600
+
+
 #: The width of a PDF's first page as a tile picture. LibreOffice's PNG export
 #: of a deck is the slide at screen size; a PDF page is drawn to about the same.
 THUMB_WIDTH_PX = 1280
@@ -273,8 +381,12 @@ THUMB_WIDTH_PX = 1280
 THUMB_MAX_PIXELS = 4_000_000
 
 
-def _rasterise_pdf_page(source: Path, target: Path, width: int, timeout_s: float = CONVERT_TIMEOUT_S) -> None:
-    """The first page of a PDF as a PNG at most ``width`` wide, written atomically.
+def _rasterise_pdf_page(
+    source: Path, target: Path, width: int, timeout_s: float = CONVERT_TIMEOUT_S, page: int = 1
+) -> None:
+    """One page of a PDF as a PNG at most ``width`` wide, written atomically.
+
+    ``page`` is 1-based, as the reader counts and as ``pdftoppm`` takes it.
 
     A PDF is already a rendering, so LibreOffice has nothing to convert (and its
     Draw import refuses most of them). PyMuPDF draws the page when it is
@@ -302,9 +414,11 @@ def _rasterise_pdf_page(source: Path, target: Path, width: int, timeout_s: float
             with pymupdf.open(source) as doc:
                 if doc.page_count == 0:
                     raise PdfPreviewError(f"{source.name} has no pages")
-                page = doc[0]
-                zoom = _thumb_zoom(page.rect.width, page.rect.height, width)
-                page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False).save(str(staged))
+                if not 1 <= page <= doc.page_count:
+                    raise PdfPreviewError(f"{source.name} has no page {page}")
+                drawn = doc[page - 1]
+                zoom = _thumb_zoom(drawn.rect.width, drawn.rect.height, width)
+                drawn.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False).save(str(staged))
         else:
             pdftoppm = shutil.which("pdftoppm")
             if pdftoppm is None:
@@ -316,7 +430,17 @@ def _rasterise_pdf_page(source: Path, target: Path, width: int, timeout_s: float
 
             prefix = scratch / "p"
             subprocess.run(  # noqa: S603 - resolved above, argv is literals plus this file's path
-                [pdftoppm, "-f", "1", "-l", "1", *_scale_argv(source, width), "-png", str(source), str(prefix)],
+                [
+                    pdftoppm,
+                    "-f",
+                    str(page),
+                    "-l",
+                    str(page),
+                    *_scale_argv(source, width),
+                    "-png",
+                    str(source),
+                    str(prefix),
+                ],
                 check=True,
                 capture_output=True,
                 timeout=timeout_s,
@@ -472,7 +596,13 @@ def _sweep(root: Path) -> None:
     # accumulate for as long as the installation lives. Their owner removes
     # them when the document goes; this is what bounds the ones whose owner
     # never got the chance.
-    for entry in (*root.glob("*.pdf"), *root.glob("*/*")):
+    #
+    # The pictures as well as the PDFs. Only ``*.pdf`` was swept at the root,
+    # so every tile thumbnail ever drawn stayed for the life of the install --
+    # and a viewer that draws a picture per page writes far more of them. They
+    # are dated by use like the PDFs are, so one still being read is not a
+    # candidate however old the render was.
+    for entry in (*root.glob("*.pdf"), *root.glob("*.png"), *root.glob("*/*")):
         try:
             if entry.is_file() and entry.stat().st_mtime < cutoff:
                 entry.unlink()

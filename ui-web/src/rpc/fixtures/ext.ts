@@ -66,7 +66,14 @@ const PLUGINS: ExtPlugin[] = [
 
 /* One server per state the rows have to be able to draw: connected, waiting
    for an authorization, failed, and switched off. The rail's attention badge
-   counts the middle two, which is why both are here. */
+   counts the middle two, which is why both are here.
+
+   `name` is also the catalogue id the drawer looks the server up by, and each
+   row's `auth` has to match the mode its catalogue entry names (see
+   fixtures/plughub.ts): github was filed there as `github-mcp` with `oauth`
+   while the row here says `apikey`, so its drawer found no entry, read the
+   miss as an empty field list, and told the reader a server whose token had
+   expired needed no credential. */
 const MCP: ExtMcp[] = [
   { name: 'websearch', transport: 'http', state: 'auth_required', connected: false, tool_count: 2, enabled: true,
     auth: 'oauth', credentialed: false },

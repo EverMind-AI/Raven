@@ -38,26 +38,26 @@ import * as escapeOrder from './escapeOrder'
 import { toggle as toggleFind } from './find'
 import { onPointerDown as menuAway } from './menu'
 import { close as closePermPopover } from './perm'
+import { close as closePlusMenu } from './plus'
 import { onClick as chipClick, onKey as chipKey } from './proseChips'
 import { get as railOpen, set as setRail } from './rail'
 import { clamp as clampSelection } from './selection'
 import { close as closeSettings, isOpen as settingsIsOpen } from './settings'
 import { onDblClick as shellZoom, onMouseDown as shellDrag } from './shellWindow'
-import { close as closeTierPopover } from './tier'
 import * as tip from './tooltip'
-import { close as closeWorkdirPopover } from './workdir'
+import { close as closeWorkdir } from './workdir'
 
-/* The three composer popovers have no close button and no Escape branch: a
-   pointer landing outside one is the way back out. Capture, because the row
-   under the pointer may stop the event.
+/* The three composer popovers have no close button: a pointer landing outside
+   one is one way back out, and Escape is the other (state/escapeOrder.ts).
+   Capture, because the row under the pointer may stop the event.
 
    The More group is rail navigation rather than a popover, which is why it is
    not here: it folds on its own toggle only, never on an outside click. */
 function awayFromPopovers(event: PointerEvent): void {
   const target = event.target as Element
   if (!target.closest('#permPop') && !target.closest('#permChip')) closePermPopover()
-  if (!target.closest('#tierPop') && !target.closest('#tierChip')) closeTierPopover()
-  if (!target.closest('#wdPop') && !target.closest('#wdChip')) closeWorkdirPopover()
+  if (!target.closest('#plusPop') && !target.closest('#plusBtn')) closePlusMenu()
+  if (!target.closest('#wdPop') && !target.closest('#wdChip')) closeWorkdir()
 }
 
 /* Code blocks come and go with every answer, so the click is caught once here

@@ -356,6 +356,20 @@ async def test_run_turn_refuses_a_workdir_outside_the_mount(tmp_path, monkeypatc
         await loop.run_turn(_req("hi"), _EmitCollector(), _drain, stream=False)
 
 
+def test_a_multi_round_plan_works_the_session_s_directory_not_the_agent_home(tmp_path: Path) -> None:
+    """A plan takes a checkout of a project and edits it for hours. Agent home
+    is not a project, and on a gateway neither is the directory the process was
+    launched from -- so the question goes through the same resolver a tool call
+    does."""
+    project = tmp_path / "chanwork" / "web"
+    loop = AgentLoop(
+        provider=_FakeChatProvider(), workspace=tmp_path, subagents=SubagentWiring(workdir_resolver=_resolver(tmp_path))
+    )
+
+    assert loop._stint_workspace("web:abc") == project
+    assert loop._stint_workspace("web:abc") != tmp_path
+
+
 def test_peek_does_not_create_the_directory(tmp_path: Path) -> None:
     """Reporting where a session would work must not touch the disk."""
     loop = AgentLoop(

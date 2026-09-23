@@ -7,7 +7,7 @@ and ``_build_subagent_prompt``, extracted verbatim so a spawned sub-agent's
 
 from __future__ import annotations
 
-import difflib
+import asyncio
 import json
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from pathlib import Path
@@ -28,10 +28,12 @@ from raven.agent.subagent.mcp_grant import (
     resolve_grant,
 )
 from raven.agent.subagent.tool_vocabulary import RAVEN_NAME
+from raven.agent.tools import snapshot
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry, call_failed
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.tools.shell import ExecTool
+from raven.agent.tools.snapshot import take as take_snapshot
 from raven.agent.tools.web import ImageSearchTool, WebFetchTool, WebSearchTool, image_search_vendor, resolve_vendor_key
 from raven.config.live import LiveConfig, exec_extra_deny_patterns, live_vendor_key
 from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
@@ -119,28 +121,7 @@ def _file_change_counts(file_change: Any, diff: str | None) -> tuple[int, int]:
         add = sum(1 for line in lines if line.startswith("+") and not line.startswith("+++"))
         delete = sum(1 for line in lines if line.startswith("-") and not line.startswith("---"))
         return add, delete
-    after_lines = file_change.after.splitlines()
-    if file_change.before is None:
-        return len(after_lines), 0
-    before_lines = file_change.before.splitlines()
-    add = delete = 0
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, before_lines, after_lines).get_opcodes():
-        if tag in ("insert", "replace"):
-            add += j2 - j1
-        if tag in ("delete", "replace"):
-            delete += i2 - i1
-    return add, delete
-
-
-def _workspace_relative(path: str, workspace: Path) -> str:
-    """The path a file record carries: relative to the run's workspace when the
-    file is under it (the file endpoint anchors relative paths there, and the
-    panel reads ``work/notes.md`` where an absolute path says nothing), absolute
-    otherwise."""
-    try:
-        return str(Path(path).resolve().relative_to(Path(workspace).resolve()))
-    except (ValueError, OSError):
-        return path
+    return activity.count_line_changes(file_change.before, file_change.after)
 
 
 def build_subagent_prompt(
@@ -616,12 +597,14 @@ class RavenLoopBackend:
                     **generation_kwargs(provider),
                 )
                 if response.finish_reason == "error" and not response.has_tool_calls:
-                    # The stream ended before anything deliverable arrived
-                    # (``stream_llm_call`` hands that back as an error reply rather
-                    # than raising, for the loop that owns a ladder). Its text is a
-                    # diagnostic, not the answer. The failed call's tokens were still
-                    # spent -- a cut mid-thought is 11-15k reasoning tokens -- so they
-                    # are billed before the reply is replaced.
+                    # An error reply has two sources: a stream that died before
+                    # anything deliverable arrived (still retryable), or one that
+                    # died after rendering, whose retry ``stream_llm_call`` has
+                    # already spent so the same words are not drawn twice. Either
+                    # way its text is a diagnostic, not the answer. The failed
+                    # call's tokens were still spent -- a cut mid-thought is 11-15k
+                    # reasoning tokens -- so they are billed before the reply is
+                    # replaced.
                     activity.note_usage(response.usage)
                     verdict = response.error_classification
                     if verdict is None and (classify := getattr(provider, "classify_error", None)) is not None:
@@ -679,14 +662,31 @@ class RavenLoopBackend:
                     # asking "what happened" most needs to see.
                     activity.note_tool_call(tool_call.name)
                     set_current_tool_call_id(tool_call.id)
+                    # Only around a command: every other tool reports the file it
+                    # touched, and walking the workspace twice per call would cost
+                    # a run far more than the one change it could find. Off the
+                    # loop, because the walk is tens of milliseconds of it and
+                    # every other session on this process waits behind them. The
+                    # directory is the one the command runs in, which the tool
+                    # itself resolves: the workspace unless the call names another.
+                    exec_root = (
+                        snapshot.root_for(tools.get(tool_call.name), tool_call.arguments, workspace)
+                        if RAVEN_NAME.get(tool_call.name, tool_call.name) == "exec"
+                        else None
+                    )
+                    before_files = await asyncio.to_thread(take_snapshot, exec_root) if exec_root is not None else None
                     result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
+                    # What this call already accounted for by name, so the listing
+                    # below does not report the same change a second time.
+                    accounted: list[str] = []
                     # Settled before this call's own write is noted, so the file
                     # it just wrote is not stat'ed to say it exists.
                     for removal in removal_watch.settle(getattr(result, "removed", ())):
+                        accounted.append(removal.path)
                         # No add, and no size: the file is gone, and a zero there
                         # would read as a file that is present and empty.
                         activity.note_file_change(
-                            _workspace_relative(removal.path, workspace),
+                            activity.workspace_relative(removal.path, workspace),
                             "delete",
                             0,
                             len((removal.before or "").splitlines()),
@@ -694,6 +694,7 @@ class RavenLoopBackend:
                         )
                     removal_watch.note_write(getattr(result, "file_change", None))
                     if (file_change := getattr(result, "file_change", None)) is not None:
+                        accounted.append(file_change.path)
                         # The op is the tool's, except that a write onto nothing
                         # is a creation: `before is None` is the only record that
                         # the file did not exist, and a reader draws an added file
@@ -704,11 +705,18 @@ class RavenLoopBackend:
                         else:
                             op = "add" if file_change.before is None else "write"
                         activity.note_file_change(
-                            _workspace_relative(file_change.path, workspace),
+                            activity.workspace_relative(file_change.path, workspace),
                             op,
                             add,
                             delete,
                             len(file_change.after.encode("utf-8")),
+                        )
+                    if before_files is not None:
+                        activity.record_snapshot_changes(
+                            before_files,
+                            await asyncio.to_thread(take_snapshot, exec_root),
+                            workspace,
+                            already=accounted,
                         )
                     # Recorded beside the call, so the run's account says how
                     # its calls went and not only that it made them. Through the

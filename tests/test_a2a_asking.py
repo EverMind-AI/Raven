@@ -5,6 +5,7 @@ import asyncio
 from a2a.types import TaskState
 
 from raven.a2a.asking import A2aQuestionBroker
+from raven.agent.tools.ask_user import AskUserTool
 
 
 async def test_await_question_parks_and_then_returns_the_answer():
@@ -35,3 +36,22 @@ def test_parked_is_the_input_required_state():
     from raven.a2a.lifecycle import task_state_for
 
     assert task_state_for("question") == TaskState.TASK_STATE_INPUT_REQUIRED
+
+
+async def test_the_ask_user_tool_asks_through_this_broker_with_every_flag_it_sends():
+    """The tool hands the broker every field of the protocol, a multi-select flag
+    included, so a responder that stopped short of the protocol failed the call
+    before anything was parked."""
+    parked = []
+    broker = A2aQuestionBroker(on_park=parked.append)
+    tool = AskUserTool(broker=broker, conversation_id="task-3", timeout_s=5.0)
+
+    asking = asyncio.create_task(
+        tool.execute(questions=[{"question": "Which days?", "options": ["mon", "tue"], "multi_select": True}])
+    )
+    await asyncio.sleep(0)
+    assert parked == ["task-3"]
+
+    assert broker.answer("task-3", "mon, tue") is True
+    result = await asking
+    assert result.display_text == "answered: mon, tue"

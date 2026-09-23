@@ -327,9 +327,13 @@ export function rename(): void {
   const inp = document.createElement('input')
   inp.className = 'titin'
   inp.value = s.title
+  /* The field opens at exactly the heading's width, so nothing after it moves:
+     a field that measures its own value opens a little wider than the name it
+     replaces, and a short name was pushed wider still by the floor such a
+     field needs -- either way the workspace tag beside it slid sideways at
+     the moment of the click. A name longer than the box scrolls in it. */
+  inp.style.width = `${h.getBoundingClientRect().width}px`
   h.replaceWith(inp)
-  const rb = document.getElementById('renameBtn') as HTMLButtonElement | null
-  if (rb) rb.hidden = true
   inp.focus()
   inp.select()
   const was = s.title
@@ -356,7 +360,6 @@ export function rename(): void {
     nh.textContent = plainTitle(next)
     nh.id = 'title'
     inp.replaceWith(nh)
-    if (rb) rb.hidden = false
     draw()
   }
   finishOpen = finish

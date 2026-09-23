@@ -11,7 +11,7 @@ import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
-import { open as openSettings, openModels, openProviderModels } from '../settings/store'
+import { openModels, openProviderModels } from '../settings/store'
 import { open as openPickerAt, setCurrent, statedTags } from './store'
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
@@ -61,8 +61,8 @@ export function setChipPainter(fn: () => void): void {
 }
 
 /* The chip the composer shows and the settings default both write. */
-export const showModel = (model: string): void => {
-  setCurrent(model)
+export const showModel = (model: string, provider = ''): void => {
+  setCurrent(model, provider)
   paintChip()
 }
 
@@ -102,7 +102,7 @@ const rowsOf = (list: ProviderWire[]): Provider[] =>
     kind: p.auth_type || 'api_key', needsBase: !!p.needs_api_base,
     // The catalogue page's filter, and the picker's answer to "whose column
     // does the running model belong in": both are facts only the registry has.
-    gateway: !!p.gateway, current: !!p.is_current,
+    gateway: !!p.gateway, current: !!p.is_current, routes: p.route_names || [],
     // Addresses to choose between. A provider that has them is asked which
     // storefront the key came from instead of being handed a host field --
     // the key does not say, and the three are separate accounts.
@@ -146,7 +146,7 @@ export async function loadProviders(sid?: string | null, gen?: number): Promise<
   // page the reader has since moved to.
   if (ticket !== generation()) return
   providersLive = rowsOf(mo.providers || [])
-  if (mo.model) showModel(mo.model)
+  if (mo.model) showModel(mo.model, mo.provider || '')
 }
 
 /* provider is required -- a bare model id does not name whose credential serves
@@ -190,7 +190,7 @@ export async function persistModel(
     // leaving the draft for a conversation of its own advances the generation
     // (every view switch does) -- so without this the resolved draft write
     // repaints a chip that has since been loaded correctly for someone else.
-    if (!sid && !staging().model && gen === generation()) showModel(m)
+    if (!sid && !staging().model && gen === generation()) showModel(m, provider)
     /* The write landed in a process with no agent loop -- a first run, where
        the gateway started before there was a model to build one from. Said
        back so the onboarding wizard can tell the reader, instead of the next
@@ -224,7 +224,7 @@ export const modelSource: ModelSource = {
     await gateway().call('model.set_protocol', { model, slug: provider, protocol })
     await loadProviders()
   },
-  openSettings: () => openSettings(),
+  openSettings: () => openModels(),
   openProviderModels: (provider: string) => openProviderModels(provider),
 }
 

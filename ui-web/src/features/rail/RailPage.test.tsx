@@ -72,7 +72,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     '<div class="app" data-page="off">' +
     '<button id="newBtn"></button><button id="agentsBtn"></button>' +
     PAGES.map(p => `<div id="${p}" data-open="false"></div>`).join('') +
-    '<div id="list"></div><h1 id="title">t</h1><button id="renameBtn"></button></div>'
+    '<div id="list"></div><h1 id="title">t</h1></div>'
   return { state, calls, toasts }
 }
 
@@ -200,7 +200,7 @@ describe('rail island', () => {
     expect(screen.getByText('gui.rail.manage')).toBeTruthy()
   })
 
-  it('splits the rest on whether the conversation was pinned to a folder', () => {
+  it('keeps every unpinned conversation in one recent group, folder or not', () => {
     install({
       rows: [
         row({ id: 'a', title: 'thesis edits', workdir: '/Users/me/thesis' }),
@@ -210,38 +210,15 @@ describe('rail island', () => {
       ]
     })
     const host = mount()
-    /* Two groups for the rest: the folder one first, and the other renamed to
-       say what it is now that it is no longer all of them. */
-    expect(screen.getByText('gui.rail.workdir')).toBeTruthy()
-    expect(screen.getByText('gui.rail.no_workdir')).toBeTruthy()
-    expect(screen.queryByText('gui.rail.recent')).toBeNull()
+    /* One list of recent work: the folder a conversation runs in is said
+       beside its title once it is open, not as a second heading here, and
+       not as a tag on the row. A pinned session stays in the pinned group. */
     const groups = [...host.querySelectorAll('.grp .lab')].map((n) => n.textContent)
-    expect(groups).toEqual(['gui.rail.pinned', 'gui.rail.from_cron', 'gui.rail.workdir', 'gui.rail.no_workdir'])
-    /* Each pinned row wears its folder's name, with the whole path on hover;
-       either separator. A pinned session stays in the pinned group. */
-    const tags = [...host.querySelectorAll('.sess .rail-wdt')].map((n) => [n.textContent, n.getAttribute('title')])
-    expect(tags).toEqual([['thesis', '/Users/me/thesis'], ['thesis', '/Users/me/thesis'], ['notes', 'C:\\work\\notes']])
+    expect(groups).toEqual(['gui.rail.pinned', 'gui.rail.from_cron', 'gui.rail.recent'])
+    expect(host.querySelectorAll('.sess .rail-wdt').length).toBe(0)
     expect(host.querySelectorAll('.sess').length).toBe(4)
-  })
-
-  it('keeps the old recent heading while nothing is pinned to a folder', () => {
-    install({ rows: [row(), row({ id: 'b', title: 'another' })] })
-    mount()
-    expect(screen.getByText('gui.rail.recent')).toBeTruthy()
-    expect(screen.queryByText('gui.rail.workdir')).toBeNull()
-    expect(screen.queryByText('gui.rail.no_workdir')).toBeNull()
-  })
-
-  it('folds the folder group on its own key', () => {
-    install({ rows: [row({ id: 'a', title: 'thesis edits', workdir: '/w/thesis' }), row({ id: 'b', title: 'chat' })] })
-    const host = mount()
-    const head = [...host.querySelectorAll<HTMLElement>('.grp')].find((g) => g.querySelector('.lab')?.textContent === 'gui.rail.workdir')!
-    act(() => { head.click() })
-    expect(head.getAttribute('aria-expanded')).toBe('false')
-    expect(screen.queryByText('thesis edits')).toBeNull()
-    expect(screen.getByText('chat')).toBeTruthy()
-    act(() => { head.click() })
     expect(screen.getByText('thesis edits')).toBeTruthy()
+    expect(screen.getByText('notes')).toBeTruthy()
   })
 
   it('marks only the current session, and the new button when nothing is', () => {
@@ -336,11 +313,29 @@ describe('rail island', () => {
 
   it('keeps the permanent groups on an empty list', () => {
     install({ rows: [], cur: null })
-    const host = mount()
-    expect(host.querySelectorAll('.grp-empty').length).toBe(2)
+    mount()
     expect(screen.getByText('gui.rail.from_cron')).toBeTruthy()
     expect(screen.getByText('gui.rail.recent')).toBeTruthy()
     expect(screen.queryByText('gui.rail.pinned')).toBeNull()
+  })
+
+  it('draws an empty group as its heading alone, a plain label keeping only its verb', () => {
+    install({ rows: [], cur: null })
+    const host = mount()
+    const heads = [...host.querySelectorAll<HTMLElement>('.grp')]
+    expect(heads.map(g => g.firstElementChild!.textContent)).toEqual(['gui.rail.from_cron', 'gui.rail.recent'])
+    for (const g of heads) {
+      expect(g.hasAttribute('data-empty')).toBe(true)
+      expect(g.getAttribute('role')).toBeNull()
+      expect(g.getAttribute('tabindex')).toBeNull()
+      expect(g.getAttribute('aria-expanded')).toBeNull()
+      expect(g.querySelector('.car')).toBeNull()
+    }
+    expect([...heads[0]!.children].map(c => c.className)).toEqual(['lab', 'grp-go'])
+    expect([...heads[1]!.children].map(c => c.className)).toEqual(['lab'])
+    expect([...host.children].map(c => c.className)).toEqual(['grp', 'grp'])
+    act(() => heads[1]!.click())
+    expect(store.isFolded('recent')).toBe(false)
   })
 
   it('holds skeleton rows for the live boot and swaps them for the list', () => {
@@ -360,7 +355,7 @@ describe('rail island', () => {
 
   it('shows a placeholder instead of a title while the name is being generated', () => {
     /* The row is not loading -- the list is here. Only its name is coming, so
-       the bar stands where the title goes and the timestamp keeps its slot. */
+       the bar stands where the title goes, and the row carries no clock. */
     install({ rows: [row({ naming: true, title: 'gui.new_task' })] })
     const host = mount()
 
@@ -368,14 +363,14 @@ describe('rail island', () => {
     expect(bars.length).toBe(1)
     expect(bars[0]!.getAttribute('aria-label')).toBe('gui.sess.naming')
     expect(screen.queryByText('gui.new_task')).toBeNull()
-    expect(screen.getByText('11:24')).toBeTruthy()
+    expect(screen.queryByText('11:24')).toBeNull()
   })
 
   it('leaves the placeholder no width of its own', () => {
     /* Width and flex belong to the stylesheet, not to this element. Two earlier
        versions sized the bar here and both were wrong for the same reason: a
        per-row inline size resolves against the title slot, whose width depends
-       on how long the neighbouring timestamp is and shrinks again under hover.
+       on what else shares the row and shrinks again under hover.
        Only the height stays inline, since it is the one dimension the
        surrounding line box does not set. */
     install({ rows: [row({ naming: true, title: 'gui.new_task' })] })
@@ -642,6 +637,23 @@ describe('rail island', () => {
       expect(document.getElementById('title')!.textContent).toBe('renamed by hand')
     })
 
+    it('opens the editor at the width the heading was drawn at', () => {
+      /* The workspace tag sits right after the title, and it must not move
+         when the name is clicked. No stylesheet can promise that: a field that
+         measures its own value opens a little wider than the heading it
+         replaces, and a short name is pushed wider still by the floor such a
+         field needs. So the width is taken from the heading's own box and
+         written on the field. jsdom has no layout, so what is assertable here
+         is that mechanism; whether the two line up to the pixel is a question
+         for a browser, and was answered in one. */
+      install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      const host = mount()
+      document.getElementById('title')!.getBoundingClientRect = () => ({ width: 137.5 } as DOMRect)
+      const item = rowItems(host, 'second task').find(x => x !== '-' && x.label === 'gui.sess.rename') as MenuItem
+      act(() => item.fn())
+      expect(document.querySelector<HTMLInputElement>('input.titin')!.style.width).toBe('137.5px')
+    })
+
     it('tells the source on blur too', () => {
       install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
       const said = wire()
@@ -691,7 +703,6 @@ describe('rail island', () => {
       expect(said).toEqual([['b', 'named once']])
       expect(document.querySelectorAll('#title').length).toBe(1)
       expect(document.getElementById('title')!.textContent).toBe('named once')
-      expect((document.getElementById('renameBtn') as HTMLButtonElement).hidden).toBe(false)
     })
 
     /* The editor stands IN PLACE OF h1#title, so while it is open that id
@@ -716,7 +727,6 @@ describe('rail island', () => {
 
       expect(document.getElementById('title')!.textContent).toBe('named on the way out')
       expect(document.querySelector('input.titin')).toBeNull()
-      expect((document.getElementById('renameBtn') as HTMLButtonElement).hidden).toBe(false)
       expect(said).toEqual([['b', 'named on the way out']])
       expect(h.state.rows[1]!.title).toBe('named on the way out')
 

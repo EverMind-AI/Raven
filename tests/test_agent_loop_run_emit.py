@@ -534,6 +534,10 @@ def _dr_stream_provider():
 
 
 def _dr_chat_provider():
+    # The second reply acknowledges the receipt, the way _dr_stream_provider's
+    # does. A model that says nothing after a tool is a turn with no answer of
+    # its own, so leaving it empty made these tests turn on that exit rather
+    # than on the routing they are about.
     return _FakeChatProvider(
         [
             LLMResponse(
@@ -541,7 +545,7 @@ def _dr_chat_provider():
                 tool_calls=[ToolCallRequest(id="d1", name="deep_research", arguments={"query": "q"})],
                 finish_reason="tool_calls",
             ),
-            LLMResponse(content="", finish_reason="stop"),
+            LLMResponse(content="ok done", finish_reason="stop"),
         ]
     )
 
@@ -1074,6 +1078,33 @@ async def test_run_message_tool_reply_outlives_a_failed_follow_up_call(tmp_path)
     assert outcome.explicit_reply is True
     assert not any(isinstance(e, EvText) for e in sink.events)
     assert not any(isinstance(e, EvStreamDelta) and "Error calling LLM" in e.delta for e in sink.events)
+
+
+async def test_run_inline_research_answer_outlives_a_silent_follow_up(tmp_path):
+    # The same fact through the other door. run itself streamed the research
+    # answer to the reader; the model then said nothing at all, for as long as
+    # empty-response recovery kept asking. The turn is answered, so it ends the
+    # way it always has -- the reader already has the answer, and failing the
+    # turn would take it off the screen and out of the record.
+    provider = _FakeChatProvider(
+        [
+            LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest(id="d1", name="deep_research", arguments={"query": "q"})],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="", finish_reason="stop"),
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeDeepResearch())
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("q"), sink, _drain, stream=False, inline_tool_stream=True)
+
+    assert any(isinstance(e, EvText) and e.content == "ANSWER-BODY" for e in sink.events)
+    assert outcome.explicit_reply is True
 
 
 async def test_run_message_tool_media_is_not_dropped(tmp_path):

@@ -263,7 +263,88 @@ async def test_a_model_call_the_loop_gives_up_on_fails_the_turn_and_leaves_the_m
     msgs = _persisted(workspace)
     assert [m["role"] for m in msgs] == ["user", "assistant"]
     assert msgs[-1]["turn_ended"] == {"status": "failed", "reason": error}
-    assert msgs[-1]["content"] == f"(turn failed: {error})"
+    # The two readers are told apart: ``turn_ended.reason`` keeps the
+    # provider's own account for whoever is diagnosing the failure, while the
+    # text the model reads back next turn names the category only.
+    assert msgs[-1]["content"] == (
+        "(turn failed: The model sent nothing before the first-byte timeout expired (stub). "
+        "The runtime log has the provider's own account.)"
+    )
+    assert "no first byte after 5.0s" not in msgs[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_empty_response_recovery_leaves_the_same_marker(workspace):
+    """A turn whose model never sent a word fails like a model call the loop gave
+    up on, so the transcript ends the same way: on a marker saying the turn
+    failed and why, not on the question alone and not on a manufactured reply.
+
+    The reason is the loop's own sentence rather than a vendor's, so the model's
+    copy of it is that sentence -- there is no category to summarise.
+    """
+    agent = _agent_without_ladder(workspace, DyingProvider([LLMResponse(content="", finish_reason="stop")] * 8))
+
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await agent._process_message(_make_msg("hello"))
+
+    reason = str(failed.value)
+    assert reason == "The model returned no content on 3 attempt(s) (prefill 0, post-tool nudge 0, plain retry 2)."
+    msgs = _persisted(workspace)
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert msgs[-1]["turn_ended"] == {"status": "failed", "reason": reason}
+    assert msgs[-1]["content"] == f"(turn failed: {reason})"
+
+
+@pytest.mark.asyncio
+async def test_a_vendors_body_does_not_reach_the_model_through_the_marker(workspace):
+    """The marker is history the model reads on its next turn. A vendor's auth
+    body carries a masked key and an account URL, and both would be spent
+    context and something to answer rather than the end of the turn."""
+    vendor_body = (
+        "AuthenticationError: OpenrouterException - No auth credentials found for key sk-or-v1-a1b2...ef90; "
+        "see https://openrouter.ai/settings/keys"
+    )
+    error = f"Error calling LLM (auth@openrouter): {vendor_body}"
+    agent = _agent_without_ladder(workspace, DyingProvider([_error_response(error)]))
+
+    with pytest.raises(AnswerlessTurnError):
+        await agent._process_message(_make_msg("hello"))
+
+    marker = _persisted(workspace)[-1]
+    assert "sk-or-v1" not in marker["content"]
+    assert "openrouter.ai/settings" not in marker["content"]
+    assert marker["content"] == (
+        "(turn failed: The provider rejected the credentials (openrouter). "
+        "The runtime log has the provider's own account.)"
+    )
+    assert marker["turn_ended"]["reason"] == error
+
+
+@pytest.mark.asyncio
+async def test_a_crash_leaves_a_bounded_reason_on_the_marker(workspace):
+    """A crash's message is arbitrary -- a chained SDK trace, a whole HTTP body
+    -- and it is filed into a session a model reads back. It is cut to the same
+    ceiling the lane's own event uses, and the mark says it was cut."""
+    from raven.spine.events import TURN_FAILURE_TEXT_MAX
+
+    class _Boom(Exception):
+        pass
+
+    agent = _agent_without_ladder(workspace, DyingProvider([]))
+
+    async def _explode(*args, **kwargs):
+        raise _Boom("z" * 5000)
+
+    agent._run_agent_loop = _explode
+
+    with pytest.raises(_Boom):
+        await agent._process_message(_make_msg("hello"))
+
+    marker = _persisted(workspace)[-1]
+    reason = marker["turn_ended"]["reason"]
+    assert len(reason) == TURN_FAILURE_TEXT_MAX and reason.endswith("...")
+    # Not a canonical model-call sentence, so the model's copy is the same text.
+    assert marker["content"] == f"(turn failed: {reason})"
 
 
 @pytest.mark.asyncio
@@ -312,28 +393,38 @@ async def test_a_hook_that_salvages_an_answerless_turn_keeps_it_a_finished_turn(
 
 
 @pytest.mark.asyncio
-async def test_a_half_answer_the_call_died_on_is_not_filed_as_the_reason(workspace):
-    """With retries after output on, ``stream_llm_call`` hands a stall back as an
-    error response whose content is the reply that had streamed; the reason is
-    then the classification, never the reader's own half answer."""
+async def test_a_half_answer_is_not_what_the_failed_call_reports(workspace):
+    """A stall after words had streamed used to hand those words back as the error
+    response's content, and the turn then needed a setting to tell it whether the
+    content it held was a diagnosis or half a reply. The account of the failure is
+    the reason; the half answer is filed where a half answer goes."""
     agent = _agent_without_ladder(
-        workspace,
-        DyingProvider([_error_response("half an answer", "first_byte_timeout")]),
-        retry_after_output=True,
+        workspace, _StreamingThenDying(["half an ", "answer"], TimeoutError()), retry_after_output=True
     )
 
-    with pytest.raises(AnswerlessTurnError) as failed:
-        await agent._process_message(_make_msg("hello"))
+    async def _sink(_text: str) -> None:
+        return None
 
-    reason = "Error calling LLM (first_byte_timeout): the call failed after the reply had started streaming"
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await agent._process_message(_make_msg("hello"), on_token_delta=_sink)
+
+    reason = "Error calling LLM (network): TimeoutError"
     assert str(failed.value) == reason
-    assert _persisted(workspace)[-1]["turn_ended"]["reason"] == reason
+    msgs = _persisted(workspace)
+    assert msgs[-1]["turn_ended"]["reason"] == reason
+    assert any(str(m.get("content")) == "half an answer" for m in msgs), "the words the reader saw are still filed"
 
 
 @pytest.mark.asyncio
-async def test_a_providers_own_account_is_the_reason_when_retries_after_output_are_off(workspace):
+@pytest.mark.parametrize("retry_after_output", [False, True])
+async def test_a_providers_own_account_is_the_reason_whatever_the_retry_setting(workspace, retry_after_output):
+    """The reason is read off the response rather than guessed at from a setting:
+    an account that is not the canonical sentence used to be replaced, with
+    retries after output on, by one about a reply that had started streaming."""
     account = "The upstream closed the stream before its first chunk."
-    agent = _agent_without_ladder(workspace, DyingProvider([_error_response(account)]))
+    agent = _agent_without_ladder(
+        workspace, DyingProvider([_error_response(account)]), retry_after_output=retry_after_output
+    )
 
     with pytest.raises(AnswerlessTurnError) as failed:
         await agent._process_message(_make_msg("hello"))
@@ -343,8 +434,8 @@ async def test_a_providers_own_account_is_the_reason_when_retries_after_output_a
 
 @pytest.mark.asyncio
 async def test_a_cut_streams_canonical_account_survives_retries_after_output(workspace):
-    """``stream_llm_call`` words the cut-stream account in the canonical shape so
-    it is kept even where a half answer would be replaced by the classification."""
+    """``stream_llm_call`` words the cut-stream account in the canonical shape, and
+    the loop files that account as the reason whatever the retry setting says."""
     cut = "Error calling LLM (network): the model's reply was cut off by the connection after 30s"
     agent = _agent_without_ladder(workspace, DyingProvider([_error_response(cut)]), retry_after_output=True)
 

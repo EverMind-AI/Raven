@@ -1,5 +1,7 @@
+import { Cancel01Icon, File01Icon } from '@hugeicons/core-free-icons'
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
+import { FileBadge, Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import * as lightbox from '../../state/lightbox'
 import * as store from './store'
@@ -90,23 +92,43 @@ export function QueueList(): ReactElement {
 
 /* ── the attachment tray ──────────────────────────────────────────────── */
 
+/* The badge a staged file wears, by its extension: the two kinds the design
+   draws one for, and a plain file glyph for the rest. */
+function kindMark(name: string): ReactElement {
+  const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase()
+  if (ext === 'pdf') return <FileBadge kind="pdf" />
+  if (ext === 'doc' || ext === 'docx') return <FileBadge kind="doc" />
+  return <Icon icon={File01Icon} size={14} />
+}
+
 function AttChip({ a, i }: { a: Attachment; i: number }): ReactElement {
   const isImg = !!a.url
   const size = a.uploading ? t('gui.att.uploading') : store.fmtSize(a.size)
-  return (
-    <div className={'att' + (isImg ? ' img' : '') + (a.uploading ? ' up' : '')}>
-      {isImg ? (
-        /* the square crops the image, so a click has to be able to show all of it */
+  const rm = (
+    <button className="rm" aria-label={t('gui.att.remove', { name: a.name })}
+      onClick={(e) => { e.stopPropagation(); store.removeAtt(i) }}>
+      {isImg ? '✕' : <Icon icon={Cancel01Icon} size={12} />}
+    </button>
+  )
+  if (isImg) {
+    return (
+      <div className={'att img' + (a.uploading ? ' up' : '')}>
+        {/* the square crops the image, so a click has to be able to show all of it */}
         <img src={a.url as string} alt={a.name} title={`${a.name} · ${size}`}
           onClick={() => lightbox.open(a.url as string, a.name)} />
-      ) : (
-        <>
-          <span className="nm">{a.name}</span>
-          <span className="sz">{size}</span>
-        </>
-      )}
-      <button className="rm" aria-label={t('gui.att.remove', { name: a.name })}
-        onClick={(e) => { e.stopPropagation(); store.removeAtt(i) }}>✕</button>
+        {rm}
+      </div>
+    )
+  }
+  /* The name and the badge are the chip; a finished file's size goes to the
+     tooltip, and only an upload in flight says so in words. The
+     remove button takes the badge's slot on hover, the way the design draws it,
+     so the chip keeps its width. */
+  return (
+    <div className={'att' + (a.uploading ? ' up' : '')} title={`${a.name} · ${size}`}>
+      <span className="cp-ik">{kindMark(a.name)}{rm}</span>
+      <span className="nm">{a.name}</span>
+      {a.uploading ? <span className="sz">{size}</span> : null}
     </div>
   )
 }

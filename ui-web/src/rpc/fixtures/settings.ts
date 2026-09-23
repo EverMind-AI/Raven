@@ -31,14 +31,14 @@ type Json = ResultOf<'config.get'>['config'][string]
    itself, so the canvas can only show the Chinese lines by carrying them. */
 const TIER_SUB: Record<string, Record<string, string>> = {
   en: {
-    medium: 'The least effort a sub-agent is asked for.',
-    high: 'The middle amount of effort, between the other two.',
-    max: 'The most effort a sub-agent is asked for.',
+    medium: 'Faster and cheaper, for small, well-defined tasks.',
+    high: 'A balance of speed and quality.',
+    max: 'Deepest reasoning and full sub-agent effort, for complex or open-ended work.',
   },
   zh: {
-    medium: '子代理被要求付出的最少努力。',
-    high: '居中的投入，介于另外两档之间。',
-    max: '子代理被要求付出的最多努力。',
+    medium: '子智能体投入最少。',
+    high: '居中的投入。',
+    max: '子智能体投入最多。',
   },
 }
 const tierMenu = (): Rung[] => ['medium', 'high', 'max'].map((id) => ({
@@ -52,10 +52,16 @@ const tierMenu = (): Rung[] => ['medium', 'high', 'max'].map((id) => ({
    and the two disabled lists the tool and plugin rows toggle. */
 function seed(ext: ExtFixture): Record<string, Json> {
   return {
-    /* No `language`: an install that never picked one, which is what a fresh
-       config is. The page keeps the catalogue it booted with -- `loadLang`
-       only moves it for an explicit 'en' or 'zh' -- and the pick still writes
-       one here, so the setting works from the offline page too. */
+    /* The language an install that never picked one answers with, which is
+       what a fresh config is: `config.get` fills its own default for every key
+       the config file omits (raven/rpc/methods/config.py's _DEFAULTS), so a
+       gateway has no way to answer null here and neither has this. It has to
+       stay: `loadLang` moves the page only for an explicit 'en' or 'zh' and
+       nothing after it reads the language again, so a null leaves the offline
+       page on the zh-CN its own markup declares with nothing left that could
+       move it. The pick still writes over this, so the setting works from the
+       offline page too. */
+    language: 'en',
     model: 'claude-fable-5',
     agents: { defaults: { model: 'claude-fable-5', provider: 'anthropic' } },
     tools: { disabledTools: ext.disabledTools },

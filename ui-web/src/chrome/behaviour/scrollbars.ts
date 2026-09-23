@@ -43,6 +43,32 @@ const dragWired = new WeakSet<HTMLElement>()
    wider -- still has to have its thumb put back where the box now is. */
 const live = new Set<HTMLElement>()
 
+/* Every scroller that has a thumb in the layer, showing or faded. */
+const owners = new Set<HTMLElement>()
+
+/* A scroller can leave the page with its thumb still parked in a layer of its
+   own -- the model picker closing, a dialog torn down. A showing thumb then
+   hung over the page until its fade ran out, and a faded one stayed in the
+   layer for good, one per picker opened. So while any thumb exists, removals
+   from the document take the thumbs of the scrollers they took. */
+let departures: MutationObserver | null = null
+
+function watchDepartures(): void {
+  if (departures || typeof MutationObserver === 'undefined') return
+  departures = new MutationObserver(() => {
+    owners.forEach((el) => {
+      if (!el.isConnected) hide(el)
+    })
+  })
+  departures.observe(document.documentElement, { childList: true, subtree: true })
+}
+
+function settle(): void {
+  if (owners.size || !departures) return
+  departures.disconnect()
+  departures = null
+}
+
 /* The fixed layer the thumbs are parked in. Handed out by state/portals.ts,
    which is where the order of everything standing at the body is declared:
    this layer shares its `--z` step with nothing, but the two below it do, and
@@ -70,7 +96,7 @@ function bars(el: HTMLElement): Bars {
   return b
 }
 
-function thumb(b: Bars, axis: Axis): HTMLElement {
+function thumb(el: HTMLElement, b: Bars, axis: Axis): HTMLElement {
   const had = b[axis]
   if (had) return had
   const t = document.createElement('div')
@@ -78,7 +104,22 @@ function thumb(b: Bars, axis: Axis): HTMLElement {
   t.dataset.axis = axis
   layer().appendChild(t)
   b[axis] = t
+  owners.add(el)
+  watchDepartures()
   return t
+}
+
+/* Takes one axis's thumb out of the layer, and the scroller off the watch once
+   it has none left. */
+function drop(el: HTMLElement, b: Bars, axis: Axis): void {
+  const t = b[axis]
+  if (!t) return
+  t.remove()
+  b[axis] = null
+  if (!b.v && !b.h) {
+    owners.delete(el)
+    settle()
+  }
 }
 
 /* Geometry is read from the element every time rather than cached: a scroller
@@ -127,11 +168,7 @@ function place(el: HTMLElement, b: Bars, axis: Axis): HTMLElement | undefined {
   const size = vert ? el.clientHeight : el.clientWidth
   const full = vert ? el.scrollHeight : el.scrollWidth
   if (!el.isConnected || full <= size + 1 || size < 40) {
-    const gone = b[axis]
-    if (gone) {
-      gone.remove()
-      b[axis] = null
-    }
+    drop(el, b, axis)
     return
   }
   const r = el.getBoundingClientRect()
@@ -144,14 +181,10 @@ function place(el: HTMLElement, b: Bars, axis: Axis): HTMLElement | undefined {
      content the reader is. */
   const box = visible(el)
   if (!box) {
-    const gone = b[axis]
-    if (gone) {
-      gone.remove()
-      b[axis] = null
-    }
+    drop(el, b, axis)
     return
   }
-  const t = thumb(b, axis)
+  const t = thumb(el, b, axis)
   const from = (vert ? Math.max(r.top, box.top) : Math.max(r.left, box.left)) + SB_PAD
   const to = (vert ? Math.min(r.bottom, box.bottom) : Math.min(r.right, box.right)) - SB_PAD
   const track = to - from
@@ -169,6 +202,12 @@ function place(el: HTMLElement, b: Bars, axis: Axis): HTMLElement | undefined {
 }
 
 export function show(el: HTMLElement): void {
+  /* Not on a one-line field. A text input scrolls itself to the caret as you
+     type -- there is no thumb to reach for -- and the bar landed across the
+     bottom of a box one line tall, 6px of it inside 27px, which is what a
+     long conversation name being renamed looked like. A textarea is a real
+     scroller and keeps its bar. */
+  if (el.tagName === 'INPUT') return
   const b = bars(el)
   for (const a of AXES) {
     const t = place(el, b, a)
@@ -179,6 +218,10 @@ export function show(el: HTMLElement): void {
   b.timer = setTimeout(() => {
     /* A bar being dragged must not time out from under the pointer. */
     if (b.drag) return
+    if (!el.isConnected) {
+      hide(el)
+      return
+    }
     for (const a of AXES) {
       const t = b[a]
       if (t) t.dataset.on = 'false'
@@ -204,13 +247,7 @@ export function hide(el: HTMLElement): void {
   live.delete(el)
   if (!b) return
   clearTimeout(b.timer)
-  for (const a of AXES) {
-    const t = b[a]
-    if (t) {
-      t.remove()
-      b[a] = null
-    }
-  }
+  for (const a of AXES) drop(el, b, a)
 }
 
 /* The native bar is gone, so the thumb has to be draggable itself or scrolling

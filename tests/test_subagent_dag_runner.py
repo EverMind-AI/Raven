@@ -5472,9 +5472,9 @@ _TEST_ORIGIN = {"channel": "t", "chat_id": "t", "session_key": "t"}
 async def _run_two_node_dag(
     tmp_path,
     *,
-    desk,
+    desk=None,
     judge_node,
-    announce_exception,
+    announce_exception=None,
     max_continuations=2,
     exec_backend=None,
     instance_a=None,
@@ -5552,6 +5552,75 @@ async def test_a_node_judged_not_accomplished_suspends_and_reports(tmp_path):
     assert result.summary["skipped"] == 1
     assert reports[0][0] == "a"
     assert "missing_credential" in reports[0][1]
+
+
+async def test_a_judge_that_knows_what_to_say_retries_the_node_itself(tmp_path):
+    """No desk, no announcer, nobody reachable -- and the node still runs again.
+
+    A judge that ran a command holds the failing output, and "the build failed,
+    here is the error" is a complete instruction. Relaying that through a person
+    would be asking them to read it out; on an unattended run there is nobody to
+    read it to.
+    """
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    attempts = []
+
+    async def _judge(*, node, **_):
+        attempts.append(node.id)
+        if len([seen for seen in attempts if seen == node.id]) == 1:
+            return Verdict(accomplished=False, what_is_missing="build failed", follow_up="fix the build")
+        return Verdict(accomplished=True)
+
+    result = await _run_two_node_dag(tmp_path, judge_node=_judge, max_continuations=2)
+
+    assert result.summary["completed"] == 2
+    assert attempts.count("a") == 2, "the node ran again on its judge's own say-so"
+
+
+async def test_a_judge_with_a_follow_up_and_no_budget_left_falls_back_to_asking(tmp_path):
+    """The budget is what separates "retry" from "this needs somebody"."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    reports = []
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        reports.append(node_id)
+        desk.resolve(node_id, "abandon", None)
+
+    async def _judge(**_):
+        return Verdict(accomplished=False, what_is_missing="build failed", follow_up="fix the build")
+
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, max_continuations=0
+    )
+
+    assert result.summary["failed"] == 1
+    assert reports == ["a"]
+
+
+async def test_an_unanswerable_node_fails_and_its_dependents_skip(tmp_path):
+    """A node that did not accomplish its task, with nobody to ask about it.
+
+    It stays `failed`. Recording it as `completed` would hand the output a
+    judge rejected to every node downstream -- and a dependent reads its
+    dependency's output as fact.
+    """
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    async def _judge(*, node, **_):
+        return (
+            Verdict(accomplished=False, what_is_missing="which of the two?")
+            if node.id == "a"
+            else Verdict(accomplished=True)
+        )
+
+    result = await _run_two_node_dag(tmp_path, judge_node=_judge)
+
+    assert result.summary["failed"] == 1
+    assert result.summary["skipped"] == 1
 
 
 async def test_a_continued_node_runs_again_and_can_then_pass(tmp_path):

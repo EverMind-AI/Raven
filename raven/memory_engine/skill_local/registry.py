@@ -631,6 +631,8 @@ def requires_list(requires: object, key: str) -> list[str]:
 def filter_by_required_tools(
     skills: "list[SkillMeta]",
     available: "Collection[str] | None",
+    *,
+    denied: "Collection[str] | None" = None,
 ) -> "list[SkillMeta]":
     """Drop skills whose ``requires.tools`` are not in ``available``.
 
@@ -645,13 +647,22 @@ def filter_by_required_tools(
     awareness, or its lookup raised) and gates nothing: showing too much beats
     blanking the section over a wiring gap. An empty collection is a different
     statement — "this surface has no tools" — and does gate.
+
+    ``denied`` is the other half of the same question, for a surface that cannot
+    say what a reader *has* but can say what it certainly has not: a sub-agent
+    is never given ``run_subagent_dag``, whatever backend runs it, so that much
+    is decidable without the reader's tool list. It gates on its own, including
+    when ``available`` is None, which is what lets an unknowable surface still
+    keep the one rule this gate was written for.
     """
-    if available is None:
+    refused = set(denied or ())
+    have = None if available is None else set(available)
+    if have is None and not refused:
         return list(skills)
-    have = set(available)
     kept: list[SkillMeta] = []
     for m in skills:
-        missing = [t for t in requires_list(getattr(m, "requires", None), "tools") if t not in have]
+        wants = requires_list(getattr(m, "requires", None), "tools")
+        missing = [t for t in wants if t in refused or (have is not None and t not in have)]
         if missing:
             log.debug("skill %r withheld — tools not registered: %s", m.name, ", ".join(missing))
             continue

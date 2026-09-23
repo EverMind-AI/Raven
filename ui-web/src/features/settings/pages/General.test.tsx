@@ -43,8 +43,21 @@ describe('general page', () => {
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.general.theme_dark')) })
     expect(look.get().theme).toBe('dark')
     expect(document.documentElement.dataset.theme).toBe('dark')
-    expect(screen.getByText('gui.settings.general.theme_dark').getAttribute('aria-pressed')).toBe('true')
+    const cards = screen.getAllByRole('radio')
+    expect(cards.map((c) => c.textContent)).toEqual([
+      'gui.settings.general.theme_system', 'gui.settings.general.theme_light', 'gui.settings.general.theme_dark',
+    ])
+    expect(cards.map((c) => c.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true'])
     expect(calls).toEqual([])
+  })
+
+  it('says what each setting is for under its name', async () => {
+    install()
+    await mount('general')
+    for (const k of ['language', 'theme', 'notify']) {
+      const title = screen.getByText('gui.settings.general.' + k, { selector: '.settings-gen-t' })
+      expect(title.nextElementSibling!.textContent).toBe('gui.settings.general.' + k + '_sub')
+    }
   })
 
   it('the notification switch goes to the notifications module and refuses where the browser has none', async () => {

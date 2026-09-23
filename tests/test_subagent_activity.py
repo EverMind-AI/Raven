@@ -264,3 +264,98 @@ def test_a_pre_fold_record_folds_the_same_way_through_the_tasks_reader() -> None
         {"path": "a.py", "op": "add", "add": 4, "del": 1, "size": 40},
         {"path": "b.py", "op": "delete", "add": 0, "del": 2, "size": None},
     ]
+
+
+def test_count_line_changes_reads_a_file_that_did_not_exist_as_all_additions() -> None:
+    """``before is None`` is the only record that the write created the file,
+    and a creation has nothing to have removed."""
+    assert activity.count_line_changes(None, "one\ntwo\n") == (2, 0)
+    assert activity.count_line_changes("", "one\ntwo\n") == (2, 0)
+
+
+def test_count_line_changes_counts_only_the_lines_that_moved() -> None:
+    assert activity.count_line_changes("keep\nold\n", "keep\nnew\nextra\n") == (2, 1)
+    assert activity.count_line_changes("same\n", "same\n") == (0, 0)
+
+
+def test_workspace_relative_anchors_a_path_under_the_workspace(tmp_path) -> None:
+    inside = tmp_path / "work" / "notes.md"
+    inside.parent.mkdir()
+    inside.write_text("x")
+
+    assert activity.workspace_relative(str(inside), tmp_path) == "work/notes.md"
+
+
+def test_workspace_relative_leaves_a_path_outside_it_alone(tmp_path) -> None:
+    """Absolute is the honest answer for a file the panel cannot anchor; a
+    workspace nobody knows leaves the path as it came."""
+    outside = "/etc/hosts"
+    assert activity.workspace_relative(outside, tmp_path / "work") == outside
+    assert activity.workspace_relative(outside, None) == outside
+
+
+def test_a_snapshot_records_a_creation_a_rewrite_and_a_removal(tmp_path) -> None:
+    """What a command did, read off the directory: the creation counts its
+    lines, the rewrite has none to count (the listing never held the old
+    content), and the removal has no size because the file is gone."""
+    from raven.agent.tools import snapshot
+
+    (tmp_path / "kept.md").write_text("one\n")
+    (tmp_path / "gone.md").write_text("bye\n")
+    before = snapshot.take(tmp_path)
+    (tmp_path / "made.md").write_text("a\nb\n")
+    (tmp_path / "kept.md").write_text("one\ntwo\n")
+    (tmp_path / "gone.md").unlink()
+
+    with activity.collecting() as run:
+        activity.record_snapshot_changes(before, snapshot.take(tmp_path), tmp_path)
+
+    assert run.files == [
+        {"path": "made.md", "op": "add", "add": 2, "del": 0, "size": 4},
+        {"path": "kept.md", "op": "write", "add": 0, "del": 0, "size": 8},
+        {"path": "gone.md", "op": "delete", "add": 0, "del": 0, "size": None},
+    ]
+
+
+def test_a_path_the_call_already_accounted_for_is_not_recorded_twice(tmp_path) -> None:
+    """The tool result and the listing see the same removal. Recorded from both,
+    a node that deleted one file would have its deletion counted twice -- and
+    the listing's copy carries neither the lines the file held nor its op."""
+    from raven.agent.tools import snapshot
+
+    (tmp_path / "gone.md").write_text("bye\n")
+    before = snapshot.take(tmp_path)
+    (tmp_path / "gone.md").unlink()
+    (tmp_path / "made.md").write_text("a\n")
+
+    with activity.collecting() as run:
+        activity.record_snapshot_changes(before, snapshot.take(tmp_path), tmp_path, already=[str(tmp_path / "gone.md")])
+
+    assert [entry["path"] for entry in run.files] == ["made.md"]
+
+
+def test_a_snapshot_that_never_happened_records_nothing(tmp_path) -> None:
+    from raven.agent.tools import snapshot
+
+    with activity.collecting() as run:
+        activity.record_snapshot_changes(None, snapshot.take(tmp_path), tmp_path)
+        activity.record_snapshot_changes(snapshot.take(tmp_path), None, tmp_path)
+
+    assert run.files == []
+
+
+def test_a_snapshot_can_be_recorded_into_a_run_it_is_not_running_inside(tmp_path) -> None:
+    """The acp collector is called from the connection's read loop, whose
+    ContextVar predates the run -- so the run it writes to has to be the one it
+    was handed, not whatever is current."""
+    from raven.agent.tools import snapshot
+
+    before = snapshot.take(tmp_path)
+    (tmp_path / "made.md").write_text("a\n")
+    theirs = activity.RunActivity()
+
+    with activity.collecting() as current:
+        activity.record_snapshot_changes(before, snapshot.take(tmp_path), tmp_path, run=theirs)
+
+    assert current.files == []
+    assert [entry["path"] for entry in theirs.files] == ["made.md"]

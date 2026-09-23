@@ -93,6 +93,16 @@ def test_name_is_constrained_to_installed_playbooks(runtime):
     assert schema["required"] == ["name"]
 
 
+def test_a_round_count_is_offered_within_the_bounds_a_plan_can_run(runtime):
+    """The one field of a playbook a caller may overrule, so the bounds are on
+    the schema: a number outside them is otherwise only refused after the call."""
+    from raven.playbook.stint_spec import MAX_ROUNDS
+
+    rounds = LoadPlaybookTool(runtime).parameters["properties"]["max_rounds"]
+    assert (rounds["minimum"], rounds["maximum"]) == (1, MAX_ROUNDS)
+    assert "max_rounds" not in LoadPlaybookTool(runtime).parameters["required"]
+
+
 def test_tool_schema_uses_one_consistent_view_then_refreshes_next_render(runtime):
     loader = LoadPlaybookTool(runtime)
     loader.set_turn_message("weekly feedback")

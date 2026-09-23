@@ -18,7 +18,7 @@ import { pane } from '../../state/wsPane'
 import { shortPath } from './source'
 import { shared as workspaceShared } from './store'
 
-import type { FileChange, FileRemoval } from '../../rpc/generated'
+import type { FileChange, FileRemoval, FileWritten } from '../../rpc/generated'
 import type { WsChange, WsHunk, WsShared } from './types'
 
 const record = (): WsShared => workspaceShared()
@@ -36,19 +36,25 @@ export function wsArgs(name: string, args: unknown): Record<string, unknown> {
   return { path: s }
 }
 
+/* How a row spells the file it is for: the path shortened for display, split
+   into the part the row greys out and the name it shows. */
+function labelFor(key: string): { dir: string; name: string } {
+  const shown = shortPath(key)
+  const cut = shown.lastIndexOf('/')
+  return { dir: cut < 0 ? '' : shown.slice(0, cut + 1), name: cut < 0 ? shown : shown.slice(cut + 1) }
+}
+
 /* This turn's row for one path, made if the turn has not touched it yet. */
 function rowFor(key: string, kind: WsChange['kind']): WsChange {
   const WS = record()
   const found = WS.changes.find((x) => x.key === key && x.turn === WS.turn)
   if (found) return found
-  const shown = shortPath(key)
-  const cut = shown.lastIndexOf('/')
   /* The newest change is the one you came here to read, so it arrives
      expanded. `auto` marks it as opened by us, so the next arrival folds it
      back without touching a row the reader opened on purpose. */
   WS.changes.forEach((x) => { if (x.auto) { x.open = false; x.auto = false } })
   const made: WsChange = {
-    key, dir: cut < 0 ? '' : shown.slice(0, cut + 1), name: cut < 0 ? shown : shown.slice(cut + 1),
+    key, ...labelFor(key),
     kind, add: 0, del: 0, hunks: [], turn: WS.turn, open: true, auto: true, seen: false,
   }
   WS.changes.unshift(made)
@@ -58,6 +64,7 @@ function rowFor(key: string, kind: WsChange['kind']): WsChange {
 /* One row per path, not per call: five edits to the same file is one changed
    file with five hunks, which is how a person thinks about it. */
 export function wsRecordChange(path: string, kind: WsChange['kind'], hunk: WsHunk): WsChange {
+  adoptListing(String(path))
   const c = rowFor(String(path), kind)
   /* A creation stays one for the rest of the turn: rewriting a file the turn
      itself made does not turn it into a file that was already there. */
@@ -118,6 +125,42 @@ function wsRecordRemoval(path: string, before?: string, lines?: number | null): 
   c.del = c.hunks.length ? c.hunks[0]!.del : (lines == null ? 0 : lines)
 }
 
+/* The same two spellings ``sameFile`` reconciles for a removal, in the other
+   order: a listing row is keyed by the path the runtime resolved, and a file
+   tool's row by the path the model typed, so a tool that touches a file an
+   `exec` already left behind this turn would open a second row for it and the
+   desk would list one file twice. The tool's account is the one that can say
+   what changed, so the listing's row carries on under the tool's spelling
+   instead -- keeping the verdict the listing is better placed to know, that
+   the file was new. Only a row the listing made is taken this way, which is
+   what carrying no hunk means; a removal's bare row is its own answer. */
+function adoptListing(key: string): void {
+  const WS = record()
+  const row = WS.changes.find((x) => x.turn === WS.turn && x.key !== key
+    && !x.hunks.length && x.kind !== 'delete' && sameFile(x.key, key))
+  if (!row) return
+  const { dir, name } = labelFor(key)
+  row.key = key
+  row.dir = dir
+  row.name = name
+}
+
+/* What a command left behind, which no tool result names: the runtime lists the
+   directory the turn's tools run in before and after an `exec` and reports the
+   difference. A listing knows a file is there, how big it is and whether it was
+   there before -- never how it changed -- so the row carries a count and no
+   hunk, and the desk sends a reader who opens it to the file itself.
+
+   A row this turn already holds for the path is left alone: it came from a file
+   tool, whose arguments say everything a listing cannot. */
+function wsRecordWritten(w: FileWritten): void {
+  const WS = record()
+  const key = String(w.path)
+  if (WS.changes.some((x) => x.turn === WS.turn && sameFile(x.key, key))) return
+  const c = rowFor(key, w.created ? 'add' : 'write')
+  if (w.created) c.add = w.lines == null ? 0 : w.lines
+}
+
 /* ── tool-event hooks ──────────────────────────────────────────────────
    Fed the FULL argument object, because that is where the diff lives. */
 export function wsOnTool(name: string, args: unknown, _silent?: boolean): void {
@@ -160,7 +203,7 @@ function createdTheFile(fileChange: FileChange | undefined, diff: string | undef
 
 export function wsOnToolDone(
   name: string, args: unknown, _ok?: boolean, _preview?: string, _ms?: number | null, diff?: string,
-  fileChange?: FileChange, fileRemoved?: FileRemoval[],
+  fileChange?: FileChange, fileRemoved?: FileRemoval[], fileWritten?: FileWritten[],
 ): void {
   const WS = record()
   const a = wsArgs(name, args)
@@ -178,8 +221,11 @@ export function wsOnToolDone(
     }
     if (c && c.kind === 'write' && createdTheFile(fileChange, diff)) c.kind = 'add'
   }
-  /* Outside the write/edit branch: a file goes when whatever call made it go
-     returns, and that is an `exec` far more often than a file tool. */
+  /* Outside the write/edit branch: a file arrives or goes when whatever call
+     did it returns, and that is an `exec` far more often than a file tool.
+     Written before removed, so a file the listing found and the same call then
+     took away cancels out the way one written by a tool does. */
+  ;(fileWritten || []).forEach((w) => { if (w && w.path) wsRecordWritten(w) })
   ;(fileRemoved || []).forEach((r) => { if (r && r.path) wsRecordRemoval(String(r.path), r.before) })
   if (pane().showsTurn()) pane().draw()
   pane().bump()
@@ -198,6 +244,7 @@ interface StoredMessage {
   tool_call_id?: string | number
   diff?: string
   file_removed?: Array<{ path?: string; del?: number }>
+  file_written?: FileWritten[]
   tool_calls?: Array<{ id?: string | number; name?: string; arguments?: string }>
 }
 
@@ -212,10 +259,15 @@ export function wsOnHistory(messages: StoredMessage[] | null | undefined): void 
      row and the count, and the hunk only when this turn's own write is still
      on the row to rebuild it from. */
   const gone = new Map<string, Array<{ path?: string; del?: number }>>()
+  /* Stored exactly as the live event carried it -- a size and a line count are
+     all a listing ever knew, so unlike a removal there is nothing to reduce --
+     which is why a replayed command builds the same rows from the same shape. */
+  const wrote = new Map<string, FileWritten[]>()
   ;(messages || []).forEach((m) => {
     if (!m || m.role !== 'tool' || !m.tool_call_id) return
     if (m.diff) diffs.set(String(m.tool_call_id), m.diff)
     if (Array.isArray(m.file_removed)) gone.set(String(m.tool_call_id), m.file_removed)
+    if (Array.isArray(m.file_written)) wrote.set(String(m.tool_call_id), m.file_written)
   })
   ;(messages || []).forEach((m) => {
     if (!m) return
@@ -241,6 +293,7 @@ export function wsOnHistory(messages: StoredMessage[] | null | undefined): void 
       wsOnTool(name, args, true)
       const diff = diffs.get(String(c.id || ''))
       if (diff) wsOnToolDone(name, args, true, '', null, diff)
+      ;(wrote.get(String(c.id || '')) || []).forEach((w) => { if (w && w.path) wsRecordWritten(w) })
       ;(gone.get(String(c.id || '')) || []).forEach((r) => {
         if (r && r.path) wsRecordRemoval(String(r.path), undefined, r.del == null ? null : Number(r.del))
       })

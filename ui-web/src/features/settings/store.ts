@@ -72,8 +72,9 @@ export interface Sheet {
   items: ModelCandidate[]
   /* The kind tab in force, or every kind. */
   kind: 'all' | Kind
-  /* Vendor groups the reader has collapsed, by prefix. */
-  folded: Record<string, boolean>
+  /* Ticked and not yet added, by model id. Kept across a search or a kind
+     tab, so narrowing the list to find the next one does not drop the last. */
+  picked: string[]
   /* What a typed id would be added as, once the reader has said; null means
      the guess from its name still stands. */
   typed: Kind | null
@@ -130,6 +131,10 @@ export interface SettingsState {
   skq: string
   toolOpen: string | null
   plugOpen: string | null
+  /* The provider whose model list is shown in full rather than folded. Here,
+     not in the list's own state: a removal redraws the page from a new
+     snapshot, and a fold kept in the component snapped shut on every one. */
+  modelsAll: string | null
   archived: ArchivedSession[] | null
 }
 
@@ -163,6 +168,7 @@ const initial = (): SettingsState => ({
   skq: '',
   toolOpen: null,
   plugOpen: null,
+  modelsAll: null,
   archived: null,
 })
 
@@ -289,7 +295,7 @@ export function setTab(id: string): void {
   settingsTab.id = id
   set({
     tab: curTab(), err: '', provider: null, provQ: '', provFilt: 'all', provAdd: null, sheet: null, hdrAdd: null, ovlAdd: null, adv: null,
-    skill: null, detail: null, toolOpen: null, plugOpen: null,
+    skill: null, detail: null, toolOpen: null, plugOpen: null, modelsAll: null,
   })
   if (moved) settingsDialog.enterSection(id)
 }
@@ -357,7 +363,7 @@ export async function skillOpen(name: string): Promise<void> {
    with no list endpoint answers a status other than ok, and the sheet then
    takes a typed id alone. */
 export async function sheetOpen(slug: string): Promise<void> {
-  set({ sheet: { slug, q: '', state: 'loading', items: [], kind: 'all', folded: {}, typed: null } })
+  set({ sheet: { slug, q: '', state: 'loading', items: [], kind: 'all', picked: [], typed: null } })
   let items: ModelCandidate[] = []
   let ok = false
   try {
@@ -437,6 +443,11 @@ export function _resetForTests(): void {
   oauthStop()
   if (refreshTimer) clearTimeout(refreshTimer)
   refreshTimer = null
+  /* A case that mounts the dialog on a load it never resolves leaves this
+     holding that promise, and `refresh` hands the same one to every later
+     caller -- so one failed assertion turned the four cases after it into
+     timeouts inside `open()`. */
+  loading = null
   store._resetForTests()
   store.set(initial())
   lazy = false

@@ -4,7 +4,8 @@
 import { t } from '../../../i18n/t'
 import { md } from '../../../lib/prose'
 import * as confirm from '../../../state/confirm'
-import { Card, Crumb, Grow, IconBtn, Rov, Search, Switch, Tag } from '../Fields'
+import { Card, Crumb, Grow, IconBtn, Search, Switch, Tag } from '../Fields'
+import { SkillDetailWait } from '../Skeletons'
 import * as store from '../store'
 
 import type { SkillDetail, SkillRow } from '../types'
@@ -119,7 +120,7 @@ function SkillDetailView({ name }: { name: string }): JSX.Element {
         )}
         <SkillSwitch name={name} off={off} />
       </Crumb>
-      {!d && <div className="settings-card"><div className="settings-rows"><div className="settings-row"><Rov>{t('gui.settings.loading')}</Rov></div></div></div>}
+      {!d && <SkillDetailWait />}
       {d && (
         <div className="settings-card settings-mdcard">
           <div className="settings-mdhead">

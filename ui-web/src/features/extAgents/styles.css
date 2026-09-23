@@ -80,6 +80,66 @@
 .extAgents-ctl .mini.danger:hover:not(:disabled), .extAgents-act .mini.danger:hover:not(:disabled) { border-color: var(--clay); background: color-mix(in oklab, var(--clay) 8%, transparent); }
 .extAgents-state { font-family: var(--mono); font-size: 11px; color: var(--faint); }
 
+/* ── the hub: tabs over a grid of cards ─────────────────────────── */
+
+.extAgents-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px; }
+.extAgents-tab {
+  height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: none;
+  font: inherit; font-size: 13px; color: var(--muted); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.extAgents-tab:hover { color: var(--text); }
+.extAgents-tab[aria-selected="true"] { background: var(--raised); color: var(--text); font-weight: 500; }
+.extAgents-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.extAgents-tn { font-size: 11.5px; color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
+.extAgents-tn::before { content: "("; }
+.extAgents-tn::after { content: ")"; }
+
+/* The column is the composer's width (`#extAgentsPage .wrap` in page.css).
+   Four cards a row at most -- the track floor is a quarter of the row less its
+   three gaps -- and never narrower than 200px, so a narrow window steps down
+   to three, two, one rather than squeezing four. */
+.extAgents-grid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(max(200px, calc((100% - 36px) / 4)), 1fr));
+}
+.extAgents-empty { padding: 28px 0; font-size: 12.5px; color: var(--faint); }
+
+.extAgents-card {
+  position: relative; min-width: 0; min-height: 104px; padding: 14px 14px 16px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+  color: inherit; cursor: pointer; transition: box-shadow .15s ease, border-color .15s ease;
+}
+.extAgents-card:hover, .extAgents-card[aria-current="true"] {
+  border-color: color-mix(in oklab, var(--line) 60%, var(--muted));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .06);
+}
+.extAgents-card:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.extAgents-ctop { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.extAgents-ctop .extAgents-nm { flex: 1; }
+.extAgents-ctop .extAgents-t { font-size: 14px; font-weight: 600; }
+.extAgents-card .extAgents-tile .agent-mark { width: 32px; height: 32px; border-radius: 9px; }
+.extAgents-card .extAgents-tile .agent-mark img, .extAgents-card .extAgents-tile .agent-mark svg { width: 20px; height: 20px; }
+.extAgents-card .extAgents-tile-own .agent-mark img { width: 18px; height: 23px; }
+.extAgents-card .extAgents-one {
+  margin-top: 10px; line-height: 1.55; white-space: normal;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.extAgents-card .extAgents-one-work { display: flex; }
+
+/* The corner control: a quiet square, always drawn. */
+.extAgents-cbtn {
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: 7px;
+  background: var(--raised); color: var(--muted); cursor: pointer;
+  display: grid; place-items: center;
+}
+.extAgents-cbtn svg { width: 14px; height: 14px; }
+.extAgents-cbtn:hover { color: var(--text); background: color-mix(in oklab, var(--raised) 70%, var(--line)); }
+.extAgents-cbtn:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.extAgents-cbtn-bad { color: var(--clay); background: color-mix(in oklab, var(--clay) 10%, transparent); }
+.extAgents-cbtn-bad:hover { color: var(--clay); background: color-mix(in oklab, var(--clay) 18%, transparent); }
+.extAgents-ctag { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+
 /* The wizard's agents step: a scanning placeholder before the first
    `subagents.list` answer lands, and the same ring again on a row's own
    connect button while its write is in flight. The roster and the sheet wear
@@ -167,17 +227,19 @@
 }
 .extAgents-pill-dim .extAgents-mid { font-family: var(--sans); font-weight: 400; color: var(--muted); }
 .extAgents-mpv { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
-.extAgents-mch { color: var(--faint); font-size: 11px; margin-left: 2px; }
+.extAgents-mch { color: var(--faint); font-size: 11px; margin-left: 2px; width: 14px; flex: none; text-align: center; }
 .extAgents-mx {
   position: absolute; top: 0; right: 0; bottom: 0; width: 30px;
   font: inherit; font-size: 15px; line-height: 1; border: 0;
   background: var(--paper); color: var(--faint); cursor: pointer; display: none;
 }
 .extAgents-pill-clearable:hover .extAgents-mx, .extAgents-pill-clearable:focus-within .extAgents-mx { display: block; }
-.extAgents-pill-clearable:hover .extAgents-mch, .extAgents-pill-clearable:focus-within .extAgents-mch { visibility: hidden; }
-/* The clear control sits over the pill's right edge; the provider steps back
-   from under it while it is showing. */
-.extAgents-pill-clearable:hover .extAgents-mpv, .extAgents-pill-clearable:focus-within .extAgents-mpv { margin-right: 18px; }
+/* The clear control sits over the pill's right edge: on hover the chevron
+   leaves the row and the button's padding takes its exact place (gap 7 +
+   margin 2 + slot 14 + padding 8 = 31, one past the control's 30), so the
+   provider ellipsizes short of it and its right edge does not move. */
+.extAgents-pill-clearable:hover .extAgents-mch, .extAgents-pill-clearable:focus-within .extAgents-mch { display: none; }
+.extAgents-pill-clearable:hover .extAgents-pm, .extAgents-pill-clearable:focus-within .extAgents-pm { padding-right: 31px; }
 .extAgents-mx:hover { color: var(--clay); }
 
 /* The shared picker, sized to hang under the pill inside the 520px sheet: the

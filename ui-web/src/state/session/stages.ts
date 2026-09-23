@@ -158,6 +158,13 @@ export const STAGES: readonly Stage[] = [
   arm('session.naming_ended', (_rt, p) => { void namingEnded(p.session_id, p.reason) }),
 
   arm('notice', (rt, p) => {
+    /* A transient one reports on a turn still running -- the runtime waiting out
+       a failed model call -- so it goes where `permission.review` puts its pause:
+       the status line, which the next thinking/token/tool frame kills. Sealing
+       the step and writing a row would end the turn's prose on a wait it is
+       about to come back from. `episode.start` does not kill the status, so the
+       line survives the whole silence and dies on the first real output. */
+    if (p.transient) { transcript.status(t('gui.notice.' + (p.kind || ''), null, p.kind || '')); return }
     transcript.killStatus()
     /* Seals the open step first: this ends the turn, so the streamed prose
        above stays where it was said. */
@@ -212,9 +219,10 @@ export const STAGES: readonly Stage[] = [
     o.h.done(ok, preview, took, null, p.truncated)
     /* p.diff is the real change on disk -- the only place a whole-file write's
        previous content survives; p.file_change says whether there was a file
-       there at all, and p.file_removed which files this call made vanish. */
+       there at all, p.file_removed which files this call made vanish, and
+       p.file_written the ones a command left behind that no result names. */
     if (typeof wsOnToolDone === 'function') {
-      wsOnToolDone(o.name, o.args, ok, preview, took, p.diff, p.file_change, p.file_removed)
+      wsOnToolDone(o.name, o.args, ok, preview, took, p.diff, p.file_change, p.file_removed, p.file_written)
     }
   }),
 

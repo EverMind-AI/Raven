@@ -3,6 +3,8 @@
 import asyncio
 from dataclasses import replace
 
+import pytest
+
 from raven.acp_client.asker import current_ask
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.message import MessageTool
@@ -23,6 +25,7 @@ from raven.rpc.spine import (
 )
 from raven.sandbox import ExecResult, SandboxExecutor
 from raven.spine import (
+    AnswerlessTurnError,
     ChatType,
     EpisodeStart,
     MediaOut,
@@ -477,6 +480,27 @@ async def test_runner_cron_captures_reply_non_streaming():
     assert readback["cron:job1"] == "reminder fired"  # reply captured for fan-out
 
 
+async def test_runner_cron_clears_the_readback_a_failed_turn_would_hand_on():
+    # The submitter pops the read-back text by conversation after the handle
+    # resolves. A turn that fails stores nothing, so without the clear the next
+    # run on that conversation would read the previous run's reply as its own.
+    readback: dict[str, str] = {}
+    req = TurnRequest(origin=Origin.CRON, source=_src(chat_id="direct"), text="[cron]", conversation="cron:job1")
+    _events, emit = _collect()
+    await RpcTurnRunner(_RunTurnLoop(reply_text="reminder fired"), FakeEmitter(), {}, readback).run(
+        req, emit, lambda: []
+    )
+    assert readback["cron:job1"] == "reminder fired"
+
+    class _FailsLoop(_RunTurnLoop):
+        async def run_turn(self, req, emit, drain, **kwargs) -> TurnOutcome:
+            raise AnswerlessTurnError("Error calling LLM (server@openrouter): 503")
+
+    with pytest.raises(AnswerlessTurnError):
+        await RpcTurnRunner(_FailsLoop(), FakeEmitter(), {}, readback).run(req, emit, lambda: [])
+    assert "cron:job1" not in readback
+
+
 # --- RpcOutlet.deliver: maps each spine event to its wire event ---
 
 
@@ -718,6 +742,49 @@ async def test_outlet_deliver_tool_complete_forwards_the_files_that_went():
         assert "file_removed" not in emitter.emitted[0][1]["payload"], nothing
 
 
+async def test_outlet_deliver_tool_complete_forwards_the_files_a_command_wrote():
+    """The files a command left behind, which its own result never names.
+
+    Absent rather than null when there are none, for the reason ``file_change``
+    and ``file_removed`` are: every call that is not a command has none, and a
+    payload that grew a null key under all of them would change the shape the
+    wire already had.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t1",
+            result_preview="ok",
+            truncated=False,
+            file_written=[
+                {"path": "/tmp/made.txt", "created": True, "size": 8, "lines": 2},
+                {"path": "/tmp/kept.txt", "created": False, "size": 16, "lines": None},
+            ],
+            conversation_id="tui:c1",
+        )
+    )
+    assert emitter.emitted[0][1]["payload"]["file_written"] == [
+        {"path": "/tmp/made.txt", "created": True, "size": 8, "lines": 2},
+        {"path": "/tmp/kept.txt", "created": False, "size": 16, "lines": None},
+    ]
+
+    for nothing in (None, []):
+        emitter.emitted.clear()
+        await outlet.deliver(
+            ToolEvent(
+                phase=ToolPhase.COMPLETE,
+                tool_call_id="t2",
+                result_preview="ok",
+                truncated=False,
+                file_written=nothing,
+                conversation_id="tui:c1",
+            )
+        )
+        assert "file_written" not in emitter.emitted[0][1]["payload"], nothing
+
+
 async def test_a_blocked_action_rides_notice_and_never_the_token_stream():
     """The one notice that replaces the answer instead of accompanying it.
 
@@ -741,11 +808,68 @@ async def test_a_blocked_action_rides_notice_and_never_the_token_stream():
             "tui:c1",
             {
                 "type": "notice",
-                "payload": {"kind": "action_blocked", "detail": "Error: Command blocked by safety guard"},
+                "payload": {
+                    "kind": "action_blocked",
+                    "detail": "Error: Command blocked by safety guard",
+                    "transient": False,
+                },
             },
         )
     ]
     assert not any(ev["type"] == "token.delta" for _, ev in emitter.emitted)
+
+
+async def test_a_degraded_organ_reaches_the_page_as_a_closing_notice():
+    """The only surface that ever heard this was a channel; the page and the
+    terminal never did, so a memoryless answer was indistinguishable there from
+    a remembered one -- which is the whole point of the degrade-with-notice
+    ruling. It accompanies the answer, so it is a row and not a status."""
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        Notice(kind=NoticeKind.ORGAN_DEGRADED, detail="long-term memory was unavailable", conversation_id="tui:c1")
+    )
+    assert emitter.emitted == [
+        (
+            "tui:c1",
+            {
+                "type": "notice",
+                "payload": {
+                    "kind": "organ_degraded",
+                    "detail": "long-term memory was unavailable",
+                    "transient": False,
+                },
+            },
+        )
+    ]
+
+
+async def test_a_retry_wait_rides_notice_marked_transient_and_tagged_with_its_lane():
+    """The other notice the runtime raises about a turn, and the opposite of a
+    blocked action: the turn is still running, so a client must draw it where the
+    next output frame replaces it rather than as the turn's outcome.
+
+    Tagged, because a direct chat runs on its own lane and the client holds one
+    subscription per session: an untagged notice reads as the main agent's, and a
+    sub-agent's retry was drawn into the main conversation.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter, {"tui:c1#sub/h1": {"agent": "sub", "handle": "h1"}})
+    await outlet.deliver(Notice(kind=NoticeKind.LLM_RETRY, detail="server", conversation_id="tui:c1#sub/h1"))
+    assert emitter.emitted == [
+        (
+            "tui:c1",
+            {
+                "type": "notice",
+                "payload": {
+                    "kind": "llm_retry",
+                    "detail": "server",
+                    "transient": True,
+                    "target": {"agent": "sub", "handle": "h1"},
+                },
+            },
+        )
+    ]
 
 
 async def test_every_outlet_emission_validates_against_the_wire_contract():
@@ -784,6 +908,13 @@ async def test_every_outlet_emission_validates_against_the_wire_contract():
             tool_call_id="t2",
             result_preview="ok",
             file_removed=[{"path": "/tmp/gone.txt", "before": "one\ntwo\n"}],
+            conversation_id="tui:c1",
+        ),
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t3",
+            result_preview="ok",
+            file_written=[{"path": "/tmp/made.txt", "created": True, "size": 8, "lines": 2}],
             conversation_id="tui:c1",
         ),
         Text(content="hello", conversation_id="tui:c1"),

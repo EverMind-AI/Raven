@@ -50,6 +50,10 @@ function place(): void {
   const pill = get().host
   if (!pill) return
   pill.dataset.on = 'true'
+  /* A label that is a sentence wraps to a fixed width instead of running the
+     window's; the control says so with `data-tip-wrap`. Before the measure
+     below, since wrapping is what decides the pill's height. */
+  pill.dataset.wrap = hovered.hasAttribute('data-tip-wrap') ? 'true' : 'false'
   const vw = document.documentElement.clientWidth
   const vh = document.documentElement.clientHeight
   const r = hovered.getBoundingClientRect()

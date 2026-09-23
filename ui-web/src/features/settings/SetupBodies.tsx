@@ -12,6 +12,7 @@ import { Card, Chip, InlineErr, Row, Rov } from './Fields'
 import { KeyRow, VendorSelect } from './pages/Tools'
 import { Providers } from './providers/Providers'
 import { Roles } from './providers/Roles'
+import { SetupWait } from './Skeletons'
 import { FETCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, keySet, legacyKey, vendorKey, webVendor } from './source'
 import * as store from './store'
 
@@ -28,7 +29,7 @@ export function ModelStepBody(): JSX.Element {
           <Roles />
         </>
       ) : (
-        <div className="settings-soonbox"><div className="settings-t">{t('gui.settings.loading')}</div></div>
+        <SetupWait step="model" />
       )}
       <InlineErr text={s.err} />
     </div>
@@ -79,7 +80,7 @@ export function WebStepBody(): JSX.Element {
           </Card>
         </>
       ) : (
-        <div className="settings-soonbox"><div className="settings-t">{t('gui.settings.loading')}</div></div>
+        <SetupWait step="web" />
       )}
       <InlineErr text={s.err} />
     </div>

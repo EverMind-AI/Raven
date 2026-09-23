@@ -29,6 +29,12 @@ export interface ProviderRow {
      catalogue. What the settings page manages is `configured` below. */
   models: string[]
   configured?: string[]
+  /* Every model-id prefix that names this provider, carried so a page asking
+     whether two spellings are one model can ask what the backend answers
+     (`features/model/types.ts`'s `ModelHost`). These rows are the model
+     feature's own (`features/model/source.ts` builds them), so the field is
+     here to be read rather than to be filled in again. */
+  routes?: readonly string[]
   /* Name and tags per model id, straight off `model.options`. A model with no
      entry is one the registry knows nothing about and nobody has described --
      it lists as its id with no icons. */
@@ -176,6 +182,18 @@ export interface AuthField {
   help_url?: string
 }
 
+/* What the catalogue knows about one installed server, beside what the runtime
+   row already carries. `known` is the difference between "this server takes no
+   credential" and "the catalogue has no entry for it": both leave `fields`
+   empty, and only one of them is a thing to tell the reader. */
+export interface McpDetail {
+  known: boolean
+  fields: AuthField[]
+  /* A URL for an http or sse server, a command line for a stdio one. */
+  address?: string
+  tools: string[]
+}
+
 export interface SettingsSource {
   load(): Promise<SettingsSnapshot>
   set(key: string, value: unknown): Promise<SettingsSnapshot>
@@ -211,7 +229,7 @@ export interface SettingsSource {
   uninstallSkill(name: string): Promise<SettingsSnapshot>
   /* The credential fields the catalogue declares for this server, empty for
      one nobody installed from the catalogue. A read, so no snapshot back. */
-  serverAuthFields(name: string): Promise<AuthField[]>
+  serverDetail(name: string): Promise<McpDetail>
   toggleServer(name: string, on: boolean): Promise<SettingsSnapshot>
   retryServer(name: string): Promise<SettingsSnapshot>
   revokeServer(name: string): Promise<SettingsSnapshot>
