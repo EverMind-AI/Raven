@@ -29,7 +29,6 @@
 | `raven plugin auth <server>` | 为 MCP 服务完成认证或刷新 OAuth 授权 |
 | `raven mcp bridge <socket-path>` | 通过标准输入输出，将子 Agent 的 MCP 连接桥接到宿主管理的服务 |
 | `raven import` | 预览并导入其他 AI 工具的数据、查看进度或停止导入 |
-| `raven deep-research` | 配置、查看或重置 MiroThinker 研究集成 |
 | `raven cron` | 创建、查看、运行、启用、禁用或删除定时任务 |
 | `raven sentinel` | 配置主动行为，查看关注事项、例行任务、决策和提醒 |
 | `raven ops connection` | 注册和列出机器；`add` 默认探测连接，`doctor` 校验注册表条目 |

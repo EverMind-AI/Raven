@@ -145,7 +145,6 @@ from raven.cli.a2a_commands import a2a_app
 from raven.cli.acp_commands import acp_app
 from raven.cli.channel_commands import channels_app
 from raven.cli.cron_commands import cron_app
-from raven.cli.deep_research_commands import deep_research_app
 from raven.cli.mcp_commands import mcp_app
 from raven.cli.ops_connection_commands import ops_app
 from raven.cli.playbook_commands import playbook_app
@@ -160,7 +159,6 @@ app.add_typer(acp_app, name="acp")
 app.add_typer(channels_app, name="channels")
 app.add_typer(cron_app, name="cron")
 app.add_typer(ops_app, name="ops")
-app.add_typer(deep_research_app, name="deep-research")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(playbook_app, name="playbook")
 app.add_typer(provider_app, name="provider")
@@ -209,7 +207,7 @@ def run() -> None:
             console.print(exc.remedy)
         raise SystemExit(1) from exc
     except ConfigReadError as exc:
-        # A config-write command (channels/provider/deep-research/onboard) hit an
+        # A config-write command (channels/provider/onboard) hit an
         # unparseable config. The write layer already refused (file untouched);
         # surface it cleanly here, once, for every command instead of a traceback.
         from rich.console import Console

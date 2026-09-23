@@ -1278,6 +1278,95 @@ def test_the_retired_gateway_web_table_is_dropped_once_with_a_notice():
     assert loader.drain_migration_notices() == []
 
 
+def test_the_retired_deep_research_settings_go_with_one_notice_per_branch():
+    """Behind the floor a config loses both the tool's section and its
+    disabled-tools entry, hearing about each once; a second pass over the same
+    dict has nothing left to say; a config at the floor keeps the lot.
+
+    The floors are literals, not ``CURRENT_CONFIG_VERSION``: written from the
+    constant they would move with every bump and only ever test the generation
+    they were run under (the lesson of
+    test_context_window_pin_survives_once_stamped).
+    """
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    data = {
+        "tools": {
+            "deepResearch": {"apiKey": "sk-test"},
+            "disabledTools": ["deep_research", "exec"],
+            "webSearch": {"provider": "serper"},
+        },
+        "providers": {"anthropic": {"apiKey": "sk-a"}},
+    }
+    loader._migrate_config(data, from_version=9)
+
+    assert "deepResearch" not in data["tools"]
+    assert data["tools"]["disabledTools"] == ["exec"]
+    assert data["tools"]["webSearch"] == {"provider": "serper"}
+    assert data["providers"] == {"anthropic": {"apiKey": "sk-a"}}
+    notices = loader.drain_migration_notices()
+    assert len(notices) == 2 and len(set(notices)) == 2, notices
+    assert [n for n in notices if "tools.deepResearch" in n], notices
+    assert [n for n in notices if "tools.disabledTools" in n], notices
+
+    loader._migrate_config(data, from_version=9)
+    assert data["tools"] == {"disabledTools": ["exec"], "webSearch": {"provider": "serper"}}
+    assert loader.drain_migration_notices() == []
+
+    untouched = {"tools": {"deepResearch": {"apiKey": "sk-test"}, "disabledTools": ["deep_research"]}}
+    loader._migrate_config(untouched, from_version=10)
+    assert untouched["tools"] == {"deepResearch": {"apiKey": "sk-test"}, "disabledTools": ["deep_research"]}
+    assert loader.drain_migration_notices() == []
+
+
+def test_the_deep_research_migration_reads_the_snake_case_spellings():
+    """Configs in the wild spell both the section and the list either way."""
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    data = {"tools": {"deep_research": {"apiKey": "sk-test"}, "disabled_tools": ["web_search", "deep_research"]}}
+    loader._migrate_config(data, from_version=9)
+
+    assert data["tools"] == {"disabled_tools": ["web_search"]}
+    notices = loader.drain_migration_notices()
+    assert len(notices) == 2, notices
+    assert [n for n in notices if "tools.deep_research" in n], notices
+    assert [n for n in notices if "tools.disabled_tools" in n], notices
+
+
+def test_a_deep_research_config_that_only_switched_it_off_hears_about_the_list():
+    """Most configs never keyed the tool -- they only turned it off -- so the
+    section notice must not fire for them."""
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    data = {"tools": {"disabledTools": ["deep_research"]}}
+    loader._migrate_config(data, from_version=9)
+
+    assert data["tools"]["disabledTools"] == []
+    notices = loader.drain_migration_notices()
+    assert len(notices) == 1 and "tools.disabledTools" in notices[0], notices
+
+
+def test_the_deep_research_section_also_leaves_the_file_on_disk(tmp_path: Path) -> None:
+    """A config stamped 9 still holds the tool's API key in the file itself; the
+    persist pass takes the section and the entry out of it and stamps the current
+    mark. The 9 is the literal a shipped build wrote."""
+    p = tmp_path / "config.json"
+    _write(p, {"tools": {"deepResearch": {"apiKey": "sk-test"}, "disabledTools": ["deep_research", "exec"]}})
+    _stamp_path(p).write_text(json.dumps({"version": 9}), encoding="utf-8")
+
+    drain_migration_notices()
+    load_config(p)
+
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert "deepResearch" not in on_disk["tools"]
+    assert on_disk["tools"]["disabledTools"] == ["exec"]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert len([n for n in drain_migration_notices() if "deep_research" in n]) == 2
+
+
 def test_channels_section_settings_are_not_mistaken_for_channels(tmp_path: Path, caplog) -> None:
     """``channels.sendProgress`` is a setting of the section, not a channel whose
     table failed to parse; only an unknown scalar under ``channels`` warns."""

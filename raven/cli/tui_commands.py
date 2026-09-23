@@ -385,12 +385,9 @@ async def _run_rpc_server_until_done(
 
     # Late-bind the QuestionBroker into the tools that ask the user mid-turn, now
     # that the loop (and its tool registry) exists; the broker was built up-front.
-    # deep_research goes through the loop so a tool built later by promotion (a
-    # mid-session enable) inherits the broker too, not just the startup one.
     if agent_loop is not None:
         if (ask_tool := agent_loop.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
             ask_tool.set_broker(question_broker)
-        agent_loop.set_deep_research_broker(question_broker)
         # Fan run_subagent_dag progress to the turn's conversation so the TUI can
         # draw the graph. Goes through the loop (not the tool) so a DAG tool
         # registered later by a mid-session config apply inherits the sink too.

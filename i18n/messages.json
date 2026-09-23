@@ -395,10 +395,6 @@
       "en": "scheduling",
       "zh": "正在设置定时"
     },
-    "gui.act.ing.deep_research": {
-      "en": "researching",
-      "zh": "正在深度调研"
-    },
     "gui.act.ing.edit_file": {
       "en": "editing",
       "zh": "正在修改"
@@ -682,10 +678,6 @@
     "gui.act.v.cron": {
       "en": "scheduled",
       "zh": "定时"
-    },
-    "gui.act.v.deep_research": {
-      "en": "researched",
-      "zh": "深度调研"
     },
     "gui.act.v.edit_file": {
       "en": "edited",
@@ -4818,10 +4810,6 @@
     "tool.cron": {
       "en": "Schedule",
       "zh": "定时提醒"
-    },
-    "tool.deep_research": {
-      "en": "Deep research",
-      "zh": "深度调研"
     },
     "tool.edit_file": {
       "en": "Edit file",

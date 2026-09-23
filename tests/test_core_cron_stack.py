@@ -421,7 +421,7 @@ async def test_interactive_assembly_cron_renders_once_via_outlet():
     from raven.spine import Text, TurnOutcome, Usage
 
     class _CronEchoLoop:
-        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False) -> TurnOutcome:
+        async def run_turn(self, req, emit, drain, *, stream) -> TurnOutcome:
             await emit(Text(content=f"cron-reply<{req.conversation}>", source=req.source))
             return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 

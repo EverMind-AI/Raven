@@ -31,9 +31,6 @@ This module is that surface. It describes the rules rather than replacing them
 one -- and ``tests/test_tool_capabilities.py`` pins the description against what
 the loop actually offers, so the two cannot drift apart quietly. Drifting
 descriptions of the same fact is the failure this exists to avoid repeating.
-
-``deep_research`` is deliberately absent: it is moving to the sub-agent surface
-and its tool is going away.
 """
 
 from __future__ import annotations

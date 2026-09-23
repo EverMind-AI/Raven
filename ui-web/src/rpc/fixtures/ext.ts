@@ -25,14 +25,13 @@ export type ExtMcp = ExtList['mcp'][number]
    withheld for want of a key, which the row says out loud. */
 const TOOLS: ExtTool[] = [
   { name: 'read_file', description: 'Read a file in the working directory', enabled: true , builtin: false },
-  { name: 'write_file', description: 'Create a file or overwrite one', enabled: true , builtin: false },
+  { name: 'write_file', description: 'Create a file or overwrite one', enabled: false, builtin: false },
   { name: 'edit_file', description: 'Change lines of an existing file', enabled: true , builtin: false },
   { name: 'list_dir', description: 'Look at the shape of a directory', enabled: true , builtin: false },
   { name: 'grep', description: 'Find text across code and documents', enabled: true , builtin: false },
   { name: 'exec', description: 'Run a command, run the tests, read the output', enabled: true , builtin: false },
   { name: 'spawn', description: 'Split a large job across several sub-agents', enabled: true , builtin: false },
   { name: 'web_fetch', description: 'Read a given address as prose', enabled: true , builtin: false },
-  { name: 'deep_research', description: 'Many rounds of search and cross-checking; slow and expensive', enabled: false , builtin: false },
   { name: 'ask_user', description: 'Stop and ask rather than guess', enabled: true , builtin: false },
   /* The meta-tools, the only two whose switch the loop would not honour: this
      page writes `tools.disabledTools`, and neither is registered from it.
@@ -107,7 +106,7 @@ export function createExt(_env: FixtureEnv): ExtFixture {
     skills,
     plugins,
     mcp,
-    disabledTools: ['deep_research'],
+    disabledTools: ['write_file'],
     disabledPlugins: ['pdf'],
     websearchOn: () => {
       const server = mcp.find((m) => m.name === 'websearch')

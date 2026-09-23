@@ -20,9 +20,8 @@ import pytest
 
 #: The vendored twin's visible tool face -- its config disables everything
 #: else its fork registers. The B side must show exactly this face: trunk
-#: grew tools the fork never had (the deep_research offer stub above all,
-#: which would have a research agent offering to outsource research), and
-#: every one of them must be disabled by the product config, not by luck.
+#: grew tools the fork never had, and every one of them must be disabled by
+#: the product config, not by luck.
 #:
 #: tool_call is the one name this face carries that no config row put there:
 #: raven reserves the tool-search meta-pair from tools.disabledTools, because

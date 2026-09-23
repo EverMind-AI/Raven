@@ -934,7 +934,7 @@ class _DrainOnceLoop:
         self.started.setdefault(text, asyncio.Event())
         return self.release.setdefault(text, asyncio.Event())
 
-    async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None, text_sink=None):
+    async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None):
         from raven.spine.events import Usage
         from raven.spine.runner import TurnOutcome
 

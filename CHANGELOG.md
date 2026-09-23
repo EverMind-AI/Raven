@@ -42,6 +42,17 @@ All notable changes to Raven are documented here.
   file name is unchanged so the new picture arrives without the page being
   edited.
 
+### Removed
+
+- The built-in `deep_research` tool is gone, along with the stand-in that
+  took its name when no key was configured and the `raven deep-research`
+  command that configured it. The settings page no longer carries its row,
+  and `tools.deepResearch` is no longer read: a load-time migration drops
+  that section and any `deep_research` entry in `tools.disabledTools`.
+  Reports written under `<workspace>/deep_research/` stay on disk; nothing
+  writes there any more. The capability moved to the agent surface -- the
+  first-party Raven-Research agent, and MiroThinker as a sub-agent preset.
+
 ### Changed
 
 - A Raven-PPT turn that changes nothing about an already published deck no
@@ -870,8 +881,7 @@ All notable changes to Raven are documented here.
   OpenRouter, so a raven that already has an OpenRouter key is not asked for a second
   copy of it - and that reuse reads `providers.openrouter` alone, never a key parked in
   `custom`, which belongs to whichever private gateway that section names. It replaces the
-  deep_research step, which is unchanged and still reachable through
-  `raven deep-research enable`. Previously `subagents/install.sh` did the registering,
+  deep_research step. Previously `subagents/install.sh` did the registering,
   which could not work on a first install: it runs before `~/.raven/config.json` exists,
   read that file to decide whether an agent had an LLM to fall back on, and so declined
   to register every folder on exactly the machines that had just been set up. It now

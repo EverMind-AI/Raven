@@ -255,7 +255,8 @@ def test_the_config_is_the_forks_modulo_the_swap_ledger():
     ours_disabled = set(ours["tools"].pop("disabledTools"))
     fork_disabled = set(fork_tools.pop("disabledTools"))
     assert ours_disabled - fork_disabled == TRUNK_HELD_OUT
-    assert fork_disabled <= ours_disabled, "no fork disable row may be quietly re-enabled"
+    # The fork froze a row for deep_research; the trunk retired that tool, so the row has nothing left to disable.
+    assert fork_disabled - {"deep_research"} <= ours_disabled, "no fork disable row may be quietly re-enabled"
     assert ours["tools"] == fork_tools
     ours.pop("tools")
     theirs.pop("tools")
@@ -988,7 +989,7 @@ def test_the_state_root_override_wins_and_the_default_sits_under_the_home(ground
 # --- the pinned tool face: fork config intent, said as plugin admission -------
 
 #: The fork engine's config-intent face, measured: its AgentLoop built under
-#: this product's published config (the four media/deep-research disable rows
+#: this product's published config (the three media disable rows
 #: applied, no Serper key, everos on) registers exactly these -- the six
 #: filesystem tools and exec, the two web tools (search key-gated, so absent
 #: hermetically), message/ask_user (the question rides the ACP
@@ -1124,7 +1125,7 @@ def test_neither_deck_lane_can_hand_its_work_to_a_helper_it_starts() -> None:
     from pathlib import Path
 
     agents = Path(__file__).resolve().parents[1] / "agents"
-    held = {"spawn", "run_subagent_dag", "deep_research", "hub"}
+    held = {"spawn", "run_subagent_dag", "hub"}
     for lane in ("raven-design", "raven-ppt"):
         disabled = set(
             json.loads((agents / lane / "config.json").read_text(encoding="utf-8"))["tools"]["disabledTools"]

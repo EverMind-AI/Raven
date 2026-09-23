@@ -330,27 +330,6 @@ async def test_routing_cancel_all_failsafes_both() -> None:
     assert await channel_task == "cd"
 
 
-async def test_deep_research_clarify_follows_the_same_routing() -> None:
-    """The deep-vs-regular clarify keys by the same conversation, so through
-    the routing shim a page session's clarify reaches the page broker and an
-    IM session's the channel broker."""
-    from raven.agent.tools.deep_research import _MODE_DEEP, _ask_search_mode
-
-    routed, page, page_frames, channel, channel_frames = _routing_pair()
-
-    page_task = asyncio.create_task(_ask_search_mode(routed, PAGE_CID))
-    frame = await _wait_for_frame(page_frames)
-    assert frame["params"]["conversation_id"] == PAGE_CID
-    page.reply(PAGE_CID, _MODE_DEEP)
-    assert await page_task == "deep"
-
-    channel_task = asyncio.create_task(_ask_search_mode(routed, CID))
-    frame = await _wait_for_frame(channel_frames)
-    assert frame["params"]["conversation_id"] == CID
-    channel.reply(CID, _MODE_DEEP)
-    assert await channel_task == "deep"
-
-
 # ---------------------------------------------------------------------------
 # Per-conversation scoping of the notification itself
 # (connection.conversation_scoped, what the gateway's page broker is built on)

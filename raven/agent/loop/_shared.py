@@ -43,12 +43,6 @@ from raven.agent.subagent import SubagentManager
 from raven.agent.subagent.direct_chat import DirectChatHandoff
 from raven.agent.subagent.spawn_tool import SpawnTool
 from raven.agent.tools.ask_user import AskUserTool
-from raven.agent.tools.deep_research import (
-    DeepResearchManager,
-    DeepResearchOfferTool,
-    DeepResearchTool,
-    deep_research_mode,
-)
 from raven.agent.tools.file_search import FindTool, GrepTool
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.media_gen import (
@@ -191,12 +185,10 @@ if TYPE_CHECKING:
     from raven.config.schema import (
         AskUserToolConfig,
         ChannelsConfig,
-        DeepResearchToolConfig,
         ExecToolConfig,
         PlaybookConfig,
     )
     from raven.context_engine import ContextEngine
-    from raven.contracts.asking import QuestionResponder
     from raven.contracts.memory import MemoryBackend
     from raven.contracts.token_strategy import UsageSnapshot
     from raven.contracts.tool import Tool

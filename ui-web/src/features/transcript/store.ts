@@ -141,7 +141,7 @@ export function actLabel(name: string, a: Record<string, unknown>, display?: str
     case 'grep': return s('pattern') + (a.glob ? '  ' + s('glob') : '')
     case 'find': return s('pattern')
     case 'exec': return String(a.intent || a.command || '')
-    case 'web_search': case 'deep_research': case 'tool_search':
+    case 'web_search': case 'tool_search':
       return a.query ? '“' + s('query') + '”' : ''
     case 'web_fetch': return s('url').replace(/^https?:\/\//, '')
     case 'understand_media': {

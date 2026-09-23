@@ -56,7 +56,6 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "tools.media.image.model",
         "tools.media.image.quality",
         "tools.media.image",
-        "tools.deepResearch.apiKey",
         "channels.sendProgress",
         "channels.sendToolHints",
         "memory.memoryTopK",

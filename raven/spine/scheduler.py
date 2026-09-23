@@ -427,7 +427,7 @@ class Lane:
         # Resolve the turn's identity here, once, and put it back on the request so
         # the runner and the lifecycle events agree on one value. Minted when the
         # submitter supplied none: a turn the runtime submits onto a busy lane (a
-        # sub-agent announce, a deep-research delivery) must still be
+        # sub-agent announce, a runtime-submitted verbatim reply) must still be
         # distinguishable from the client turn queued behind it, or a consumer keyed
         # on a per-lane slot ends the wrong turn.
         # Falsy, not just None: turn_id is a public field and an empty string

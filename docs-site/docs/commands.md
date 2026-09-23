@@ -30,7 +30,6 @@ lists its subcommands and options.
 | `raven plugin auth <server>` | Authenticate or refresh OAuth access for an MCP server |
 | `raven mcp bridge <socket-path>` | Bridge a subagent's MCP connection over stdio to a host-managed server |
 | `raven import` | Preview and import data from other AI tools, inspect progress, or stop an import |
-| `raven deep-research` | Configure, inspect, or reset the MiroThinker research integration |
 | `raven cron` | Create, inspect, run, enable, disable, or delete scheduled jobs |
 | `raven sentinel` | Configure proactivity and inspect attention, routines, decisions, and nudges |
 | `raven ops connection` | Register and list machines; `add` probes by default, while `doctor` validates registry entries |

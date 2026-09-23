@@ -526,12 +526,6 @@ plugin tools built by `PluginRegistry.build_tool` (`core/plugin_stack.py`), and 
 registers MCP tools per connected server.
 _Avoid_: a fourth door -- a tool reaching the table any other way skips admission.
 
-**Deep Research** (`agent/tools/deep_research.py`):
-Opt-in tool delegating an open-ended research question to the MiroThinker API; returns a
-finished, cited answer. Streamed inline on CLI/TUI, async on channels (background run +
-verbatim `deliver_text` push). Configured via `raven deep-research`.
-_Avoid_: "Subagent" — it is a single long-running tool, not a spawned agent.
-
 **Checkpoint** (`agent/loop/checkpoint.py`):
 A once-per-turn commit of the session workspace into a shadow git repo (separate from the
 user's `.git`), so an interrupted or failed turn can be rolled back. One `CheckpointService`

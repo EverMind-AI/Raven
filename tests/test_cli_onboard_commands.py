@@ -916,7 +916,7 @@ def test_prompt_api_key_validator_rejects_whitespace_only(monkeypatch: pytest.Mo
     ``typer.Exit`` (which quit raven with no message)."""
     captured = _capture_password_validate(monkeypatch, "sk-realkey123")
 
-    key = onboard_commands._prompt_api_key("deep_research")
+    key = onboard_commands._prompt_api_key("serper")
     assert key == "sk-realkey123"
 
     validate = captured["validate"]
@@ -931,7 +931,7 @@ def test_prompt_api_key_empty_is_back_but_whitespace_rejected(monkeypatch: pytes
     silently treated as back."""
     captured = _capture_password_validate(monkeypatch, "")
 
-    result = onboard_commands._prompt_api_key("deep_research", allow_back=True)
+    result = onboard_commands._prompt_api_key("serper", allow_back=True)
     assert result is onboard_commands._BACK
 
     validate = captured["validate"]

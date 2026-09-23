@@ -29,7 +29,6 @@
     "disabledTools": [
       "create_playbook",
       "cron",
-      "deep_research",
       "deliver_files",
       "hub",
       "load_playbook",

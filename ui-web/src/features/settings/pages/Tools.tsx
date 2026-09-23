@@ -34,8 +34,7 @@ const ROLE_OF: Record<string, string> = {
 }
 
 /* Why a wanted tool would still not register, or '' when nothing stops it:
-   the web tools by their vendor's key, deep research by its key, the media
-   tools by their role. */
+   the web tools by their vendor's key, the media tools by their role. */
 export function blocker(id: string, raw: Record<string, unknown>): string {
   const snap = store.get().snap
   if (id === 'web_search') return keySet(id, webVendor(id, raw), raw) ? '' : 'key'
@@ -43,7 +42,6 @@ export function blocker(id: string, raw: Record<string, unknown>): string {
     const vendor = webVendor(id, raw)
     return !FETCH_KEYLESS.has(vendor) && !keySet(id, vendor, raw) ? 'key' : ''
   }
-  if (id === 'deep_research') return str(raw, 'tools.deepResearch.apiKey') ? '' : 'key'
   const roleId = ROLE_OF[id]
   if (roleId) {
     const role = ROLES.find((r) => r.id === roleId) as Role
@@ -116,13 +114,10 @@ function Panel({ id, raw }: { id: string; raw: Record<string, unknown> }): JSX.E
       </>
     )
   }
-  if (id === 'deep_research') {
-    return <KeyRow label={t('gui.settings.tools.vendor_key', { name: 'MiroThinker' })} keyName="tools.deepResearch.apiKey" raw={raw} />
-  }
   return null
 }
 
-const hasPanel = (id: string): boolean => !!ROLE_OF[id] || ['web_search', 'web_fetch', 'deep_research'].includes(id)
+const hasPanel = (id: string): boolean => !!ROLE_OF[id] || ['web_search', 'web_fetch'].includes(id)
 
 export function Tools(): JSX.Element {
   const s = store.get()
