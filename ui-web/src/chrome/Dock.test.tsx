@@ -7,9 +7,11 @@
  * data-* cannot see: the roles and flags that are not data-*, the elements
  * handed over empty because another writer owns them, that the literals come
  * from the catalogue rather than from a copy in the JSX, the two contracts the
- * field carries -- an IME's Enter, the palette's Escape -- and where the three
- * popovers off the bar stand.
+ * field carries -- an IME's Enter, the palette's Escape -- what keeps the bar
+ * under the field to one row, and where the three popovers off the bar stand.
  */
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -413,6 +415,84 @@ describe('the dock once a language is applied', () => {
         expect(name, sel).not.toMatch(/^data-i18n/)
       }
     }
+  })
+})
+
+/* The bar under the field keeps to one row at every width the document allows.
+ *
+ * That is the stylesheet's to hold, not the markup's. A flex row that may wrap
+ * picks its breaks from its items' whole widths before any of them shrinks, so
+ * a second line is the only answer such a row has to a narrow column -- and the
+ * send button, last in the row, is what lands on it. So the row never wraps,
+ * and the items whose width is their text give instead: the folder, the mode,
+ * the model and the meter.
+ *
+ * happy-dom lays nothing out, so these cases read what page.css cascades onto
+ * the bar as rendered: the mechanism, not the geometry. Only a browser can show
+ * the row itself.
+ */
+describe('the bar under the field', () => {
+  let sheet: HTMLStyleElement | null = null
+
+  function styled(): void {
+    render()
+    sheet = document.createElement('style')
+    sheet.textContent = readFileSync('src/styles/page.css', 'utf8') as string
+    document.head.append(sheet)
+  }
+
+  afterEach(() => {
+    sheet?.remove()
+    sheet = null
+  })
+
+  const style = (n: Element): CSSStyleDeclaration => getComputedStyle(n)
+  const bar = (): Element => document.querySelector('.dock-in > .under') as Element
+
+  /* Every box from a label up to the bar: each is as wide as the label until
+     it is told it may be less. */
+  function upTo(id: string): Element[] {
+    const out: Element[] = []
+    for (let n: Element | null = el(id); n && n !== bar(); n = n.parentElement) out.push(n)
+    return out
+  }
+
+  it('never wraps', () => {
+    styled()
+    expect(style(bar()).flexWrap).not.toBe('wrap')
+  })
+
+  it('lets every box between a label and the bar give, and ends the label in an ellipsis', () => {
+    styled()
+    for (const id of ['wdName', 'permName', 'modelName', 'meter']) {
+      for (const n of upTo(id)) {
+        const at = `${id} at ${n.id || n.className}`
+        expect(style(n).minWidth, at).toMatch(/^0(px)?$/)
+        expect(style(n).flexShrink, at).not.toBe('0')
+      }
+      const label = style(el(id))
+      expect([label.overflow, label.textOverflow, label.whiteSpace], id).toEqual(['hidden', 'ellipsis', 'nowrap'])
+    }
+  })
+
+  /* Shrinking in proportion to width takes the most pixels from the widest box,
+     and a chip is mostly its icon and its padding: a short model name beside a
+     long folder went to nothing, and its caret out of the chip. So each takes an
+     equal share of what the fixed controls leave and never more than its own
+     width -- a short name stays whole while a long one gives. */
+  it('shares what the controls leave equally, each at most its own width', () => {
+    styled()
+    for (const n of [anchor('wdChip'), anchor('permChip'), el('modelChip'), el('meter')]) {
+      const at = n.id || (n.firstElementChild as Element).id
+      expect([style(n).flexGrow, style(n).maxWidth], at).toEqual(['1', 'max-content'])
+      expect(style(n).flexBasis, at).toMatch(/^0(px|%)?$/)
+    }
+  })
+
+  it('keeps the controls that are not text at their own size', () => {
+    styled()
+    for (const n of [el('plusBtn'), el('ctxChip'), el('go')]) expect(style(n).flexShrink, n.id).toBe('0')
+    expect(style(anchor('plusBtn')).minWidth).not.toMatch(/^0/)
   })
 })
 
