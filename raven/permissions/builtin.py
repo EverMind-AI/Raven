@@ -42,7 +42,6 @@ from raven.permissions.shell_policy import CommandDecision, ShellCommandPolicy
 # `rm -f a.py b.json`, and denying both means the agent cannot clean up
 # after itself -- with no prompt offered, because hard deny outranks approval.
 BUILTIN_DENY_PATTERNS: tuple[str, ...] = (
-    r"(?:^|[;&|]\s*)format\b",  # format (as standalone command only)
     r"\b(mkfs|diskpart)\b",  # disk operations
     r"\bdd\s+if=",  # dd
     r">\s*/dev/sd",  # write to disk
@@ -57,6 +56,7 @@ BUILTIN_DENY_PATTERNS: tuple[str, ...] = (
 _DENY_REASONS: dict[str, str] = {
     "deny_pattern": "matches a denied pattern (tools.exec.extraDenyPatterns, plus the built-in list)",
     "catastrophic_delete": "recursively deletes the filesystem root or the home directory",
+    "disk_format": "formats a disk using the format command",
     "system_power": "powers the machine off or reboots it",
     "parse_error": "could not be parsed as a shell command; an unbalanced quote is the usual cause",
 }
