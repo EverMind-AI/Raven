@@ -274,6 +274,28 @@ async def test_a_model_call_the_loop_gives_up_on_fails_the_turn_and_leaves_the_m
 
 
 @pytest.mark.asyncio
+async def test_an_exhausted_empty_response_recovery_leaves_the_same_marker(workspace):
+    """A turn whose model never sent a word fails like a model call the loop gave
+    up on, so the transcript ends the same way: on a marker saying the turn
+    failed and why, not on the question alone and not on a manufactured reply.
+
+    The reason is the loop's own sentence rather than a vendor's, so the model's
+    copy of it is that sentence -- there is no category to summarise.
+    """
+    agent = _agent_without_ladder(workspace, DyingProvider([LLMResponse(content="", finish_reason="stop")] * 8))
+
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await agent._process_message(_make_msg("hello"))
+
+    reason = str(failed.value)
+    assert reason == "The model returned no content on 3 attempt(s) (prefill 0, post-tool nudge 0, plain retry 2)."
+    msgs = _persisted(workspace)
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert msgs[-1]["turn_ended"] == {"status": "failed", "reason": reason}
+    assert msgs[-1]["content"] == f"(turn failed: {reason})"
+
+
+@pytest.mark.asyncio
 async def test_a_vendors_body_does_not_reach_the_model_through_the_marker(workspace):
     """The marker is history the model reads on its next turn. A vendor's auth
     body carries a masked key and an account URL, and both would be spent
