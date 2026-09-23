@@ -1681,18 +1681,19 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    version, or sources the served page is behind; a quiet amber row in the rail
    foot whose action is always the reader's click (app/updates.ts) */
 .upnote {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 7px 10px; margin-bottom: 6px; border-radius: 8px;
-  border: 1px solid var(--line); border-left: 2px solid var(--amber);
-  background: var(--surface); font-size: 12px; color: var(--muted);
-  cursor: pointer; text-align: left;
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 32px;
+  padding: 0 8px; margin-bottom: 4px; border-radius: 8px;
+  background: color-mix(in oklab, var(--amber) 9%, transparent);
+  font-size: 13px; color: var(--rail-ink-on); cursor: pointer; text-align: left;
 }
-.upnote:hover { color: var(--text); border-color: var(--faint); }
-.upnote .pip { width: 6px; height: 6px; border-radius: 50%; background: var(--amber);
-  flex: none; animation: breathe 1.4s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .upnote .pip { animation: none; } }
-.upnote .t { flex: 1; min-width: 0; }
-.upnote .rl { color: var(--amber); font-weight: 600; flex: none; }
+.upnote:hover { background: color-mix(in oklab, var(--amber) 15%, transparent); }
+/* The dot sits in the 16px glyph slot the settings row below uses, so the two
+   labels start on the same line. Still, not breathing: the tint and the action
+   word already say "something here", and nothing about it is urgent. */
+.upnote .pip { flex: none; width: 16px; height: 16px; display: grid; place-items: center; }
+.upnote .pip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+.upnote .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upnote .rl { color: var(--amber); font-weight: 600; font-size: 12.5px; flex: none; }
 
 /* upgrade shade: the server is being replaced under us, so the page holds
    still until serve answers again. A bar and one line -- there is nothing to
