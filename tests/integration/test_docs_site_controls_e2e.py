@@ -690,6 +690,7 @@ TOC_GEOMETRY = """() => {
           pad: parseFloat(getComputedStyle(a).paddingLeft),
           active: a.classList.contains('md-nav__link--raven-active'),
           inView: Boolean(hb) && hb.bottom > 0 && hb.top < innerHeight,
+          above: Boolean(hb) && hb.bottom <= 0,
         });
       }
       const nested = li.querySelector(':scope > .md-nav > .md-nav__list');
@@ -768,7 +769,8 @@ def test_table_of_contents_rail_is_one_polyline_through_the_outline(page: Page, 
 
 
 def test_table_of_contents_lights_every_heading_on_screen(page: Page, site: str) -> None:
-    """Current means the heading is in the viewport, so several can be current.
+    """Whenever any heading is on screen, current means in the viewport, so
+    several can be current.
 
     The lit stretch then runs from the first current entry to the last without
     a break, which is what carries the colour across a diagonal when a parent
@@ -791,6 +793,44 @@ def test_table_of_contents_lights_every_heading_on_screen(page: Page, site: str)
         bottom = _run(rows, current[-1])[1]
         assert geometry["clipTop"] == pytest.approx(top, abs=0.5), anchor
         assert geometry["clipHeight"] == pytest.approx(bottom - top, abs=0.5), anchor
+
+
+HEADING_FREE_STRETCHES = """() => {
+  const list = document.querySelector('.md-sidebar--secondary .md-nav--secondary > .md-nav__list');
+  const spans = [...list.querySelectorAll('a.md-nav__link')].map((a) => {
+    const box = document.getElementById(a.getAttribute('href').slice(1)).getBoundingClientRect();
+    return { top: box.top + scrollY, bottom: box.bottom + scrollY };
+  });
+  const end = document.documentElement.scrollHeight - innerHeight;
+  return spans.flatMap(({ bottom }, index) => {
+    const last = index + 1 < spans.length ? spans[index + 1].top - innerHeight : end;
+    return last - bottom > 2 ? [Math.round((bottom + last) / 2)] : [];
+  });
+}"""
+
+
+def test_table_of_contents_keeps_the_section_above_lit_between_headings(page: Page, site: str) -> None:
+    """A section longer than the screen scrolls its heading off the top before
+    the next heading comes on, and the reader is inside that section the whole
+    way. With no heading in the viewport, the entry of the nearest one above is
+    current on its own, so the column never goes dark partway down a page."""
+    _open(page, site, "sandbox/")
+    stretches = page.evaluate(HEADING_FREE_STRETCHES)
+    assert stretches, "no section on this page is longer than the screen, so it proves nothing"
+    for y in stretches:
+        page.evaluate(f"() => window.scrollTo(0, {y})")
+        page.evaluate(TOC_SETTLED)
+        geometry = page.evaluate(TOC_GEOMETRY)
+        rows = geometry["rows"]
+        assert not any(row["inView"] for row in rows), f"a heading is on screen at {y}px"
+
+        nearest = [index for index, row in enumerate(rows) if row["above"]][-1]
+        current = [index for index, row in enumerate(rows) if row["active"]]
+        assert current == [nearest], f"at {y}px"
+
+        top, bottom = _run(rows, nearest)
+        assert geometry["clipTop"] == pytest.approx(top, abs=0.5), f"at {y}px"
+        assert geometry["clipHeight"] == pytest.approx(bottom - top, abs=0.5), f"at {y}px"
 
 
 @pytest.mark.parametrize(

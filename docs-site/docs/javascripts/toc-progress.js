@@ -119,18 +119,28 @@
 
   /* An entry is current while its heading is anywhere in the viewport, which
      is why several can be current at once and why the lit stretch grows and
-     shrinks rather than jumping between entries. */
+     shrinks rather than jumping between entries. Partway through a section
+     longer than the screen no heading is in view, yet the reader is still
+     inside the section the nearest heading above opened, so that entry is
+     current on its own until the next heading comes on screen. */
   const sync = () => {
     if (!state.list && !layout()) return;
 
-    const active = [];
-    state.entries.forEach(({ link }, index) => {
+    const boxes = state.entries.map(({ link }) => {
       const id = (link.getAttribute("href") || "").slice(1);
       const heading = id ? document.getElementById(id) : null;
-      const box = heading && heading.getBoundingClientRect();
-      const current = Boolean(box) && box.bottom > 0 && box.top < window.innerHeight;
-      link.classList.toggle("md-nav__link--raven-active", current);
-      if (current) active.push(index);
+      return heading && heading.getBoundingClientRect();
+    });
+    const active = [];
+    boxes.forEach((box, index) => {
+      if (box && box.bottom > 0 && box.top < window.innerHeight) active.push(index);
+    });
+    if (!active.length) {
+      const above = boxes.findLastIndex((box) => box && box.top < 0);
+      if (above !== -1) active.push(above);
+    }
+    state.entries.forEach(({ link }, index) => {
+      link.classList.toggle("md-nav__link--raven-active", active.includes(index));
     });
 
     const rect = state.list.querySelector(`.raven-toc-progress clipPath rect`);

@@ -1362,8 +1362,8 @@
 }
 
 /* ------------------------------------------------ Reading progress rail --- */
-/* Material marks the current section while the reader scrolls. Keep that
-   state visible with one short gold line, matching the reference layout. */
+/* The rail marks the section being read: toc-progress.js lights the stretch
+   for the headings on screen, or for the nearest one above when none is. */
 
 @media screen and (min-width: 76.25em) {
   .md-sidebar--secondary {
