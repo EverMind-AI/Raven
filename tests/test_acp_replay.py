@@ -20,6 +20,10 @@ import json
 import pytest
 
 from raven.acp.replay import MAX_REPLAYED_MESSAGES, MAX_REPLAYED_TEXT, replay
+from raven.acp.updates import translate
+from raven.agent.loop._shared import _ABORTED_ACTION_REPLY
+from raven.rpc.methods.session import _map_to_wire
+from raven.spine.events import NoticeKind
 from tests.acp_schema import validate_def
 
 
@@ -234,22 +238,142 @@ class TestToolCalls:
         assert _kinds(updates) == ["tool_call"]
 
 
+def _stored_block(detail: str | None = None) -> dict:
+    """The entry ``_save_turn`` files for a blocked action, as it is stored.
+
+    Built from the writer's own constants rather than typed out, because the
+    thing under test is that the replay does NOT send this text.
+    """
+    notice: dict = {"kind": NoticeKind.ACTION_BLOCKED.value}
+    if detail is not None:
+        notice["detail"] = detail
+    return {"role": "assistant", "content": _ABORTED_ACTION_REPLY, "notice": notice}
+
+
+def _live_notice_text(detail: str | None = None) -> str:
+    payload = {"kind": NoticeKind.ACTION_BLOCKED.value, **({"detail": detail} if detail is not None else {})}
+    return translate({"type": "notice", "payload": payload}).updates[0]["content"]["text"]
+
+
+class TestRuntimeMarks:
+    """Entries the runtime wrote for the model, replayed for a person.
+
+    ``notice`` and ``turn_ended`` both sit on assistant entries whose text is an
+    instruction the model reads on its next turn. Replaying that text draws the
+    runtime's prose in the assistant's voice, so the live wording is sent in its
+    place -- and these tests go through ``_map_to_wire``, because the marks only
+    arrive here if the transcript mapper carries them.
+    """
+
+    def test_a_blocked_turn_replays_as_its_notice_not_as_the_runtime_prose(self):
+        entries = _map_to_wire([_stored_block("rm -rf /work was refused by policy")], "acp:s1")
+
+        updates = _valid(replay(entries, session_id="acp:s1"))
+
+        assert _texts(updates) == ["rm -rf /work was refused by policy"]
+        assert _ABORTED_ACTION_REPLY not in _texts(updates)
+
+    def test_the_replayed_notice_is_worded_the_way_the_live_frame_worded_it(self):
+        detail = "rm -rf /work was refused by policy"
+        entries = _map_to_wire([_stored_block(detail)], "acp:s1")
+
+        assert _texts(replay(entries, session_id="acp:s1")) == [_live_notice_text(detail)]
+
+    def test_a_notice_with_no_detail_still_explains_itself(self):
+        """Same sentence the live path falls back to: a refusal with no
+        explanation is indistinguishable from an empty answer."""
+        entries = _map_to_wire([_stored_block()], "acp:s1")
+
+        assert _texts(replay(entries, session_id="acp:s1")) == [_live_notice_text()]
+
+    def test_a_credential_in_the_refused_command_is_redacted(self):
+        entries = _map_to_wire([_stored_block("curl -H 'Authorization: Bearer sk-ant-AAAABBBBCCCC'")], "acp:s1")
+
+        text = _texts(replay(entries, session_id="acp:s1"))[0]
+
+        assert "sk-ant-AAAABBBBCCCC" not in text
+        assert "curl" in text
+
+    def test_an_unknown_notice_kind_names_itself_rather_than_speaking_the_prose(self):
+        """A kind this build does not know is still not a reason to put the
+        model-facing text on a person's screen."""
+        entry = {"role": "assistant", "content": _ABORTED_ACTION_REPLY, "notice": {"kind": "quota_exhausted"}}
+
+        updates = _valid(replay(_map_to_wire([entry], "acp:s1"), session_id="acp:s1"))
+
+        assert _texts(updates) == ["quota_exhausted"]
+
+    def test_a_notice_with_no_kind_draws_nothing_at_all(self):
+        entry = {"role": "assistant", "content": _ABORTED_ACTION_REPLY, "notice": {"detail": ""}}
+
+        assert replay(_map_to_wire([entry], "acp:s1"), session_id="acp:s1") == []
+
+    def test_a_failed_turn_replays_as_the_failure_the_marker_records(self):
+        reason = "Error calling LLM (server@stub): 503"
+        marker = {
+            "role": "assistant",
+            "content": f"(turn failed: {reason})",
+            "turn_ended": {"status": "failed", "reason": reason},
+        }
+
+        updates = _valid(replay(_map_to_wire([marker], "acp:s1"), session_id="acp:s1"))
+
+        assert _texts(updates) == [reason]
+        assert "(turn failed:" not in _texts(updates)[0]
+
+    def test_the_replayed_failure_is_worded_the_way_the_live_frame_worded_it(self):
+        reason = "Error calling LLM (server@stub): 503"
+        marker = {"role": "assistant", "content": "(turn failed)", "turn_ended": {"status": "failed", "reason": reason}}
+        live = translate({"type": "error", "payload": {"message": reason}})
+
+        updates = replay(_map_to_wire([marker], "acp:s1"), session_id="acp:s1")
+
+        assert _texts(updates) == [live.updates[0]["content"]["text"]]
+
+    def test_a_failure_that_recorded_no_reason_still_says_something(self):
+        marker = {"role": "assistant", "content": "(turn failed: unknown error)", "turn_ended": {"status": "failed"}}
+
+        assert _texts(replay(_map_to_wire([marker], "acp:s1"), session_id="acp:s1")) == ["The turn failed."]
+
+    def test_a_credential_in_the_failure_reason_is_redacted(self):
+        reason = "auth failed for Authorization: Bearer sk-ant-AAAABBBBCCCC"
+        marker = {
+            "role": "assistant",
+            "content": f"(turn failed: {reason})",
+            "turn_ended": {"status": "failed", "reason": reason},
+        }
+
+        assert "sk-ant-AAAABBBBCCCC" not in _texts(replay(_map_to_wire([marker], "acp:s1"), session_id="acp:s1"))[0]
+
+    def test_a_cancelled_turn_replays_as_nothing(self):
+        """The live path sends no text for a cancel either: the person reading
+        the transcript is the person who stopped the turn."""
+        marker = {
+            "role": "assistant",
+            "content": "(turn cancelled by the user)",
+            "turn_ended": {"status": "cancelled"},
+        }
+
+        assert replay(_map_to_wire([marker], "acp:s1"), session_id="acp:s1") == []
+
+    def test_a_broken_turn_keeps_the_words_the_model_had_already_said(self):
+        """The marker is filed after the partial answer, so the reader sees how
+        far the turn got and then why it stopped."""
+        stored = [
+            {"role": "assistant", "content": "I read the file and"},
+            {
+                "role": "assistant",
+                "content": "(turn failed: boom)",
+                "turn_ended": {"status": "failed", "reason": "boom"},
+            },
+        ]
+
+        updates = _valid(replay(_map_to_wire(stored, "acp:s1"), session_id="acp:s1"))
+
+        assert _texts(updates) == ["I read the file and", "boom"]
+
+
 class TestContent:
-    def test_a_blocked_turn_says_so_when_it_has_no_words_of_its_own(self):
-        """``action_blocked`` replaces the answer rather than accompanying it, so
-        an entry carrying only a notice would otherwise replay as nothing."""
-        updates = replay([{"role": "assistant", "notice": "the runtime refused this"}], session_id="acp:s1")
-
-        assert _texts(updates) == ["the runtime refused this"]
-
-    def test_a_notice_beside_real_text_does_not_duplicate_it(self):
-        updates = replay(
-            [{"role": "assistant", "text": "Here is what I did instead.", "notice": "blocked"}],
-            session_id="acp:s1",
-        )
-
-        assert _texts(updates) == ["Here is what I did instead."]
-
     def test_a_credential_recorded_three_turns_ago_is_still_redacted(self):
         """A replayed transcript is rendered in an editor and kept in its
         history, so it is as much a publishing surface as a live frame."""
