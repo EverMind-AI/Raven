@@ -136,7 +136,10 @@
       if (box && box.bottom > 0 && box.top < window.innerHeight) active.push(index);
     });
     if (!active.length) {
-      const above = boxes.findLastIndex((box) => box && box.top < 0);
+      const above = boxes.reduce(
+        (last, box, index) => (box && box.top < 0 ? index : last),
+        -1,
+      );
       if (above !== -1) active.push(above);
     }
     state.entries.forEach(({ link }, index) => {
