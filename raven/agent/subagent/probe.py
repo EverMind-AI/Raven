@@ -174,7 +174,33 @@ def _missing_exe_detail(cfg: Any, exe: str) -> str:
     return _missing_detail(exe, install_hint_for(cfg))
 
 
-def _refusal_detail(cfg: Any, said: str) -> str:
+def _said(exc: BaseException) -> tuple[str, str | None]:
+    """What to show for a failed ping, and the part of it that is the agent's answer.
+
+    Shown: the failure as raised, with the agent's reason (`reason_of`) spliced in
+    after its own words -- they were in the answer all along, and ``str()`` drops
+    them. Classified: the agent's answer alone. A wrapper can add words of its
+    own -- raven's MCP-grant note does ("withheld because OAuth needs user
+    interaction") -- and those are raven describing an MCP server, not the agent
+    describing its credential; the verdict must not come from them. ``None``
+    when no agent answered at all (a timeout, a process that never started), and
+    the whole text is then all there is to go on.
+    """
+    from raven.acp_client.protocol import reason_of, remote_error_in
+
+    shown = str(exc)
+    error = remote_error_in(exc)
+    if error is None:
+        return shown, None
+    answer = reason_of(error)
+    added = answer[len(error.message) :]
+    if added:
+        own = str(error)
+        shown = shown.replace(own, own + added, 1) if own in shown else shown + added
+    return shown, answer
+
+
+def _refusal_detail(cfg: Any, said: str, answer: str | None = None) -> str:
     """What the reader is told when the test message came back a failure.
 
     The agent's own words are the evidence and they are kept, but they are not
@@ -187,9 +213,16 @@ def _refusal_detail(cfg: Any, said: str) -> str:
     sentence says to sign in, and nothing says where.
 
     So a refusal that reads as one about a credential is named as one, with the
-    command where the command is known. The rest are unchanged: a failure this
-    cannot classify keeps the words it came with rather than being given a
-    guess about what they mean.
+    command where the command is known -- or, for a row that is an endpoint and
+    a key rather than an installed agent, with where the key goes, since
+    "sign in" is not a thing its reader can do.
+
+    ``answer`` is the agent's own answer, ``data`` included, when one came back
+    (`_said`); it is what gets classified, and ``said`` is what gets shown. The
+    SDKs put the reason in ``data`` and a placeholder in ``message``, so
+    classifying the placeholder alone would leave every such refusal
+    unclassified. A failure this cannot classify keeps the words it came with
+    rather than being given a guess about what they mean.
 
     The same question the roster asks (`acp_client.capabilities.looks_like_auth`)
     rather than a second spelling of it -- the roster already marks such a row
@@ -197,21 +230,31 @@ def _refusal_detail(cfg: Any, said: str) -> str:
     """
     from raven.acp_client.capabilities import looks_like_auth
 
-    if not looks_like_auth(said):
+    if not looks_like_auth(said if answer is None else answer):
         return said[:_DETAIL_CAP]
-    hint = sign_in_hint_for(cfg)
-    lead = "it is installed but has no usable credential"
-    if hint is None:
-        advice = "sign in to it and connect again"
+    if getattr(cfg, "kind", None) == "openai":
+        # Nothing was installed and there is nothing to sign in to: this row is
+        # an endpoint and a key. Telling its reader to sign in would send them
+        # looking for a CLI that does not exist -- measured, the row that
+        # prompted this answers `HTTP 401: {"error":"missing api key"}` against
+        # a preset whose `apiKey` ships empty on purpose.
+        lead = "it has no usable API key"
+        advice = "add one in this agent's settings and connect again"
     else:
-        # Which spelling, decided on this machine rather than in the table: a
-        # shim-launched row runs where the agent's CLI was never installed
-        # globally, and naming a command that is not there answers a credential
-        # failure with a second one. Resolved against the same PATH the probe
-        # resolves every other executable against, so the hint and the probe
-        # cannot disagree about what this machine has.
-        local = shutil.which(hint.exe, path=_login_path()) is not None
-        advice = f"sign in with `{hint.local if local else hint.anywhere}` and connect again"
+        hint = sign_in_hint_for(cfg)
+        lead = "it is installed but has no usable credential"
+        if hint is None:
+            advice = "sign in to it and connect again"
+        else:
+            # Which spelling, decided on this machine rather than in the table: a
+            # shim-launched row runs where the agent's CLI was never installed
+            # globally, and naming a command that is not there answers a credential
+            # failure with a second one. Resolved against the same PATH the probe
+            # resolves every other executable against, so the hint and the probe
+            # cannot disagree about what this machine has.
+            local = shutil.which(hint.exe, path=_login_path()) is not None
+            command = hint.local if local or hint.anywhere is None else hint.anywhere
+            advice = f"sign in with `{command}` and connect again"
     return f"{lead}; {advice}. It said: {said}"[:_DETAIL_CAP]
 
 
@@ -581,7 +624,7 @@ async def ping_agent(cfg: Any) -> PingResult:
     except asyncio.TimeoutError:
         return PingResult(False, f"it did not answer within {_ENABLE_PING_TIMEOUT_SECONDS}s")
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
-        return PingResult(False, _refusal_detail(cfg, str(exc)))
+        return PingResult(False, _refusal_detail(cfg, *_said(exc)))
     finally:
         # The pool is this call's alone, so nothing else will ever close it, and a
         # pool left open holds the child process it launched for the rest of the

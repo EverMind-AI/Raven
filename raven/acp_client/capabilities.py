@@ -36,7 +36,7 @@ from loguru import logger
 from raven.acp_client import protocol
 from raven.acp_client.client import AcpClient
 from raven.acp_client.permissions import auto_approver
-from raven.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError
+from raven.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError, reason_of
 from raven.utils.atomic_io import atomic_update
 
 _FILENAME = "subagent_acp_capabilities.json"
@@ -60,6 +60,20 @@ _LAUNCH_FIELDS = ("command", "cwd", "env", "ready_timeout_ms")
 # `hermes acp`, an unusable provider credential surfaces as an ordinary failure
 # whose text is the only signal.
 _AUTH_HINTS = ("auth", "unauthor", "credential", "api key", "apikey", "login", "401")
+
+_NOT_AUTH_HINTS = ("rate limit", "rate-limit", "429", "cooling down", "quota", "pip install")
+"""Refusals that name a credential while saying it is not what is wrong.
+
+An agent's remedy text mentions its credential commands whether or not a
+credential is the problem, so a rate limit or a missing package reads as "auth"
+to the hints above. All three of these are hermes's own words, from its source:
+"Anthropic credentials are rate-limited for {model} ... (see `hermes auth
+list`)", a credential "cooling down after a rate limit / quota error (429)", and
+"Entra ID auth requires the 'azure-identity' package. Install it with: pip
+install azure-identity". Hermes's comment on the first says it outright -- a
+benched key "is not a missing credential; telling the user to re-authenticate
+would send them chasing a cooldown that lifts on its own".
+"""
 
 
 @dataclass(frozen=True)
@@ -648,6 +662,8 @@ def looks_like_auth(text: str) -> bool:
     connect button came to disagree about the same failure in the first place.
     """
     lowered = text.lower()
+    if any(hint in lowered for hint in _NOT_AUTH_HINTS):
+        return False
     return any(hint in lowered for hint in _AUTH_HINTS)
 
 
@@ -718,7 +734,7 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             # The agent is there and talking, it just refused this handshake --
             # a version or shape mismatch, not an absent install. Reporting it
             # as "missing" would send the operator looking for the wrong problem.
-            return done("unknown", f"connected, but rejected the ACP handshake: {exc.message} [{exc.code}]")
+            return done("unknown", f"connected, but rejected the ACP handshake: {reason_of(exc)} [{exc.code}]")
         except AcpError as exc:
             tail = client.stderr_tail(400)
             suffix = f"; stderr: {tail}" if tail else ""
@@ -743,13 +759,16 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
                 # advertisement there would label any unrelated session failure,
                 # a transient one included, as a credential story with no way out.
                 advertised = bool(handshake.auth_methods)
-                refused_over_a_credential = looks_like_auth(exc.message)
+                # The agent's whole answer, `data` included: the Connect button
+                # classifies this same text (`reason_of`), and two readers given
+                # different halves of one refusal are how they came to disagree.
+                refused_over_a_credential = looks_like_auth(reason_of(exc))
                 needs_auth = refused_over_a_credential
                 status: SnapshotStatus = "attention" if advertised or refused_over_a_credential else "unknown"
                 hint = f" (auth methods: {', '.join(handshake.auth_methods)})" if handshake.auth_methods else ""
                 return done(
                     status,
-                    f"connected, but no session could be opened: {exc.message}{hint}",
+                    f"connected, but no session could be opened: {reason_of(exc)}{hint}",
                     handshake,
                     needs_auth=needs_auth,
                 )

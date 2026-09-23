@@ -137,6 +137,53 @@ class AcpRemoteError(AcpError):
         self.data = data
 
 
+def remote_error_in(exc: BaseException) -> AcpRemoteError | None:
+    """The agent's own refusal, when ``exc`` is one or was raised from one.
+
+    Follows ``__cause__`` only. A wrapper that re-raises ``from`` the refusal is
+    saying the refusal is the cause -- raven's MCP-grant annotation does exactly
+    that, adding a note of its own -- while an implicit ``__context__`` only says
+    a refusal was being handled when something else went wrong.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(current, AcpRemoteError):
+            return current
+        seen.add(id(current))
+        current = current.__cause__
+    return None
+
+
+def reason_of(error: AcpRemoteError) -> str:
+    """What the agent said went wrong: its message, plus the reason it put in ``data``.
+
+    ``str()`` of the error carries the code and message only, and for the refusals
+    that matter most the message is a placeholder. Both ACP SDKs wrap an
+    unhandled exception as ``Internal error`` with the exception's own text in
+    ``data.details`` (the Python one in ``acp/connection.py``, the JS one in
+    ``errorToResult``); codex-acp builds its turn failures by hand and puts the
+    reason in ``data.message``. Measured 2026-09-23: hermes refused
+    ``session/new`` with ``Internal error`` and ``data.details`` "Hermes is not
+    connected to any AI provider yet. Run `hermes model` to pick one ...".
+
+    Only those string fields are read. The other shape the SDKs send is machine
+    data -- invalid params arrive as a validator's error list -- with nothing in
+    it a reader can act on. Not ``__str__``: that string reaches every surface
+    that reports an agent failure, and this is for the ones that classify one.
+    """
+    data = error.data
+    if isinstance(data, dict):
+        details = data.get("details")
+        data = details if isinstance(details, str) else data.get("message")
+    reason = data.strip() if isinstance(data, str) else ""
+    # An adapter that also names the reason in `message` (the JS SDK's
+    # `internalError(data, additionalMessage)`) would otherwise say it twice.
+    if not reason or reason in error.message:
+        return error.message
+    return f"{error.message}: {reason}"
+
+
 def encode(frame: dict[str, Any]) -> bytes:
     """Serialise one frame for the wire.
 
