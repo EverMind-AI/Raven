@@ -482,7 +482,7 @@ export function ExtAgentsApp(): JSX.Element {
   const current = TABS.find((x) => x.tab === tab)!
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
   return (
-    <div className="extAgents-hub">
+    <>
       <div className="pmhero">
         <div>
           <h3>{t('gui.page.agents')}</h3>
@@ -509,6 +509,6 @@ export function ExtAgentsApp(): JSX.Element {
       </div>
       <CardGrid empty={t(current.empty)} rows={rows[tab]} s={s} />
       {sheetRow ? <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} /> : null}
-    </div>
+    </>
   )
 }

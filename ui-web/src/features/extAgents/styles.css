@@ -95,12 +95,14 @@
 .extAgents-tn::before { content: "("; }
 .extAgents-tn::after { content: ")"; }
 
-/* The page's own column, narrower than the shared 1080px one and centred in
-   it: three columns' worth, since a card stretched across a wide window is a
-   long bar with a name at one end and its button at the other. The heading
-   and tabs share it, so their left edge is the grid's. */
-.extAgents-hub { max-width: 780px; margin: 0 auto; }
-.extAgents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+/* The column is the composer's width (`#extAgentsPage .wrap` in page.css).
+   Four cards a row at most -- the track floor is a quarter of the row less its
+   three gaps -- and never narrower than 200px, so a narrow window steps down
+   to three, two, one rather than squeezing four. */
+.extAgents-grid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(max(200px, calc((100% - 36px) / 4)), 1fr));
+}
 .extAgents-empty { padding: 28px 0; font-size: 12.5px; color: var(--faint); }
 
 .extAgents-card {
