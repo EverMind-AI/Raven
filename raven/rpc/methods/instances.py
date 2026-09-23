@@ -817,6 +817,41 @@ async def instances_set_model(
             for c in (manager.agent_model_choices(agent) if manager is not None else ())
         ]
 
+    def host_id(proposed: str) -> str | None:
+        """``proposed`` as this host would store it, or ``None`` if it cannot serve it.
+
+        The row-level write's own check (``subagents._host_pair``), because an
+        instance of one of raven's own picks from the same catalogue a row does
+        -- the page draws both from this host's live provider list, and two
+        checks behind one menu would let a pick land on one surface and be
+        refused on the other.
+        """
+        from raven.rpc.methods.subagents import _host_pair
+
+        return _host_pair(proposed)
+
+    def takes_host_models() -> bool:
+        """Whether this agent answers on raven's own providers, and so on their ids.
+
+        The listing's rule, asked of the same row the roster drew
+        (``subagents._model_rule``), so the menu the page offered for this agent
+        is the vocabulary this write accepts.
+        """
+        from raven.agent.subagent.backends import acp_snapshot_for, third_party_agent_meta
+        from raven.rpc.methods.subagents import _model_rule
+
+        # Duck-typed, like every other reach into the manager here: a host that
+        # hands over something without a roster cannot say whose catalogue an
+        # agent runs on, and the handshake's vocabulary is the answer that was
+        # right before this asked at all.
+        registry = getattr(manager, "registry", None)
+        row = registry.get(agent) if registry is not None else None
+        if row is None:
+            return False
+        cfg = row.config
+        snapshot = acp_snapshot_for(cfg) if getattr(cfg, "kind", None) == "acp" else None
+        return _model_rule(cfg, snapshot, third_party_agent_meta(cfg, snapshot=snapshot)) == "raven"
+
     if manager is None:
         # A read degrades to empty and a write does not, for the reason the mode
         # method states: answering a set with "no models" is a silent no-op, and
@@ -833,8 +868,27 @@ async def instances_set_model(
         # against a handle that does not exist is stored where nothing will read
         # it and echoed back as if it had landed.
         raise ConfigValidationError(f"no instance {agent}/{handle} in this session")
+    offered: list[str] | None = None
+    if model is not None and takes_host_models():
+        # An agent of raven's own: the page picked from this host's catalogue, so
+        # the id is checked against it rather than against a handshake capture
+        # the page no longer draws. Stored the way a row's is, naming the
+        # provider, because a bare id is claimed by keyword matching at dispatch
+        # and that sends it wherever those rules land.
+        stored = host_id(model)
+        if stored is None:
+            raise ConfigValidationError(
+                f"{agent!r} runs on raven's own providers, and none of them can serve {model!r}: "
+                "it names no provider raven knows, or that provider has no usable credentials",
+                data={"field": "model", "name": agent},
+            )
+        model, offered = stored, [stored]
     try:
-        applied = manager.set_instance_model(session_key, agent, handle, model)
+        # Passed only when there is one, the way every other optional keyword
+        # into a duck-typed manager is: a host that replaces this method keeps
+        # working as long as it is not handed an argument it never declared.
+        extra = {"offered": offered} if offered is not None else {}
+        applied = manager.set_instance_model(session_key, agent, handle, model, **extra)
     except ValueError as exc:
         raise ConfigValidationError(str(exc)) from exc
     return {"model": applied, "availableModels": menu()}

@@ -1908,9 +1908,13 @@ class _ModelledManager(_FakeManager):
     def instance_model(self, session_key, agent, handle):
         return self.held.get((session_key or "", agent, handle))
 
-    def set_instance_model(self, session_key, agent, handle, model):
-        if model is not None and model not in [c.value for c in self.agent_model_choices(agent)]:
-            raise ValueError(f"{agent!r} has no model {model!r}; it offers 2")
+    def set_instance_model(self, session_key, agent, handle, model, *, offered=None):
+        # `offered` mirrors the real manager: the caller supplies the vocabulary
+        # when it knows a better one than this agent's handshake. Still enforced
+        # here, so a test handing a value neither list holds still fails.
+        allowed = [c.value for c in self.agent_model_choices(agent)] if offered is None else offered
+        if model is not None and model not in allowed:
+            raise ValueError(f"{agent!r} has no model {model!r}; it offers {len(allowed)}")
         self.applied.append((session_key, agent, handle, model))
         key = (session_key or "", agent, handle)
         if model is None:
@@ -1918,6 +1922,82 @@ class _ModelledManager(_FakeManager):
         else:
             self.held[key] = model
         return model
+
+
+def _own_acp_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str = "Raven-Code") -> Any:
+    """A manager whose roster holds one agent of raven's own, with a real handshake.
+
+    Written through the capability store under the real fingerprint rather than
+    by stubbing the rule: what is under test is that the instance write reads
+    the rule the roster reads, and a stub would take that reading out of the
+    test. The row is otherwise the `_ModelledManager` above, so the menu it
+    advertises is still there to be ignored.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.capabilities import CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
+    from raven.config.schema import SubagentsConfig
+
+    caps = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: caps)
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"providers": {"openai": {"apiKey": "sk-test"}}}), encoding="utf-8")
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: config)
+
+    cfg = next(
+        c
+        for c in SubagentsConfig(
+            agents=[{"name": agent, "kind": "acp", "command": f"{agent} acp", "description": "d", "enabled": True}]
+        ).agents
+        if c.name == agent
+    )
+    SnapshotStore(path=caps).record(
+        CapabilitySnapshot(
+            agent=agent,
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=1,
+            agent_name="raven",
+        )
+    )
+    manager = _ModelledManager()
+    manager.registry = SimpleNamespace(get=lambda name: SimpleNamespace(config=cfg) if name == agent else None)
+    return manager
+
+
+async def test_an_instance_of_ravens_own_takes_a_host_model_id(
+    _isolated_registry: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page draws such an instance's menu from this host's live catalogue,
+    the way the agents page draws its row's, so the write has to accept what was
+    on offer there. Checked against raven's providers (`_host_pair`) rather than
+    against the agent's handshake capture, which that menu no longer comes from,
+    and stored naming its provider the way a row's model is."""
+    manager = _own_acp_manager(tmp_path, monkeypatch)
+    key = {"session_key": "web:s1", "agent": "Raven-Code", "handle": "h1"}
+    await _isolated_registry.upsert_spawn("web:s1", "Raven-Code", "h1", "completed")
+
+    reported = await instances_set_model({**key, "model": "gpt-5"}, agent_loop_factory=lambda: _FakeLoop(manager))
+
+    assert reported["model"] == "openai/gpt-5"
+    assert manager.applied == [("web:s1", "Raven-Code", "h1", "openai/gpt-5")]
+
+
+async def test_an_instance_of_ravens_own_refuses_an_id_no_provider_of_ravens_serves(
+    _isolated_registry: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Taking the host's vocabulary is not taking any string: the refusal names
+    why, because a reader looking at a catalogue needs to know it was that
+    catalogue that turned the id down."""
+    manager = _own_acp_manager(tmp_path, monkeypatch)
+    key = {"session_key": "web:s1", "agent": "Raven-Code", "handle": "h1"}
+    await _isolated_registry.upsert_spawn("web:s1", "Raven-Code", "h1", "completed")
+
+    with pytest.raises(ConfigValidationError, match="none of them can serve"):
+        await instances_set_model({**key, "model": "nowhere/xyz"}, agent_loop_factory=lambda: _FakeLoop(manager))
+
+    assert manager.applied == []
 
 
 async def test_setting_a_model_answers_with_the_whole_menu(_isolated_registry: Any) -> None:

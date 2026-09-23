@@ -28,6 +28,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { t } from '../../i18n/t'
 import { show as menuAt } from '../../state/menu'
 import { show as toast } from '../../state/toast'
+import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
+import { offered } from '../model/types'
 import * as store from './store'
 
 import type { InstanceRow, SubagentModelChoice } from './types'
@@ -39,6 +41,31 @@ interface Held {
   model: string | null
   menu: SubagentModelChoice[]
 }
+
+/* The menu for an agent of raven's own: this host's live catalogue, through the
+   composer's own rule, because that is what such an agent actually runs on.
+
+   Not the agent's own `availableModels` -- for one of raven's own, that list is
+   this same catalogue captured at handshake time, put through the ACP option
+   builder: measured once on a probe session, capped at forty ids per provider
+   (`MAX_MODELS_PER_PROVIDER`), and stale from the first credential edit after
+   it. The agents page stopped drawing that capture; a chip that kept drawing it
+   would put two menus on one catalogue, which is the defect either way.
+
+   A third party keeps its own list. Its credentials decide what it can run, and
+   raven's ids would be refused by the agent itself. */
+const hostMenu = (): SubagentModelChoice[] =>
+  hostProviders()
+    .filter((p) => p.on)
+    .flatMap((p) => offered(p, 'text').map((m) => ({ value: m, name: m, group: p.name })))
+
+/* Which vocabulary this instance's agent takes, off the roster the panel has
+   already loaded -- the same `model_source` the agents page reads, so the two
+   surfaces cannot disagree about one agent. Absent while the roster is still
+   arriving, and for an agent no longer on it, which both read as "ask the
+   agent", the answer before any of this. */
+const ruleOf = (agent: string): string =>
+  store.get().roster.find((r) => r.name === agent)?.model_source || ''
 
 /* What the agent asked to be shown. Falling back to the value is the honest
    last resort: it is long and provider-qualified, but it is what was actually
@@ -57,11 +84,19 @@ export function InstanceModel({ row }: { row: InstanceRow }): JSX.Element | null
   const read = useCallback(async (): Promise<void> => {
     const source = store.source()
     if (!source.instanceModel) return
+    const rule = ruleOf(agent)
+    /* A row whose model is its own folder's (`fixed`) has no menu to offer here
+       either: the agents page draws it as managed by itself, and a chip letting
+       a reader pick would be the page saying two things about one agent. */
+    if (rule === 'fixed') { setHeld(null); return }
+    /* Loaded at boot for the composer's chip; a pane opened before that landed
+       asks once itself rather than offering nothing. */
+    if (rule === 'raven' && !hostProviders().length) await loadDefaultProviders()
     try {
       const r = await source.instanceModel(agent, handle)
       setHeld({
         model: typeof r.model === 'string' && r.model ? r.model : null,
-        menu: (r.availableModels || []).filter((m) => m && m.value),
+        menu: rule === 'raven' ? hostMenu() : (r.availableModels || []).filter((m) => m && m.value),
       })
     } catch {
       /* An instance whose model cannot be read draws no chip, the way the effort
@@ -92,7 +127,7 @@ export function InstanceModel({ row }: { row: InstanceRow }): JSX.Element | null
       const r = await source.instanceSetModel(agent, handle, next)
       setHeld({
         model: typeof r.model === 'string' && r.model ? r.model : null,
-        menu: (r.availableModels || []).filter((m) => m && m.value),
+        menu: ruleOf(agent) === 'raven' ? hostMenu() : (r.availableModels || []).filter((m) => m && m.value),
       })
     } catch (err) {
       /* The manager refuses a value this agent does not advertise, and the agent
@@ -115,8 +150,9 @@ export function InstanceModel({ row }: { row: InstanceRow }): JSX.Element | null
     }]
     let group = ''
     held.menu.forEach((m) => {
-      /* A separator where the agent's own bucketing changes. Forty ids in one
-         unbroken run is not a menu anyone reads. */
+      /* A separator where the bucketing changes -- the agent's own for a third
+         party, the provider for one of raven's own. A long unbroken run is not
+         a menu anyone reads. */
       if ((m.group || '') !== group) {
         group = m.group || ''
         rows.push('-')
