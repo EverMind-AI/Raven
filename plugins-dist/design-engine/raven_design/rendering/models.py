@@ -93,6 +93,17 @@ def _discover_chromium(roots: DiscoveryRoots | None = None) -> str | None:
     return None
 
 
+def _discover_libreoffice() -> str | None:
+    """raven's own resolver where raven is importable, so this engine agrees
+    with the preview and the render gate about whether LibreOffice is here --
+    including a Mac app bundle with nothing on PATH. PATH alone otherwise."""
+    try:
+        from raven.utils.office import find_soffice
+    except ImportError:
+        return shutil.which("libreoffice") or shutil.which("soffice")
+    return find_soffice()
+
+
 class RenderError(RuntimeError):
     def __init__(
         self,
@@ -192,7 +203,7 @@ class RenderConfig:
     def discover(cls, **overrides: Any) -> RenderConfig:
         values: dict[str, Any] = {
             "chrome_path": _discover_chromium(),
-            "libreoffice_path": shutil.which("libreoffice") or shutil.which("soffice"),
+            "libreoffice_path": _discover_libreoffice(),
             "ffmpeg_path": shutil.which("ffmpeg"),
             "ffprobe_path": shutil.which("ffprobe"),
             "qpdf_path": shutil.which("qpdf"),

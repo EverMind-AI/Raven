@@ -93,6 +93,28 @@ def find_soffice() -> str | None:
         return found
     if sys.platform == "win32":
         return _windows_install_soffice()
+    if sys.platform == "darwin":
+        return _macos_app_soffice()
+    return None
+
+
+def macos_app_dirs() -> tuple[Path, ...]:
+    """Where a Mac keeps an app installed without a package manager.
+
+    The dmg from libreoffice.org (and install.sh, where Homebrew is absent) puts
+    LibreOffice.app here and nothing on PATH, so without this a Mac that has it
+    is reported as having none. ``~/Applications`` is where a user who cannot
+    write /Applications gets it.
+    """
+    return (Path("/Applications"), Path.home() / "Applications")
+
+
+def _macos_app_soffice() -> str | None:
+    """The launcher inside a LibreOffice.app bundle, or None."""
+    for root in macos_app_dirs():
+        candidate = root / "LibreOffice.app" / "Contents" / "MacOS" / "soffice"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
     return None
 
 

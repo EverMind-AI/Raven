@@ -212,6 +212,33 @@ def test_a_posix_host_does_not_go_looking_for_a_windows_install(monkeypatch: pyt
     assert office.find_soffice() is None
 
 
+def test_a_mac_app_bundle_is_found_when_nothing_is_on_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The libreoffice.org dmg, and install.sh where there is no Homebrew, put
+    LibreOffice.app in an Applications folder and nothing on PATH. A PATH-only
+    search called that Mac one without LibreOffice, and every preview stayed off."""
+    system, user = tmp_path / "Applications", tmp_path / "home" / "Applications"
+    launcher = user / "LibreOffice.app" / "Contents" / "MacOS" / "soffice"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n")
+    launcher.chmod(0o755)
+    monkeypatch.setattr(office.sys, "platform", "darwin")
+    monkeypatch.setattr(office.shutil, "which", lambda name: None)
+    monkeypatch.setattr(office, "macos_app_dirs", lambda: (system, user))
+
+    assert office.find_soffice() == str(launcher)
+
+    monkeypatch.setattr(office.shutil, "which", lambda name: "/opt/homebrew/bin/soffice" if name == "soffice" else None)
+    assert office.find_soffice() == "/opt/homebrew/bin/soffice", "PATH still wins"
+
+    launcher.unlink()
+    monkeypatch.setattr(office.shutil, "which", lambda name: None)
+    assert office.find_soffice() is None
+
+
+def test_the_mac_app_folders_are_the_system_one_then_the_users() -> None:
+    assert office.macos_app_dirs() == (Path("/Applications"), Path.home() / "Applications")
+
+
 def test_every_seat_that_reports_libreoffice_missing_asks_one_resolver() -> None:
     """The resolver, not just the conversion.
 

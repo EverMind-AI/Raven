@@ -525,6 +525,68 @@ install_browser() {
     || warn "Chromium download failed; the browser tool stays off. Retry later with: $py -m playwright install chromium"
 }
 
+# macOS without Homebrew: the release dmg, pinned the way the cask pins it --
+# one version, one digest per build. The stable directory drops a release once
+# the next one ships and the archive keeps it byte for byte, so the archive is
+# the fallback rather than the only source. Verified before it is mounted.
+LO_VERSION="26.8.0"
+LO_BUILD="26.8.0.3"
+LO_SHA256_ARM64="8858d8058da4f862f47559486814e65efc27294da67c5e4bb56b006b1ee59f89"
+LO_SHA256_X64="2dcbce4894e01bc1ecd594658e2cbda70ff7bfcd0b310f35d38887797172d09e"
+
+# Where a Mac's apps live; overridable so a test can install into a directory
+# of its own. raven's own lookup (raven/utils/office.py) checks the same two.
+MACOS_APPS="${RAVEN_MACOS_APPS:-/Applications}"
+
+# The cask's own trick: a two-line launcher rather than a symlink, because
+# soffice finds the rest of its bundle from the path it was started by. On PATH
+# because the model checks a deck by running `soffice` itself.
+write_soffice_launcher() {
+  launcher_dir="$HOME/.local/bin"
+  mkdir -p "$launcher_dir" \
+    && printf '#!/bin/sh\nexec "%s/Contents/MacOS/soffice" "$@"\n' "$1" > "$launcher_dir/soffice" \
+    && chmod +x "$launcher_dir/soffice" \
+    && ok "LibreOffice launcher: $launcher_dir/soffice"
+}
+
+install_libreoffice_dmg() {
+  case "$NODE_ARCH" in
+    arm64) lo_dir=aarch64; lo_arch=aarch64; lo_sha="$LO_SHA256_ARM64" ;;
+    x64) lo_dir=x86_64; lo_arch=x86-64; lo_sha="$LO_SHA256_X64" ;;
+    *) return 1 ;;
+  esac
+  # /Applications takes an admin's write without sudo; anyone else gets their
+  # own Applications folder.
+  apps="$MACOS_APPS"
+  [ -w "$apps" ] || apps="$HOME/Applications"
+  work="$(mktemp -d "${TMPDIR:-/tmp}/raven-libreoffice.XXXXXX")" || return 1
+  dmg="$work/LibreOffice.dmg"
+  info "Downloading LibreOffice $LO_VERSION for deck preview (about 300 MB)..."
+  fetched=""
+  for url in \
+    "https://download.documentfoundation.org/libreoffice/stable/$LO_VERSION/mac/$lo_dir/LibreOffice_${LO_VERSION}_MacOS_$lo_arch.dmg" \
+    "https://downloadarchive.documentfoundation.org/libreoffice/old/$LO_BUILD/mac/$lo_dir/LibreOffice_${LO_BUILD}_MacOS_$lo_arch.dmg"; do
+    if curl -fsSL --retry 2 --max-time 1800 -o "$dmg" "$url" && [ "$(sha256_of "$dmg")" = "$lo_sha" ]; then
+      fetched=1
+      break
+    fi
+  done
+  if [ -z "$fetched" ]; then
+    rm -rf "$work"
+    return 1
+  fi
+  mkdir -p "$work/mnt" "$apps" || { rm -rf "$work"; return 1; }
+  hdiutil attach -nobrowse -readonly -noverify -noautoopen -quiet -mountpoint "$work/mnt" "$dmg" \
+    || { rm -rf "$work"; return 1; }
+  copied=0
+  ditto "$work/mnt/LibreOffice.app" "$apps/LibreOffice.app" || copied=1
+  hdiutil detach -quiet "$work/mnt" || hdiutil detach -quiet -force "$work/mnt" || true
+  rm -rf "$work"
+  [ "$copied" = 0 ] || { rm -rf "$apps/LibreOffice.app"; return 1; }
+  ok "LibreOffice $LO_VERSION installed to $apps/LibreOffice.app"
+  write_soffice_launcher "$apps/LibreOffice.app"
+}
+
 install_office() {
   # soffice and libreoffice are the two launcher names the runtime resolves
   # (raven/utils/office.py); either one means deck preview already works.
@@ -532,14 +594,23 @@ install_office() {
   have libreoffice && return 0
   case "$NODE_OS" in
     darwin)
+      # An app already in an Applications folder (the libreoffice.org dmg, or
+      # an earlier run of this script) only lacks a launcher on PATH. Never
+      # install a second copy over it.
+      for app in "$MACOS_APPS/LibreOffice.app" "$HOME/Applications/LibreOffice.app"; do
+        if [ -x "$app/Contents/MacOS/soffice" ]; then
+          write_soffice_launcher "$app"
+          return 0
+        fi
+      done
+      # A cask needs no sudo, so install directly rather than prompting.
       if have brew; then
         info "Installing LibreOffice (deck preview)..."
-        # A cask needs no sudo, so install directly rather than prompting.
-        brew install --cask libreoffice \
-          || warn "LibreOffice install failed; deck preview stays off. Retry later with: brew install --cask libreoffice"
-      else
-        warn "LibreOffice not found; deck preview stays off. Install it later with: brew install --cask libreoffice"
+        brew install --cask libreoffice && return 0
+        warn "brew could not install LibreOffice; fetching it from libreoffice.org instead."
       fi
+      install_libreoffice_dmg \
+        || warn "LibreOffice install failed; deck preview stays off. Install it later from https://www.libreoffice.org/download/ or with: brew install --cask libreoffice"
       ;;
     linux)
       if ! have apt-get; then
@@ -658,7 +729,8 @@ configure_macos_fonts() {
   # Already there: written by an earlier run, or Homebrew's own on an Intel Mac,
   # which LibreOffice reads and which names the system fonts already.
   [ -f "$MACOS_FONTCONFIG" ] && return 1
-  if ! have soffice && ! have libreoffice && [ ! -d /Applications/LibreOffice.app ]; then
+  if ! have soffice && ! have libreoffice \
+    && [ ! -d "$MACOS_APPS/LibreOffice.app" ] && [ ! -d "$HOME/Applications/LibreOffice.app" ]; then
     return 1
   fi
   target_dir="$(dirname "$MACOS_FONTCONFIG")"
