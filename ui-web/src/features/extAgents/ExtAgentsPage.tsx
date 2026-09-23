@@ -60,7 +60,8 @@ const canTest = (row: ExtAgentRow): boolean => !row.builtin
    is left: Enter is a newline in a textarea, and a click away from a field one
    has just typed into means the typing. Left blank it goes back to what was
    there -- this is the text the dispatching model reads, and it cannot be
-   nothing. */
+   nothing. The built-in loop's line is not the reader's to word, so it is
+   drawn as text rather than as a field that will not take typing. */
 function GoodAt({ row, saved, readOnly }: { row: ExtAgentRow; saved: string; readOnly: boolean }): JSX.Element {
   const [draft, setDraft] = useState(saved)
   useEffect(() => setDraft(saved), [saved])
@@ -72,6 +73,14 @@ function GoodAt({ row, saved, readOnly }: { row: ExtAgentRow; saved: string; rea
     }
     if (next !== saved) store.describe(row, next)
   }
+  if (readOnly) {
+    return (
+      <div className="extAgents-fld">
+        <span className="extAgents-k">{t('gui.agent.good_at')}</span>
+        <p className="extAgents-ro">{saved}</p>
+      </div>
+    )
+  }
   return (
     <label className="extAgents-fld">
       <span className="extAgents-k">{t('gui.agent.good_at')}</span>
@@ -79,7 +88,6 @@ function GoodAt({ row, saved, readOnly }: { row: ExtAgentRow; saved: string; rea
         aria-label={t('gui.agent.good_at')}
         onBlur={commit}
         onChange={(e) => setDraft(e.target.value)}
-        readOnly={readOnly}
         value={draft}
       />
     </label>
@@ -229,7 +237,7 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
   const unset = own && !fixed ? 'gui.agent.model_follow' : menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default'
   const cls = [
     'extAgents-pill',
-    menuless ? 'extAgents-pill-fixed' : '',
+    menuless ? 'extAgents-pill-fixed' : busy ? 'extAgents-pill-busy' : '',
     shown ? '' : 'extAgents-pill-dim',
     shown ? 'extAgents-pill-clearable' : '',
   ]

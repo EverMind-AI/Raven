@@ -171,16 +171,26 @@
 .extAgents-fld { display: block; }
 .extAgents-fld + .extAgents-fld { margin-top: 16px; }
 .extAgents-k { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-/* The field's own controls only -- the picker that opens under the model pill
+/* Three looks, one per kind of value, so a glance says what can be changed:
+   a white framed box is a field the reader types into or picks from -- its
+   edge darkens under the pointer and rings amber while it has focus; plain
+   text with no frame is a value the agent owns and the sheet only reports; a
+   grey block is a command to copy. A field that is only locked for now, while
+   a write runs, keeps its frame and dims.
+
+   The field's own controls only -- the picker that opens under the model pill
    lives inside a field too, and its search box keeps the component's look. */
 .extAgents-fld > textarea, .extAgents-fld .keyfield input {
-  width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  width: 100%; background: var(--paper); border: 1px solid var(--line); border-radius: var(--ctl-r);
   padding: 8px 10px; outline: 0; font-size: 13px; color: var(--text); box-sizing: border-box;
+  transition: border-color .12s ease, box-shadow .12s ease;
 }
 .extAgents-fld > textarea { font-family: var(--sans); resize: none; height: 104px; line-height: 1.65; font-size: 12.5px; overflow-y: auto; }
-.extAgents-fld > textarea[readonly] { color: var(--muted); }
-.extAgents-fld .keyfield input { font-family: var(--mono); font-size: 12.5px; }
-.extAgents-fld > textarea:focus, .extAgents-fld .keyfield input:focus { border-color: var(--muted); }
+/* The eye sits in the input's right end, so the text stops short of it. */
+.extAgents-fld .keyfield input { font-family: var(--mono); font-size: 12.5px; height: var(--ctl-h); padding: 0 32px 0 10px; }
+.extAgents-fld > textarea:hover, .extAgents-fld .keyfield input:hover { border-color: color-mix(in oklab, var(--line) 50%, var(--muted)); }
+.extAgents-fld > textarea:focus, .extAgents-fld .keyfield input:focus { border-color: var(--amber); box-shadow: var(--ctl-focus); }
+.extAgents-ro { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 /* The key field is the shared component; its eye button keeps its own styling. */
 .extAgents-fld .keyfield { display: flex; width: 100%; }
 
@@ -206,21 +216,32 @@
 /* ── the model pill ─────────────────────────────────────────────── */
 
 /* The settings page's pill, in this domain's clothes: id and provider inside
-   one frame, a chevron that gives way to the clear control on hover. */
+   one frame, a chevron that gives way to the clear control on hover. It is a
+   field like the ones above it, so it wears their frame and their edges. */
 .extAgents-pill {
   position: relative; display: inline-flex; align-items: stretch; width: 320px; max-width: 100%;
-  border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--text); overflow: hidden;
+  height: var(--ctl-h); box-sizing: border-box;
+  border: 1px solid var(--line); border-radius: var(--ctl-r); background: var(--paper); color: var(--text); overflow: hidden;
+  transition: border-color .12s ease, box-shadow .12s ease;
 }
-.extAgents-pill:hover:not(.extAgents-pill-fixed) { border-color: var(--amber); }
-.extAgents-pill-fixed { color: var(--faint); }
-.extAgents-pill-dim { background: none; }
+.extAgents-pill:hover { border-color: color-mix(in oklab, var(--line) 50%, var(--muted)); }
+.extAgents-pill:has(.extAgents-pm[aria-expanded="true"]), .extAgents-pill:has(.extAgents-pm:focus-visible) {
+  border-color: var(--amber); box-shadow: var(--ctl-focus);
+}
 .extAgents-pm {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
   font: inherit; color: inherit; background: none; border: 0;
-  padding: 5px 8px 5px 10px; cursor: pointer; text-align: left;
+  padding: 0 8px 0 10px; cursor: pointer; text-align: left;
 }
-.extAgents-pm:disabled { cursor: default; }
-.extAgents-pm:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.extAgents-pm:focus-visible { outline: 0; }
+/* Locked while a connect or a model write runs: still a field, just not now. */
+.extAgents-pill-busy { opacity: .55; }
+.extAgents-pill-busy:hover { border-color: var(--line); }
+.extAgents-pill-busy .extAgents-pm { cursor: not-allowed; }
+/* No menu to pick from: not a field at all, so no frame -- the value sits
+   under its label as text, flush with it. */
+.extAgents-pill-fixed, .extAgents-pill-fixed:hover { width: auto; border-color: transparent; background: none; }
+.extAgents-pill-fixed .extAgents-pm { padding-left: 0; cursor: default; }
 .extAgents-mid {
   flex: 1; min-width: 0; font-family: var(--mono); font-size: 12.5px; font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -241,6 +262,11 @@
 .extAgents-pill-clearable:hover .extAgents-mch, .extAgents-pill-clearable:focus-within .extAgents-mch { display: none; }
 .extAgents-pill-clearable:hover .extAgents-pm, .extAgents-pill-clearable:focus-within .extAgents-pm { padding-right: 31px; }
 .extAgents-mx:hover { color: var(--clay); }
+/* A menuless row can still carry a model, and clearing it is the one write
+   left. With no frame to hover there is nothing to reveal the control, so it
+   stands after the value, always drawn. */
+.extAgents-pill-fixed .extAgents-mx { position: static; display: block; width: 24px; background: none; }
+.extAgents-pill-fixed.extAgents-pill-clearable .extAgents-pm { padding-right: 0; }
 
 /* The shared picker, sized to hang under the pill inside the 520px sheet: the
    settings dialog's 720x560 would neither fit below the pill nor above it. */
