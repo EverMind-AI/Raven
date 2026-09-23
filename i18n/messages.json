@@ -2075,6 +2075,14 @@
       "en": "Done",
       "zh": "已完成"
     },
+    "gui.transcript.date_today": {
+      "en": "Today {t}",
+      "zh": "今天 {t}"
+    },
+    "gui.transcript.date_yesterday": {
+      "en": "Yesterday {t}",
+      "zh": "昨天 {t}"
+    },
     "gui.freq.cron": {
       "en": "Custom",
       "zh": "自定义"
@@ -2174,6 +2182,14 @@
     "gui.arts.open": {
       "en": "Open {f}",
       "zh": "打开 {f}"
+    },
+    "gui.arts.browser": {
+      "en": "Open in browser",
+      "zh": "在浏览器中打开"
+    },
+    "gui.arts.download": {
+      "en": "Download",
+      "zh": "下载"
     },
     "gui.arts.more": {
       "en": "Show {n} remaining",
@@ -4180,8 +4196,8 @@
       "zh": "已思考"
     },
     "gui.think.live": {
-      "en": "thinking",
-      "zh": "思考中"
+      "en": "Thinking…",
+      "zh": "思考中…"
     },
     "gui.time.ago_d": {
       "en": "{n}d ago",

@@ -18,12 +18,17 @@ export function Icon({
   icon,
   size = 16,
   stroke,
+  className,
 }: {
   icon: IconSvgElement
   size?: number
   stroke?: number
+  className?: string
 }): JSX.Element {
-  return <HugeiconsIcon icon={icon} size={size} strokeWidth={stroke} aria-hidden="true" />
+  return (
+    <HugeiconsIcon icon={icon} size={size} strokeWidth={stroke} aria-hidden="true"
+      {...(className ? { className } : {})} />
+  )
 }
 
 /** The Agents row: a small robot head with a flame of a crest. */
@@ -89,6 +94,55 @@ export function FileBadge({ kind }: { kind: 'pdf' | 'doc' }): JSX.Element {
       ) : (
         <path fill="white" d="M4.6193 10.3182L3.00566 4.50001H3.92896L5.06248 9.00569H5.11646L6.29543 4.50001H7.21021L8.38918 9.00853H8.44316L9.57384 4.50001H10.5L8.8835 10.3182H7.99998L6.77555 5.96023H6.73009L5.50566 10.3182H4.6193Z" />
       )}
+    </svg>
+  )
+}
+
+/* A delivered file's type, as the design's page-with-a-folded-corner mark
+   (Figma: Raven / File_ICON): a body and a fold in the type's own two tones,
+   and the extension printed on it. The kinds the design draws have its
+   colours; the rest take the nearest family, and anything unknown the slate
+   the design gives markdown. */
+const FILE_TONES: Record<string, [string, string, string, string]> = {
+  red: ['#C8201F', '#C8201F', '#F06060', '#CC1918'],
+  blue: ['#6D9CFA', '#497CE0', '#4B7BF7', '#1A4DD1'],
+  green: ['#3FB36B', '#23904E', '#5ACB84', '#1C7A41'],
+  slate: ['#8492AC', '#677692', '#A1ADC7', '#7C8EB3'],
+}
+const FILE_TONE_OF: Record<string, string> = {
+  ppt: 'red', pptx: 'red', key: 'red', pdf: 'red',
+  html: 'blue', htm: 'blue', doc: 'blue', docx: 'blue',
+  xls: 'green', xlsx: 'green', csv: 'green',
+}
+
+export function FileMark({ ext, width = 29, height = 34 }: {
+  ext: string; width?: number; height?: number
+}): JSX.Element {
+  const key = ext.toLowerCase()
+  const [b0, b1, f0, f1] = FILE_TONES[FILE_TONE_OF[key] || 'slate'] as [string, string, string, string]
+  const id = `fm-${key || 'x'}`
+  const label = key.slice(0, 4).toUpperCase()
+  return (
+    <svg width={width} height={height} viewBox="0 0 33 40" fill="none" aria-hidden="true">
+      <defs>
+        <linearGradient id={`${id}-b`} x1="17" y1="2" x2="17" y2="44" gradientUnits="userSpaceOnUse">
+          <stop stopColor={b0} />
+          <stop offset="1" stopColor={b1} />
+        </linearGradient>
+        <linearGradient id={`${id}-f`} x1="27" y1="0" x2="27" y2="11.5" gradientUnits="userSpaceOnUse">
+          <stop stopColor={f0} />
+          <stop offset="1" stopColor={f1} />
+        </linearGradient>
+        <filter id={`${id}-s`} x="18" y="-3" width="18" height="18" filterUnits="userSpaceOnUse">
+          <feDropShadow dx="0.24" dy="0.12" stdDeviation="1.47" floodOpacity="0.33" />
+        </filter>
+      </defs>
+      <path fill={`url(#${id}-b)`} d="M33 11.3848V32C33 34.8 33 36.2 32.4551 37.2695C31.9757 38.2103 31.2103 38.9757 30.2695 39.4551C29.2 40 27.8 40 25 40H8C5.2 40 3.8 40 2.73047 39.4551C1.78966 38.9757 1.02429 38.2103 0.544922 37.2695C0 36.2 0 34.8 0 32V8C0 5.2 0 3.79905 0.544922 2.72949C1.0243 1.78879 1.78973 1.02425 2.73047 0.544922C3.8 0 5.2 0 8 0H21.6152L33 11.3848Z" />
+      <path fill={`url(#${id}-f)`} filter={`url(#${id}-s)`} d="M33 11.5H24.0882C22.6588 11.5 21.5 10.3412 21.5 8.9118V0L33 11.5Z" />
+      {label ? (
+        <text x="16.5" y="30" textAnchor="middle" fill="#fff" fontSize="8" letterSpacing="0.56"
+          fontFamily="'Varela Round', ui-rounded, system-ui, sans-serif">{label}</text>
+      ) : null}
     </svg>
   )
 }

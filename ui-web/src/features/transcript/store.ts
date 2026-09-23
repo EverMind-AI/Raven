@@ -37,24 +37,6 @@ function artifactsSource(): ArtifactsSource {
   }
 }
 
-/* The file's own first lines, out of the row the workspace record already
-   holds. A write tool's hunk IS what it wrote -- hunkFromWrite keeps the first
-   forty lines as rows and folds the rest into one gap row -- so a text product
-   draws a miniature of itself with nothing fetched, live and on replay both
-   (session.resume carries the write's arguments, and the panel's replay
-   rebuilds the same hunk from them). Null when the row carries no content, and
-   then the tile shows the file's kind rather than inventing a picture. */
-function artifactHead(c: WsChange): string | null {
-  const out: string[] = []
-  for (const h of c.hunks || []) {
-    for (const r of h.rows || []) {
-      if (r[0] === 'add') out.push(String(r[1] == null ? '' : r[1]))
-      else if (r[0] === 'gap' && Array.isArray(r[1])) for (const l of r[1]) out.push(String(l))
-    }
-  }
-  return out.length ? out.join('\n') : null
-}
-
 /* Every file this turn created or edited. The workspace record already owns
    that classification and survives live/replay through the same tool rows. */
 export function artifactsOf(lane: Lane, turn: number): ArtifactRow[] {
@@ -74,7 +56,6 @@ export function artifactsOf(lane: Lane, turn: number): ArtifactRow[] {
       dir: String(c.dir || ''),
       name,
       ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : '',
-      head: artifactHead(c),
       lines: c.add || 0,
       deleted: c.del || 0,
       /* Only a write onto nothing is new: a whole-file write over a file that
@@ -389,13 +370,14 @@ function push(lane: Lane, seg: Seg): void {
 
 function ask(
   lane: Lane, body: string, atts: string[], when?: string | null,
-  opts?: { auto?: { origin: string; note: string }; midTurn?: boolean } | null,
+  opts?: { auto?: { origin: string; note: string }; midTurn?: boolean; at?: number } | null,
 ): AskData {
   const o = opts || {}
   const seg: AskData = {
     v: 0, id: nextId(), kind: 'ask', ...(o.auto ? { auto: o.auto } : {}),
     ...(o.midTurn ? { midTurn: true } : {}), body, atts,
-    when: when != null ? when : stamp(Date.now()), expanded: false,
+    when: when != null ? when : stamp(Date.now()),
+    at: o.at != null ? o.at : when != null ? 0 : Date.now(), expanded: false,
     clipped: body.length > 640 || body.split('\n').length > 12,
     clipOpen: false,
   }
@@ -458,9 +440,11 @@ export function cronReminder(text: string): { note: string; said: string } | nul
    What it says is the origin, and for a schedule the instruction that fired,
    which is the reader's own sentence. Every other origin has a shape of its
    own that nothing here reads, so the row is the chip alone. */
-export function askAuto(lane: Lane, origin: string, text: string, when?: string | null): void {
+export function askAuto(lane: Lane, origin: string, text: string, when?: string | null, at?: number): void {
   const said = origin === 'cron' ? cronReminder(text) : null
-  ask(lane, said ? said.said : '', [], when, { auto: { origin, note: said ? said.note : '' } })
+  ask(lane, said ? said.said : '', [], when, {
+    auto: { origin, note: said ? said.note : '' }, ...(at != null ? { at } : {}),
+  })
 }
 
 export function note(lane: Lane, label: string, detail: string, opts?: { quiet?: boolean; retry?: (() => void) | null } | null): NoteHandle {
@@ -1198,12 +1182,12 @@ export function newStep(lane: Lane): StepHandle {
   }
   push(lane, seg)
 
+  /* A live thought is shown folded: the design's small "thinking" card (Figma:
+     Raven / Thinking) is what a turn opens with, and the thought itself is one
+     click away -- where it follows its newest line for as long as it grows. */
   const reveal = (): void => {
     seg.thinkShown = true
-    if (!seg.thinkLive) {
-      seg.thinkLive = true
-      if (!seg.thinkPinned) seg.thinkOpen = true
-    }
+    if (!seg.thinkLive) seg.thinkLive = true
     poke(lane)
     bump(lane, seg)
   }
@@ -1231,10 +1215,7 @@ export function newStep(lane: Lane): StepHandle {
       seg.hasThink = true
       seg.think += text || ''
       seg.thinkShown = true
-      if (!seg.thinkLive) {
-        seg.thinkLive = true
-        if (!seg.thinkPinned) seg.thinkOpen = true
-      }
+      if (!seg.thinkLive) seg.thinkLive = true
       poke(lane)
       scheduleFlush(lane, seg)
     },
@@ -1793,7 +1774,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
            measured from here. `turnNo` stays put: the workspace-turn
            bookkeeping belongs to the delegated shape, as the note above says. */
         turnAt = msOf(m.timestamp)
-        askAuto(lane, String(m.origin || ''), m.text || '', stamp(m.timestamp as string))
+        askAuto(lane, String(m.origin || ''), m.text || '', stamp(m.timestamp as string), msOf(m.timestamp))
       }
       return
     }
@@ -1807,7 +1788,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
          arm does with its own: the work that follows the message belongs below
          it, and appending it to the step above would put the reader's
          correction after the calls it asked for. */
-      askText(lane, m.text, stamp(m.timestamp as string), { midTurn: true })
+      askText(lane, m.text, stamp(m.timestamp as string), { midTurn: true, at: msOf(m.timestamp) })
       toolRun = null
       return
     }
@@ -1817,7 +1798,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
       closeProducts()
       turnNo += 1
       turnAt = msOf(m.timestamp)
-      askText(lane, m.text, stamp(m.timestamp as string))
+      askText(lane, m.text, stamp(m.timestamp as string), { at: msOf(m.timestamp) })
       return
     }
     if (m.role === 'assistant' && m.notice) {
@@ -1902,7 +1883,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
  * Reading those as the question is what a reload used to show -- the note, the
  * paths and the engine's line, all as prose (src/lib/attachments.ts). */
 export function askText(
-  lane: Lane, text: string, when?: string | null, opts?: { midTurn?: boolean } | null,
+  lane: Lane, text: string, when?: string | null, opts?: { midTurn?: boolean; at?: number } | null,
 ): AskData {
   const { body, atts } = readMessage(String(text))
   return ask(lane, body, atts, when, opts)
