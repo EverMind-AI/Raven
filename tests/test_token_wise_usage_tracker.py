@@ -350,3 +350,64 @@ async def test_two_overlapping_turns_of_one_session_each_bill_what_ran_under_the
 
     assert outer.cost_usd == pytest.approx(0.75)
     assert inner.cost_usd == pytest.approx(0.5)
+
+
+async def test_delegated_usage_reads_what_a_child_process_wrote_for_its_root(tmp_path: Path):
+    """The one-shot summary's second source: an ACP sub-agent records its calls
+    with its own tracker, under its own session, billed to the host's root. Read
+    back through the real writer, not a hand-built file, so the reader cannot
+    drift from the shape the writer actually produces."""
+    from datetime import datetime, timedelta, timezone
+
+    from raven.token_wise import usage_context
+    from raven.token_wise.usage_tracker import delegated_usage
+
+    since = datetime.now(timezone.utc) - timedelta(seconds=1)
+    child = UsageTracker(telemetry_dir=tmp_path)
+    owner = {"root_session_key": "cli:root", "telemetry_dir": str(tmp_path)}
+    with usage_context.bind("acp:child", owner):
+        await child.after_llm_call({}, UsageSnapshot(model="m", input_tokens=100, output_tokens=10, cost_usd=0.25))
+        await child.after_llm_call({}, UsageSnapshot(model="m", input_tokens=50, output_tokens=5, cost_usd=None))
+        await child.record_tool_call("write_file", "t1")
+    host = UsageTracker(telemetry_dir=tmp_path)
+    with usage_context.bind("cli:root"):
+        await host.after_llm_call({}, UsageSnapshot(model="m", input_tokens=999, output_tokens=999, cost_usd=9.0))
+    with usage_context.bind("acp:other", {"root_session_key": "cli:elsewhere", "telemetry_dir": str(tmp_path)}):
+        await child.after_llm_call({}, UsageSnapshot(model="m", input_tokens=7, output_tokens=7, cost_usd=1.0))
+
+    got = delegated_usage("cli:root", since, telemetry_dir=tmp_path)
+
+    # The root's own call is the caller's to count from its own tracker, the
+    # other root's call is not this conversation's, and a tool row is not a call.
+    assert got.calls == 2
+    assert got.input_tokens == 150
+    assert got.output_tokens == 15
+    assert got.cost_usd == pytest.approx(0.25)
+    assert got.cost_missing_calls == 1
+
+
+def test_delegated_usage_keeps_to_its_window_and_to_reported_prices(tmp_path: Path):
+    from datetime import datetime, timedelta, timezone
+
+    from raven.token_wise.usage_tracker import delegated_usage
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        {"ts": (now - timedelta(hours=2)).isoformat(), "schema_version": 2, "cost_usd": 5.0},
+        {"ts": (now - timedelta(minutes=1)).isoformat(), "schema_version": 2, "cost_usd": 0.5},
+        # A row from before providers reported a price carries a local estimate,
+        # which is not a bill.
+        {"ts": (now - timedelta(minutes=1)).isoformat(), "cost_usd": 3.0},
+    ]
+    path = tmp_path / f"usage-{date.today().isoformat()}.jsonl"
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            base = {"model": "m", "session_key": "acp:c", "root_session_key": "cli:r", "input_tokens": 1}
+            f.write(json.dumps({**base, **row}) + "\n")
+        f.write('{"ts": "cut mid-wri')
+
+    got = delegated_usage("cli:r", now - timedelta(minutes=5), until=now, telemetry_dir=tmp_path)
+
+    assert got.calls == 2
+    assert got.cost_usd == pytest.approx(0.5)
+    assert got.cost_missing_calls == 1

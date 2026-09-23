@@ -47,7 +47,7 @@ from raven.permissions.builtin import BuiltinRulings, action_digest, action_line
 from raven.permissions.judge import review
 from raven.permissions.rules import default_tier, exec_approval_shape, user_tier, validate_exec_pattern
 from raven.permissions.session import remember_allowed, session_allows, session_mode
-from raven.permissions.turn import current_tool_call_id, current_turn
+from raven.permissions.turn import current_tool_call_id, current_turn, note_refusal
 from raven.tracing import trace
 
 #: What one evidence value may carry to a prompt. A person reads a prompt; past
@@ -199,14 +199,22 @@ class PermissionGate:
         digest = action_digest(tool_name, params)
         if digest in turn.lapsed_digests:
             self._annotate({"permission.decision": "deny", "permission.source": "lapsed_earlier"})
-            return self._refusal(
-                "Error: This action was already sent for approval in this turn and the request "
-                "expired with no answer. Asking again would expire the same way. Tell the user the "
-                "approval lapsed and let them decide."
+            return self._refuse(
+                tool_name,
+                params,
+                "This action was already sent for approval in this turn and the request expired "
+                "with no answer. Asking again would expire the same way. Tell the user the "
+                "approval lapsed and let them decide.",
+                source="lapsed_earlier",
             )
         if digest in turn.denied_digests:
             self._annotate({"permission.decision": "deny", "permission.source": "denied_earlier"})
-            return self._refusal("Error: User denied this action earlier in the current turn")
+            return self._refuse(
+                tool_name,
+                params,
+                "User denied this action earlier in the current turn",
+                source="denied_earlier",
+            )
         decision = await self.check(tool_name, params)
         if isinstance(decision, Allow):
             self._annotate({"permission.decision": "allow", "permission.source": decision.source.value})
@@ -224,10 +232,15 @@ class PermissionGate:
                     continuation=Continuation.CONTINUE,
                     ok=False,
                 )
-            return self._refusal(f"Error: {decision.reason}")
+            return self._refuse(tool_name, params, decision.reason, source=decision.source.value)
         if not self._allow_ask or turn.responder is None or not turn.conversation_id:
             self._annotate({"permission.decision": "deny", "permission.source": DecisionSource.UNATTENDED.value})
-            return self._refusal(f"Error: {decision.reason}, but this turn is not interactive")
+            return self._refuse(
+                tool_name,
+                params,
+                f"{decision.reason}, but this turn is not interactive",
+                source=DecisionSource.UNATTENDED.value,
+            )
         kind, evidence = self._prompt_view(tool, params)
         try:
             outcome = await turn.responder.await_approval(
@@ -246,7 +259,12 @@ class PermissionGate:
         except Exception as exc:  # noqa: BLE001 - a broken transport must refuse, not execute
             logger.exception("permissions: approval transport failed for {}", tool_name)
             self._annotate({"permission.decision": "deny", "permission.source": "approval_transport_error"})
-            return self._refusal(f"Error: The approval request could not be delivered ({exc})")
+            return self._refuse(
+                tool_name,
+                params,
+                f"The approval request could not be delivered ({exc})",
+                source="approval_transport_error",
+            )
         self._annotate(
             {
                 "permission.decision": "allow" if outcome.approved else "deny",
@@ -285,8 +303,11 @@ class PermissionGate:
             turn.lapsed_digests.add(digest)
         feedback = f' The user said: "{outcome.feedback}"' if outcome.feedback else ""
         if outcome.choice is ApprovalChoice.DENY_STOP:
-            return self._refusal(
-                "Error: User denied this action and asked to stop here." + feedback,
+            return self._refuse(
+                tool_name,
+                params,
+                "User denied this action and asked to stop here." + feedback,
+                source="approval_deny_stop",
                 continuation=Continuation.ABORT_TURN,
             )
         if not outcome.answered:
@@ -297,13 +318,40 @@ class PermissionGate:
             # merely lapsed reported a system error and delivered something else
             # instead. Said plainly, the next move is to tell the reader, not to
             # find another way.
-            return self._refusal(
-                "Error: This action needed the user's approval, and the request expired with no "
+            return self._refuse(
+                tool_name,
+                params,
+                "This action needed the user's approval, and the request expired with no "
                 "answer. Nobody refused it. Tell the user the approval lapsed and ask whether to "
                 "retry; do not repeat this call in this turn, and do not look for another way "
-                "around it."
+                "around it.",
+                source="approval_lapsed",
             )
-        return self._refusal("Error: User denied this action." + feedback)
+        return self._refuse(
+            tool_name,
+            params,
+            "User denied this action." + feedback,
+            source="approval_denied",
+        )
+
+    def _refuse(
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        reason: str,
+        *,
+        source: str = "",
+        continuation: Continuation = Continuation.CONTINUE,
+    ) -> ToolResult:
+        """Answer the call with a refusal, and leave the turn a record of it.
+
+        Every refusal goes through here so the record cannot miss a path: the
+        one-shot ``-m`` surface has no human watching the run, and its summary
+        is the only place a caller learns that the mutations it asked for were
+        turned down.
+        """
+        note_refusal(tool_name, action_line(tool_name, params), reason, source)
+        return self._refusal(f"Error: {reason}", continuation=continuation)
 
     def _persist(self, tool_name: str, pattern: str) -> tuple[bool, bool]:
         """Write the confirmed prefix as an allow rule; the grant already stands.

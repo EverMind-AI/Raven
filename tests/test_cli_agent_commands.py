@@ -9,6 +9,7 @@ Smoke-level coverage: ``--help`` works, options are surfaced, the
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -132,11 +133,13 @@ def _invoke_agent_capturing_session(
     backend: object | None = None,
     drain_outcome: object | None = None,
     message_args: list[str] | None = None,
+    during_turn: Callable[[], None] | None = None,
 ) -> tuple[object, dict[str, str]]:
     """Run ``agent -m`` with the provider and AgentLoop stubbed out, capturing
     the session_id that reaches the spine turn (req.conversation is the session
     key, mirroring the old session_key arg). ``message_args`` replaces the
-    default ``-m hi`` so the --message-file path can be exercised too."""
+    default ``-m hi`` so the --message-file path can be exercised too.
+    ``during_turn`` runs inside the turn's own task, where the gate would."""
     from raven.config.loader import save_config
     from raven.config.schema import Config
     from raven.spine import Text, TurnOutcome, Usage
@@ -168,6 +171,8 @@ def _invoke_agent_capturing_session(
         async def run_turn(self, req, emit, drain, *, stream, **_kw) -> TurnOutcome:
             captured["session_id"] = req.conversation
             captured["text"] = str(getattr(req, "text", ""))
+            if during_turn is not None:
+                during_turn()
             await emit(Text(content="stub-response", source=req.source))
             return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
@@ -929,3 +934,61 @@ def test_a_plain_reply_is_not_rewrapped_by_the_console(capsys: pytest.CaptureFix
     _print_agent_response(line, render_markdown=False)
     printed = capsys.readouterr().out
     assert line in printed
+
+
+def test_a_one_shot_whose_mutations_were_refused_says_so_and_exits_3(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Observed: an unattended ``-m`` under the ask tier had every write, spawn
+    and mutating exec refused, was told to carry on without them, and exited 0
+    with nothing on screen to say so. A driver reading the status code could not
+    tell that run from one that did the work."""
+    from raven.permissions.turn import note_refusal
+
+    ws = tmp_path / "chanwork"
+    ws.mkdir()
+
+    def refuse_twice() -> None:
+        reason = "This call requires user approval (ask tier), but this turn is not interactive"
+        note_refusal("write_file", "write_file path=report.md", reason, "unattended")
+        note_refusal("write_file", "write_file path=report.md", "denied earlier", "denied_earlier")
+
+    r, _ = _invoke_agent_capturing_session(monkeypatch, ws, [], during_turn=refuse_twice)
+
+    assert r.exit_code == 3, r.stdout
+    assert "stub-response" in r.stdout
+    # One action, reported once, however many times the model repeated it.
+    assert "1 action(s) were refused" in r.stdout
+    assert "write_file path=report.md" in r.stdout
+    assert "--permission-mode full" in r.stdout
+
+
+def test_a_one_shot_refused_only_by_a_deny_rule_reports_it_and_exits_0(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deny rule is the operator's own policy doing what it was set to do:
+    worth saying, not a failed run, and no advice to widen permissions."""
+    from raven.permissions.turn import note_refusal
+
+    ws = tmp_path / "chanwork"
+    ws.mkdir()
+
+    def deny() -> None:
+        note_refusal("exec", "git push origin main", "blocked by a deny rule", "user_deny")
+
+    r, _ = _invoke_agent_capturing_session(monkeypatch, ws, [], during_turn=deny)
+
+    assert r.exit_code == 0, r.stdout
+    assert "1 action(s) were refused" in r.stdout
+    assert "git push origin main" in r.stdout
+    assert "--permission-mode" not in r.stdout
+
+
+def test_a_one_shot_with_nothing_refused_prints_no_report(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = tmp_path / "chanwork"
+    ws.mkdir()
+    r, _ = _invoke_agent_capturing_session(monkeypatch, ws, [])
+    assert r.exit_code == 0, r.stdout
+    assert "were refused" not in r.stdout

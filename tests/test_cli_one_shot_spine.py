@@ -400,3 +400,101 @@ async def test_summary_distinguishes_free_unknown_and_partial():
     await tracker.after_llm_call({}, UsageSnapshot(model="model", input_tokens=10))
     line = summary.take_line()
     assert "$0.4" in line and "1 calls with unknown cost" in line
+
+
+async def test_build_one_shot_spine_hands_the_turns_refusals_to_the_caller():
+    """The gate records a refusal from inside the turn's own task, which the
+    scheduler built -- so the entrance cannot read its own context back. The
+    handle the runner keeps is how a one-shot learns what was turned down."""
+    from raven.permissions.turn import note_refusal
+
+    class _RefusingLoop:
+        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False) -> TurnOutcome:
+            note_refusal("write_file", "write_file path=a.txt", "not interactive", "unattended")
+            await emit(Text(content="done, supposedly", source=req.source))
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+    received: list = []
+    scheduler, hub, teardown = build_one_shot_spine(_RefusingLoop(), "cli", lambda t: None, on_refusals=received.extend)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"))
+        await handle.result()
+        await hub.wait_idle("cli")
+    finally:
+        await teardown()
+
+    assert [(r.tool_name, r.source) for r in received] == [("write_file", "unattended")]
+
+
+async def test_a_second_turn_does_not_report_the_first_turns_refusals():
+    from raven.cli._one_shot_spine import _OneShotTurnRunner
+    from raven.permissions.turn import note_refusal
+
+    class _OnceRefusingLoop(FakeAgentLoop):
+        async def run_turn(self, req, emit, drain, **kwargs):
+            if req.text == "first":
+                note_refusal("exec", "rm x", "not interactive", "unattended")
+            return await super().run_turn(req, emit, drain, **kwargs)
+
+    batches: list[list] = []
+    runner = _OneShotTurnRunner(_OnceRefusingLoop(), stream=False)
+    runner.on_refusals = batches.append
+    _, emit = _collect()
+    for text in ("first", "second"):
+        await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text=text, conversation="cli:c1"), emit, list)
+    assert [len(batch) for batch in batches] == [1, 0]
+
+
+def test_turn_summary_adds_what_sub_agents_billed_the_root():
+    """A product sub-agent is its own ACP process, so its calls never reach the
+    tracker here; a line that reads only that tracker undercounted a delegating
+    turn by the whole delegation."""
+    from raven.contracts.token_strategy import UsageSnapshot
+
+    windows: list[tuple] = []
+
+    def delegated(root, since, until):
+        windows.append((root, since, until))
+        return UsageSnapshot(model="d", input_tokens=900, output_tokens=100, cost_usd=0.3, calls=2)
+
+    tracker = _FakeUsageTracker()
+    summary = TurnUsageSummary(tracker, delegated=delegated)
+    summary.turn_started("cli:root")
+    tracker.set(input_tokens=100, output_tokens=20, cost_usd=0.1, calls=1)
+    line = summary.take_line()
+
+    assert line is not None
+    assert "1k in / 120 out tokens" in line
+    assert "$0.4" in line
+    assert "incl. 2 sub-agent calls" in line
+    assert windows[0][0] == "cli:root"
+
+    # A second line in the same turn picks up where the first left off, or a
+    # delegation would be billed on both.
+    summary.take_line()
+    assert windows[1][1] == windows[0][2]
+
+
+def test_turn_summary_prices_a_turn_whose_only_calls_were_delegated():
+    from raven.contracts.token_strategy import UsageSnapshot
+
+    tracker = _FakeUsageTracker()
+    summary = TurnUsageSummary(
+        tracker,
+        delegated=lambda *_: UsageSnapshot(model="d", input_tokens=10, output_tokens=5, cost_usd=0.02, calls=1),
+    )
+    summary.turn_started("cli:root")
+    line = summary.take_line()
+    assert line is not None and "$0.02" in line and "cost unknown" not in line
+
+
+def test_turn_summary_survives_a_ledger_it_cannot_read():
+    def broken(*_):
+        raise OSError("telemetry dir vanished")
+
+    tracker = _FakeUsageTracker()
+    summary = TurnUsageSummary(tracker, delegated=broken)
+    summary.turn_started("cli:root")
+    tracker.set(input_tokens=200, output_tokens=20, cost_usd=0.0042, calls=1)
+    line = summary.take_line()
+    assert line is not None and "$0.0042" in line and "sub-agent" not in line
