@@ -215,7 +215,7 @@ def plugin_failure_note(failure: "PluginActivationFailure") -> str:
     """The sentence a user reads about one plugin that did not load."""
     return (
         f"Plugin {failure.plugin_id!r} {PLUGIN_FAILURE_MARKER}: {_failure_cause(failure)}. "
-        f"Every other plugin loaded normally. Fix or remove it, or add {failure.plugin_id!r} "
+        f"Other plugins continue loading. Fix or remove it, or add {failure.plugin_id!r} "
         f"to plugins.disabled to stop loading it."
     )
 

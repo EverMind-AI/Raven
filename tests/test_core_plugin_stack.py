@@ -311,6 +311,25 @@ class TestOneBrokenPlugin:
         assert "boom" in message
         assert "plugins.disabled" in message
 
+    def test_two_broken_plugins_each_get_a_notice_that_claims_nothing_about_the_other(self, tmp_path: Path) -> None:
+        root = _broken_plugin_root(tmp_path)
+        twin = root / "wreck2"
+        (root / "wreck").rename(twin)
+        (twin / "raven-plugin.toml").write_text(
+            (twin / "raven-plugin.toml").read_text(encoding="utf-8").replace('"wreck"', '"wreck2"'), encoding="utf-8"
+        )
+        _broken_plugin_root(tmp_path / "second")
+        heard: list[str] = []
+        reg = build_plugin_registry(
+            _config(dirs=[str(root), str(tmp_path / "second" / "plugins")]), notify=heard.append
+        )
+
+        assert [f.plugin_id for f in reg.activation_failures()] == ["wreck", "wreck2"]
+        assert len(heard) == 2
+        for message in heard:
+            assert "loaded normally" not in message
+            assert "Other plugins continue loading" in message
+
     def test_without_a_notifier_it_reaches_stderr(self, tmp_path: Path, capsys) -> None:
         build_plugin_registry(_config(dirs=[str(_broken_plugin_root(tmp_path))]))
         assert "'wreck' did not load" in capsys.readouterr().err
