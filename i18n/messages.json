@@ -3907,10 +3907,6 @@
       "en": "No session matches \"{q}\".",
       "zh": "没有匹配「{q}」的会话。"
     },
-    "gui.rail.none": {
-      "en": "Nothing here yet",
-      "zh": "暂无会话"
-    },
     "gui.rail.pinned": {
       "en": "Pinned",
       "zh": "已固定"

@@ -495,8 +495,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    caret are what separate a heading from the session rows under it. */
 /* padding-left carries what the caret used to: the glyph now sits after the
    count (see features/rail/RailPage.tsx), and the label holds the same x it
-   held when the caret led -- which is what keeps it lined up with `.grp-empty`
-   and with the whole column. */
+   held when the caret led -- which is what keeps it lined up with the whole
+   column. */
 .list .grp {
   display: flex; align-items: center; gap: 4px; height: 28px;
   margin: 16px 0 4px; padding: 0 8px; border-radius: 8px; cursor: pointer; user-select: none;
@@ -520,7 +520,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .list .grp .car { margin-right: auto; }
 .list .grp:focus-visible { outline: 1px solid var(--amber); outline-offset: 2px; }
 .list .sess + .sess { margin-top: 2px; }
-.grp-empty { font-size: 12px; color: var(--faint); padding: 3px 8px 5px 8px; }
+/* An empty group's heading folds nothing: no hand and no hover ground, and
+   with no caret to push the Manage verb to the far end, the label does it. */
+.list .grp[data-empty] { cursor: default; }
+.list .grp[data-empty]:hover { background: none; }
+.list .grp[data-empty] .lab { margin-right: auto; }
 /* The one heading that has a verb keeps it out of sight until the pointer is on
    the row: a link beside every list would read as part of the heading, and it
    is an errand rather than a destination. Focus reveals it too -- a keyboard has

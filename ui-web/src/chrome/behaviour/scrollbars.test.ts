@@ -161,6 +161,43 @@ describe('overlay scrollbars', () => {
     expect(thumbs()).toHaveLength(0)
   })
 
+  it('takes the thumb down the moment its scroller leaves the page, not when the fade ends', async () => {
+    /* The model picker closing: its list goes with the panel, and the thumb,
+       parked in its own layer, stayed over the page for the whole of SB_HIDE
+       plus its fade. Nothing else scrolls meanwhile, so sync() never runs. */
+    const panel = document.createElement('div')
+    document.body.appendChild(panel)
+    const el = scroller()
+    panel.appendChild(el)
+    show(el)
+    expect(thumbs()).toHaveLength(1)
+    panel.remove()
+    await Promise.resolve()
+    expect(thumbs()).toHaveLength(0)
+  })
+
+  it('takes a faded thumb down too when its scroller leaves later', async () => {
+    /* The bar faded first and the picker closed after: the thumb was invisible
+       but stayed in the layer, one more for every picker opened. */
+    const el = scroller()
+    show(el)
+    vi.advanceTimersByTime(SB_HIDE)
+    expect(vert()!.dataset.on).toBe('false')
+    el.remove()
+    await Promise.resolve()
+    expect(thumbs()).toHaveLength(0)
+  })
+
+  it('removes a gone scroller\'s thumb when its timer runs, rather than only fading it', () => {
+    const el = scroller()
+    show(el)
+    const t = vert()!
+    /* Detached behind the observer's back: the timer is the second line. */
+    Object.defineProperty(el, 'isConnected', { value: false, configurable: true })
+    vi.advanceTimersByTime(SB_HIDE)
+    expect(t.isConnected).toBe(false)
+  })
+
   it('drops everything on demand, timer included', () => {
     const el = scroller()
     show(el)
