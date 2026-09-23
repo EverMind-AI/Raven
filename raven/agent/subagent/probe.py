@@ -27,7 +27,12 @@ from loguru import logger
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
-from raven.agent.subagent.presets import install_hint_for, shim_requirement_for, third_party_subagent_presets
+from raven.agent.subagent.presets import (
+    install_hint_for,
+    shim_requirement_for,
+    sign_in_hint_for,
+    third_party_subagent_presets,
+)
 from raven.agent.subagent.probe_state import LastTest
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
@@ -167,6 +172,47 @@ def _missing_exe_detail(cfg: Any, exe: str) -> str:
     about on the other.
     """
     return _missing_detail(exe, install_hint_for(cfg))
+
+
+def _refusal_detail(cfg: Any, said: str) -> str:
+    """What the reader is told when the test message came back a failure.
+
+    The agent's own words are the evidence and they are kept, but they are not
+    the whole answer: every one of these arrives as whatever prose that vendor
+    chose, wrapped in a JSON-RPC code, and the one thing a reader can act on --
+    that this agent is installed and has no credential -- is never in it.
+    Measured: an adapter answered "[-32603] Internal error: Failed to
+    authenticate: OAuth session expired and could not be refreshed", against a
+    local CLI whose own `auth status` said `loggedIn: false`. Nothing in that
+    sentence says to sign in, and nothing says where.
+
+    So a refusal that reads as one about a credential is named as one, with the
+    command where the command is known. The rest are unchanged: a failure this
+    cannot classify keeps the words it came with rather than being given a
+    guess about what they mean.
+
+    The same question the roster asks (`acp_client.capabilities.looks_like_auth`)
+    rather than a second spelling of it -- the roster already marks such a row
+    "go and sign in", and the two disagreeing about one failure is what this is.
+    """
+    from raven.acp_client.capabilities import looks_like_auth
+
+    if not looks_like_auth(said):
+        return said[:_DETAIL_CAP]
+    hint = sign_in_hint_for(cfg)
+    lead = "it is installed but has no usable credential"
+    if hint is None:
+        advice = "sign in to it and connect again"
+    else:
+        # Which spelling, decided on this machine rather than in the table: a
+        # shim-launched row runs where the agent's CLI was never installed
+        # globally, and naming a command that is not there answers a credential
+        # failure with a second one. Resolved against the same PATH the probe
+        # resolves every other executable against, so the hint and the probe
+        # cannot disagree about what this machine has.
+        local = shutil.which(hint.exe, path=_login_path()) is not None
+        advice = f"sign in with `{hint.local if local else hint.anywhere}` and connect again"
+    return f"{lead}; {advice}. It said: {said}"[:_DETAIL_CAP]
 
 
 def _missing_detail(exe: str, hint: str | None) -> str:
@@ -535,7 +581,7 @@ async def ping_agent(cfg: Any) -> PingResult:
     except asyncio.TimeoutError:
         return PingResult(False, f"it did not answer within {_ENABLE_PING_TIMEOUT_SECONDS}s")
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
-        return PingResult(False, str(exc)[:_DETAIL_CAP])
+        return PingResult(False, _refusal_detail(cfg, str(exc)))
     finally:
         # The pool is this call's alone, so nothing else will ever close it, and a
         # pool left open holds the child process it launched for the rest of the
