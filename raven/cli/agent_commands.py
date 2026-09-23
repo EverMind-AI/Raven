@@ -40,6 +40,43 @@ console = Console()
 # hub's worker task, where raising typer.Exit would be swallowed.
 _ONE_SHOT_EXIT = {"code": 0}
 
+# A run that finished but had calls refused because nobody could approve them.
+# Not 1: the turn did not fail, and a driver needs to tell "the model could not
+# run" from "the model ran without the mutations it asked for".
+EXIT_ACTIONS_REFUSED = 3
+
+
+def _report_refusals(refusals: list) -> None:
+    """Say which calls the gate turned down, once, after the reply.
+
+    Deduplicated by action: a refused call the model repeats is refused again
+    with an "earlier in this turn" reason, and that is one refusal to a reader.
+    Only a refusal nobody could answer sets the exit code; a builtin or user
+    deny rule is the policy the operator chose, doing what it was set to do.
+    """
+    from rich.markup import escape
+
+    from raven.contracts.permissions import DecisionSource
+
+    seen: dict[tuple[str, str], object] = {}
+    for refusal in refusals:
+        seen.setdefault((refusal.tool_name, refusal.action), refusal)
+    if not seen:
+        return
+    unattended = [r for r in refusals if r.source == DecisionSource.UNATTENDED.value]
+    console.print()
+    console.print(f"[yellow]{len(seen)} action(s) were refused in this run:[/yellow]")
+    for refusal in seen.values():
+        action = refusal.action if len(refusal.action) <= 160 else refusal.action[:157] + "..."
+        console.print(f"  - {escape(refusal.tool_name)}: {escape(action)}")
+        console.print(f"    [dim]{escape(refusal.reason[:200])}[/dim]")
+    if unattended:
+        console.print(
+            "[yellow]A one-shot run has nobody to approve a call. Re-run with "
+            "--permission-mode full to allow what needed approval.[/yellow]"
+        )
+        _ONE_SHOT_EXIT["code"] = _ONE_SHOT_EXIT["code"] or EXIT_ACTIONS_REFUSED
+
 
 async def _wait_for_background_work(agent_loop, scheduler, conversation: str) -> None:
     """Wait for sub-agents and their follow-up turns before one-shot teardown.
@@ -171,8 +208,9 @@ def register(app: typer.Typer) -> None:
             "--permission-mode",
             help=(
                 "How this turn reads the ask tier: ask, smart or full. A one-shot has nobody to "
-                "ask, so a call routed to approval fails closed; `full` is how an unattended "
-                "driver says it accepts that. Builtin denies and user deny rules hold regardless."
+                "ask, so a call routed to approval fails closed, is listed after the reply, and "
+                "makes the run exit 3; `full` is how an unattended driver says it accepts that. "
+                "Builtin denies and user deny rules hold regardless."
             ),
         ),
         session_id: str | None = typer.Option(
@@ -382,6 +420,8 @@ def register(app: typer.Typer) -> None:
         from raven.cli._one_shot_spine import build_one_shot_spine
         from raven.spine import ChatType, Origin, Source, TurnRequest
 
+        refusals: list = []
+
         async def run_once():
             # Bring the memory-backend plugin online before any turn
             # runs. ``backend`` is ``None`` when no plugin is wired.
@@ -404,6 +444,7 @@ def register(app: typer.Typer) -> None:
                     render_error=_print_turn_failure,
                     send_progress=bool(ch.send_progress) if ch else False,
                     send_tool_hints=bool(ch.send_tool_hints) if ch else False,
+                    on_refusals=refusals.extend,
                 )
                 # A one-shot spawn rarely finishes before the hard-exit below,
                 # but wire submit for parity with the TUI.
@@ -447,6 +488,7 @@ def register(app: typer.Typer) -> None:
 
         _ONE_SHOT_EXIT["code"] = 0
         asyncio.run(run_once())
+        _report_refusals(refusals)
         if _ONE_SHOT_EXIT["code"]:
             raise typer.Exit(_ONE_SHOT_EXIT["code"])
 

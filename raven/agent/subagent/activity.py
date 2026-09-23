@@ -623,6 +623,25 @@ def note_usage(usage: Any) -> None:
         logger.debug("subagent activity: unreadable usage report ({})", exc)
 
 
+async def note_provider_usage(
+    usage: Any,
+    *,
+    model: str,
+    session_key: str | None,
+    task_id: str,
+) -> None:
+    """Record one direct provider call in the run activity and usage ledger."""
+    note_usage(usage)
+    if session_key is None or not isinstance(usage, dict):
+        return
+    try:
+        from raven.token_wise.usage_tracker import record_delegated_usage
+
+        await record_delegated_usage(usage, model=model, root=session_key, task_id=task_id)
+    except Exception:  # noqa: BLE001 - accounting must never fail the delegated run
+        logger.debug("subagent activity: usage ledger write failed", exc_info=True)
+
+
 def note_frames(frames: dict[str, Any] | None) -> None:
     """Record where this run's wire frames live. Replaced, not merged."""
     activity = _current.get()

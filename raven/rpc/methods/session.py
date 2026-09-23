@@ -32,7 +32,6 @@ import os
 import re
 from contextlib import suppress
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
@@ -48,6 +47,7 @@ from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import new_chat_id
 from raven.session.resolve import manager_for
 from raven.session.title import TITLE_STORAGE_MAX
+from raven.token_wise.usage_tracker import read_usage_rows, row_root
 from raven.updates.update_notice import update_notice
 from raven.utils.tokens import estimate_prompt_tokens
 
@@ -1117,28 +1117,6 @@ def _usage_days(session: Any) -> list[date]:
     return [first + timedelta(days=offset) for offset in range((today - first).days + 1)]
 
 
-def _usage_rows(path: Path) -> list[dict[str, Any]]:
-    """Parsed rows of one telemetry file.
-
-    A line that does not parse is skipped rather than raised on: the recorder
-    flushes per call, so a process killed mid-write leaves a partial line, and
-    that is not a reason to fail a report about the calls that did land.
-    """
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
-
-
 def _scan_usage(root: str, days: list[date]) -> dict[str, Any]:
     """Sum every call recorded under ``root`` over ``days``.
 
@@ -1165,10 +1143,10 @@ def _scan_usage(root: str, days: list[date]) -> dict[str, Any]:
         path = tel_dir / f"usage-{day.isoformat()}.jsonl"
         if not path.is_file():
             continue
-        for row in _usage_rows(path):
+        for row in read_usage_rows(path):
             if row.get("_type") == "tool_call":
                 continue
-            if (row.get("root_session_key") or row.get("session_key")) != root:
+            if row_root(row) != root:
                 continue
             calls += 1
             fresh += token_count(row.get("input_tokens")) or 0
