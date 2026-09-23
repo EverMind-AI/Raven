@@ -268,10 +268,18 @@ function ConnForm({ c }: { c: ConnChannel }): JSX.Element {
   const [sent, setSent] = useState(false)
   /* Receiving is the only thing that closes this card by itself. Anything else
      -- an adapter that would not start, a gateway that could not be asked -- is
-     a reason the reader is owed, so the card stays with the state line up. */
+     a reason the reader is owed, so the card stays with the state line up.
+   *
+   * And it is the turn into receiving that closes it, not the state. On an
+   * entrance that is already live -- the card a reader opens to correct a
+   * rotated token -- the state was true before the press, so the press itself
+   * closed the card and reported an answer nothing had given yet. */
   const live = connState(c) === 'live'
+  const wasLive = useRef(live)
   useEffect(() => {
-    if (sent && live) store.closeChannel()
+    const before = wasLive.current
+    wasLive.current = live
+    if (sent && live && !before) store.closeChannel()
   }, [sent, live])
   const fieldRow = (f: ConnField): JSX.Element => {
     /* The human sentence is the label; the config key rides on its tooltip.
