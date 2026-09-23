@@ -201,7 +201,17 @@ def _refusal_detail(cfg: Any, said: str) -> str:
         return said[:_DETAIL_CAP]
     hint = sign_in_hint_for(cfg)
     lead = "it is installed but has no usable credential"
-    advice = f"sign in with `{hint}` and connect again" if hint else "sign in to it and connect again"
+    if hint is None:
+        advice = "sign in to it and connect again"
+    else:
+        # Which spelling, decided on this machine rather than in the table: a
+        # shim-launched row runs where the agent's CLI was never installed
+        # globally, and naming a command that is not there answers a credential
+        # failure with a second one. Resolved against the same PATH the probe
+        # resolves every other executable against, so the hint and the probe
+        # cannot disagree about what this machine has.
+        local = shutil.which(hint.exe, path=_login_path()) is not None
+        advice = f"sign in with `{hint.local if local else hint.anywhere}` and connect again"
     return f"{lead}; {advice}. It said: {said}"[:_DETAIL_CAP]
 
 
