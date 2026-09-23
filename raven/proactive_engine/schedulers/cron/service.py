@@ -374,6 +374,27 @@ class CronService:
         """
         self._wake_event.set()
 
+    def admit_channel(self, name: str) -> None:
+        """Let this runner claim ``name``'s jobs from now on, and wake the loop.
+
+        The loop sleeps up to ``_MAX_WAKE_INTERVAL_S`` when nothing claimable is
+        due, having just excluded this channel's jobs; mutating the set alone
+        leaves a reminder that is already due asleep for the rest of that cap.
+        A service built without a partition claims everything and has nothing
+        to admit.
+        """
+        if self.allowed_channels is None:
+            return
+        self.allowed_channels.add(name)
+        self._signal_wake()
+
+    def retire_channel(self, name: str) -> None:
+        """Stop claiming ``name``'s jobs; the loop recomputes its wake without them."""
+        if self.allowed_channels is None:
+            return
+        self.allowed_channels.discard(name)
+        self._signal_wake()
+
     async def _run_loop(self) -> None:
         """Persistent wake loop: process due jobs, then wait for the next
         wake (earliest claimable run, capped) or a mutation signal.

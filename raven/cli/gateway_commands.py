@@ -161,6 +161,39 @@ def _wire_channel_intake(channels, dispatch) -> None:
     channels.on_started = on_started
 
 
+def _wire_cron_partition(channels, cron) -> None:
+    """Let the cron partition follow the channels this gateway is actually running.
+
+    ``allowed_channels`` is the launch-time snapshot :func:`_build_gateway_channels`
+    computed, and ``_may_claim`` refuses every job whose payload channel falls outside
+    it. A channel enabled from the page therefore received and replied while a reminder
+    addressed to it was logged once as foreign and never fired until the next restart
+    (2026-09-23, weixin). Composed over the hooks the caller already set, like
+    :func:`_wire_channel_intake`, so the outlet and the partition cannot drift apart.
+
+    Through the service's own ``admit_channel`` / ``retire_channel``, which also wake
+    its loop: a reminder already due when the channel comes up must not wait out the
+    loop's 30 s poll cap. ``tui`` is not touched here: it is not a manager channel, and
+    its claim follows the page mount rather than a channel start (see
+    :func:`_build_gateway_channels`).
+    """
+    started_hook = channels.on_started
+    stopped_hook = channels.on_stopped
+
+    def on_started(ch) -> None:
+        if started_hook is not None:
+            started_hook(ch)
+        cron.admit_channel(ch.name)
+
+    async def on_stopped(name: str) -> None:
+        if stopped_hook is not None:
+            await stopped_hook(name)
+        cron.retire_channel(name)
+
+    channels.on_started = on_started
+    channels.on_stopped = on_stopped
+
+
 def _format_question_body(params: dict) -> str:
     """Render one ``clarify.request`` as chat text.
 
@@ -634,6 +667,10 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # And retired when it stops, so a channel disabled and enabled
                 # again is not left replying through the adapter it dropped.
                 channels.on_stopped = gw_hub.retire
+                # And its cron jobs are claimed while it runs, so a reminder
+                # addressed to a channel enabled from the page is not left to
+                # the next restart.
+                _wire_cron_partition(channels, cron)
 
                 # Proactive target (cron / sentinel / heartbeat / subagent):
                 # the gateway spine. Its hub delivers to the IM channels and,

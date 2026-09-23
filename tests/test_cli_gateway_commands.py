@@ -324,16 +324,18 @@ class _FakeIntake:
 
 
 class _FakeChannel:
-    def __init__(self) -> None:
+    def __init__(self, name: str = "") -> None:
+        self.name = name
         self.intake = _FakeIntake()
 
 
 class _FakeChannelManager:
-    """The two members `_wire_channel_intake` touches: the table and the hook."""
+    """The members the wiring helpers touch: the table and the two hooks."""
 
-    def __init__(self, *channels, on_started=None) -> None:
+    def __init__(self, *channels, on_started=None, on_stopped=None) -> None:
         self.channels = {f"ch{i}": ch for i, ch in enumerate(channels)}
         self.on_started = on_started
+        self.on_stopped = on_stopped
 
 
 def test_every_channel_present_at_launch_gets_the_inbound_dispatch() -> None:
@@ -406,6 +408,94 @@ def test_the_gateway_command_wires_the_intake_through_the_helper() -> None:
     assert "_wire_channel_intake(channels, _inbound_dispatch)" in src
     # The old launch-only loop is gone: one path wires both the present and the late.
     assert "_ch.intake.set_submit(_inbound_dispatch)" not in src
+
+
+class _FakeCron:
+    """The two members the partition wiring touches, plus a count of the wakes:
+    the service's real methods wake its loop, and that is the half a bare set
+    could not have shown."""
+
+    def __init__(self, allowed: set[str]) -> None:
+        self.allowed_channels = allowed
+        self.wakes = 0
+
+    def admit_channel(self, name: str) -> None:
+        self.allowed_channels.add(name)
+        self.wakes += 1
+
+    def retire_channel(self, name: str) -> None:
+        self.allowed_channels.discard(name)
+        self.wakes += 1
+
+
+def test_a_channel_started_while_the_gateway_runs_joins_the_cron_partition() -> None:
+    """The cron partition is a launch-time snapshot, so a channel the page enabled
+    stayed outside it for the life of the process: it received and replied, while a
+    reminder addressed to it was logged once as foreign and never fired until a
+    restart (2026-09-23, weixin)."""
+    from raven.cli.gateway_commands import _wire_cron_partition
+
+    outlets: list[object] = []
+    manager = _FakeChannelManager(on_started=outlets.append)
+    cron = _FakeCron({"telegram"})
+
+    _wire_cron_partition(manager, cron)
+    late = _FakeChannel("weixin")
+    manager.on_started(late)
+
+    assert cron.allowed_channels == {"telegram", "weixin"}
+    assert cron.wakes == 1, "the loop is asleep on its poll cap and has to be told"
+    assert outlets == [late], "and must keep the outlet the hook already carried"
+
+
+async def test_a_channel_stopped_leaves_the_cron_partition() -> None:
+    """The mirror, and the half that also covers a channel enabled at launch: once
+    it is off, the gateway has no outlet for it, so claiming its jobs would burn a
+    model turn on a reply the hub drops."""
+    from raven.cli.gateway_commands import _wire_cron_partition
+
+    retired: list[str] = []
+
+    async def retire(name: str) -> None:
+        retired.append(name)
+
+    manager = _FakeChannelManager(on_stopped=retire)
+    cron = _FakeCron({"telegram", "weixin"})
+
+    _wire_cron_partition(manager, cron)
+    await manager.on_stopped("telegram")
+
+    assert cron.allowed_channels == {"weixin"}
+    assert retired == ["telegram"], "and must keep the outlet retirement the hook carried"
+
+
+async def test_the_cron_partition_follows_a_manager_with_no_outlet_hooks() -> None:
+    """A gateway built without the hub is not a reason to drop the partition half:
+    both hooks are composed over whatever was there, including nothing."""
+    from raven.cli.gateway_commands import _wire_cron_partition
+
+    manager = _FakeChannelManager(on_started=None, on_stopped=None)
+    cron = _FakeCron(set())
+
+    _wire_cron_partition(manager, cron)
+    manager.on_started(_FakeChannel("weixin"))
+    assert cron.allowed_channels == {"weixin"}
+
+    await manager.on_stopped("weixin")
+    assert cron.allowed_channels == set()
+
+
+def test_the_gateway_command_wires_the_cron_partition_through_the_helper() -> None:
+    """Same pin as the intake above, plus the order: the outlet hooks are assigned
+    rather than composed, so a partition wired before them would be thrown away."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    assert "_wire_cron_partition(channels, cron)" in src
+    assert src.index("channels.on_started = lambda ch:") < src.index("_wire_cron_partition(channels, cron)")
+    assert src.index("channels.on_stopped = gw_hub.retire") < src.index("_wire_cron_partition(channels, cron)")
 
 
 def _gateway_partition_with_the_page_enabled() -> set[str]:
@@ -521,6 +611,51 @@ async def test_a_gateway_hosting_the_page_does_claim_tui_jobs(tmp_path: Path) ->
     missed = tmp_path / "missed.json"
     _write_jobs(missed, [_past_due_oneshot_tui_job(now_ms)])
     assert await _survivors_after_restart(missed, partition) == []
+
+
+async def test_a_hot_started_channel_can_then_claim_its_own_cron_jobs(tmp_path: Path) -> None:
+    """The far end of the same chain: the set the start hook mutates is the one the
+    live service reads, so a reminder addressed to a channel enabled from the page
+    fires on the next due tick rather than waiting for the next restart."""
+    import time
+
+    from raven.cli.gateway_commands import _wire_cron_partition
+    from raven.proactive_engine.schedulers.cron.service import CronService
+
+    now_ms = int(time.time() * 1000)
+    store = tmp_path / "jobs.json"
+    _write_jobs(
+        store,
+        [
+            {
+                "id": "standup",
+                "name": "standup nudge",
+                "enabled": True,
+                "schedule": {"kind": "every", "everyMs": 600_000},
+                "payload": {"message": "standup", "channel": "weixin", "to": "default"},
+                "state": {"nextRunAtMs": 1},
+                "createdAtMs": now_ms - 600_000,
+                "updatedAtMs": now_ms - 600_000,
+            }
+        ],
+    )
+
+    fired: list[str] = []
+
+    async def on_job(job) -> None:
+        fired.append(job.id)
+
+    svc = CronService(store, allowed_channels=_gateway_partition_with_the_page_enabled())
+    svc.on_job = on_job
+    await svc._process_due()
+    assert fired == [], "weixin was off at launch, so the job is outside the partition"
+
+    manager = _FakeChannelManager()
+    _wire_cron_partition(manager, svc)
+    manager.on_started(_FakeChannel("weixin"))
+
+    await svc._process_due()
+    assert fired == ["standup"]
 
 
 def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
