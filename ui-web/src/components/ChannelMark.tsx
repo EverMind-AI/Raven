@@ -4,7 +4,6 @@
 import { useState } from 'react'
 
 import { assetStamp } from '../lib/assetStamp'
-import { Tile } from './SetupRow'
 
 import type { JSX } from 'react'
 
@@ -35,6 +34,19 @@ const MARKS: Record<string, { file: string; inset?: true }> = {
    logo would name one inbox out of every mail host the form accepts. */
 const GENERIC = new Set(['email'])
 
+/* What an entrance whose own mark cannot be drawn wears instead. Plain on
+   purpose: an id this table has no file for is a gap to fix, not a thing to
+   name, and a letter in a coloured square named it -- with the reader's own
+   language, so a Chinese entrance wore its first character as if it were an
+   initial. */
+function PlainIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M20.5 12c0 4-3.8 7.2-8.5 7.2-1 0-2-.15-2.9-.42L4.5 20.5l1.3-3.6C4.3 15.6 3.5 13.9 3.5 12c0-4 3.8-7.2 8.5-7.2s8.5 3.2 8.5 7.2Z" />
+    </svg>
+  )
+}
+
 function MailIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -44,13 +56,12 @@ function MailIcon(): JSX.Element {
   )
 }
 
-/* One frame per entrance, the size of the letter tile it replaces -- and that
-   tile is still what an entrance with no mark draws: an id nobody drew, or a
-   file the request could not find. The second is only known once it fails, so
-   the failure is remembered against the URL rather than the slot, and a row
-   redrawn as another channel starts clean. `hasOwn`, not a bare index: every
-   object literal answers `constructor` from its prototype. */
-export function ChannelMark({ id, name }: { id: string; name: string }): JSX.Element {
+/* One frame per entrance. An entrance with no mark draws the plain one: an id
+   nobody drew, or a file the request could not find. The second is only known
+   once it fails, so the failure is remembered against the URL rather than the
+   slot, and a row redrawn as another channel starts clean. `hasOwn`, not a bare
+   index: every object literal answers `constructor` from its prototype. */
+export function ChannelMark({ id }: { id: string }): JSX.Element {
   const [failed, setFailed] = useState<string | null>(null)
   if (GENERIC.has(id)) {
     return (
@@ -61,7 +72,13 @@ export function ChannelMark({ id, name }: { id: string; name: string }): JSX.Ele
   }
   const mark = Object.hasOwn(MARKS, id) ? MARKS[id] : undefined
   const src = mark ? `assets/channels/${mark.file}${assetStamp()}` : null
-  if (!mark || !src || failed === src) return <Tile name={name} />
+  if (!mark || !src || failed === src) {
+    return (
+      <span className="channel-mark channel-mark-inset" aria-hidden="true">
+        <PlainIcon />
+      </span>
+    )
+  }
   return (
     <span className={mark.inset ? 'channel-mark channel-mark-inset' : 'channel-mark'} aria-hidden="true">
       <img src={src} alt="" draggable="false" onError={() => setFailed(src)} />

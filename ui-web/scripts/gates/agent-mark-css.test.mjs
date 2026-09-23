@@ -98,42 +98,37 @@ describe('the agent mark filters', () => {
     expect(/flex:\s*none/.test(slot)).toBe(true)
   })
 
-  /* A brand mark and a letter tile are alternatives in one slot, and a slot
-     that sizes the tile has to size the mark to the same box. The roster size
-     above is a default, not a geometry every list agrees on: the sub-agents
-     card sizes its tile to 46px and the row that opens it to 28px, so a mark
-     left at its default came out smaller in the header than in the row. The
-     mismatch is silent -- nothing errors, the mark simply renders small -- and
-     no DOM test can see it, because happy-dom applies no stylesheet.
+  /* A slot that overrides the roster size has to declare a whole box. That
+     size is a default, not a geometry every list agrees on: the sub-agents card
+     draws its mark at 46px and the row that opens it at 28px, so a mark left at
+     its default came out smaller in the header than in the row. The mismatch is
+     silent -- nothing errors, the mark simply renders small -- and no DOM test
+     can see it, because happy-dom applies no stylesheet.
 
-     The expected box is read off the tile's own rule rather than restated, so
-     a slot whose tile is resized takes its mark with it. The two slots are
-     named because that is a fact about the markup rather than the stylesheet:
-     these are the containers where an agent mark and a letter tile share one
-     cell. An agent mark drawn in a container that sizes no tile (the desk's
-     roster head, an instance row) keeps the default and belongs to neither. */
-  const SHARED_SLOTS = ['pmdhead', 'surow']
+     These two slots used to size a letter tile as well, and the box was read
+     off the tile's rule rather than restated here. The tile is gone, so the
+     mark's own rule is the box, and what is left to hold is that each slot
+     declares all three of width, height and radius: a rule that drops one falls
+     back to the default for that property alone, which is the same silent
+     half-size. The slots are named because that is a fact about the markup
+     rather than the stylesheet. An agent mark in a container that overrides
+     nothing (the desk's roster head, an instance row) keeps the default. */
+  const SIZED_SLOTS = ['pmdhead', 'surow']
 
-  it('sizes an agent mark to the tile it stands in for, in every shared slot', () => {
+  it('gives an agent mark a whole box in every slot that resizes it', () => {
     const boxOf = (body) => ({
       width: /(?:^|[;{\s])width:\s*([\d.]+)px/.exec(body)?.[1],
       height: /(?:^|[;{\s])height:\s*([\d.]+)px/.exec(body)?.[1],
       radius: /border-radius:\s*([\d.]+)px/.exec(body)?.[1],
     })
-    for (const slot of SHARED_SLOTS) {
-      const tile = rules(new RegExp(`^\\.${slot}\\s*>?\\s*\\.pmtile$`))
+    for (const slot of SIZED_SLOTS) {
       const mark = rules(new RegExp(`^\\.${slot}\\s*>?\\s*\\.agent-mark$`))
-      expect(tile.length, `.${slot} sizes a letter tile`).toBe(1)
-      expect(mark.length, `.${slot} sizes an agent mark too`).toBe(1)
-      const want = boxOf(tile[0][1])
+      expect(mark.length, `.${slot} sizes an agent mark`).toBe(1)
       const got = boxOf(mark[0][1])
-      /* Read, not assumed: a tile rule that stopped declaring a box would make
-         every comparison below pass on a pair of undefineds. */
-      expect(want.width, `.${slot} tile declares a width`).toBeTruthy()
-      expect(want.radius, `.${slot} tile declares a radius`).toBeTruthy()
-      expect(got.width, `.${slot} mark width`).toBe(want.width)
-      expect(got.height, `.${slot} mark height`).toBe(want.height)
-      expect(got.radius, `.${slot} mark radius`).toBe(want.radius)
+      expect(got.width, `.${slot} mark declares a width`).toBeTruthy()
+      expect(got.height, `.${slot} mark declares a height`).toBeTruthy()
+      expect(got.radius, `.${slot} mark declares a radius`).toBeTruthy()
+      expect(got.height, `.${slot} mark is square`).toBe(got.width)
     }
   })
 })

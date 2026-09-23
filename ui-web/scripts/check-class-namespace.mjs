@@ -323,7 +323,9 @@ const LEGACY_EXPR = {
   extAgents: 0,
   importSync: 0,
   installed: 0,
-  memory: 1,
+  /* Down from 1 with the initial tile gone: `.pmtile`, written only from
+     inside a `className={...}` expression, left with it. */
+  memory: 0,
   model: 0,
   onboard: 0,
   rail: 2,
@@ -371,7 +373,9 @@ const LEGACY_CHROME_EXPR = {
      while the playbooks and agents pages both wrote the class; the agents page
      writes its own names now, so the name is playbooks' alone and the
      component's use of it counts here instead. */
-  components: 11,
+  /* Down one with the letter tile gone: `.pmtile`, written from inside an
+     expression in SetupRow.tsx, left with it. */
+  components: 10,
 }
 
 // A class the markup writes that styles/page.css does not define -- page.css

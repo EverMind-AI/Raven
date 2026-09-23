@@ -4,9 +4,9 @@ The channels section of the settings dialog draws each entrance's app icon,
 chosen by channel id. The adapters live in Python (one package each under
 ``raven/channels/adapters/``) and the mark table lives in
 ``ui-web/src/components/ChannelMark.tsx``, so nothing in either language notices
-when they disagree: a new adapter's row wears the letter tile, and a renamed
+when they disagree: a new adapter's row wears the plain mark, and a renamed
 file leaves a row asking for a 404 -- which the component also answers with the
-letter tile, so neither is visible in review.
+plain mark, so neither is visible in review.
 
 The files themselves come from ``scripts/refresh_channel_marks.py``, which
 records where each one is published. The rasters are held to the size it
