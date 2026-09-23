@@ -11,10 +11,8 @@ export interface ConnField {
 
 export interface ConnChannel {
   id: string
-  /* The catalogue's two spellings: `key` names a message-catalogue entry for
-     the generic channels, `name` is a brand name used verbatim. */
-  key?: string
-  name?: string
+  /* The message-catalogue entry that names the row, in both languages. */
+  key: string
   on: boolean
   who?: string
   fields?: ConnField[]

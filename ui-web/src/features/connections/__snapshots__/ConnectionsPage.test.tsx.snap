@@ -13,7 +13,8 @@ exports[`connections island > keeps its rendered shape, list 1`] = `
       div.two-pane-grp
       div.two-pane-row
         button.two-pane-hit
-          span.pmtile.th0
+          span.channel-mark
+            img
           span.two-pane-txt
             span.nm
             span.ds.live
@@ -21,14 +22,18 @@ exports[`connections island > keeps its rendered shape, list 1`] = `
       div.two-pane-grp
       div.two-pane-row.two-pane-off
         button.two-pane-hit
-          span.pmtile.th1
+          span.channel-mark
+            img
           span.two-pane-txt
             span.nm
             span.ds
         button.two-pane-swi
       div.two-pane-row.two-pane-off
         button.two-pane-hit
-          span.pmtile.th3
+          span.channel-mark.channel-mark-inset
+            svg
+              rect
+              path
           span.two-pane-txt
             span.nm
             span.ds
@@ -39,7 +44,8 @@ exports[`connections island > keeps its rendered shape, list 1`] = `
 
 exports[`connections island > keeps its rendered shape, the picked channel 1`] = `
 "div.two-pane-head
-  span.pmtile.th0
+  span.channel-mark
+    img
   div.ttl
     div.nm
     div.two-pane-meta

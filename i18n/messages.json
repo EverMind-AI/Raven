@@ -1207,6 +1207,10 @@
       "en": "DingTalk",
       "zh": "钉钉"
     },
+    "gui.chan.discord": {
+      "en": "Discord",
+      "zh": "Discord"
+    },
     "gui.chan.email": {
       "en": "Email",
       "zh": "邮件"
@@ -1215,9 +1219,25 @@
       "en": "Feishu",
       "zh": "飞书"
     },
+    "gui.chan.matrix": {
+      "en": "Matrix",
+      "zh": "Matrix"
+    },
     "gui.chan.mochat": {
-      "en": "魔笔",
+      "en": "MoChat",
       "zh": "魔笔"
+    },
+    "gui.chan.qq": {
+      "en": "QQ",
+      "zh": "QQ"
+    },
+    "gui.chan.slack": {
+      "en": "Slack",
+      "zh": "Slack"
+    },
+    "gui.chan.telegram": {
+      "en": "Telegram",
+      "zh": "Telegram"
     },
     "gui.chan.wecom": {
       "en": "WeCom",
@@ -1226,6 +1246,10 @@
     "gui.chan.weixin": {
       "en": "WeChat",
       "zh": "微信"
+    },
+    "gui.chan.whatsapp": {
+      "en": "WhatsApp",
+      "zh": "WhatsApp"
     },
     "gui.clarify.aria": {
       "en": "Raven needs more from you",

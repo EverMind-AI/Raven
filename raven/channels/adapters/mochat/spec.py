@@ -14,7 +14,7 @@ def _make(config):
 
 
 SPEC = ChannelSpec(
-    display_name="Mochat",
+    display_name="MoChat",
     factory=_make,
     capabilities=Capabilities(),
     # Cargo declaration (config-with-cargo): the fields only this adapter

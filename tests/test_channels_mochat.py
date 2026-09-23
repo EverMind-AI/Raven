@@ -879,7 +879,7 @@ def test_mochat_spec_import_is_cheap():
         "import sys, raven.channels.adapters.mochat.spec as s;"
         "assert 'raven.channels.adapters.mochat.channel' not in sys.modules, "
         "'spec import pulled in the channel implementation';"
-        "assert callable(s.SPEC.factory) and s.SPEC.display_name == 'Mochat'"
+        "assert callable(s.SPEC.factory) and s.SPEC.display_name == 'MoChat'"
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
