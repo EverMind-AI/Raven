@@ -179,6 +179,8 @@ describe('cron island', () => {
     expect(rowNamed('morning digest').querySelector('.ds')!.className).toContain('bad')
     expect(rowNamed('weekly report').querySelector('.ds')!.className).not.toContain('bad')
     expect(rowNamed('paused one').className).toContain('two-pane-off')
+    /* The group heading already says it is off; the row does not repeat it. */
+    expect(rowNamed('paused one').textContent).not.toContain('gui.cron.paused')
   })
 
   it('narrows the list by what is typed in the search', async () => {
