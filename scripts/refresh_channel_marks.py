@@ -22,8 +22,9 @@ import sys
 import urllib.request
 from pathlib import Path
 
-#: Twice the 38px tile the page draws, with headroom for a 3x display, and the
-#: same edge as the one other raster mark (scripts/refresh_dmxapi_mark.py).
+#: Two and a half times the 38px tile the channels section draws, so sharp on a
+#: 2x display, and the same edge as the one other raster mark
+#: (scripts/refresh_dmxapi_mark.py).
 SIDE = 96
 
 ROOT = Path(__file__).resolve().parents[1]
