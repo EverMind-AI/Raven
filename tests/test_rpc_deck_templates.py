@@ -198,6 +198,87 @@ async def test_cover_for_is_none_where_the_host_cannot_draw(templates: Path, mon
     assert await deck_templates.cover_for(deck_templates.bundled()[0]) is None
 
 
+# --- the covers the engine's wheel carries ---------------------------------------
+
+
+async def _never_drawn(*_args, **_kwargs) -> None:
+    raise AssertionError("a cover the wheel carries must not be drawn again")
+
+
+def test_shipped_cover_name_carries_the_language_only_where_a_phrasebook_does(templates: Path) -> None:
+    template = deck_templates.bundled()[0]
+    assert deck_templates.shipped_cover_name(template) == "amber_wave"
+    assert deck_templates.shipped_cover_name(template, "en") == "amber_wave", (
+        "no phrasebook means the reader reads the shipped file, which is the cover already named"
+    )
+
+    (templates / "i18n").mkdir()
+    (templates / "i18n" / "en.json").write_text(json.dumps({"seasons": "quarters"}), encoding="utf-8")
+    assert deck_templates.shipped_cover_name(template, "en") == "amber_wave-en"
+
+
+async def test_a_shipped_cover_answers_without_drawing_anything(templates: Path, monkeypatch) -> None:
+    """The point of the whole arrangement: a host that was handed the picture
+    never starts LibreOffice to make one, and never writes a cache entry for it."""
+    template = deck_templates.bundled()[0]
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "draw_cover", _never_drawn)
+
+    assert deck_templates.shipped_cover(template) is None
+    assert deck_templates.cached_cover(template) is None
+
+    (templates / "covers").mkdir()
+    shipped = templates / "covers" / "amber_wave.jpg"
+    shipped.write_bytes(b"\xff\xd8shipped")
+
+    assert deck_templates.shipped_cover(template) == shipped
+    assert deck_templates.cached_cover(template) == shipped
+    assert await deck_templates.cover_for(template) == shipped
+    assert not deck_templates.cover_cache_dir().exists(), "nothing was drawn, so nothing was cached"
+
+
+async def test_a_language_the_build_did_not_cover_still_draws_its_own(templates: Path, monkeypatch) -> None:
+    """A template dropped in by hand, or a language added after the wheel: the
+    fallback is the whole reason `shipped_cover` answers None rather than raising."""
+    from raven.rpc import pdf_preview
+
+    template = deck_templates.bundled()[0]
+    (templates / "i18n").mkdir()
+    (templates / "i18n" / "en.json").write_text(json.dumps({"seasons": "quarters"}), encoding="utf-8")
+    (templates / "covers").mkdir()
+    (templates / "covers" / "amber_wave.jpg").write_bytes(b"\xff\xd8shipped")
+
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "translated_dir", lambda: templates.parent / "copies")
+    monkeypatch.setattr(deck_templates, "_swap_text", lambda source, target, table: target.write_bytes(b"PKen"))
+
+    async def pdf_for(path: Path, **_) -> Path:
+        return path.with_suffix(".pdf")
+
+    monkeypatch.setattr(pdf_preview, "pdf_for", pdf_for)
+    monkeypatch.setattr(
+        deck_templates,
+        "_rasterise_first_page",
+        lambda pdf, target: (target.parent.mkdir(parents=True, exist_ok=True), target.write_bytes(b"\xff\xd8drawn")),
+    )
+
+    assert deck_templates.shipped_cover(template, "en") is None
+    cover = await deck_templates.cover_for(template, "en")
+    assert cover is not None and cover.read_bytes() == b"\xff\xd8drawn"
+
+
+async def test_warming_draws_nothing_when_the_wheel_carried_the_covers(templates: Path, monkeypatch) -> None:
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "cover_for", _never_drawn)
+    (templates / "covers").mkdir()
+    (templates / "covers" / "amber_wave.jpg").write_bytes(b"\xff\xd8shipped")
+
+    task = deck_templates.warm_covers_in_background(delay_s=0)
+    assert task is not None
+    await task
+    assert deck_templates._drawing == {}
+
+
 async def test_pages_for_renders_every_page_or_none(templates: Path, monkeypatch) -> None:
     from raven.rpc import pdf_preview
 
