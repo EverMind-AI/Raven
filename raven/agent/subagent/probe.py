@@ -174,8 +174,51 @@ def _missing_exe_detail(cfg: Any, exe: str) -> str:
     return _missing_detail(exe, install_hint_for(cfg))
 
 
+_CREDENTIAL_FAILS = (
+    "not logged in",
+    "not signed in",
+    "not authenticated",
+    "unauthenticated",
+    "unauthorized",
+    "authentication required",
+    "authentication failed",
+    "failed to authenticate",
+    "login required",
+    "credentials unavailable",
+    "credential unavailable",
+    "no credential",
+    "no authentication",
+    "missing api key",
+    "invalid api key",
+    "no api key",
+    "api key required",
+    "session expired",
+    "token expired",
+    "http 401",
+)
+"""Phrases that each state, on their own, that a credential is absent or refused.
+
+Deliberately not `looks_like_auth`, which the refusal path above uses. That one
+asks whether a text is *about* authentication, which is the right question for
+a refusal -- a message that arrived because the call failed. A stderr tail is
+not that: it is whatever the agent logged while starting up, and asking only
+what a line is about promotes ordinary chatter into a diagnosis. Measured
+against the live matcher on 2026-09-23, all four of these were classified as
+credential failures: "INFO oauth callback server started", "oauth callback
+server failed to bind port 8080", "Plugin authoring guide loaded", "retrying
+after 401 backoff sweep" -- `oauth` and `authoring` both contain `auth`.
+
+Pairing an `auth` token with a failure word would not fix it either: the second
+of those four has both. So each entry here is itself the claim being made, and
+a line that does not contain one is left alone. The cost is asymmetric and the
+list is sized for it -- a phrase missing from it returns the reader to the bare
+protocol error, which is where they were before this path existed, while a
+wrong hit sends them to fix a credential that was never the problem.
+"""
+
+
 def _auth_line(stderr: str) -> str | None:
-    """The first line of a child's stderr that reads as a credential failure.
+    """The first line of a child's stderr that states a credential failure.
 
     For the agents that answer the protocol with a bare code and write the
     reason nowhere but here. Measured 2026-09-23: `hermes acp` returned
@@ -191,11 +234,10 @@ def _auth_line(stderr: str) -> str | None:
     it. Taking the newest would quote a consequence and, in that agent's case,
     a command that does not address the cause.
     """
-    from raven.acp_client.capabilities import looks_like_auth
-
     for line in stderr.splitlines():
         text = line.strip()
-        if text and looks_like_auth(text):
+        lowered = text.lower()
+        if text and any(phrase in lowered for phrase in _CREDENTIAL_FAILS):
             return text
     return None
 
@@ -237,10 +279,11 @@ def _refusal_detail(cfg: Any, said: str, *, stderr: str = "") -> str:
     Two sources, in that order. The words the protocol carried are read first.
     Where they carry nothing -- measured, an agent whose whole answer was
     ``[-32603] Internal error`` while its own stderr named the missing
-    credential and the command for it -- the child's stderr is read instead,
-    and that line becomes the evidence. The rest are unchanged: a failure
-    neither source can classify keeps the words it came with rather than being
-    given a guess about what they mean.
+    credential and the command for it -- the child's stderr is read as well,
+    against a narrower rule than the one the answer is read against, and on a
+    hit the log line is added to the failure rather than put in its place. The
+    rest are unchanged: a failure neither source can classify keeps the words
+    it came with rather than being given a guess about what they mean.
 
     The same question the roster asks (`acp_client.capabilities.looks_like_auth`)
     rather than a second spelling of it -- the roster already marks such a row
@@ -249,15 +292,13 @@ def _refusal_detail(cfg: Any, said: str, *, stderr: str = "") -> str:
     from raven.acp_client.capabilities import looks_like_auth
 
     evidence = said
+    logged = ""
     if not looks_like_auth(evidence):
         # The words the protocol carried say nothing. Before giving up on
-        # classifying, ask the child what it said on its own channel -- and
-        # keep that line as the evidence, since the one that came back is the
-        # one that carried nothing.
-        told = _auth_line(stderr)
-        if told is None:
+        # classifying, ask the child what it said on its own channel.
+        logged = _auth_line(stderr) or ""
+        if not logged:
             return said[:_DETAIL_CAP]
-        evidence = told
     if getattr(cfg, "kind", None) == "openai":
         # Nothing was installed and there is nothing to sign in to: this row is
         # an endpoint and a key. Telling its reader to sign in would send them
@@ -281,7 +322,13 @@ def _refusal_detail(cfg: Any, said: str, *, stderr: str = "") -> str:
             local = shutil.which(hint.exe, path=_login_path()) is not None
             command = hint.local if local or hint.anywhere is None else hint.anywhere
             advice = f"sign in with `{command}` and connect again"
-    return f"{lead}; {advice}. It said: {evidence}"[:_DETAIL_CAP]
+    # What came back is kept whether or not it was the half that classified.
+    # A diagnosis drawn from a log line is the weaker of the two -- the line was
+    # written while starting up, not in answer to this call -- so dropping the
+    # failure it was read against would leave a reader who was diagnosed wrongly
+    # with no way to see that, and nothing to report but this sentence.
+    tail = f". Its log said: {logged}" if logged else ""
+    return f"{lead}; {advice}. It said: {evidence}{tail}"[:_DETAIL_CAP]
 
 
 def _missing_detail(exe: str, hint: str | None) -> str:

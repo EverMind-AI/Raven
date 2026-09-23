@@ -4381,6 +4381,51 @@ def test_an_agent_that_answers_nothing_is_read_from_its_own_stderr() -> None:
     assert "`hermes model`" in told
     assert "not logged into Nous Portal" in told, "the agent's own sentence is the evidence"
     assert "hermes auth" not in told, "the consequence line names a command for something else"
+    assert "[-32603] Internal error" in told, (
+        "a diagnosis read off a startup log is the weaker of the two, so the failure "
+        "it was read against is kept -- a reader diagnosed wrongly can still see what broke"
+    )
+
+
+def test_ordinary_startup_chatter_is_not_a_diagnosis() -> None:
+    """A log line that mentions authentication is not a line that says it failed.
+
+    The rule the *answer* is read against asks whether a text is about
+    authentication, which is right for a message that arrived because the call
+    failed. A stderr tail is not that -- it is whatever the agent logged on its
+    way up -- and asking the same question of it promotes chatter into a cause,
+    while discarding the real failure behind a credential story.
+
+    Every line below was classified as a credential failure by that rule when
+    measured on 2026-09-23: `oauth` and `authoring` both contain `auth`. The
+    last one is why pairing an auth token with a failure word is not the fix
+    either -- it has both, and is still about a port.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.capabilities import looks_like_auth
+    from raven.agent.subagent.probe import _refusal_detail
+
+    benign = (
+        "INFO oauth callback server started",
+        "Plugin authoring guide loaded",
+        "retrying after 401 backoff sweep",
+        "oauth callback server failed to bind port 8080",
+    )
+    cfg = SimpleNamespace(preset="hermes")
+    said = "request failed: [-32603] Internal error"
+
+    for line in benign:
+        assert looks_like_auth(line), "the pinned hazard is that the refusal rule accepts these"
+        out = _refusal_detail(cfg, said, stderr=line)
+        assert out == said, f"{line!r} was promoted to a credential failure"
+        assert "credential" not in out
+        assert "hermes model" not in out
+
+    # The same tail with the real line in it still classifies: the narrowing
+    # must not have cost the case this path exists for.
+    real = "\n".join((*benign, "Nous Portal runtime credentials unavailable: not logged in"))
+    assert "`hermes model`" in _refusal_detail(cfg, said, stderr=real)
 
 
 async def test_the_child_is_asked_before_its_connection_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
