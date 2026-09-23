@@ -404,6 +404,80 @@ describe('connections island', () => {
     expect(rowSwitch('Slack').getAttribute('aria-checked')).toBe('false')
   })
 
+  /* The press is not the end of the errand: the source reads the status back,
+     and what it reads is what the row has to show. The row used to keep
+     whatever the section entry had loaded, so the same backend state drew
+     "not started" or "receiving" depending on when the reader arrived. */
+  it('redraws the row from what the write read back, not from the press', async () => {
+    install([chan({ on: false, running: false })], {
+      toggle: async (c, on) => {
+        c.on = on
+        /* After the await, the way a status read is: a paint that only happens
+           on the press cannot have this. */
+        await Promise.resolve()
+        c.running = on
+      },
+    })
+    await mount()
+    expect(groupOf('Slack')).toBe('gui.conn.g_off')
+    await act(async () => {
+      rowSwitch('Slack').click()
+    })
+    expect(groupOf('Slack')).toBe('gui.conn.g_on')
+  })
+
+  /* Where the code appears is the pane, and the list says nothing about that:
+     the owner had to be told to click the row. */
+  it('opens the card when a scan entrance is switched on from the list', async () => {
+    install([
+      chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [] }),
+      chan({ on: true, running: true }),
+    ])
+    await mount()
+    await act(async () => {
+      rowSwitch('gui.chan.weixin').click()
+    })
+    expect(paneHead().querySelector('.nm')!.textContent).toBe('gui.chan.weixin')
+  })
+
+  it('opens nothing for an entrance whose way in is the form, or for a switch off', async () => {
+    install([
+      chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [], on: true, running: true }),
+      chan({ on: false }),
+    ])
+    await mount()
+    await act(async () => {
+      rowSwitch('Slack').click()
+    })
+    expect(screen.getByText('gui.conn.pick')).toBeTruthy()
+    await act(async () => {
+      rowSwitch('gui.chan.weixin').click()
+    })
+    expect(screen.getByText('gui.conn.pick')).toBeTruthy()
+  })
+
+  /* The page-level fact the write can change too: `host` was written only on
+     section entry, so a gateway that came up since then left the pane telling
+     the reader nothing was running it. */
+  it('re-reads whether anything hosts an adapter after a write', async () => {
+    let up = false
+    install([chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [], on: true, running: false })], {
+      hostRunning: () => up,
+      toggle: async () => {
+        up = true
+      },
+    })
+    await mount()
+    await act(async () => { openRow('gui.chan.weixin') })
+    expect(main().querySelectorAll('.suwiz .step')[1]!.querySelector('.sd')!.textContent)
+      .toBe('gui.conn.w2_blocked')
+    await act(async () => {
+      rowSwitch('gui.chan.weixin').click()
+    })
+    expect(main().querySelectorAll('.suwiz .step')[1]!.querySelector('.sd')!.textContent)
+      .toBe('gui.conn.w2_down')
+  })
+
   it('leaves the switch unavailable while a credential is still missing', async () => {
     install([
       chan({ fields: [{ key: 'bot_token', required: true }], missing: ['bot_token'] }),

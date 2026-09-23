@@ -82,7 +82,10 @@ settingsDialog.onLeave('clearConnChannel', closeChannel)
 export function toggle(c: ConnChannel): void {
   const p = source().toggle(c, !c.on)
   redraw()
-  void p.catch(() => redraw())
+  /* Both ways: the write's own answer is what the row is drawn from once the
+     source has read the status back, so the paint the press earns is not the
+     last one. */
+  void p.then(() => redraw(), () => redraw())
 }
 
 /* Credentials and the switch travel together; the source speaks its own
@@ -97,7 +100,9 @@ export async function apply(c: ConnChannel, patch: Record<string, string>, enabl
 }
 
 /* A language flip changes nothing in this state, but every visible string
-   comes from t(), so a re-render is the whole redraw. */
+   comes from t(), so a re-render is the whole redraw. `host` rides along
+   because it is otherwise written only on section entry: a gateway that came up
+   since then left the pane telling the reader nothing was running it. */
 function redraw(): void {
-  set({})
+  set({ host: source().hostRunning?.() })
 }

@@ -1499,6 +1499,30 @@
       "en": "{name} {state} - reopen the Raven app to apply",
       "zh": "{name} 已{state} · 重新打开 Raven App 生效"
     },
+    "gui.conn.toggled_now": {
+      "en": "{name} {state}",
+      "zh": "{name} 已{state}"
+    },
+    "gui.conn.toggle_failed": {
+      "en": "{name} did not start - {detail}",
+      "zh": "{name} 没有启动 —— {detail}"
+    },
+    "gui.conn.out_missing_dep": {
+      "en": "its package is not installed.",
+      "zh": "缺少这个渠道的依赖包。"
+    },
+    "gui.conn.out_bad_config": {
+      "en": "the gateway refused its settings; its log names the field.",
+      "zh": "后台拒绝了它的配置，后台日志里写着是哪一项。"
+    },
+    "gui.conn.out_deny_all": {
+      "en": "its allow-list is empty, so it would let nobody in.",
+      "zh": "它的允许名单是空的，谁都进不来。"
+    },
+    "gui.conn.out_refused": {
+      "en": "the gateway would not start it ({outcome}).",
+      "zh": "后台没有启动它（{outcome}）。"
+    },
     "gui.conn_where": {
       "en": "Where you reach it",
       "zh": "你在哪儿找到它"

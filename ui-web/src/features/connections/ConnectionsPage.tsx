@@ -186,7 +186,15 @@ function ConnSide({ rows, loaded, q, onQ, pickedId }: {
             on={c.on}
             disabled={!isConfigured(c)}
             label={cn}
-            onChange={() => store.toggle(c)}
+            onChange={() => {
+              /* A scan entrance switched on from the list has its code in the
+                 pane, and the list says nothing about that: opening the card
+                 with the switch is the cue, and the reader is where the code
+                 appears instead of watching a row that will never turn green
+                 on its own. */
+              if (!c.on && scanLogin(c)) store.openChannel(c)
+              store.toggle(c)
+            }}
           />
         }
       />
