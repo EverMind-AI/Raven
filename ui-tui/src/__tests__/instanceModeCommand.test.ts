@@ -219,7 +219,11 @@ describe('/mode', () => {
           availableModes: [
             { description: 'Faster and cheaper, for small, well-defined tasks.', id: 'medium', name: 'Medium' },
             { description: 'The middle rung, and where every session starts.', id: 'high', name: 'High' },
-            { description: 'Deepest reasoning and full sub-agent effort, for complex or open-ended work.', id: 'max', name: 'Max' }
+            {
+              description: 'Deepest reasoning and full sub-agent effort, for complex or open-ended work.',
+              id: 'max',
+              name: 'Max'
+            }
           ],
           mode: 'high'
         })
