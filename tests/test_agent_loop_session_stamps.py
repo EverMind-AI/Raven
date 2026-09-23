@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -19,9 +20,11 @@ import pytest
 
 from raven.agent import workdir
 from raven.agent.loop import AgentLoop
+from raven.agent.loop._shared import _FILE_WRITTEN_TEXT_MAX_BYTES
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.contracts.tool import FileChange, FileRemoval, Tool, ToolResult
 from raven.providers.base import LLMProvider, LLMResponse
+from raven.spine.events import ToolEvent, ToolPhase
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 
@@ -723,3 +726,126 @@ async def test_a_tool_that_is_not_a_command_is_never_worth_a_listing(workspace, 
 
     assert roots == []
     assert completes[0]["file_written"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_real_command_tool_lists_the_directory_it_was_bound_to(workspace):
+    """The stubs above stand in for ``exec`` and agree with the listing by
+    construction. The one agreement the feature rests on is that the shell runs
+    in the directory the listing walks, and only the shell itself can show it:
+    ``ExecTool`` resolves its cwd from the same binding this turn is under."""
+    work = workspace / "work"
+    work.mkdir()
+    (work / "keep.md").write_text("one\n", encoding="utf-8")
+
+    completes = await _run_command_turn(
+        workspace, work, _command_script("printf 'a\\nb\\n' > made.txt && echo more >> keep.md")
+    )
+
+    written = {Path(w["path"]).resolve(): w for w in completes[0]["file_written"]}
+    assert set(written) == {(work / "made.txt").resolve(), (work / "keep.md").resolve()}
+    assert written[(work / "made.txt").resolve()]["created"] is True
+    assert written[(work / "made.txt").resolve()]["lines"] == 2
+    assert written[(work / "keep.md").resolve()]["created"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_created_file_that_is_not_text_is_reported_without_a_count(workspace):
+    """A command writes images and archives as readily as it writes text, and a
+    row for one still has to say it arrived. Unknown rather than zero: zero is a
+    file with nothing in it, which is a different thing to tell the reader."""
+    work = workspace / "work"
+    work.mkdir()
+    made = work / "out.bin"
+
+    completes = await _run_command_turn(
+        workspace, work, _command_script(), _CommandTool(lambda: made.write_bytes(b"\xff\xfe\x00\x01"))
+    )
+
+    written = completes[0]["file_written"]
+    assert len(written) == 1, written
+    assert written[0]["created"] is True
+    assert written[0]["lines"] is None
+    assert written[0]["size"] == 4
+
+
+@pytest.mark.asyncio
+async def test_a_created_file_past_the_reading_cap_is_reported_without_a_count(workspace):
+    """Perfectly readable text, and still no number: reading a build artifact
+    whole to number it costs the turn more than the count is worth to the row,
+    so past the cap the count is unknown by decision rather than by failure."""
+    work = workspace / "work"
+    work.mkdir()
+    made = work / "big.txt"
+    line = "a" * 63 + "\n"
+    body = line * (_FILE_WRITTEN_TEXT_MAX_BYTES // len(line) + 1)
+    assert len(body.encode()) > _FILE_WRITTEN_TEXT_MAX_BYTES
+
+    completes = await _run_command_turn(
+        workspace, work, _command_script(), _CommandTool(lambda: made.write_text(body, encoding="utf-8"))
+    )
+
+    written = completes[0]["file_written"]
+    assert len(written) == 1, written
+    assert written[0]["created"] is True
+    assert written[0]["lines"] is None
+    assert written[0]["size"] == len(body)
+
+
+@pytest.mark.asyncio
+async def test_numbering_the_files_a_command_wrote_never_runs_on_the_event_loop(workspace, monkeypatch):
+    """The two walks were put on a worker thread because every other session on
+    this process waits behind whatever the loop does. The counting that follows
+    reads each created file whole, which for a command that wrote a hundred of
+    them is the larger stall of the two."""
+    from raven.agent.loop import turn_path as turn_path_module
+
+    real = turn_path_module._file_written_payload
+    threads: list[int] = []
+
+    def watched(*args: Any, **kwargs: Any) -> Any:
+        threads.append(threading.get_ident())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(turn_path_module, "_file_written_payload", watched)
+    work = workspace / "work"
+    work.mkdir()
+    made = work / "made.txt"
+
+    completes = await _run_command_turn(
+        workspace, work, _command_script(), _CommandTool(lambda: made.write_text("one\n", encoding="utf-8"))
+    )
+
+    assert completes[0]["file_written"], completes[0]
+    assert threads and threading.get_ident() not in threads
+
+
+@pytest.mark.asyncio
+async def test_the_files_a_command_wrote_reach_the_spine_event_a_served_turn_emits(workspace):
+    """``_process_message`` hands the payload to the callback the tests above
+    read. Every served lane -- CLI, TUI, WebUI -- reads the ``ToolEvent``
+    ``run_turn`` emits instead, and that is a second hop the payload has to make
+    by hand, beside the diff and the removals it travels with."""
+    work = workspace / "work"
+    work.mkdir()
+    made = work / "made.txt"
+    agent = AgentLoop(
+        provider=ScriptedProvider(_command_script()),
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=4, interactive=False),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    agent.tools.register(_CommandTool(lambda: made.write_text("one\ntwo\n", encoding="utf-8")))
+    events: list[Any] = []
+
+    async def emit(event: Any) -> None:
+        events.append(event)
+
+    with workdir.bind(work):
+        await agent.run_turn(_make_msg("run it"), emit, lambda: [], stream=False)
+
+    complete = next(e for e in events if isinstance(e, ToolEvent) and e.phase is ToolPhase.COMPLETE)
+    assert complete.file_written is not None, complete
+    assert Path(complete.file_written[0]["path"]).resolve() == made.resolve()
+    assert complete.file_written[0]["lines"] == 2

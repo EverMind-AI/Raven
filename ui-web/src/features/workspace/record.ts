@@ -36,19 +36,25 @@ export function wsArgs(name: string, args: unknown): Record<string, unknown> {
   return { path: s }
 }
 
+/* How a row spells the file it is for: the path shortened for display, split
+   into the part the row greys out and the name it shows. */
+function labelFor(key: string): { dir: string; name: string } {
+  const shown = shortPath(key)
+  const cut = shown.lastIndexOf('/')
+  return { dir: cut < 0 ? '' : shown.slice(0, cut + 1), name: cut < 0 ? shown : shown.slice(cut + 1) }
+}
+
 /* This turn's row for one path, made if the turn has not touched it yet. */
 function rowFor(key: string, kind: WsChange['kind']): WsChange {
   const WS = record()
   const found = WS.changes.find((x) => x.key === key && x.turn === WS.turn)
   if (found) return found
-  const shown = shortPath(key)
-  const cut = shown.lastIndexOf('/')
   /* The newest change is the one you came here to read, so it arrives
      expanded. `auto` marks it as opened by us, so the next arrival folds it
      back without touching a row the reader opened on purpose. */
   WS.changes.forEach((x) => { if (x.auto) { x.open = false; x.auto = false } })
   const made: WsChange = {
-    key, dir: cut < 0 ? '' : shown.slice(0, cut + 1), name: cut < 0 ? shown : shown.slice(cut + 1),
+    key, ...labelFor(key),
     kind, add: 0, del: 0, hunks: [], turn: WS.turn, open: true, auto: true, seen: false,
   }
   WS.changes.unshift(made)
@@ -58,6 +64,7 @@ function rowFor(key: string, kind: WsChange['kind']): WsChange {
 /* One row per path, not per call: five edits to the same file is one changed
    file with five hunks, which is how a person thinks about it. */
 export function wsRecordChange(path: string, kind: WsChange['kind'], hunk: WsHunk): WsChange {
+  adoptListing(String(path))
   const c = rowFor(String(path), kind)
   /* A creation stays one for the rest of the turn: rewriting a file the turn
      itself made does not turn it into a file that was already there. */
@@ -116,6 +123,26 @@ function wsRecordRemoval(path: string, before?: string, lines?: number | null): 
      the same nothing and keeps a replay reading the same as the live row. */
   c.hunks = hunk && hunk.rows.length ? [hunk] : []
   c.del = c.hunks.length ? c.hunks[0]!.del : (lines == null ? 0 : lines)
+}
+
+/* The same two spellings ``sameFile`` reconciles for a removal, in the other
+   order: a listing row is keyed by the path the runtime resolved, and a file
+   tool's row by the path the model typed, so a tool that touches a file an
+   `exec` already left behind this turn would open a second row for it and the
+   desk would list one file twice. The tool's account is the one that can say
+   what changed, so the listing's row carries on under the tool's spelling
+   instead -- keeping the verdict the listing is better placed to know, that
+   the file was new. Only a row the listing made is taken this way, which is
+   what carrying no hunk means; a removal's bare row is its own answer. */
+function adoptListing(key: string): void {
+  const WS = record()
+  const row = WS.changes.find((x) => x.turn === WS.turn && x.key !== key
+    && !x.hunks.length && x.kind !== 'delete' && sameFile(x.key, key))
+  if (!row) return
+  const { dir, name } = labelFor(key)
+  row.key = key
+  row.dir = dir
+  row.name = name
 }
 
 /* What a command left behind, which no tool result names: the runtime lists the

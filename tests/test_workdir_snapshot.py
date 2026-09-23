@@ -63,6 +63,23 @@ def test_the_skipped_directories_are_never_walked(tmp_path: Path) -> None:
     assert list(listing) == [str(tmp_path / "mine.txt")]
 
 
+def test_the_agents_own_directory_inside_the_tree_is_never_walked(tmp_path: Path) -> None:
+    """Named rather than left to the loop above, because this one is inside the
+    directory a command runs in: the checkpoint keeps a shadow git repo at
+    ``<workdir>/.raven/shadow.git`` and commits into it at every turn's end, so
+    a second turn sharing the directory would otherwise land objects and refs
+    in the middle of this command's listing and be reported as its work."""
+    shadow = tmp_path / ".raven" / "shadow.git" / "objects" / "ab"
+    shadow.mkdir(parents=True)
+    (shadow / "cdef").write_bytes(b"x")
+    (tmp_path / ".raven" / "NOTICE.txt").write_text("x")
+    (tmp_path / "mine.txt").write_text("x")
+
+    listing = snapshot.take(tmp_path)
+    assert listing is not None
+    assert list(listing) == [str(tmp_path / "mine.txt")]
+
+
 def test_a_tree_past_the_ceiling_has_no_listing_at_all(tmp_path: Path, monkeypatch) -> None:
     """Not a partial one: a listing that stopped half way reads, on the next
     comparison, as a run that deleted everything the walk never reached."""

@@ -1282,7 +1282,14 @@ class TurnPathMixin:
                     if isinstance(getattr(tool_change, "path", None), str):
                         accounted.append(tool_change.path)
                     created, modified, deleted = workdir_snapshot.diff(exec_before, exec_after)
-                    tool_written = _file_written_payload(created, modified, exec_after, already=accounted)
+                    # Off the loop for the reason the walks above are: this reads
+                    # every created file to number its lines, and one command can
+                    # create hundreds. The removals stay here -- they read nothing.
+                    tool_written = (
+                        await asyncio.to_thread(_file_written_payload, created, modified, exec_after, already=accounted)
+                        if created or modified
+                        else None
+                    )
                     tool_removed.extend(_listing_removals(deleted, already=accounted))
                     if emit_tool_event:
                         await on_tool_event(

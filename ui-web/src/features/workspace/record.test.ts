@@ -439,6 +439,55 @@ describe('recording the files a command left behind', () => {
     expect(store.shared().changes).toHaveLength(0)
   })
 
+  /* The other order, and the one the listing cannot settle by itself: the row
+     is already there under the path the runtime resolved when the file tool
+     arrives under the path the model typed. Two rows for one file is what the
+     reader sees -- the command's addition and the edit on top of it -- so the
+     tool takes over the row the listing opened instead of starting its own. */
+  it('edits the row a command already made for the same file, under either spelling', () => {
+    wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null,
+      undefined, undefined, undefined, [{ path: '/w/notes.md', created: true, size: 6, lines: 3 }])
+
+    const args = { path: 'notes.md', old_text: 'b', new_text: 'B' }
+    wsOnTool('edit_file', args)
+    wsOnToolDone('edit_file', args, true, '', null,
+      '--- a/w/notes.md\n+++ b/w/notes.md\n@@ -2,1 +2,1 @@\n-b\n+B')
+
+    expect(store.shared().changes).toHaveLength(1)
+    const row = rowFor('notes.md')
+    /* Still the command's creation, not an edit to a file that was there. */
+    expect(row?.kind).toBe('add')
+    expect(row?.name).toBe('notes.md')
+    expect(row?.hunks).toHaveLength(1)
+  })
+
+  it('writes into the row a command already made, rather than beside it', () => {
+    wsOnToolDone('exec', { command: 'touch n.md' }, true, '', null,
+      undefined, undefined, undefined, [{ path: '/w/n.md', created: false, size: 0, lines: null }])
+
+    const args = { path: 'n.md', content: 'one\n' }
+    wsOnTool('write_file', args)
+    wsOnToolDone('write_file', args, true, '', null,
+      '--- a/w/n.md\n+++ b/w/n.md\n@@ -0,0 +1,1 @@\n+one', { path: '/w/n.md', after: 'one\n' })
+
+    expect(store.shared().changes).toHaveLength(1)
+    expect(rowFor('n.md')?.kind).toBe('add')
+    expect(rowFor('n.md')?.add).toBe(1)
+  })
+
+  /* A file that went leaves a row with no hunk too, and that row IS the answer:
+     nothing of what was lost was caught. A later write is a new file under the
+     same name, not a correction to that account. */
+  it('leaves a removal\'s bare row alone when a tool writes the path again', () => {
+    wsOnToolDone('exec', { command: 'rm old.md' }, true, '', null,
+      undefined, undefined, [{ path: '/w/old.md' }])
+
+    const args = { path: 'old.md', content: 'again\n' }
+    wsOnTool('write_file', args)
+
+    expect(store.shared().changes.map((c) => c.kind).sort()).toEqual(['delete', 'write'])
+  })
+
   /* A reload reads the same shape back: unlike a removal there is nothing to
      reduce, so live and replayed rows are identical. */
   it('replays the stored listing as the same rows', () => {

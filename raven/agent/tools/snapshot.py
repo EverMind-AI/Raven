@@ -22,10 +22,14 @@ from pathlib import Path
 
 #: Directories a walk never enters. Machinery rather than work: a run that
 #: installs a dependency or lands a commit would otherwise report thousands of
-#: files it did not author.
+#: files it did not author. ``.raven`` is the same kind of thing one level in:
+#: the checkpoint keeps a shadow git repo inside the very directory a command
+#: runs in, and a turn that commits into it while another turn's command is
+#: running would surface as that command's files.
 SKIP_DIRS = frozenset(
     {
         ".git",
+        ".raven",
         "node_modules",
         ".venv",
         "venv",
