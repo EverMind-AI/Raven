@@ -616,6 +616,9 @@ the Context Engine assembles the whole window.
 **Spine** (`spine/`):
 The single backbone every turn flows through: one entry
 (`Scheduler.submit(TurnRequest) → TurnHandle.result()`) and one exit (`emit(Deliverable)`).
+A handle resolves three ways: the `TurnOutcome` of a turn that answered, the `TurnFailed`
+its Lane filed for a turn that failed with a name, or `None` when it was cancelled or never
+ran (a queued turn drained by a stop, an inject merged into a turn that did not answer).
 Per-conversation **Lanes** are the unit of both ordering and cancellation. Deliberately
 not a broadcast bus.
 _Avoid_: "the bus" — there is no Bus; "queue" for Lane — Lane is a serial+cancel domain.

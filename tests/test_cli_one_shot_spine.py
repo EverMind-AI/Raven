@@ -302,7 +302,9 @@ async def test_build_one_shot_spine_prints_a_failed_turn_in_its_own_words():
     )
     try:
         handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"))
-        assert await handle.result() is None
+        outcome = await handle.result()
+        assert isinstance(outcome, TurnFailed)
+        assert outcome.error == "Error calling LLM (network@stub): boom"
         await hub.wait_idle("cli")
         assert failures == ["Error calling LLM (network@stub): boom"]
         assert rendered == [], "a failure is not drawn as the reply"
@@ -323,7 +325,9 @@ async def test_build_one_shot_spine_falls_back_to_render_for_a_failed_turn():
     scheduler, hub, teardown = build_one_shot_spine(_FailingLoop(), "cli", rendered.append)
     try:
         handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"))
-        assert await handle.result() is None
+        outcome = await handle.result()
+        assert isinstance(outcome, TurnFailed)
+        assert outcome.error == "Error calling LLM (network@stub): boom"
         await hub.wait_idle("cli")
         assert rendered == ["Error calling LLM (network@stub): boom"]
     finally:
