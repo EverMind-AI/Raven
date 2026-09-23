@@ -117,6 +117,29 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A heartbeat on an untouched `HEARTBEAT.md` no longer costs a model call every
+  interval. The shipped template promises that a file of only headers and
+  comments is skipped, and the service skipped only a file with no bytes at all,
+  so a workspace that never edited the template paid a decision call every 30
+  minutes -- 14 to 35 a day on one machine. What counts as a task is now read
+  from the template itself: its headings, prose and comments are scaffolding,
+  anything else is a task, and one is still decided (including a task written as
+  a heading, or a section the template does not have).
+
+- Every model call is accounted for, not only the turn loop's. About forty
+  callers reached a provider directly -- the heartbeat's decision, the sentinel
+  planner and its predictors, memory consolidation, session titles, the
+  permission judge, the playbook planner, the curator, the in-process
+  sub-agent's own loop -- and none of them reached `UsageTracker`, so
+  `~/.raven/telemetry/usage-*.jsonl` recorded none of it: 20-odd heartbeats in
+  one day left no row. The recording now happens at the provider seam
+  (`raven/providers/usage_record.py`, installed by the runtime assembly), which
+  bills each call once: nested providers and the retry ladder record at the
+  outermost entry, a stream is one row from its terminal usage, the turn loop
+  keeps its own richer row and tells the seam so, and a call that never reached
+  a model is not a row. The heartbeat's own call is billed to a `heartbeat`
+  session rather than to whichever conversation ran last.
+
 - `web_fetch`, `web_search` and `image_search` stop asking a vendor that has
   refused the key. A 401 or 402 from a reader, or a 401, 402 or 403 from a
   search vendor, is about the key or the account, not the page or the query,
