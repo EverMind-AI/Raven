@@ -1676,20 +1676,28 @@ async def channels_configure(params: dict, *, agent_loop_factory=None) -> dict:
     # all until the next launch -- for a scan-login entrance that meant no QR
     # could ever appear, and the page said "reopen Raven App" instead of
     # signing anyone in. Ask the gateway to start (or stop) it now.
+    answer: dict[str, Any] = {"applied": True}
     if enabled is not None:
         from raven.gateway.live_probe import channel_start, reset_cache
 
         try:
-            await channel_start(name, enabled=enabled)
+            outcome = await channel_start(name, enabled=enabled)
         except Exception:
-            # Nobody answered, or the gateway refused: the config write stands
-            # and the next launch honours it, which is what the page already
-            # says while an adapter is not up.
-            pass
+            outcome = None
+        # Nobody answered, or the gateway refused to say: the config write
+        # stands and the next launch honours it, which is the one case the
+        # page's "reopen the app" sentence is true of. Every other outcome was
+        # swallowed here too, so a channel whose SDK is missing and a channel
+        # nothing was running reached the reader as the same silence.
+        answer["outcome"] = outcome or "unreachable"
+        if outcome == "missing_dep":
+            from raven.gateway.manager import missing_dep_hint
+
+            answer["detail"] = missing_dep_hint()
         # The liveness cache is three seconds old at most, but the poll right
         # after this write is exactly the one that should see the new adapter.
         reset_cache()
-    return {"applied": True}
+    return answer
 
 
 async def channels_qr(params: dict) -> dict:

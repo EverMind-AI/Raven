@@ -1321,12 +1321,12 @@ async def test_channels_configure_connects_and_disconnects(isolated_config: None
         return next(c for c in status["channels"] if c["name"] == "telegram")["enabled"]
 
     r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "123:abc"}, "enabled": True})
-    assert r == {"applied": True}
+    assert r == {"applied": True, "outcome": "unreachable"}
     assert stored_enabled() is True
     assert await reported_on() is True
 
     r = await console_module.channels_configure({"name": "telegram", "fields": {}, "enabled": False})
-    assert r == {"applied": True}
+    assert r == {"applied": True, "outcome": "unreachable"}
     assert stored_enabled() is False
     assert await reported_on() is False
 
@@ -1351,13 +1351,16 @@ async def test_channels_configure_asks_the_gateway_to_start_the_adapter(isolated
     probe_start = probe.channel_start
     probe.channel_start = fake_start
     try:
-        await console_module.channels_configure({"name": "telegram", "fields": {"token": "1:a"}, "enabled": True})
+        r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "1:a"}, "enabled": True})
         assert asked == [("telegram", True)]
-        await console_module.channels_configure({"name": "telegram", "fields": {}, "enabled": False})
+        assert r == {"applied": True, "outcome": "started"}
+        r = await console_module.channels_configure({"name": "telegram", "fields": {}, "enabled": False})
         assert asked == [("telegram", True), ("telegram", False)]
+        assert r == {"applied": True, "outcome": "stopped"}
         # A credential correction with no switch in it does not restart anything.
-        await console_module.channels_configure({"name": "telegram", "fields": {"token": "2:b"}})
+        r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "2:b"}})
         assert asked == [("telegram", True), ("telegram", False)]
+        assert r == {"applied": True}, "no switch, nothing started: no outcome to report"
     finally:
         probe.channel_start = probe_start
 
@@ -1380,8 +1383,31 @@ async def test_channels_configure_still_applies_when_no_gateway_answers(isolated
         r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "1:a"}, "enabled": True})
     finally:
         probe.channel_start = probe_start
-    assert r == {"applied": True}
+    assert r == {"applied": True, "outcome": "unreachable"}, "the one case where the next launch is the remedy"
     assert _json.loads(get_config_path().read_text())["channels"]["telegram"]["enabled"] is True
+
+
+async def test_channels_configure_carries_the_gateway_refusal_and_what_to_do(isolated_config: None) -> None:
+    """A channel the gateway would not start has a reason, and the reader needs
+    it: the word was dropped here, so a missing SDK reached the page as a bare
+    red "not started" while the sentence that fixes it sat in the gateway log.
+    """
+    from raven.gateway.manager import missing_dep_hint
+
+    async def refusing(name: str, *, enabled: bool = True) -> str:
+        return "missing_dep"
+
+    import raven.gateway.live_probe as probe
+
+    probe_start = probe.channel_start
+    probe.channel_start = refusing
+    try:
+        r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "1:a"}, "enabled": True})
+    finally:
+        probe.channel_start = probe_start
+    assert r["applied"] is True, "the config write stands whatever the adapter did"
+    assert r["outcome"] == "missing_dep"
+    assert r["detail"] == missing_dep_hint()
 
 
 async def test_channels_configure_refuses_an_empty_request(isolated_config: None) -> None:
