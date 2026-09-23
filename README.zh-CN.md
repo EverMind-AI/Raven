@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/ff05474a-03f5-4ec2-b42b-55f1508ede06?raw=true)
+![Raven banner](https://github.com/user-attachments/assets/ae944083-9c61-4218-8372-2c3c0d483d4b?raw=true)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -32,7 +32,7 @@ Raven 是 **The Harness of Harnesses**——一个持续自我演进的多 Agent
 > Raven 目前处于 pre-alpha 阶段，接口和配置可能快速变化。
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/e333694a-0f4c-4f27-8bfe-8120ff5339a0"><img src="https://github.com/user-attachments/assets/e333694a-0f4c-4f27-8bfe-8120ff5339a0" alt="Multi-Agent Orchestration Benchmark: Node F1, Edge F1, Partial Order Accuracy, and Exact Match Rate" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/1756ab94-706d-4c07-b8b3-3ef6dd8a147f"><img src="https://github.com/user-attachments/assets/1756ab94-706d-4c07-b8b3-3ef6dd8a147f" alt="Multi-Agent Orchestration Benchmark: Node F1, Edge F1, Partial Order Accuracy, and Exact Match Rate" width="100%"></a>
 </p>
 
 <p align="center"><em>Raven 在多 Agent 编排基准测试上的表现</em></p>
@@ -48,7 +48,7 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 **Raven-Research** 为复杂问题、文献综述与技术分析提供**自主深度研究**能力。它交付清晰、结构化且来源可追溯的研究报告，帮助用户理解陌生领域、比较不同方案，并作出有依据的决策。
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/d072a514-58fd-41c7-8fcd-40782ebb4c80"><img src="https://github.com/user-attachments/assets/d072a514-58fd-41c7-8fcd-40782ebb4c80" alt="DeepResearch Mixed: Accuracy, Input Tokens, Output Tokens, and Cost" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/9dbc1aaa-3477-4871-b3fd-a42405c6ef02"><img src="https://github.com/user-attachments/assets/9dbc1aaa-3477-4871-b3fd-a42405c6ef02" alt="DeepResearch Mixed: Accuracy, Input Tokens, Output Tokens, and Cost" width="100%"></a>
 </p>
 
 <p align="center"><em>Raven-Research 在 DeepResearch Mixed 基准测试中的表现</em></p>
@@ -124,76 +124,76 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>宋代居家美学（成本约 0.80 美元）</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>古希腊如何被漂白（成本约 0.80 美元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于宋代居家美学的演示文稿（成本约 5.5 元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于古希腊如何被漂白的演示文稿（成本约 5.5 元）</b></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4"><img src="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7bf450bb-3d5c-4d4a-826a-e5a06344d489"><img src="https://github.com/user-attachments/assets/7bf450bb-3d5c-4d4a-826a-e5a06344d489" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257"><img src="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f"><img src="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f" alt="Cover, slides and closing slide of the Song-dynasty aesthetics deck" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/3c5a2a9a-d6d7-40ad-b3dc-70e9f5c095df"><img src="https://github.com/user-attachments/assets/3c5a2a9a-d6d7-40ad-b3dc-70e9f5c095df" alt="Cover, slides and closing slide of the Greek polychromy deck" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/92fafcb0-8e17-4f17-819f-d18d970f2c3c"><img src="https://github.com/user-attachments/assets/92fafcb0-8e17-4f17-819f-d18d970f2c3c" alt="Cover, slides and closing slide of the Song-dynasty aesthetics deck" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/82801a70-edb3-4ca7-b7f0-a2c11431d6d3"><img src="https://github.com/user-attachments/assets/82801a70-edb3-4ca7-b7f0-a2c11431d6d3" alt="Cover, slides and closing slide of the Greek polychromy deck" width="100%"></a></p></td>
 </tr>
 </table>
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>流行音乐如何被制造出来（成本约 0.80 美元）</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>抽象艺术的一百年（成本约 0.80 美元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于流行音乐如何被制造出来的演示文稿（成本约 5.5 元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于百年抽象艺术的演示文稿（成本约 5.5 元）</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6"><img src="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="98%"></a></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9ab75945-81ba-4437-aec0-9ef6a633ed55"><img src="https://github.com/user-attachments/assets/9ab75945-81ba-4437-aec0-9ef6a633ed55" alt="Cover, slides and closing slide of the pop music deck" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/b3dfce6c-366d-4e31-9a57-7c98df054618"><img src="https://github.com/user-attachments/assets/b3dfce6c-366d-4e31-9a57-7c98df054618" alt="Cover, slides and closing slide of the abstract art deck" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/350f902e-838a-4233-af44-d86c3240e757"><img src="https://github.com/user-attachments/assets/350f902e-838a-4233-af44-d86c3240e757" alt="Cover, slides and closing slide of the pop music deck" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/4feda7e4-bb2e-4d63-b592-dc75c77f3406"><img src="https://github.com/user-attachments/assets/4feda7e4-bb2e-4d63-b592-dc75c77f3406" alt="Cover, slides and closing slide of the abstract art deck" width="100%"></a></p></td>
 </tr>
 </table>
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>六个智能体编排框架横向对比</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>参数扫描：编写、运行、绘图</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于六个智能体编排框架横向对比的海报</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于参数扫描的数据分析</b></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/92ff2c83-3b0f-49eb-9995-c1ad4c298452"><img src="https://github.com/user-attachments/assets/92ff2c83-3b0f-49eb-9995-c1ad4c298452" alt="Task graph: two Raven-Research nodes running in parallel into one Raven-Design node" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8"><img src="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8" alt="Task graph: Raven-Code into Raven-Oncall into Raven-Design, run in sequence" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/db8ac2b2-bf18-4d18-a8f4-6d4904a7a0c4"><img src="https://github.com/user-attachments/assets/db8ac2b2-bf18-4d18-a8f4-6d4904a7a0c4" alt="Task graph: two Raven-Research nodes running in parallel into one Raven-Design node" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/0048ee55-9102-407c-a58a-366dc0a8a9da"><img src="https://github.com/user-attachments/assets/0048ee55-9102-407c-a58a-366dc0a8a9da" alt="Task graph: Raven-Code into Raven-Oncall into Raven-Design, run in sequence" width="100%"></a></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/5120c2c0-9aeb-4224-ac85-df9dc188b5cc"><img src="https://github.com/user-attachments/assets/5120c2c0-9aeb-4224-ac85-df9dc188b5cc" alt="Comparison board: six orchestration frameworks against four dimensions, each tagged explicit graph or canvas, declared task flow, or dynamic at runtime" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/10679855-e2c5-4422-81c3-17cd784123ce"><img src="https://github.com/user-attachments/assets/10679855-e2c5-4422-81c3-17cd784123ce" alt="Retrieval sweep dashboard: recall@k is set by top_k alone and latency stays broadly flat, with a sixteen-cell grid of measured recall and latency and the best cell ringed at top_k 10, chunk_size 1024" width="99%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/15396c71-10ff-4077-9193-44c3a25d2d60"><img src="https://github.com/user-attachments/assets/15396c71-10ff-4077-9193-44c3a25d2d60" alt="Comparison board: six orchestration frameworks against four dimensions, each tagged explicit graph or canvas, declared task flow, or dynamic at runtime" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9e0ee7b0-4265-4b84-bb50-8034406894b3"><img src="https://github.com/user-attachments/assets/9e0ee7b0-4265-4b84-bb50-8034406894b3" alt="Retrieval sweep dashboard: recall@k is set by top_k alone and latency stays broadly flat, with a sixteen-cell grid of measured recall and latency and the best cell ringed at top_k 10, chunk_size 1024" width="99%"></a></p></td>
 </tr>
 </table>
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>光污染如何偷走野生动物的睡眠</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>GPS 为什么需要四颗卫星</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于光污染如何偷走野生动物睡眠的海报</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>关于 GPS 为什么需要四颗卫星的网站</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd"><img src="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd" alt="Task graph: three Raven-Research nodes in parallel into a Raven-Code node; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="83%"></a></p></td>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9754976b-11ff-4738-b53d-0621ec6ae7da"><img src="https://github.com/user-attachments/assets/9754976b-11ff-4738-b53d-0621ec6ae7da" alt="Task graph: two Raven-Code nodes in parallel into a Raven-Oncall cross-check; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="100%"></a></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7767ac05-6785-4e6a-9e27-c1b123753766"><img src="https://github.com/user-attachments/assets/7767ac05-6785-4e6a-9e27-c1b123753766" alt="Key visual plus the derived series: street poster, data panel, social square and wide banner" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/25c57220-c5fc-4f72-94fb-ea4b7e83f429"><img src="https://github.com/user-attachments/assets/25c57220-c5fc-4f72-94fb-ea4b7e83f429" alt="GPS trilateration explainer: the live page, and the fix at two, three and four satellites" width="97%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/fd70acb8-ec48-4adc-bf51-1e1c316e939e"><img src="https://github.com/user-attachments/assets/fd70acb8-ec48-4adc-bf51-1e1c316e939e" alt="Key visual plus the derived series: street poster, data panel, social square and wide banner" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/dbf6fa43-5a68-4e6a-95d4-a9902770ee4b"><img src="https://github.com/user-attachments/assets/dbf6fa43-5a68-4e6a-95d4-a9902770ee4b" alt="GPS trilateration explainer: the live page, and the fix at two, three and four satellites" width="97%"></a></p></td>
 </tr>
 </table>
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>用二分法测出一根梁的极限载荷</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>一次溃坝模拟，调到水相不再越界</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>梁的极限载荷仿真，用二分法测出</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>溃坝仿真，调到水相不再越界</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783"><img src="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a CalculiX cantilever plastic limit chain, 3 of 3 done in 5m21s, 1m28s and 4m11s" width="100%"></a></p></td>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/050707b5-2af9-4f29-9d65-1564e96fef9d"><img src="https://github.com/user-attachments/assets/050707b5-2af9-4f29-9d65-1564e96fef9d" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a dam-break chain, 3 of 3 done in 11m48s, 1m16s and 3m58s" width="100%"></a></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7d195366-8764-4788-84a6-22bf60cbb058"><img src="https://github.com/user-attachments/assets/7d195366-8764-4788-84a6-22bf60cbb058" alt="Limit-load search: a cantilever beam under rising load colored by von Mises stress, with the bisection bracket narrowing from 1800-2000 kN down to 3.125 kN over eight rounds" width="90%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/e814c6b9-f41f-4070-94cb-d1bc8ca9c51e"><img src="https://github.com/user-attachments/assets/e814c6b9-f41f-4070-94cb-d1bc8ca9c51e" alt="Dam-break solve: a collapsing water column resolved to fine free-surface structure, with the out-of-bounds water fraction falling from 1e0 to 1.36e-10 over seven rounds" width="90%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7"><img src="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7" alt="Limit-load search: a cantilever beam under rising load colored by von Mises stress, with the bisection bracket narrowing from 1800-2000 kN down to 3.125 kN over eight rounds" width="90%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24"><img src="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24" alt="Dam-break solve: a collapsing water column resolved to fine free-surface structure, with the out-of-bounds water fraction falling from 1e0 to 1.36e-10 over seven rounds" width="90%"></a></p></td>
 </tr>
 </table>
 
@@ -286,7 +286,7 @@ raven web
 ## ❯❯ EverMind 生态
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/6c4392ea-2f82-42c7-acde-8dfecb2e6c2c"><img src="https://github.com/user-attachments/assets/6c4392ea-2f82-42c7-acde-8dfecb2e6c2c" alt="The EverMind ecosystem: the EverMind mark and its slogan on an orbital field" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/65a5e3f1-dccb-496f-94f5-9782070ec8b4"><img src="https://github.com/user-attachments/assets/65a5e3f1-dccb-496f-94f5-9782070ec8b4" alt="The EverMind ecosystem: the EverMind mark and its slogan on an orbital field" width="100%"></a>
 </p>
 
 [EverMind](https://evermind.ai/) 将记忆研究、可用于生产环境的产品与实际集成连接为一个开源生态。
