@@ -35,7 +35,7 @@ beforeEach(() => {
   box(document.querySelector('.chat')!, 0, CHAT_BOTTOM)
   box(document.querySelector('.dock')!, 460, 140)
   box(document.querySelector('.dock-in')!, 500, 100)
-}) 
+})
 
 describe('the dock lift', () => {
   it('reaches the top of the composer card when nothing else is docked', () => {
