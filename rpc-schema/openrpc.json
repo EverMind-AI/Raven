@@ -12039,12 +12039,20 @@
             "properties": {
               "kind": {
                 "type": "string",
-                "description": "Which runtime decision this reports; `action_blocked` today."
+                "description": "Which runtime decision this reports: `action_blocked`, `llm_retry` or `organ_degraded`."
               },
               "detail": {
                 "type": "string",
                 "default": "",
-                "description": "The blocking tool's own first line, when it gave one."
+                "description": "What `kind` says it is: the blocking tool's own first line, the failed call's error category, or the organ that dropped out."
+              },
+              "transient": {
+                "type": "boolean",
+                "default": false,
+                "description": "True when the turn is still running and the next frame of output replaces this: draw it as a status, not as a row. False means it stands in for the answer."
+              },
+              "target": {
+                "$ref": "#/components/schemas/DirectTarget"
               }
             }
           }

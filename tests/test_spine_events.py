@@ -6,6 +6,7 @@ from typing import get_args
 import pytest
 
 from raven.spine import (
+    TRANSIENT_NOTICE_KINDS,
     ChatType,
     Deliverable,
     EpisodeStart,
@@ -43,16 +44,33 @@ def test_notice_kind_is_closed_enum_with_progress_and_tool_hint():
     # organ_degraded accompanies an answer produced without an optional organ
     # (degrade-with-notice ruling): the user must be able to tell a memoryless
     # answer from a remembered one.
+    # llm_retry says the Model-Error Ladder is waiting before asking again --
+    # the turn is still running, so it is the one kind the next frame of real
+    # output is expected to overwrite.
     assert {k.value for k in NoticeKind} == {
         "progress",
         "tool_hint",
         "action_blocked",
         "organ_degraded",
+        "llm_retry",
     }
     assert str(NoticeKind.PROGRESS) == "progress"
     assert str(NoticeKind.TOOL_HINT) == "tool_hint"
     with pytest.raises(ValueError):
         NoticeKind("hint")
+
+
+def test_only_the_retry_notice_is_transient():
+    """The transient/closing split lives beside the enum, not at each surface.
+
+    An outlet draws a transient notice where the next output frame overwrites it
+    and a closing one as a row that stays, so a kind listed in neither place --
+    or in a stale copy of this set kept at a surface -- is drawn as the turn's
+    outcome when it is only a status.
+    """
+    assert TRANSIENT_NOTICE_KINDS == {NoticeKind.LLM_RETRY}
+    assert NoticeKind.ACTION_BLOCKED not in TRANSIENT_NOTICE_KINDS
+    assert TRANSIENT_NOTICE_KINDS <= set(NoticeKind)
 
 
 def test_tool_phase_is_closed_two_value_enum():

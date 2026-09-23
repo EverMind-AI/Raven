@@ -493,8 +493,22 @@ class EpisodeStartEvent(_Strict):
 
 
 class NoticePayload(_Strict):
-    kind: str = Field(..., description="Which runtime decision this reports; `action_blocked` today.")
-    detail: str = Field("", description="The blocking tool's own first line, when it gave one.")
+    kind: str = Field(
+        ...,
+        description="Which runtime decision this reports: `action_blocked`, `llm_retry` or `organ_degraded`.",
+    )
+    detail: str = Field(
+        "",
+        description="What `kind` says it is: the blocking tool's own first line, the failed call's error category, or the organ that dropped out.",
+    )
+    transient: bool = Field(
+        False,
+        description=(
+            "True when the turn is still running and the next frame of output replaces this: "
+            "draw it as a status, not as a row. False means it stands in for the answer."
+        ),
+    )
+    target: DirectTarget | None = None
 
 
 class PermissionReviewPayload(_Strict):

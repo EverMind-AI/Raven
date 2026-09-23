@@ -603,7 +603,12 @@ def turn_failure_text(*parts: Any) -> str:
 
 
 def _notice(payload: dict[str, Any], meta: dict[str, Any] | None) -> Translated:
-    """A runtime notice. Only ``action_blocked`` reaches the wire at all.
+    """A runtime notice, of which only ``action_blocked`` is translated here.
+
+    The outlet also puts ``llm_retry`` on the wire, and ACP has no transient
+    status update to map it to -- the same reason ``permission.review`` is
+    dropped. Translating it as message content would write the runtime's waiting
+    into the answer and, worse, latch a stop reason onto a turn still running.
 
     It latches ``refusal`` rather than terminating: the runtime still ends the
     turn through its normal path, and claiming the stop reason here would race

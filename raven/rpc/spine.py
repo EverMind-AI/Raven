@@ -27,6 +27,7 @@ from raven.contracts.asking import ApprovalResponder, SupportsDirectAsk
 from raven.permissions import start_permission_turn
 from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import (
+    TRANSIENT_NOTICE_KINDS,
     Deliverable,
     EpisodeStart,
     MediaOut,
@@ -254,6 +255,19 @@ class RpcTurnRunner(AgentTurnRunner):
         return outcome
 
 
+# The notices that describe what the RUNTIME did to the turn, and so reach a
+# client that draws every tool call itself. Progress and tool-hint notices exist
+# for text-only channels that cannot draw a tool row; forwarding them here would
+# narrate the same work twice.
+_WIRE_NOTICE_KINDS = frozenset(
+    {
+        NoticeKind.ACTION_BLOCKED,
+        NoticeKind.LLM_RETRY,
+        NoticeKind.ORGAN_DEGRADED,
+    }
+)
+
+
 class RpcOutlet:
     """A client's send surface. Maps each spine event to its wire event on the
     conversation's subscription: streamed token content via ``send_stream_chunk``
@@ -261,9 +275,11 @@ class RpcOutlet:
     thinking.delta, ToolEvent -> tool.start / tool.complete, a non-streamed Text
     -> a token.delta). The turn's completion (``message.complete``) and failure
     (``error``) are emitted by the sink after the render barrier. A Notice the
-    runtime raised about the turn itself (``action_blocked``) rides ``notice``;
-    a MediaOut rides ``media``. Progress and tool-hint notices are eaten -- no
-    client shows per-turn progress today (a known gap, deferred)."""
+    runtime raised about the turn itself (``_WIRE_NOTICE_KINDS``) rides
+    ``notice``, stamped ``transient`` so a client knows whether to draw it as a
+    status the next output frame replaces or as a row that stays; a MediaOut
+    rides ``media``. Progress and tool-hint notices are eaten -- no client shows
+    per-turn progress today (a known gap, deferred)."""
 
     def __init__(
         self,
@@ -405,15 +421,19 @@ class RpcOutlet:
                     {"type": "token.delta", "payload": self._tagged({"text": out.content}, cid)},
                 )
         elif isinstance(out, Notice):
-            # Only the kinds that describe what the RUNTIME did to the turn go
-            # on the wire. Progress and tool-hint notices exist for text-only
-            # channels that cannot draw a tool row; this client draws every call
-            # already, so forwarding them would narrate the same work twice.
-            if out.kind is NoticeKind.ACTION_BLOCKED:
-                await self._emitter.emit(
-                    self._subscription(cid),
-                    {"type": "notice", "payload": {"kind": out.kind.value, "detail": out.detail or ""}},
+            if out.kind in _WIRE_NOTICE_KINDS:
+                # Tagged like token.delta: a direct chat's turn runs on its own
+                # lane, and an untagged notice is read as the main agent's, so a
+                # sub-agent's retry was drawn into the main conversation.
+                payload = self._tagged(
+                    {
+                        "kind": out.kind.value,
+                        "detail": out.detail or "",
+                        "transient": out.kind in TRANSIENT_NOTICE_KINDS,
+                    },
+                    cid,
                 )
+                await self._emitter.emit(self._subscription(cid), {"type": "notice", "payload": payload})
         elif isinstance(out, EpisodeStart):
             # Boundary marker; the TUI buckets this model call's reasoning +
             # text + tools into one collapsible episode.

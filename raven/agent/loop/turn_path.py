@@ -1449,6 +1449,9 @@ class TurnPathMixin:
                         }
                     final_content = _ABORTED_ACTION_REPLY
                     if on_notice is not None:
+                        # Not staged the way the retry notice is: this notice IS
+                        # the turn's answer, so abandoning it on a wedged outlet
+                        # queue would end the turn saying nothing at all.
                         await on_notice(_NoticeKind.ACTION_BLOCKED, abort_reason)
                     elif on_token_delta is not None:
                         # A channel with no notice outlet still has to say
@@ -1553,6 +1556,23 @@ class TurnPathMixin:
                             len(ladder),
                             (clean or "")[:160],
                         )
+                        if on_notice is not None:
+                            # Only the category: the vendor's own body can carry
+                            # a masked key and an account URL, and this text is
+                            # read by everyone watching the turn.
+                            from raven.spine.events import NoticeKind as _NoticeKind
+
+                            # Staged like the episode boundary: a bounded outlet
+                            # queue with a wedged worker behind it would park the
+                            # turn here for the whole ladder, and the notice is a
+                            # status hint -- losing one is a silent wait, not a
+                            # turn lost.
+                            await first_call.stage(
+                                "the retry-notice emit",
+                                on_notice(_NoticeKind.LLM_RETRY, verdict.category),
+                                iteration=iteration,
+                                fallback=None,
+                            )
                         iteration -= 1  # the failed call did no work; don't bill it
                         await asyncio.sleep(delay)
                         continue

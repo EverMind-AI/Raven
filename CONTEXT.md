@@ -562,6 +562,17 @@ _Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes; an
 FAIL as a fourth mode — it is the answer given when there is nothing left to try;
 `OUTPUT_LIMIT_NUDGE` rides RETRY rather than being the NUDGE mode.
 
+**Model-Error Ladder** (`agent/loop/turn_path.py`, `RecoveryLimits.llm_error_retry_delays`):
+The waits the Agent Loop spends on a model call that came back an *error* before it gives the
+turn up. The provider's own retries are seconds long and suit a dropped connection; a gateway
+serving error pages outlasts them, so a retryable verdict buys one rung of this ladder and the
+same ask goes out again — the messages are untouched, so nothing is appended for the failed
+call. The wait is announced as a `NoticeKind.LLM_RETRY` notice carrying the error *category*,
+which is how a surface can say the runtime is still working rather than showing nothing for
+minutes. A non-retryable verdict, or a spent ladder, ends the turn.
+_Avoid_: "retry" unqualified — Empty-Response Recovery's RETRY is a different mechanism, for a
+call that *succeeded* and returned no text; this one answers a call that failed.
+
 **Call Record** (`contracts/llm_provider.py`, `providers/call_record.py`):
 What the transport did on one model call, carried on `LLMResponse.call_record` and stored
 under `call` in the `llm.output` audit artifact: HTTP status, the backend that served it and
