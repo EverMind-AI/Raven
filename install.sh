@@ -663,22 +663,16 @@ install_office() {
 # fonts-noto-cjk alongside it; otherwise a pinned Noto Sans SC goes into the
 # user's font directory, which fontconfig reads without being told.
 #
-# macOS already ships Han faces (Songti, STHeiti, Hiragino Sans GB, PingFang).
-# What is missing is LibreOffice looking at them: its bundled fontconfig reads
-# /usr/local/etc/fonts/fonts.conf, which an Apple Silicon Mac does not have, and
-# without it sees no system or user font at all -- a face installed into
-# ~/Library/Fonts is not reached either, and neither is a per-user fontconfig
-# file. So the fix is that one file, naming the Mac's own font directories;
-# every LibreOffice process reads it, whoever starts it.
+# macOS needs nothing here. The system already ships Han faces; LibreOffice's
+# macOS build just cannot see them when it renders headless, and raven links
+# them into the profile of every conversion it runs, and into the default one
+# the model's own soffice uses (raven/utils/office.py) -- no file outside the
+# user's home, no password.
 
 HAN_FONT_URL="https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf"
 HAN_FONT_SHA256="faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9"
 HAN_FONT_BYTES="8331336"
 HAN_FONT_NAME="NotoSansSC-Regular.otf"
-
-# Where LibreOffice's bundled fontconfig looks; overridable so a test can point
-# it into a directory of its own.
-MACOS_FONTCONFIG="${RAVEN_MACOS_FONTCONFIG:-/usr/local/etc/fonts/fonts.conf}"
 
 sha256_of() {
   if have sha256sum; then sha256sum "$1" | cut -d' ' -f1
@@ -686,7 +680,7 @@ sha256_of() {
   else printf ''; fi
 }
 
-# Both platform steps succeed only when they changed what LibreOffice can reach.
+# Succeeds only when it changed what LibreOffice can reach.
 install_linux_cjk_font() {
   # LibreOffice reads the same fontconfig as fc-list here, so its answer holds.
   [ -n "$(fc-list :lang=zh family 2>/dev/null)" ] && return 1
@@ -710,59 +704,9 @@ install_linux_cjk_font() {
   return 1
 }
 
-macos_fontconfig_body() {
-  printf '%s\n' '<?xml version="1.0"?>' '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">' '<fontconfig>' \
-    '  <dir>/System/Library/Fonts</dir>' '  <dir>/Library/Fonts</dir>' '  <dir>~/Library/Fonts</dir>'
-  # PingFang is a downloaded system asset, not under /System/Library/Fonts.
-  # Only the font asset folders: the rest of AssetsV2 is some 16k files that a
-  # first scan would open one by one.
-  for asset in /System/Library/AssetsV2/com_apple_MobileAsset_Font* /System/Library/Assets/com_apple_MobileAsset_Font*; do
-    [ -d "$asset" ] && printf '  <dir>%s</dir>\n' "$asset"
-  done
-  # The cache must be somewhere the user can write, or every conversion rescans
-  # every face; conf.d keeps a later Homebrew fontconfig under /usr/local working.
-  printf '%s\n' '  <cachedir prefix="xdg">fontconfig</cachedir>' \
-    '  <include ignore_missing="yes">conf.d</include>' '</fontconfig>'
-}
-
-configure_macos_fonts() {
-  # Already there: written by an earlier run, or Homebrew's own on an Intel Mac,
-  # which LibreOffice reads and which names the system fonts already.
-  [ -f "$MACOS_FONTCONFIG" ] && return 1
-  if ! have soffice && ! have libreoffice \
-    && [ ! -d "$MACOS_APPS/LibreOffice.app" ] && [ ! -d "$HOME/Applications/LibreOffice.app" ]; then
-    return 1
-  fi
-  target_dir="$(dirname "$MACOS_FONTCONFIG")"
-  if mkdir -p "$target_dir" 2>/dev/null && { macos_fontconfig_body > "$MACOS_FONTCONFIG"; } 2>/dev/null; then
-    ok "LibreOffice now reads the Mac's own fonts ($MACOS_FONTCONFIG)"
-    return 0
-  fi
-  later="Chinese pages in deck previews render as boxes until $MACOS_FONTCONFIG exists; rerun this installer in a terminal to create it."
-  if ! { : < /dev/tty; } 2>/dev/null || ! have sudo; then
-    warn "$later"
-    return 1
-  fi
-  printf 'Let LibreOffice use the Chinese fonts macOS already has? This writes %s and needs your password once. [Y/n] ' "$MACOS_FONTCONFIG"
-  answer=""
-  read -r answer < /dev/tty || { warn "No answer read. $later"; return 1; }
-  case "$answer" in
-    n|N|[nN][oO]) warn "Skipped. $later"; return 1 ;;
-  esac
-  # sudo prompts on the tty itself; its stdin here carries the file.
-  if sudo mkdir -p "$target_dir" && macos_fontconfig_body | sudo tee "$MACOS_FONTCONFIG" >/dev/null; then
-    ok "LibreOffice now reads the Mac's own fonts ($MACOS_FONTCONFIG)"
-    return 0
-  fi
-  warn "Could not write $MACOS_FONTCONFIG. $later"
-  return 1
-}
-
 install_cjk_fonts() {
-  case "$NODE_OS" in
-    darwin) configure_macos_fonts || return 0 ;;
-    *) install_linux_cjk_font || return 0 ;;
-  esac
+  [ "$NODE_OS" = linux ] || return 0
+  install_linux_cjk_font || return 0
   # Previews and gallery covers cached before this were drawn without a Han
   # face, and they are keyed by the deck's own stamp, so nothing else would
   # ever replace them.

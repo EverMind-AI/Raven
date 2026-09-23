@@ -17,7 +17,7 @@ from raven_design.rendering.models import (
     RenderRequest,
 )
 from raven_design.rendering.spreadsheet import SpreadsheetRenderer
-from raven_design.rendering.util import command_version
+from raven_design.rendering.util import command_version, link_han_faces
 
 OFFICE_FORMATS = frozenset({"docx", "pptx", "xlsx"})
 _LOG_TAIL_LENGTH = 1000
@@ -105,6 +105,7 @@ class LibreOfficeBackend:
         input_dir.mkdir(parents=True)
         output_dir.mkdir(parents=True)
         profile_dir.mkdir(parents=True)
+        link_han_faces(profile_dir)
         staged_source = input_dir / source.name
         shutil.copy2(source, staged_source)
         command = [

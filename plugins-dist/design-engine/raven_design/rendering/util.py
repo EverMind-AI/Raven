@@ -108,3 +108,16 @@ def evenly_spaced(items: list[Any], limit: int) -> list[Any]:
         return [items[0]]
     indexes = {round(index * (len(items) - 1) / (limit - 1)) for index in range(limit)}
     return [items[index] for index in sorted(indexes)]
+
+
+def link_han_faces(profile: Path) -> None:
+    """Give a LibreOffice profile the host's Chinese faces (see raven.utils.office).
+
+    Optional: this renderer also runs where raven itself is not importable,
+    such as an isolated worker, and there the host's fontconfig serves.
+    """
+    try:
+        from raven.utils import office
+    except ImportError:
+        return
+    office.link_han_faces(profile)

@@ -64,14 +64,15 @@ does not hold the caller past the budget it has already given up on."""
 _WINDOWS_PROGRAM_ROOT_VARS = ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA")
 
 
-RENDER_GENERATION = 2
+RENDER_GENERATION = 3
 """Bumped whenever a change alters what a conversion on some host draws.
 
 A cached PDF or page image is keyed by its source deck, and the deck does not
 change when the fonts around it do, so a host keeps serving the boxes it drew
 before a fix for as long as the cache lives. Mixed into those keys, a bump
 retires every render made under the old answer. 1 is every release before
-LibreOffice was given the host's Chinese fonts.
+LibreOffice was given the host's Chinese fonts; 2 relied on a fontconfig file
+an installer might not have written; 3 links the faces into every profile.
 """
 
 
@@ -128,6 +129,80 @@ def _windows_install_soffice() -> str | None:
         if candidate.is_file():
             return str(candidate)
     return None
+
+
+# The Chinese faces every Mac ships. LibreOffice 26.8's macOS build renders
+# headless through a bundled fontconfig that looks for /usr/local/etc/fonts,
+# which an Apple Silicon Mac does not have, and without it reaches no system or
+# user font at all -- so a Chinese deck comes out as boxes. What it always reads
+# is the ``user/fonts`` folder of the profile it runs with, so the faces are
+# linked there. Measured 2026-09-23 (macOS 15.7, LibreOffice 26.8 from the stock
+# dmg, fontconfig given an empty configuration): nothing in the profile drew no
+# Han; links to these four drew PingFang, STHeiti and Songti.
+MACOS_SYSTEM_HAN_FACES = (
+    Path("/System/Library/Fonts/Supplemental/Songti.ttc"),
+    Path("/System/Library/Fonts/STHeiti Medium.ttc"),
+    Path("/System/Library/Fonts/STHeiti Light.ttc"),
+    Path("/System/Library/Fonts/Hiragino Sans GB.ttc"),
+)
+# PingFang is a downloaded asset under a hashed folder that moves with macOS
+# updates, so it is found each time rather than named.
+MACOS_ASSET_FONTS = Path("/System/Library/AssetsV2")
+
+
+def macos_han_faces() -> list[Path]:
+    """The Chinese faces this Mac has today, or nothing on any other platform."""
+    if sys.platform != "darwin":
+        return []
+    faces = [face for face in MACOS_SYSTEM_HAN_FACES if face.is_file()]
+    faces += sorted(MACOS_ASSET_FONTS.glob("com_apple_MobileAsset_Font*/*/AssetData/PingFang.ttc"))[:1]
+    return faces
+
+
+def link_han_faces(profile: Path) -> None:
+    """Link the host's Chinese faces into ``profile/user/fonts``.
+
+    ``profile`` is the directory ``-env:UserInstallation`` names. Links rather
+    than copies: the faces are the system's own, and a link whose target moved
+    (PingFang after a macOS update) is replaced rather than left dangling. A
+    file somebody put there by hand is left alone. Nothing here may fail a
+    conversion, so an unwritable profile just renders as it did before.
+    """
+    faces = macos_han_faces()
+    if not faces:
+        return
+    target = profile / "user" / "fonts"
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    for face in faces:
+        link = target / face.name
+        try:
+            if link.is_symlink():
+                if os.readlink(link) == str(face):
+                    continue
+                link.unlink()
+            elif link.exists():
+                continue
+            link.symlink_to(face)
+        except OSError:
+            # A conversion started at the same moment made the same link.
+            continue
+
+
+def default_profile() -> Path | None:
+    """The profile a plain ``soffice`` uses -- the one the model's own renders run with."""
+    if sys.platform != "darwin":
+        return None
+    return Path.home() / "Library" / "Application Support" / "LibreOffice" / "4"
+
+
+def link_han_faces_into_default_profile() -> None:
+    """Give the model's own ``soffice --convert-to`` the host's Chinese faces."""
+    profile = default_profile()
+    if profile is not None:
+        link_han_faces(profile)
 
 
 def install_hint() -> str:
@@ -204,6 +279,7 @@ def to_pdf(
     with tempfile.TemporaryDirectory(prefix="raven-soffice-", dir=profile_root) as scratch:
         profile = Path(scratch) / "profile"
         profile.mkdir()
+        link_han_faces(profile)
         command = convert_command(Path(source), Path(staged), profile, executable=executable, fmt=fmt)
         returncode, stdout, stderr = _run(command, timeout_s=timeout_s)
     return Converted(

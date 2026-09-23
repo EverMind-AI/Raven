@@ -304,3 +304,105 @@ def test_a_finished_conversion_leaves_the_registry(monkeypatch: pytest.MonkeyPat
     with pytest.raises(TimeoutError):
         office._run(["soffice", "--version"], timeout_s=0.01)
     assert office._LIVE == set(), "a conversion that timed out leaves it too"
+
+
+def _mac_faces(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, asset_hash: str = "aaaa") -> tuple[Path, Path]:
+    """A Mac's shipped faces and its downloaded PingFang, under tmp_path."""
+    songti = tmp_path / "System" / "Songti.ttc"
+    songti.parent.mkdir(parents=True, exist_ok=True)
+    songti.write_bytes(b"ttcf")
+    assets = tmp_path / "AssetsV2"
+    pingfang = assets / "com_apple_MobileAsset_Font7" / f"{asset_hash}.asset" / "AssetData" / "PingFang.ttc"
+    pingfang.parent.mkdir(parents=True, exist_ok=True)
+    pingfang.write_bytes(b"ttcf")
+    monkeypatch.setattr(office.sys, "platform", "darwin")
+    monkeypatch.setattr(office, "MACOS_SYSTEM_HAN_FACES", (songti, tmp_path / "System" / "absent.ttc"))
+    monkeypatch.setattr(office, "MACOS_ASSET_FONTS", assets)
+    return songti, pingfang
+
+
+def test_a_mac_profile_is_given_links_to_the_faces_the_system_ships(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LibreOffice 26.8's macOS build renders headless through a fontconfig that
+    reaches no system font, and always reads its profile's user/fonts. Links
+    there are what turn a Chinese deck from boxes into text."""
+    songti, pingfang = _mac_faces(tmp_path, monkeypatch)
+    profile = tmp_path / "profile"
+
+    office.link_han_faces(profile)
+
+    fonts = profile / "user" / "fonts"
+    assert sorted(p.name for p in fonts.iterdir()) == ["PingFang.ttc", "Songti.ttc"]
+    assert (fonts / "Songti.ttc").resolve() == songti.resolve()
+    assert (fonts / "PingFang.ttc").resolve() == pingfang.resolve()
+
+
+def test_a_link_left_behind_by_a_macos_update_is_replaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PingFang lives under a hashed asset folder that an update can move; a link
+    to the old one draws nothing, so it is pointed at the face that is there now.
+    A real file someone copied in by hand is not touched."""
+    _mac_faces(tmp_path, monkeypatch, asset_hash="old")
+    profile = tmp_path / "profile"
+    office.link_han_faces(profile)
+    fonts = profile / "user" / "fonts"
+    theirs = fonts / "Songti.ttc"
+    theirs.unlink()
+    theirs.write_bytes(b"their own copy")
+
+    for stale in (tmp_path / "AssetsV2").rglob("PingFang.ttc"):
+        stale.unlink()
+    _mac_faces(tmp_path, monkeypatch, asset_hash="new")
+    office.link_han_faces(profile)
+
+    assert "new.asset" in str((fonts / "PingFang.ttc").resolve())
+    assert not theirs.is_symlink()
+    assert theirs.read_bytes() == b"their own copy"
+
+
+def test_other_platforms_get_no_profile_fonts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux reads the system fontconfig, where an installed face is already
+    reachable; nothing is linked there, and no default profile is touched."""
+    monkeypatch.setattr(office.sys, "platform", "linux")
+
+    office.link_han_faces(tmp_path / "profile")
+
+    assert not (tmp_path / "profile").exists()
+    assert office.default_profile() is None
+
+
+def test_every_conversion_profile_carries_the_faces(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The preview panel, the delivery thumbnail and the ppt engine all convert
+    through to_pdf, each with a profile of its own that starts out empty."""
+    _mac_faces(tmp_path, monkeypatch)
+    seen: list[str] = []
+
+    def _fake(command, *, timeout_s):
+        uri = next(token for token in command if token.startswith("-env:UserInstallation="))
+        profile = Path(uri.split("file://", 1)[1])
+        seen.extend(sorted(p.name for p in (profile / "user" / "fonts").iterdir()))
+        Path(command[command.index("--outdir") + 1], "deck.pdf").write_bytes(b"%PDF-1.4")
+        return 0, "", ""
+
+    monkeypatch.setattr(office, "_run", _fake)
+    staged = tmp_path / "out"
+    staged.mkdir()
+    office.to_pdf(tmp_path / "deck.pptx", staged, executable="soffice", timeout_s=5)
+
+    assert seen == ["PingFang.ttc", "Songti.ttc"]
+
+
+def test_the_models_own_soffice_gets_the_faces_in_the_default_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The model checks a deck by running a plain `soffice --convert-to` through
+    its exec tool, which uses LibreOffice's default profile."""
+    from raven.agent.tools.shell import ExecTool
+
+    _mac_faces(tmp_path, monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    ExecTool(working_dir=str(tmp_path))
+
+    fonts = tmp_path / "home" / "Library" / "Application Support" / "LibreOffice" / "4" / "user" / "fonts"
+    assert sorted(p.name for p in fonts.iterdir()) == ["PingFang.ttc", "Songti.ttc"]

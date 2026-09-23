@@ -543,20 +543,18 @@ def test_the_windows_capability_steps_stay_above_the_closing_launch() -> None:
 _FONT_STEP = (
     "sha256_of",
     "install_linux_cjk_font",
-    "macos_fontconfig_body",
-    "configure_macos_fonts",
     "install_cjk_fonts",
 )
 
 
-def _font_step_harness(tmp_path: Path, *, office: bool = True, **overrides: str) -> Path:
+def _font_step_harness(tmp_path: Path, **overrides: str) -> Path:
     text = INSTALL_SH.read_text(encoding="utf-8")
     bodies = []
     for name in _FONT_STEP:
         match = re.search(rf"^{name}\(\) \{{.*?^\}}$", text, re.S | re.M)
         assert match is not None, name
         bodies.append(match.group(0))
-    names = ("HAN_FONT_NAME", "MACOS_FONTCONFIG", "MACOS_APPS")
+    names = ("HAN_FONT_NAME",)
     settings = [re.search(rf"^{name}=.*$", text, re.M).group(0) for name in names]
     settings += [f"{name}='{value}'" for name, value in overrides.items()]
     harness = tmp_path / "font-step.sh"
@@ -565,11 +563,6 @@ def _font_step_harness(tmp_path: Path, *, office: bool = True, **overrides: str)
         "ok() { printf 'OK %s\\n' \"$1\"; }\n"
         "warn() { printf 'WARN %s\\n' \"$1\" >&2; }\n"
         'have() { command -v "$1" >/dev/null 2>&1; }\n'
-        + (
-            ""
-            if office
-            else 'have() { case "$1" in soffice|libreoffice) return 1 ;; esac; command -v "$1" >/dev/null 2>&1; }\n'
-        )
         + "\n".join(settings)
         + "\n"
         + "\n".join(bodies)
@@ -605,7 +598,6 @@ def _run_font_step(tmp_path: Path, harness: Path, *, os_name: str, fc_list: str 
             "RAVEN_HOME": str(home / ".raven"),
             "XDG_DATA_HOME": str(home / "share"),
             "NODE_OS": os_name,
-            "RAVEN_MACOS_FONTCONFIG": str(tmp_path / "etc" / "fonts" / "fonts.conf"),
             "RAVEN_MACOS_APPS": str(tmp_path / "Applications"),
         },
     )
@@ -672,55 +664,19 @@ def test_a_download_that_does_not_match_its_digest_is_not_installed(tmp_path: Pa
     assert cached.is_file()
 
 
-def test_a_mac_gets_the_file_its_libreoffice_reads(tmp_path: Path) -> None:
-    """LibreOffice's bundled fontconfig reads one file and, without it, no
-    system or user font at all. Writing it with the Mac's own font directories
-    is the whole fix, and it reaches every LibreOffice process."""
-    from xml.etree import ElementTree
-
-    harness = _font_step_harness(tmp_path)
-    result, _calls, cached, _home = _run_font_step(tmp_path, harness, os_name="darwin", tools=("soffice",))
-
-    config = tmp_path / "etc" / "fonts" / "fonts.conf"
-    assert result.returncode == 0, result.stderr
-    root = ElementTree.fromstring(config.read_text(encoding="utf-8"))
-    dirs = [element.text for element in root.findall("dir")]
-    assert dirs[:3] == ["/System/Library/Fonts", "/Library/Fonts", "~/Library/Fonts"]
-    assert [element.get("prefix") for element in root.findall("cachedir")] == ["xdg"], (
-        "the compiled-in cache directory is root's; a cache the user cannot write is rebuilt on every conversion"
-    )
-    assert not cached.exists()
-
-
-def test_a_mac_that_already_has_the_file_keeps_it(tmp_path: Path) -> None:
-    """On an Intel Mac that file is Homebrew's own and already names the system
-    fonts; on any Mac it may be one an earlier run wrote. Either way it stays."""
-    config = tmp_path / "etc" / "fonts" / "fonts.conf"
-    config.parent.mkdir(parents=True)
-    config.write_text("<fontconfig><!-- theirs --></fontconfig>", encoding="utf-8")
-    harness = _font_step_harness(tmp_path)
-    result, _calls, cached, _home = _run_font_step(tmp_path, harness, os_name="darwin", tools=("soffice",))
+def test_a_mac_is_left_alone_by_the_font_step(tmp_path: Path) -> None:
+    """A Mac already ships Han faces, and raven links them into LibreOffice's
+    profiles itself (raven/utils/office.py): no download, no password, and no
+    file written outside the user's home."""
+    harness = _font_step_harness(tmp_path, **_published_face(tmp_path))
+    result, calls, cached, home = _run_font_step(tmp_path, harness, os_name="darwin")
 
     assert result.returncode == 0, result.stderr
-    assert "theirs" in config.read_text(encoding="utf-8")
+    assert result.stdout == "" and result.stderr == ""
+    assert calls == []
+    assert not (home / "share" / "fonts").exists()
     assert cached.is_file()
-
-
-def test_a_mac_without_libreoffice_is_not_asked_for_a_password(tmp_path: Path) -> None:
-    harness = _font_step_harness(tmp_path, office=False)
-    result, _calls, _cached, _home = _run_font_step(tmp_path, harness, os_name="darwin")
-
-    assert result.returncode == 0, result.stderr
-    assert not (tmp_path / "etc" / "fonts" / "fonts.conf").exists()
-
-
-def test_the_mac_password_prompt_reads_the_tty_and_a_failed_read_declines() -> None:
-    text = INSTALL_SH.read_text(encoding="utf-8")
-    body = re.search(r"^configure_macos_fonts\(\) \{.*?^\}$", text, re.S | re.M).group(0)
-    assert ": < /dev/tty; } 2>/dev/null || ! have sudo" in body
-    assert "read -r answer < /dev/tty || {" in body
-    assert "n|N|[nN][oO])" in body
-    assert 'sudo tee "$MACOS_FONTCONFIG"' in body
+    assert "/usr/local/etc/fonts" not in INSTALL_SH.read_text(encoding="utf-8")
 
 
 # --- LibreOffice on a Mac without Homebrew ------------------------------------
