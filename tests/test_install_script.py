@@ -383,7 +383,7 @@ def test_resolve_node_dir_answers_each_case_it_exists_for(tmp_path: Path) -> Non
 def test_the_office_prompt_and_sudo_both_read_the_tty() -> None:
     text = INSTALL_SH.read_text(encoding="utf-8")
     assert "read -r answer < /dev/tty" in text
-    assert "sudo apt-get install -y libreoffice < /dev/tty" in text
+    assert "sudo apt-get install -y libreoffice fonts-noto-cjk < /dev/tty" in text
 
 
 def test_a_failed_tty_read_declines_instead_of_defaulting_yes() -> None:
@@ -533,3 +533,346 @@ def test_the_windows_capability_steps_stay_above_the_closing_launch() -> None:
     closing = closing[closing.index("function Start-Web") :].lower()
     assert "playwright" not in closing
     assert "libreoffice" not in closing
+
+
+# --- the Chinese-font step --------------------------------------------------
+# Every case below is a box on a rendered page when it goes wrong, and none of
+# them raises: the conversion succeeds, the PDF is well formed, and only whoever
+# looks at the picture finds out. So each branch runs for real, against files.
+
+_FONT_STEP = (
+    "sha256_of",
+    "linux_has_han_face",
+    "install_linux_cjk_font",
+    "install_cjk_fonts",
+)
+
+
+def _font_step_harness(tmp_path: Path, *, office: bool = True, **overrides: str) -> Path:
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    bodies = []
+    for name in _FONT_STEP:
+        match = re.search(rf"^{name}\(\) \{{.*?^\}}$", text, re.S | re.M)
+        assert match is not None, name
+        bodies.append(match.group(0))
+    names = ("HAN_FONT_NAME",)
+    settings = [re.search(rf"^{name}=.*$", text, re.M).group(0) for name in names]
+    settings += [f"{name}='{value}'" for name, value in overrides.items()]
+    harness = tmp_path / "font-step.sh"
+    harness.write_text(
+        "info() { :; }\n"
+        "ok() { printf 'OK %s\\n' \"$1\"; }\n"
+        "warn() { printf 'WARN %s\\n' \"$1\" >&2; }\n"
+        'have() { command -v "$1" >/dev/null 2>&1; }\n'
+        + (
+            ""
+            if office
+            else 'have() { case "$1" in soffice|libreoffice) return 1 ;; esac; command -v "$1" >/dev/null 2>&1; }\n'
+        )
+        + "\n".join(settings)
+        + "\n"
+        + "\n".join(bodies)
+        + "\ninstall_cjk_fonts\n",
+        encoding="utf-8",
+    )
+    return harness
+
+
+def _run_font_step(tmp_path: Path, harness: Path, *, os_name: str, fc_list: str = "", tools: tuple[str, ...] = ()):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "calls.log"
+    (bin_dir / "fc-list").write_text(f"#!/bin/sh\nprintf '%s' '{fc_list}'\n", encoding="utf-8")
+    (bin_dir / "fc-cache").write_text(f"#!/bin/sh\necho \"fc-cache $*\" >> '{log}'\n", encoding="utf-8")
+    for tool in ("fc-list", "fc-cache"):
+        (bin_dir / tool).chmod(0o755)
+    for tool in tools:
+        (bin_dir / tool).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (bin_dir / tool).chmod(0o755)
+    home = tmp_path / "home"
+    cached = home / ".raven" / "cache" / "pdf-preview" / "old-render.pdf"
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(b"%PDF drawn without a Han face")
+    result = subprocess.run(
+        ["sh", str(harness)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(home),
+            "RAVEN_HOME": str(home / ".raven"),
+            "XDG_DATA_HOME": str(home / "share"),
+            "NODE_OS": os_name,
+            "RAVEN_MACOS_APPS": str(tmp_path / "Applications"),
+        },
+    )
+    calls = log.read_text(encoding="utf-8").splitlines() if log.is_file() else []
+    return result, calls, cached, home
+
+
+def _published_face(tmp_path: Path, payload: bytes = b"OTTO a face that is not really one") -> dict[str, str]:
+    import hashlib
+
+    source = tmp_path / "upstream" / "NotoSansSC-Regular.otf"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(payload)
+    return {
+        "HAN_FONT_URL": source.as_uri(),
+        "HAN_FONT_SHA256": hashlib.sha256(payload).hexdigest(),
+        "HAN_FONT_BYTES": str(len(payload)),
+    }
+
+
+def test_the_font_step_is_skippable_and_runs_before_the_launch() -> None:
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    assert "install_cjk_fonts() {" in text
+    assert '[ -n "${RAVEN_MINIMAL:-}" ] || install_cjk_fonts' in text
+    main_body = text[text.index("main() {") :]
+    assert main_body.index("install_cjk_fonts") < main_body.index("launch_web")
+
+
+def test_a_linux_host_with_a_han_face_downloads_nothing_and_keeps_its_previews(tmp_path: Path) -> None:
+    """LibreOffice reads the same fontconfig as fc-list on Linux, so a Chinese
+    family listed there is one a page is drawn with."""
+    harness = _font_step_harness(tmp_path, **_published_face(tmp_path))
+    result, calls, cached, home = _run_font_step(
+        tmp_path, harness, os_name="linux", fc_list="Noto Sans CJK SC\n", tools=("soffice",)
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not (home / "share" / "fonts").exists()
+    assert cached.is_file(), "previews drawn with a Han face are not thrown away"
+    assert calls == []
+
+
+def test_a_linux_host_without_one_gets_the_face_and_loses_its_stale_previews(tmp_path: Path) -> None:
+    harness = _font_step_harness(tmp_path, **_published_face(tmp_path))
+    result, calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux", tools=("soffice",))
+
+    installed = home / "share" / "fonts" / "NotoSansSC-Regular.otf"
+    assert result.returncode == 0, result.stderr
+    assert installed.is_file()
+    assert calls == [f"fc-cache -f {installed.parent}"], "fontconfig only sees a new face once its cache is rebuilt"
+    assert not cached.exists(), "a preview cached before the face existed shows boxes forever"
+
+
+def test_a_download_that_does_not_match_its_digest_is_not_installed(tmp_path: Path) -> None:
+    """A truncated or substituted OTF still parses and draws nothing, which is
+    exactly the failure the step is for -- so a mismatch installs nothing."""
+    pins = _published_face(tmp_path)
+    pins["HAN_FONT_SHA256"] = "0" * 64
+    harness = _font_step_harness(tmp_path, **pins)
+    result, _calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux", tools=("soffice",))
+
+    fonts_dir = home / "share" / "fonts"
+    assert result.returncode == 0, "a failed download is a warning, not the end of the install"
+    assert list(fonts_dir.iterdir()) == [], "neither the face nor its partial download is left behind"
+    assert "package: fonts-noto-cjk" in result.stderr, "the hint names the package, not one distro's command"
+    assert "apt-get" not in result.stderr
+    assert cached.is_file()
+
+
+def test_a_mac_is_left_alone_by_the_font_step(tmp_path: Path) -> None:
+    """A Mac already ships Han faces, and raven links them into LibreOffice's
+    profiles itself (raven/utils/office.py): no download, no password, and no
+    file written outside the user's home."""
+    harness = _font_step_harness(tmp_path, **_published_face(tmp_path))
+    result, calls, cached, home = _run_font_step(tmp_path, harness, os_name="darwin")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "" and result.stderr == ""
+    assert calls == []
+    assert not (home / "share" / "fonts").exists()
+    assert cached.is_file()
+    assert "/usr/local/etc/fonts" not in INSTALL_SH.read_text(encoding="utf-8")
+
+
+# --- LibreOffice on a Mac without Homebrew ------------------------------------
+
+_OFFICE_STEP = ("sha256_of", "write_soffice_launcher", "install_libreoffice_dmg", "install_office")
+
+
+def _office_step_harness(tmp_path: Path, **overrides: str) -> Path:
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    bodies = [re.search(rf"^{name}\(\) \{{.*?^\}}$", text, re.S | re.M).group(0) for name in _OFFICE_STEP]
+    names = ("LO_VERSION", "LO_BUILD", "LO_SHA256_ARM64", "LO_SHA256_X64", "MACOS_APPS")
+    settings = [re.search(rf"^{name}=.*$", text, re.M).group(0) for name in names]
+    settings += [f"{name}='{value}'" for name, value in overrides.items()]
+    harness = tmp_path / "office-step.sh"
+    harness.write_text(
+        "set -eu\n"
+        "info() { :; }\n"
+        "ok() { printf 'OK %s\\n' \"$1\"; }\n"
+        "warn() { printf 'WARN %s\\n' \"$1\" >&2; }\n"
+        # The host running the suite may have its own soffice; this Mac has none.
+        'have() { case "$1" in soffice|libreoffice|brew) return 1 ;; esac; command -v "$1" >/dev/null 2>&1; }\n'
+        + "\n".join(settings)
+        + "\n"
+        + "\n".join(bodies)
+        + "\ninstall_office\n",
+        encoding="utf-8",
+    )
+    return harness
+
+
+def _run_office_step(tmp_path: Path, harness: Path, dmg: bytes = b"a dmg that is not really one"):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "calls.log"
+    payload = tmp_path / "payload.dmg"
+    payload.write_bytes(dmg)
+    (bin_dir / "curl").write_text(
+        "#!/bin/sh\n"
+        'while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; http*) url="$1"; shift ;; *) shift ;; esac; done\n'
+        f"echo \"curl $url\" >> '{log}'\n"
+        f"cp '{payload}' \"$out\"\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "hdiutil").write_text(
+        "#!/bin/sh\n"
+        f"echo \"hdiutil $1\" >> '{log}'\n"
+        '[ "$1" = attach ] || exit 0\n'
+        'while [ $# -gt 0 ]; do case "$1" in -mountpoint) mnt="$2"; shift 2 ;; *) shift ;; esac; done\n'
+        'mkdir -p "$mnt/LibreOffice.app/Contents/MacOS"\n'
+        "printf '#!/bin/sh\\n' > \"$mnt/LibreOffice.app/Contents/MacOS/soffice\"\n"
+        'chmod +x "$mnt/LibreOffice.app/Contents/MacOS/soffice"\n',
+        encoding="utf-8",
+    )
+    (bin_dir / "ditto").write_text('#!/bin/sh\ncp -R "$1" "$2"\n', encoding="utf-8")
+    for tool in ("curl", "hdiutil", "ditto"):
+        (bin_dir / tool).chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    apps = tmp_path / "Applications"
+    apps.mkdir(exist_ok=True)
+    result = subprocess.run(
+        ["sh", str(harness)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(home),
+            "TMPDIR": str(tmp_path),
+            "NODE_OS": "darwin",
+            "NODE_ARCH": "arm64",
+            "RAVEN_MACOS_APPS": str(apps),
+        },
+    )
+    calls = log.read_text(encoding="utf-8").splitlines() if log.is_file() else []
+    return result, calls, apps, home
+
+
+def test_a_mac_without_homebrew_still_gets_libreoffice(tmp_path: Path) -> None:
+    """Deck preview is the render-truth capability, and it was off on every Mac
+    without Homebrew: the script only warned. The release dmg is fetched,
+    verified, and copied in, with a launcher on PATH for the model's own soffice."""
+    import hashlib
+
+    dmg = b"the release dmg"
+    harness = _office_step_harness(tmp_path, LO_SHA256_ARM64=hashlib.sha256(dmg).hexdigest())
+    result, calls, apps, home = _run_office_step(tmp_path, harness, dmg)
+
+    assert result.returncode == 0, result.stderr
+    app = apps / "LibreOffice.app"
+    assert (app / "Contents" / "MacOS" / "soffice").is_file()
+    assert calls[0] == (
+        "curl https://download.documentfoundation.org/libreoffice/stable/26.8.0/mac/aarch64/"
+        "LibreOffice_26.8.0_MacOS_aarch64.dmg"
+    )
+    assert calls[1:] == ["hdiutil attach", "hdiutil detach"], "the image is detached again"
+    launcher = home / ".local" / "bin" / "soffice"
+    assert f'exec "{app}/Contents/MacOS/soffice" "$@"' in launcher.read_text(encoding="utf-8")
+    assert os.access(launcher, os.X_OK)
+    assert [p.name for p in tmp_path.glob("raven-libreoffice.*")] == [], "the download does not outlive the step"
+
+
+def test_a_dmg_that_does_not_match_its_digest_is_never_mounted(tmp_path: Path) -> None:
+    """An app copied from an image nobody verified is the one thing worse than
+    no preview. Both sources are tried, then the step gives up and says so."""
+    harness = _office_step_harness(tmp_path, LO_SHA256_ARM64="0" * 64)
+    result, calls, apps, home = _run_office_step(tmp_path, harness)
+
+    assert result.returncode == 0, "a failed download is a warning, not the end of the install"
+    assert [call.split("/")[2] for call in calls] == [
+        "download.documentfoundation.org",
+        "downloadarchive.documentfoundation.org",
+    ]
+    assert not (apps / "LibreOffice.app").exists()
+    assert not (home / ".local" / "bin" / "soffice").exists()
+    assert "libreoffice.org" in result.stderr
+
+
+def test_an_app_already_in_applications_gets_a_launcher_and_no_second_copy(tmp_path: Path) -> None:
+    """The libreoffice.org dmg puts nothing on PATH. Downloading again would
+    copy a second bundle over the one the user installed."""
+    harness = _office_step_harness(tmp_path)
+    existing = tmp_path / "Applications" / "LibreOffice.app" / "Contents" / "MacOS" / "soffice"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("#!/bin/sh\n# theirs\n", encoding="utf-8")
+    existing.chmod(0o755)
+    result, calls, _apps, home = _run_office_step(tmp_path, harness)
+
+    assert result.returncode == 0, result.stderr
+    assert calls == [], "nothing is downloaded or mounted"
+    assert "theirs" in existing.read_text(encoding="utf-8")
+    assert (home / ".local" / "bin" / "soffice").is_file()
+
+
+def test_a_launcher_that_cannot_be_written_does_not_abort_the_install(tmp_path: Path) -> None:
+    """The step is best effort: an existing app whose launcher cannot be written
+    (here ~/.local is a file, which blocks root as well) is a warning, and the
+    installer carries on under set -e."""
+    harness = _office_step_harness(tmp_path)
+    existing = tmp_path / "Applications" / "LibreOffice.app" / "Contents" / "MacOS" / "soffice"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("#!/bin/sh\n", encoding="utf-8")
+    existing.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".local").write_text("not a directory", encoding="utf-8")
+    harness.write_text(harness.read_text(encoding="utf-8") + "echo STEP_FINISHED\n", encoding="utf-8")
+
+    result, calls, _apps, _home = _run_office_step(tmp_path, harness)
+
+    assert result.returncode == 0, result.stderr
+    assert "STEP_FINISHED" in result.stdout, "set -e must not abort the installer here"
+    assert "Could not write ~/.local/bin/soffice" in result.stderr
+    assert calls == []
+
+
+def test_a_linux_host_without_libreoffice_downloads_no_font(tmp_path: Path) -> None:
+    """The LibreOffice offer declined, or a distro without apt: nothing will
+    render, so the 8 MB face would be fetched for nobody."""
+    harness = _font_step_harness(tmp_path, office=False, **_published_face(tmp_path))
+    result, calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "" and result.stderr == ""
+    assert not (home / "share" / "fonts").exists()
+    assert calls == []
+    assert cached.is_file()
+
+
+def test_the_pinned_face_by_name_counts_as_a_han_face(tmp_path: Path) -> None:
+    """A host with the fontconfig library but no fc-list binary: the file this
+    step installs, found by its own name, means a second run downloads nothing."""
+    harness = _font_step_harness(tmp_path, **_published_face(tmp_path))
+    fonts = tmp_path / "home" / "share" / "fonts"
+    fonts.mkdir(parents=True)
+    (fonts / "NotoSansSC-Regular.otf").write_bytes(b"already here")
+    result, calls, cached, _home = _run_font_step(tmp_path, harness, os_name="linux", tools=("soffice",))
+
+    assert result.returncode == 0, result.stderr
+    assert (fonts / "NotoSansSC-Regular.otf").read_bytes() == b"already here"
+    assert calls == []
+    assert cached.is_file()
+
+
+def test_the_helpers_are_defined_before_the_sections_that_use_them() -> None:
+    """The file reads top-down; sha256_of is first called from the LibreOffice
+    step, so it lives with the other helpers."""
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    assert text.index("sha256_of() {") < text.index("install_libreoffice_dmg() {")
+    assert text.index("sha256_of() {") < text.index("# --- 0. platform detection")

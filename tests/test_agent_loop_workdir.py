@@ -213,7 +213,8 @@ def test_sandbox_mounts_the_root_covering_every_session(tmp_path: Path, monkeypa
         recorded["extra_volumes"] = list(extra_volumes)
 
         class _Stub:
-            pass
+            # Stands in for the sandbox built with this mount.
+            is_sandboxed = True
 
         return _Stub()
 
@@ -240,7 +241,8 @@ def test_sandbox_skips_the_home_volume_when_the_mount_already_covers_it(tmp_path
         recorded["extra_volumes"] = list(extra_volumes)
 
         class _Stub:
-            pass
+            # Stands in for the sandbox built with this mount.
+            is_sandboxed = True
 
         return _Stub()
 

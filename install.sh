@@ -50,6 +50,11 @@ ok()    { printf '\033[1;32m+\033[0m %s\n' "$1"; }
 warn()  { printf '\033[1;33m!\033[0m %s\n' "$1" >&2; }
 die()   { printf '\033[1;31mx\033[0m %s\n' "$1" >&2; exit 1; }
 have()  { command -v "$1" >/dev/null 2>&1; }
+sha256_of() {
+  if have sha256sum; then sha256sum "$1" | cut -d' ' -f1
+  elif have shasum; then shasum -a 256 "$1" | cut -d' ' -f1
+  else printf ''; fi
+}
 
 # --- 0. platform detection -------------------------------------------------
 detect_platform() {
@@ -525,6 +530,68 @@ install_browser() {
     || warn "Chromium download failed; the browser tool stays off. Retry later with: $py -m playwright install chromium"
 }
 
+# macOS without Homebrew: the release dmg, pinned the way the cask pins it --
+# one version, one digest per build. The stable directory drops a release once
+# the next one ships and the archive keeps it byte for byte, so the archive is
+# the fallback rather than the only source. Verified before it is mounted.
+LO_VERSION="26.8.0"
+LO_BUILD="26.8.0.3"
+LO_SHA256_ARM64="8858d8058da4f862f47559486814e65efc27294da67c5e4bb56b006b1ee59f89"
+LO_SHA256_X64="2dcbce4894e01bc1ecd594658e2cbda70ff7bfcd0b310f35d38887797172d09e"
+
+# Where a Mac's apps live; overridable so a test can install into a directory
+# of its own. raven's own lookup (raven/utils/office.py) checks the same two.
+MACOS_APPS="${RAVEN_MACOS_APPS:-/Applications}"
+
+# The cask's own trick: a two-line launcher rather than a symlink, because
+# soffice finds the rest of its bundle from the path it was started by. On PATH
+# because the model checks a deck by running `soffice` itself.
+write_soffice_launcher() {
+  launcher_dir="$HOME/.local/bin"
+  mkdir -p "$launcher_dir" \
+    && printf '#!/bin/sh\nexec "%s/Contents/MacOS/soffice" "$@"\n' "$1" > "$launcher_dir/soffice" \
+    && chmod +x "$launcher_dir/soffice" \
+    && ok "LibreOffice launcher: $launcher_dir/soffice"
+}
+
+install_libreoffice_dmg() {
+  case "$NODE_ARCH" in
+    arm64) lo_dir=aarch64; lo_arch=aarch64; lo_sha="$LO_SHA256_ARM64" ;;
+    x64) lo_dir=x86_64; lo_arch=x86-64; lo_sha="$LO_SHA256_X64" ;;
+    *) return 1 ;;
+  esac
+  # /Applications takes an admin's write without sudo; anyone else gets their
+  # own Applications folder.
+  apps="$MACOS_APPS"
+  [ -w "$apps" ] || apps="$HOME/Applications"
+  work="$(mktemp -d "${TMPDIR:-/tmp}/raven-libreoffice.XXXXXX")" || return 1
+  dmg="$work/LibreOffice.dmg"
+  info "Downloading LibreOffice $LO_VERSION for deck preview (about 300 MB)..."
+  fetched=""
+  for url in \
+    "https://download.documentfoundation.org/libreoffice/stable/$LO_VERSION/mac/$lo_dir/LibreOffice_${LO_VERSION}_MacOS_$lo_arch.dmg" \
+    "https://downloadarchive.documentfoundation.org/libreoffice/old/$LO_BUILD/mac/$lo_dir/LibreOffice_${LO_BUILD}_MacOS_$lo_arch.dmg"; do
+    if curl -fsSL --retry 2 --max-time 1800 -o "$dmg" "$url" && [ "$(sha256_of "$dmg")" = "$lo_sha" ]; then
+      fetched=1
+      break
+    fi
+  done
+  if [ -z "$fetched" ]; then
+    rm -rf "$work"
+    return 1
+  fi
+  mkdir -p "$work/mnt" "$apps" || { rm -rf "$work"; return 1; }
+  hdiutil attach -nobrowse -readonly -noverify -noautoopen -quiet -mountpoint "$work/mnt" "$dmg" \
+    || { rm -rf "$work"; return 1; }
+  copied=0
+  ditto "$work/mnt/LibreOffice.app" "$apps/LibreOffice.app" || copied=1
+  hdiutil detach -quiet "$work/mnt" || hdiutil detach -quiet -force "$work/mnt" || true
+  rm -rf "$work"
+  [ "$copied" = 0 ] || { rm -rf "$apps/LibreOffice.app"; return 1; }
+  ok "LibreOffice $LO_VERSION installed to $apps/LibreOffice.app"
+  write_soffice_launcher "$apps/LibreOffice.app"
+}
+
 install_office() {
   # soffice and libreoffice are the two launcher names the runtime resolves
   # (raven/utils/office.py); either one means deck preview already works.
@@ -532,18 +599,28 @@ install_office() {
   have libreoffice && return 0
   case "$NODE_OS" in
     darwin)
+      # An app already in an Applications folder (the libreoffice.org dmg, or
+      # an earlier run of this script) only lacks a launcher on PATH. Never
+      # install a second copy over it.
+      for app in "$MACOS_APPS/LibreOffice.app" "$HOME/Applications/LibreOffice.app"; do
+        if [ -x "$app/Contents/MacOS/soffice" ]; then
+          write_soffice_launcher "$app" \
+            || warn "Could not write ~/.local/bin/soffice; raven still finds $app, but a plain soffice command will not."
+          return 0
+        fi
+      done
+      # A cask needs no sudo, so install directly rather than prompting.
       if have brew; then
         info "Installing LibreOffice (deck preview)..."
-        # A cask needs no sudo, so install directly rather than prompting.
-        brew install --cask libreoffice \
-          || warn "LibreOffice install failed; deck preview stays off. Retry later with: brew install --cask libreoffice"
-      else
-        warn "LibreOffice not found; deck preview stays off. Install it later with: brew install --cask libreoffice"
+        brew install --cask libreoffice && return 0
+        warn "brew could not install LibreOffice; fetching it from libreoffice.org instead."
       fi
+      install_libreoffice_dmg \
+        || warn "LibreOffice install failed; deck preview stays off. Install it later from https://www.libreoffice.org/download/ or with: brew install --cask libreoffice"
       ;;
     linux)
       if ! have apt-get; then
-        warn "LibreOffice not found; deck preview stays off. Install it with your system package manager (package: libreoffice)."
+        warn "LibreOffice not found; deck preview stays off. Install it with your system package manager (packages: libreoffice fonts-noto-cjk)."
         return 0
       fi
       # Installing needs sudo, so ask first -- and under `curl | sh` stdin is
@@ -552,35 +629,101 @@ install_office() {
       # without -i), so probe by opening it rather than stat-ing it; no
       # openable terminal means skip cleanly, never hang on the read.
       if ! { : < /dev/tty; } 2>/dev/null || ! have sudo; then
-        warn "LibreOffice not found; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+        warn "LibreOffice not found; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice fonts-noto-cjk"
         return 0
       fi
       # Default yes: for the deck lane this is the one dependency that matters
       # (the whole render-truth capability is soffice being present), and the
       # macOS path already installs it without asking. sudo's own password
       # prompt still stands between Enter and any change.
-      printf 'Install LibreOffice for deck preview (needs sudo)? Without it a deck still builds, but no page is ever rendered, measured or checked. [Y/n] '
+      printf 'Install LibreOffice and a Chinese font for deck preview (needs sudo)? Without them a deck still builds, but no page is ever rendered, measured or checked. [Y/n] '
       # A failed read is not an Enter: Ctrl-D, or a tty that closed after the
       # gate passed, must decline -- only a deliberate empty Enter accepts.
       answer=""
       read -r answer < /dev/tty || {
-        warn "Skipping LibreOffice (no answer read); deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+        warn "Skipping LibreOffice (no answer read); deck preview stays off. Install it later with: sudo apt-get install -y libreoffice fonts-noto-cjk"
         return 0
       }
       case "$answer" in
         n|N|[nN][oO])
-          warn "Skipping LibreOffice; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+          warn "Skipping LibreOffice; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice fonts-noto-cjk"
           ;;
         *)
           # sudo's password prompt also reads stdin: give it the tty too.
           # shellcheck disable=SC2024  # input redirect on purpose; opening /dev/tty needs no elevation.
-          sudo apt-get install -y libreoffice < /dev/tty \
-            || warn "LibreOffice install failed; deck preview stays off. Retry later with: sudo apt-get install -y libreoffice"
+          sudo apt-get install -y libreoffice fonts-noto-cjk < /dev/tty \
+            || warn "LibreOffice install failed; deck preview stays off. Retry later with: sudo apt-get install -y libreoffice fonts-noto-cjk"
           ;;
       esac
       ;;
   esac
 }
+
+# --- 4b. Chinese on a rendered page -----------------------------------------
+# A .pptx names its fonts and carries none, so a deck's Chinese is drawn with
+# whatever this machine's LibreOffice can reach. With nothing, the conversion
+# still succeeds and every Han glyph comes out as a box -- in the preview panel,
+# in the delivery thumbnail, and in the page the model renders to check its work.
+#
+# Linux: LibreOffice's apt package brings no CJK face. The offer above installs
+# fonts-noto-cjk alongside it; otherwise a pinned Noto Sans SC goes into the
+# user's font directory, which fontconfig reads without being told. The pin is
+# the Simplified Chinese subset, Regular weight only: bold is synthesized, and
+# Traditional Chinese or Japanese glyphs outside the subset still draw as boxes.
+# Enough for zh-CN decks; fonts-noto-cjk is the full answer.
+#
+# macOS needs nothing here. The system already ships Han faces; LibreOffice's
+# macOS build just cannot see them when it renders headless, and raven links
+# them into the profile of every conversion it runs, and into the default one
+# the model's own soffice uses (raven/utils/office.py) -- no file outside the
+# user's home, no password.
+
+HAN_FONT_URL="https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf"
+HAN_FONT_SHA256="faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9"
+HAN_FONT_BYTES="8331336"
+HAN_FONT_NAME="NotoSansSC-Regular.otf"
+
+# LibreOffice reads the same fontconfig as fc-list here, so its answer holds;
+# the pinned file is checked by name for a host with the library but no fc-list.
+linux_has_han_face() {
+  [ -n "$(fc-list :lang=zh family 2>/dev/null)" ] && return 0
+  [ -f "${XDG_DATA_HOME:-$HOME/.local/share}/fonts/$HAN_FONT_NAME" ]
+}
+
+install_linux_cjk_font() {
+  dir="${XDG_DATA_HOME:-$HOME/.local/share}/fonts"
+  hint="Install one with your system package manager (package: fonts-noto-cjk)."
+  mkdir -p "$dir" || { warn "Could not create $dir; Chinese pages in a deck will render as boxes. $hint"; return 1; }
+  part="$dir/.$HAN_FONT_NAME.$$.part"
+  info "Downloading a Chinese font for deck preview..."
+  # Size and digest both, before the file is put in place: a truncated OTF
+  # still parses and draws nothing, which is the failure this step exists for.
+  if curl -fsSL --max-time 120 -o "$part" "$HAN_FONT_URL" \
+    && [ "$(wc -c < "$part" | tr -d ' ')" = "$HAN_FONT_BYTES" ] \
+    && { actual="$(sha256_of "$part")"; [ -z "$actual" ] || [ "$actual" = "$HAN_FONT_SHA256" ]; } \
+    && mv -f "$part" "$dir/$HAN_FONT_NAME"; then
+    have fc-cache && fc-cache -f "$dir" >/dev/null 2>&1
+    ok "Chinese font installed to $dir/$HAN_FONT_NAME"
+    return 0
+  fi
+  rm -f "$part"
+  warn "The Chinese font download failed; Chinese pages in a deck will render as boxes. $hint"
+  return 1
+}
+
+install_cjk_fonts() {
+  [ "$NODE_OS" = linux ] || return 0
+  # No LibreOffice (the offer declined, a distro without apt): nothing renders,
+  # so the face would be 8 MB nobody reads.
+  have soffice || have libreoffice || return 0
+  linux_has_han_face && return 0
+  install_linux_cjk_font || return 0
+  # Previews and gallery covers cached before this were drawn without a Han
+  # face, and they are keyed by the deck's own stamp, so nothing else would
+  # ever replace them.
+  rm -rf "$RAVEN_HOME/cache/pdf-preview" "$RAVEN_HOME/cache/deck-template-covers"
+}
+
 
 # --- 5. launch -------------------------------------------------------------
 # The install ends on a running page. `--stop` first, because a gateway an
@@ -622,6 +765,7 @@ main() {
 
   [ -n "${RAVEN_MINIMAL:-}" ] || install_browser
   [ -n "${RAVEN_MINIMAL:-}" ] || install_office
+  [ -n "${RAVEN_MINIMAL:-}" ] || install_cjk_fonts
 
   # Before the launch, not after: the page holds this terminal until Ctrl-C,
   # and `uv tool update-shell` only reaches future shells.

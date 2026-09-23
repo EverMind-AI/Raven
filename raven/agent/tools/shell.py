@@ -77,6 +77,13 @@ class ExecTool(Tool):
         self.follow_binding = follow_binding
         self.path_append = path_append
         self._executor: SandboxExecutor = executor if executor is not None else DirectExecutor()
+        if not self._executor.is_sandboxed:
+            # The model checks a deck by running `soffice --convert-to` itself,
+            # with LibreOffice's default profile; on a Mac that profile is the
+            # only place its Chinese faces can come from (raven/utils/office.py).
+            from raven.utils import office
+
+            office.link_han_faces_into_default_profile()
 
     @property
     def timeout(self) -> int:
