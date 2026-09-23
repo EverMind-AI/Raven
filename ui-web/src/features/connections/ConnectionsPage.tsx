@@ -270,9 +270,6 @@ function ConnForm({ c }: { c: ConnChannel }): JSX.Element {
      -- an adapter that would not start, a gateway that could not be asked -- is
      a reason the reader is owed, so the card stays with the state line up. */
   const live = connState(c) === 'live'
-  useEffect(() => {
-    if (sent && live) store.closeChannel()
-  }, [sent, live])
   const fieldRow = (f: ConnField): JSX.Element => {
     /* The human sentence is the label; the config key rides on its tooltip.
        The catalogue speaks first so the label follows the reader's language,
@@ -324,8 +321,19 @@ function ConnForm({ c }: { c: ConnChannel }): JSX.Element {
     setDirty(false)
     /* Always "on". `enable` used to be `!c.on`, which read as a toggle: saving
        a correction to a connected channel turned it off. Disconnecting is its
-       own control in the dialog, so this one only ever connects. */
-    void store.apply(c, patch, true)
+       own control in the dialog, so this one only ever connects.
+     *
+     * The card closes when the write has been applied and the entrance reads
+     * live after it, not before. A card opened on an entrance that was already
+     * receiving used to close on the press itself, reporting an answer nothing
+     * had given yet; and a rebuild that finishes before the status is re-read
+     * shows no intermediate state at all, so the answer has to be read off the
+     * write's own completion rather than waited for as a transition. A write
+     * the gateway refused leaves the row as it was, live included, and that is
+     * not an answer either: the card stays with the failure the source toasted. */
+    void store.apply(c, patch, true).then((applied) => {
+      if (applied && connState(c) === 'live') store.closeChannel()
+    })
   }
   return (
     <>

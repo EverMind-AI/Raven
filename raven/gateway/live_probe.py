@@ -98,18 +98,26 @@ async def channel_qr(name: str) -> dict[str, Any] | None:
     return await _ask(endpoint[0], endpoint[1], "gateway.channels.qr", {"name": name})
 
 
-async def channel_start(name: str, *, enabled: bool = True) -> str | None:
+async def channel_start(name: str, *, enabled: bool = True, restart: bool = False) -> str | None:
     """Ask the gateway to start (or stop) one channel's adapter now.
 
     Answers the gateway's outcome word, or None when no gateway answered --
     which is not a failure to report as one: with nothing running there is no
     adapter to start, and the config write the caller just made is what the
     next launch reads.
+
+    ``restart`` rebuilds an adapter that is already running, which is the only
+    way a credential written while it runs reaches it.
     """
     endpoint = _endpoint()
     if endpoint is None:
         return None
-    result = await _ask(endpoint[0], endpoint[1], "gateway.channels.start", {"name": name, "enabled": enabled})
+    result = await _ask(
+        endpoint[0],
+        endpoint[1],
+        "gateway.channels.start",
+        {"name": name, "enabled": enabled, "restart": restart},
+    )
     outcome = (result or {}).get("outcome")
     return str(outcome) if outcome else None
 

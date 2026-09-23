@@ -128,6 +128,10 @@ async def test_channels_start_switches_the_adapter_and_reports_the_outcome() -> 
             self.calls.append(("stop", name))
             return "stopped"
 
+        async def restart_one(self, name: str) -> str:
+            self.calls.append(("restart", name))
+            return "started"
+
     mgr = _Mgr()
     d = Dispatcher()
     register_control_methods(d, channel_manager=mgr)
@@ -136,7 +140,21 @@ async def test_channels_start_switches_the_adapter_and_reports_the_outcome() -> 
     assert (await _dispatch(d, "gateway.channels.start", {"name": "telegram", "enabled": False}))["result"] == {
         "outcome": "stopped"
     }
-    assert mgr.calls == [("start", "telegram"), ("stop", "telegram")]
+    # A write that changed what the adapter was built with: a running one holds
+    # its config slice, so "start" would answer "already" and change nothing.
+    assert (await _dispatch(d, "gateway.channels.start", {"name": "telegram", "restart": True}))["result"] == {
+        "outcome": "started"
+    }
+    # And a stop stays a stop: there is nothing to rebuild on the way down.
+    assert (await _dispatch(d, "gateway.channels.start", {"name": "telegram", "enabled": False, "restart": True}))[
+        "result"
+    ] == {"outcome": "stopped"}
+    assert mgr.calls == [
+        ("start", "telegram"),
+        ("stop", "telegram"),
+        ("restart", "telegram"),
+        ("stop", "telegram"),
+    ]
 
     d2 = Dispatcher()
     register_control_methods(d2, channel_manager=None)

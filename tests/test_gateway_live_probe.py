@@ -81,6 +81,44 @@ async def test_a_wrong_token_answers_nothing_rather_than_raising(plane, monkeypa
     assert await live_probe.status() is None
 
 
+async def test_channel_start_carries_the_restart_flag_over_the_wire(monkeypatch) -> None:
+    """The flag is what makes a credential saved on a running channel reach its
+    adapter, and it has to survive the frame: the far side validates params
+    against a strict model, so one the plane does not declare is an
+    invalid_params rather than a restart.
+    """
+
+    class _Mgr:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        async def start_one(self, name: str) -> str:
+            self.calls.append(("start", name))
+            return "started"
+
+        async def stop_one(self, name: str) -> str:
+            self.calls.append(("stop", name))
+            return "stopped"
+
+        async def restart_one(self, name: str) -> str:
+            self.calls.append(("restart", name))
+            return "started"
+
+    mgr = _Mgr()
+    dispatcher = Dispatcher()
+    register_control_methods(dispatcher, channel_manager=mgr)
+    server = ControlPlaneServer(0, auth_token="tok")
+    server.bind(dispatcher)
+    host, port = await server.start()
+    monkeypatch.setattr(live_probe, "_endpoint", lambda: (f"ws://{host}:{port}/ws", "tok"))
+    try:
+        assert await live_probe.channel_start("telegram") == "started"
+        assert await live_probe.channel_start("telegram", restart=True) == "started"
+    finally:
+        await server.stop()
+    assert mgr.calls == [("start", "telegram"), ("restart", "telegram")]
+
+
 async def test_no_gateway_means_no_answer(monkeypatch) -> None:
     monkeypatch.setattr(live_probe, "_endpoint", lambda: None)
     live_probe.reset_cache()

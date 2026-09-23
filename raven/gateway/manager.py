@@ -90,6 +90,13 @@ class ChannelManager:
         # Hot-started channels' run tasks, held so nothing collects them: the
         # loop keeps only a weak reference to a task nobody awaits.
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        # One lock per channel name. Starting and stopping both rebuild the
+        # entry under that name and both await inside it, and the page fires
+        # either without waiting for the last one, so unserialised they
+        # interleave: the stop resumes after the start has installed a new
+        # adapter and cancels its task and retires its outlet by name, leaving
+        # a channel that reads as running with nothing listening.
+        self._locks: dict[str, asyncio.Lock] = {}
         # Set by the gateway wiring to register the new channel's outlet on the
         # DeliveryHub. A callback rather than the hub itself, so this module
         # stays unaware of the spine -- and so a channel started after launch
@@ -155,12 +162,46 @@ class ChannelManager:
                     f'Set ["*"] to allow everyone, or add specific user IDs.'
                 )
 
+    def _lock(self, name: str) -> asyncio.Lock:
+        """The lock serialising this channel's start and stop."""
+        lock = self._locks.get(name)
+        if lock is None:
+            lock = self._locks[name] = asyncio.Lock()
+        return lock
+
+    def _forget_task(self, name: str, task: asyncio.Task[None]) -> None:
+        """Drop a start task's record, unless the name already holds another.
+
+        A cancelled task's done callback runs a tick after the cancel, by which
+        time a restart has installed its own task under the same name; popping
+        by name alone threw that record away, and a start with no record looks
+        exactly like one that has finished.
+        """
+        if self._tasks.get(name) is task:
+            del self._tasks[name]
+
     async def _start_channel(self, name: str, channel: Channel) -> None:
-        """Start a channel and log any exceptions."""
+        """Run one channel's start, leaving nothing behind that claims it runs.
+
+        Adapters set ``_running`` before the first call that can fail (a
+        rejected token raises from inside ``start()``), so logging the
+        exception and walking away left the object in the table reading as
+        running: the row drew green, and every later attempt met
+        ``start_one``'s "already". The teardown is best effort -- an adapter
+        that never finished coming up often refuses to be stopped -- so the
+        flag is cleared whatever ``stop()`` did with it.
+        """
         try:
             await channel.start()
         except Exception as e:
             logger.error("Failed to start channel {}: {}", name, e)
+            try:
+                await channel.stop()
+            except Exception as stop_error:
+                logger.warning("Error stopping {} after a failed start: {}", name, stop_error)
+            mark_stopped = getattr(channel, "mark_stopped", None)
+            if mark_stopped is not None:
+                mark_stopped()
 
     async def start_all(self) -> None:
         """Start all channels (they run forever). Outbound delivery is the
@@ -178,7 +219,7 @@ class ChannelManager:
             # not running. Without this the launch path was invisible here and
             # the two states looked identical.
             self._tasks[name] = task
-            task.add_done_callback(lambda _t, n=name: self._tasks.pop(n, None))
+            task.add_done_callback(lambda t, n=name: self._forget_task(n, t))
             tasks.append(task)
 
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -211,6 +252,12 @@ class ChannelManager:
         the snapshot this gateway launched with, and in it the channel is still
         off.
         """
+        async with self._lock(name):
+            return await self._start_one(name)
+
+    async def _start_one(self, name: str) -> str:
+        """``start_one`` without the lock, so ``restart_one`` holds one lock
+        across both halves."""
         # An adapter in the table is not the same as an adapter that works: a
         # scan login nobody completed leaves the object here with `is_running`
         # false (weixin gives up after the code expires three times), and
@@ -224,7 +271,7 @@ class ChannelManager:
             task = self._tasks.get(name)
             if (task is not None and not task.done()) or getattr(existing, "is_running", False):
                 return "already"
-            await self.stop_one(name)
+            await self._stop_one(name)
         from raven.channels.registry import discover_specs
         from raven.config.admission import PluginConfigError
         from raven.config.loader import load_config
@@ -254,7 +301,7 @@ class ChannelManager:
         logger.info("Starting {} channel (enabled while running)...", name)
         task = asyncio.create_task(self._start_channel(name, channel))
         self._tasks[name] = task
-        task.add_done_callback(lambda _t, n=name: self._tasks.pop(n, None))
+        task.add_done_callback(lambda t, n=name: self._forget_task(n, t))
         return "started"
 
     async def stop_one(self, name: str) -> str:
@@ -266,23 +313,46 @@ class ChannelManager:
         holds the adapter it started with, so the next start of this channel
         would have received on the new adapter and replied through this one.
         """
+        async with self._lock(name):
+            return await self._stop_one(name)
+
+    async def _stop_one(self, name: str) -> str:
+        """``stop_one`` without the lock (see :meth:`_start_one`)."""
         channel = self.channels.pop(name, None)
         if channel is None:
             return "absent"
+        # Taken with the adapter it belongs to, not after the await: the task
+        # cancelled here has to be this adapter's, never whatever the name
+        # holds by the time the stop finishes.
+        task = self._tasks.get(name)
         try:
             await channel.stop()
             logger.info("Stopped {} channel", name)
         except Exception as e:
             logger.error("Error stopping {}: {}", name, e)
-        task = self._tasks.pop(name, None)
-        if task is not None and not task.done():
-            task.cancel()
+        if task is not None:
+            self._forget_task(name, task)
+            if not task.done():
+                task.cancel()
         if self.on_stopped is not None:
             try:
                 await self.on_stopped(name)
             except Exception as e:
                 logger.error("Failed to retire outlet for channel {}: {}", name, e)
         return "stopped"
+
+    async def restart_one(self, name: str) -> str:
+        """Stop one channel and start it again, under a single lock.
+
+        For a config change a live adapter cannot pick up: it holds the slice
+        it was built with and re-reads nothing, so a corrected credential only
+        reaches it through a rebuild. Answers ``start_one``'s word -- the stop
+        half has nothing the caller draws, an absent adapter being a plain
+        start.
+        """
+        async with self._lock(name):
+            await self._stop_one(name)
+            return await self._start_one(name)
 
     def get_channel(self, name: str) -> Channel | None:
         """Get a channel by name."""

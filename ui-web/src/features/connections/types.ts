@@ -51,6 +51,8 @@ export interface ConnectionsSource {
      source cannot say, and the page then claims nothing. */
   hostRunning?(): boolean | undefined
   toggle(c: ConnChannel, on: boolean): Promise<unknown>
-  apply(c: ConnChannel, patch: Record<string, string>, enable: boolean): Promise<unknown>
+  /* Resolves true once the write was applied, false when it was refused or never
+     reached the gateway (the source has already said why). */
+  apply(c: ConnChannel, patch: Record<string, string>, enable: boolean): Promise<boolean>
   qr(c: ConnChannel): Promise<ConnQr | null>
 }

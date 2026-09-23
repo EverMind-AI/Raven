@@ -90,13 +90,15 @@ export function toggle(c: ConnChannel): void {
 
 /* Credentials and the switch travel together; the source speaks its own
    failures, so this only has to repaint whatever get() the write left. */
-export async function apply(c: ConnChannel, patch: Record<string, string>, enable: boolean): Promise<void> {
+export async function apply(c: ConnChannel, patch: Record<string, string>, enable: boolean): Promise<boolean> {
+  let applied = false
   try {
-    await source().apply(c, patch, enable)
+    applied = await source().apply(c, patch, enable)
   } catch {
     /* the source already toasted */
   }
   redraw()
+  return applied
 }
 
 /* A language flip changes nothing in this state, but every visible string

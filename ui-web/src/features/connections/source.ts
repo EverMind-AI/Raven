@@ -147,12 +147,16 @@ export const connSource: ConnectionsSource = {
       await loadChannels()
       /* Saved and not started are two different things, and this path said only
          the first: the pane's own state line then had to carry a refusal it has
-         no words for. */
+         no words for. The write itself was applied either way, which is what
+         the caller's boolean says; whether the adapter then came up is the
+         row's to show. */
       const refused = refusalOf(!!enable, r)
       if (refused) toast(t('gui.conn.toggle_failed', { name: chanName(c), detail: refused }))
+      return true
     } catch (e) {
       const err = e as { data?: { detail?: string }; message?: string }
       toast(t('gui.op.save_failed', { detail: (err.data && err.data.detail) || err.message || String(e) }))
+      return false
     }
   },
   /* One scan-code read; the island polls this while the dialog is open. Null

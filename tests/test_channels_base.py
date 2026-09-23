@@ -38,6 +38,15 @@ def test_channelbase_is_running_reflects_flag():
     assert ch.is_running is True
 
 
+def test_channelbase_mark_stopped_clears_the_flag():
+    """What the manager reaches for when a start raised after the flag was up:
+    the adapter is not running, whatever its own teardown managed to do."""
+    ch = _stub()
+    ch._running = True
+    ch.mark_stopped()
+    assert ch.is_running is False
+
+
 def test_channelbase_default_is_allowed():
     assert _stub([]).is_allowed("u1") is False  # empty = deny all
     assert _stub(["*"]).is_allowed("u1") is True  # wildcard
