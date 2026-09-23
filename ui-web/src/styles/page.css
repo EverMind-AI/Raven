@@ -2451,10 +2451,24 @@ textarea:focus, textarea:focus-visible,
 @keyframes go-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .go[data-state="sending"] svg { animation-duration: 2.4s; } }
 
-/* wraps instead of pushing the usage line past the edge on a narrow window */
 /* Pulled left of the field it sits under, so the first control's own padding
-   lines its glyph up with the text above rather than with its box. */
-.under { display: flex; align-items: center; gap: 4px; margin: 0; padding: 16px 16px 16px 8px; flex-wrap: wrap; }
+   lines its glyph up with the text above rather than with its box.
+
+   One row at every width the document allows, never wrapped: a row that may
+   wrap picks its breaks from its items' whole widths before any of them
+   shrinks, so the send button, last in the row, is what a narrow column would
+   drop onto a line of its own. The items whose width is their text -- the
+   folder, the mode, the meter and the model -- give instead, each taking an
+   equal share of what the fixed controls leave and never more than its own
+   width, so a short name stays whole while a long one ends in an ellipsis. */
+.under { display: flex; align-items: center; gap: 4px; margin: 0; padding: 16px 16px 16px 8px; }
+.under > .chrome-anch:has(> .chip), .under > .chip.model, .under > .meter {
+  flex: 1 1 0; min-width: 0; max-width: max-content;
+}
+/* The chip gives with the anchor it hangs in, and only its name clips: the
+   anchor must not, because its popover stands outside the anchor's box. */
+.under > .chrome-anch > .chip { flex-shrink: 1; min-width: 0; }
+#wdName, #permName, #modelName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The "+" (src/chrome/PlusMenu.tsx): a 30px round target; open, its cross turns
    into a close mark. */
 .plus { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: var(--rail-ink); }
