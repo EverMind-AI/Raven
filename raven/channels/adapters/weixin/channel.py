@@ -39,9 +39,11 @@ from raven.utils.messages import split_message
 
 _DEDUP_CAP = 1000
 
-# How long the poll parks before re-reading a session pause it may no longer be
-# under (see `_poll_once`).
-_PAUSE_TICK_S = 30
+
+class SessionEndedError(Exception):
+    """errcode -14: WeChat invalidated this bot session, which happens when the
+    same account is paired somewhere else. Raised out of the poll so ``start()``
+    can pair again instead of holding a credential the service has retired."""
 
 
 def _registrable_domain(host: str) -> str:
@@ -123,7 +125,10 @@ class WeixinChannel(ChannelBase):
         self._seen: OrderedDict[str, None] = OrderedDict()
         self._state_dir: Path | None = None
         self._poll_timeout_s: int = p.DEFAULT_LONG_POLL_TIMEOUT_S
-        self._session_pause_until: float = 0.0
+        # When the session in hand was paired. Only a fresh one is timestamped:
+        # a restored one is of unknown age, and the guard in `_sign_in_again`
+        # must not delay the code it needs (see there).
+        self._paired_at: float = 0.0
         # The login QR (a scan URL) currently awaiting a scan, exposed so the web
         # UI can render it instead of the user reading the gateway log. None once
         # login is confirmed or the flow gives up.
@@ -140,16 +145,14 @@ class WeixinChannel(ChannelBase):
 
     @property
     def connected(self) -> bool:
-        """Whether an auth token is held and the session behind it is usable, as
-        opposed to the channel task merely running (which is true before the
-        login QR is even fetched).
+        """Whether an auth token is held, as opposed to the channel task merely
+        running (which is true before the login QR is even fetched).
 
-        A session pause is not a pairing the reader still has: for the hour
-        errcode -14 buys, the poll idles and every send raises
-        (:meth:`_assert_session_active`), so reporting the token alone drew a
-        live row over an hour in which nothing could arrive.
+        A session the service retired is dropped rather than kept
+        (:meth:`_drop_session`), so a running channel reading false here is one
+        with a code up or about to be.
         """
-        return bool(self._token) and not self.paused_until
+        return bool(self._token)
 
     # ── state persistence ─────────────────────────────────────────────
 
@@ -207,6 +210,23 @@ class WeixinChannel(ChannelBase):
             # A silent failure here means the auth token never hits disk and
             # the next start demands a fresh QR scan with no clue why.
             logger.warning("Failed to persist weixin state: {}", e)
+
+    def _drop_session(self) -> None:
+        """Forget the account the service has retired, on disk as well as in memory.
+
+        The file goes with the token: :meth:`_authenticate` restores it before
+        anything else, so a session left behind is loaded again on the next start
+        and answers the same errcode. The cursor, the per-chat context tokens and
+        the typing tickets are all addressed by the dead account (the reasoning in
+        :meth:`_adopt_account` applies to losing one as much as to swapping it).
+        """
+        self._token = ""
+        self._updates_buf = ""
+        self._context_tokens = {}
+        self._typing.restore({})
+        self._seen.clear()
+        with suppress(FileNotFoundError):
+            (self._dir() / "account.json").unlink()
 
     # ── HTTP ──────────────────────────────────────────────────────────
 
@@ -283,6 +303,7 @@ class WeixinChannel(ChannelBase):
                         logger.error("Login confirmed but no bot_token in response")
                         return False
                     self._token = token
+                    self._paired_at = time.time()
                     if accepted := _operator_base(status_data.get("baseurl") or "", self.config.base_url):
                         self._base_url = accepted
                     self._save_state()
@@ -314,10 +335,7 @@ class WeixinChannel(ChannelBase):
 
     async def login(self, force: bool = False) -> bool:
         if force:
-            self._token = ""
-            self._updates_buf = ""
-            with suppress(FileNotFoundError):
-                (self._dir() / "account.json").unlink()
+            self._drop_session()
         if self._token or self._load_state():
             return True
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=30), follow_redirects=True)
@@ -338,11 +356,6 @@ class WeixinChannel(ChannelBase):
         survives a clock the two sides do not share. There is no server-side
         threshold to compare it against -- iLink does not tell us a code's
         lifetime -- so a client that wants to warn before an expiry picks its own.
-
-        ``paused_until`` rides here rather than on a read of its own: a session
-        WeChat killed is the likeliest reason to rebind at all (see
-        :meth:`_adopt_account`), and this snapshot is what the dialog already
-        polls for.
         """
         code_at = float(self._rebind.get("code_at") or 0.0)
         return {
@@ -351,7 +364,6 @@ class WeixinChannel(ChannelBase):
             "max_refreshes": p.MAX_QR_REFRESH_COUNT,
             "code_age_s": round(max(0.0, time.time() - code_at), 1) if code_at else None,
             "detail": str(self._rebind.get("detail") or ""),
-            "paused_until": self.paused_until or None,
         }
 
     async def begin_rebind(self) -> dict:
@@ -477,13 +489,7 @@ class WeixinChannel(ChannelBase):
         self._context_tokens = {}
         self._typing.restore({})
         self._seen.clear()
-        # The pause is the most account-specific state there is: it is set only
-        # from errcode -14 on the credential being replaced, and it gates both
-        # the poll and every send (`_assert_session_active`). Leaving it would
-        # make the likeliest reason to rebind -- WeChat killed the session --
-        # the one case where the new account receives and sends nothing for the
-        # rest of the hour, while the page says "effective now".
-        self._session_pause_until = 0.0
+        self._paired_at = time.time()
         self._save_state()
 
     # ── lifecycle ─────────────────────────────────────────────────────
@@ -510,12 +516,7 @@ class WeixinChannel(ChannelBase):
             timeout=httpx.Timeout(self._poll_timeout_s + 10, connect=30), follow_redirects=True
         )
         if not await self._authenticate():
-            logger.error("login failed. Run 'raven channels login weixin' to authenticate.")
-            self._running = False
-            # What `login()` does in its finally, for the entrance the gateway
-            # uses: the code the flow gave up on is expired, and left published
-            # the page keeps drawing it as one to scan.
-            self.pending_qr = None
+            self._login_gave_up()
             return
 
         logger.info("channel starting with long-poll...")
@@ -523,6 +524,11 @@ class WeixinChannel(ChannelBase):
         while self._running:
             try:
                 await self._poll_once()
+                failures = 0
+            except SessionEndedError:
+                if not await self._sign_in_again():
+                    self._login_gave_up()
+                    return
                 failures = 0
             except httpx.TimeoutException:
                 continue  # normal for long-poll
@@ -536,6 +542,41 @@ class WeixinChannel(ChannelBase):
                     await asyncio.sleep(p.BACKOFF_DELAY_S)
                 else:
                     await asyncio.sleep(p.RETRY_DELAY_S)
+
+    def _login_gave_up(self) -> None:
+        """Leave the adapter down after a login nobody completed.
+
+        `pending_qr` goes with it, as `login()` does in its finally: the code the
+        flow gave up on is expired, and left published the page keeps drawing it
+        as one to scan.
+        """
+        logger.error("login failed. Run 'raven channels login weixin' to authenticate.")
+        self._running = False
+        self.pending_qr = None
+
+    async def _sign_in_again(self) -> bool:
+        """Pair again from inside the running adapter after the service retired
+        the session, so the card the page already polls shows the new code.
+
+        A configured token is the one credential a scan cannot replace:
+        :meth:`_authenticate` takes it over anything scanned, so the new pairing
+        would be thrown away on the next start.
+        """
+        if self.config.token:
+            logger.error("the configured weixin token is no longer valid; replace it and restart the channel")
+            return False
+        if self._rebind_task is not None and not self._rebind_task.done():
+            # A rebind the reader started owns pending_qr and the confirm path,
+            # and its scan is the new pairing: publishing a second code over it
+            # would race two logins for one adapter.
+            await asyncio.gather(self._rebind_task, return_exceptions=True)
+            return bool(self._token)
+        if self._paired_at and (wait := p.SESSION_RELOGIN_GRACE_S - (time.time() - self._paired_at)) > 0:
+            # A session retired seconds after a scan would otherwise cost a fresh
+            # code every round trip, each one asking to be scanned again.
+            logger.warning("weixin: the session ended right after login; waiting {}s for a new code", round(wait))
+            await asyncio.sleep(wait)
+        return await self._qr_login()
 
     async def stop(self) -> None:
         # A rebind outliving the channel either wakes to `_running == False` and
@@ -553,45 +594,9 @@ class WeixinChannel(ChannelBase):
             await self._client.aclose()
             self._client = None
 
-    # ── session pause ─────────────────────────────────────────────────
-
-    @property
-    def paused_until(self) -> float:
-        """Unix time an errcode -14 pause lifts; 0.0 while the session is live.
-
-        A deadline rather than a remainder because it is read by pollers that
-        each ask at their own moment; unlike :meth:`_session_remaining_s` it
-        does not clear a pause it finds expired, so a reader cannot mutate the
-        adapter by looking at it.
-        """
-        return self._session_pause_until if self._session_pause_until > time.time() else 0.0
-
-    def _session_remaining_s(self) -> int:
-        remaining = int(self._session_pause_until - time.time())
-        if remaining <= 0:
-            self._session_pause_until = 0.0
-            return 0
-        return remaining
-
-    def _assert_session_active(self) -> None:
-        remaining = self._session_remaining_s()
-        if remaining > 0:
-            raise RuntimeError(
-                f"WeChat session paused, {max((remaining + 59) // 60, 1)} min remaining "
-                f"(errcode {p.ERRCODE_SESSION_EXPIRED})"
-            )
-
     # ── poll ──────────────────────────────────────────────────────────
 
     async def _poll_once(self) -> None:
-        if (remaining := self._session_remaining_s()) > 0:
-            # Bounded, not slept whole: a rebind confirmed one minute into the
-            # hour clears the pause, and a loop parked inside a 59-minute sleep
-            # would not notice until it woke. The tick costs one comparison a
-            # half-minute against a long poll that already runs ~35s.
-            await asyncio.sleep(min(remaining, _PAUSE_TICK_S))
-            return
-
         assert self._client is not None
         self._client.timeout = httpx.Timeout(self._poll_timeout_s + 10, connect=30)
         data = await self._post("ilink/bot/getupdates", {"get_updates_buf": self._updates_buf})
@@ -599,13 +604,11 @@ class WeixinChannel(ChannelBase):
         ret, errcode = data.get("ret", 0), data.get("errcode", 0)
         if (ret and ret != 0) or (errcode and errcode != 0):
             if p.ERRCODE_SESSION_EXPIRED in (ret, errcode):
-                self._session_pause_until = time.time() + p.SESSION_PAUSE_DURATION_S
+                self._drop_session()
                 logger.warning(
-                    "session expired (errcode {}). Pausing {} min.",
-                    errcode,
-                    max((self._session_remaining_s() + 59) // 60, 1),
+                    "weixin session ended (errcode {}), most likely signed in elsewhere; signing in again", errcode
                 )
-                return
+                raise SessionEndedError(f"weixin session ended (errcode {p.ERRCODE_SESSION_EXPIRED})")
             raise RuntimeError(f"getUpdates failed: ret={ret} errcode={errcode} errmsg={data.get('errmsg', '')}")
 
         if (server_ms := data.get("longpolling_timeout_ms")) and server_ms > 0:
@@ -820,9 +823,10 @@ class WeixinChannel(ChannelBase):
     # ── outbound ──────────────────────────────────────────────────────
 
     async def send(self, chat_id: str, content: str, media: list[str] | None = None) -> None:
-        if not self._client or not self._token:
-            raise RuntimeError("WeChat client not initialized or not authenticated")
-        self._assert_session_active()
+        if not self._client:
+            raise RuntimeError("WeChat client not initialized")
+        if not self._token:
+            raise RuntimeError("WeChat is signed out; scan the code again in Settings > Channels")
 
         await self._stop_typing(chat_id, clear_remote=True)
 
