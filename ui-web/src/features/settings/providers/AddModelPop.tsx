@@ -31,7 +31,7 @@ import { ModelListWait } from '../Skeletons'
 import * as store from '../store'
 import { roleName, rolesUsing } from './Roles'
 
-import type { Kind } from '../../model/types'
+import type { Kind, ModelHost } from '../../model/types'
 import type { Sheet } from '../store'
 import type { ModelCandidate, ProviderRow } from '../types'
 import type { JSX } from 'react'
@@ -39,19 +39,19 @@ import type { JSX } from 'react'
 /* Whether this row is on the provider already. `added` is the wire's own
    answer, computed with `merge_key`; the second test covers a row the vendor's
    list never named, which reaches us with no answer at all. */
-export const isAdded = (slug: string, m: ModelCandidate, configured: string[]): boolean =>
-  m.added || configured.some((c) => bare(slug, c) === bare(slug, m.id))
+export const isAdded = (host: ModelHost, m: ModelCandidate, configured: string[]): boolean =>
+  m.added || configured.some((c) => bare(host, c) === bare(host, m.id))
 
 /* Every row the popover may draw: what the vendor named, plus what is already
    configured and the vendor did not name -- a model added by hand is only in
    the second, and leaving it out would make it unremovable from here. */
 export function allRows(sheet: Sheet, configured: string[], labels?: ProviderRow['labels']): ModelCandidate[] {
-  const seen = new Set(sheet.items.map((m) => bare(sheet.slug, m.id)))
+  const seen = new Set(sheet.items.map((m) => bare({ id: sheet.slug }, m.id)))
   /* A model somebody added by hand is not in the vendor's list, and its kind is
      not text just because the list did not name it -- the provider row carries
      one, and filing it under Text would hide a hand-added embedding model from
      the tab that exists to find it. */
-  const extra = configured.filter((m) => !seen.has(bare(sheet.slug, m)))
+  const extra = configured.filter((m) => !seen.has(bare({ id: sheet.slug }, m)))
     .map((id): ModelCandidate => ({ id, label: id, kind: modelKind(labels?.[id]), added: true }))
   return [...sheet.items, ...extra]
 }
@@ -139,9 +139,9 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
   const rows = shownRows(sheet, configured, p.labels)
   const counts = kindCounts(sheet, configured, p.labels)
   const q = sheet.q.trim()
-  const exact = allRows(sheet, configured, p.labels).some((m) => bare(p.id, m.id) === bare(p.id, q))
+  const exact = allRows(sheet, configured, p.labels).some((m) => bare(p, m.id) === bare(p, q))
   const typedKind = sheet.typed ?? guessKind(q)
-  const pending = rows.filter((m) => !isAdded(p.id, m, configured))
+  const pending = rows.filter((m) => !isAdded(p, m, configured))
 
   /* Below the button it hangs off, flipping above only when the room below is
      too short to be useful and there is more of it above. The height follows
@@ -182,7 +182,7 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
   }, [p.id])
 
   const toggle = (m: ModelCandidate): void => {
-    const listed = isAdded(p.id, m, configured)
+    const listed = isAdded(p, m, configured)
     if (listed) {
       /* The same refusal the tag list beside this popover makes: a model a role
          runs on does not come off by a click here either. */
@@ -256,7 +256,7 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
         {sheet.state === 'failed' && <div className="settings-apnote">{t('gui.settings.providers.no_list')}</div>}
         {sheet.state !== 'loading' && groups(rows).map(([name, ids]) => {
           const folded = !!sheet.folded[name]
-          const unadded = ids.filter((m) => !isAdded(p.id, m, configured))
+          const unadded = ids.filter((m) => !isAdded(p, m, configured))
           return (
             <div key={name || '_'}>
               {name && (
@@ -283,7 +283,7 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
                 </div>
               )}
               {!folded && ids.map((m) => {
-                const has = isAdded(p.id, m, configured)
+                const has = isAdded(p, m, configured)
                 return (
                   <button
                     key={m.id}

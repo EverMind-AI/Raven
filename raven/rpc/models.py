@@ -1738,6 +1738,13 @@ class ModelOptionProvider(_Strict):
     #: vendor/model ids. The catalogue's filter reads it; no client can derive
     #: it from a slug.
     gateway: bool = False
+    #: Every model-id prefix that names this provider: its own name plus the
+    #: ones it used to answer to (``ProviderSpec.route_names``). A client
+    #: comparing two spellings of one model has to strip any of them, the way
+    #: ``providers/wire.py``'s ``merge_key`` does, and that spec says to compare
+    #: against this set rather than rebuild it -- so it travels rather than
+    #: being mirrored per surface.
+    route_names: list[str] = Field(default_factory=list)
     #: Addresses to pick between, empty for the providers that have only one.
     #: A row that states these is drawn with the list in place of a host field.
     platforms: list[ModelOptionPlatform] = Field(default_factory=list)

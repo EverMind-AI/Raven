@@ -51,6 +51,12 @@ const CLOSED: OpenAt = { host: null, after: null, footer: false, scope: 'session
 let at: OpenAt = CLOSED
 let epoch = 0
 let selected = 'minimax-m3'
+/* The account the conversation is on. A pick names one, and two accounts can
+   list the same id, so the model alone cannot say which row is the one in
+   force. Empty means nothing has said -- the served frame, and a page that has
+   seen neither a pick nor an answer from the gateway -- and the surfaces fall
+   back to whichever account lists the model, which is what they did before. */
+let selectedAt = ''
 const subs = new Set<() => void>()
 
 export const source = (): ModelSource => ds('model')
@@ -75,9 +81,17 @@ export const version = (): number => epoch
 export const isOpen = (): boolean => !!at.host
 export const current = (): string => selected
 
-export function setCurrent(model: string): void {
-  if (selected === model) return
+/** The account serving `current`, or '' while nothing has said which. */
+export const currentProvider = (): string => selectedAt
+
+/* Both together, because a switch between two accounts serving one id moves
+   only the second: returning early on the model alone would leave the page
+   marking the account the reader just left. An omitted account is "not known"
+   rather than "unchanged", so a caller that has one always states it. */
+export function setCurrent(model: string, provider = ''): void {
+  if (selected === model && selectedAt === provider) return
   selected = model
+  selectedAt = provider
   announce()
 }
 
@@ -154,11 +168,17 @@ export const column = (p: Provider, offer: Offer = at.offer): string[] => {
      `pick` is what tells them apart: every slot writes through one. */
   const cur = offer.current
     ? (offer.current.provider === p.id ? offer.current.model : null)
-    : (offer.pick ? null : (p.current && !carried(selected) ? selected : null))
+    : offer.pick ? null
+      /* The account the conversation is on, where the page has been told which:
+         a pick names one and so does the gateway's answer. `carried` below is
+         the guess for when it has not, and guessing is what put the model in
+         the wrong column when a second account listed it. */
+      : selectedAt ? (selectedAt === p.id ? selected : null)
+        : (p.current && !carried(selected) ? selected : null)
   /* By the backend's identity, not by string: a role stores the spelling it was
      handed while `model.add_model` stores the one it derived, so comparing the
      strings put the same model in the column twice, under one visible name. */
-  return cur && !rows.some((m) => sameModel(p.id, m, cur)) ? [cur, ...rows] : rows
+  return cur && !rows.some((m) => sameModel(p, m, cur)) ? [cur, ...rows] : rows
 }
 
 /* Whether any connected account lists this model as its own. The wire's
@@ -168,7 +188,7 @@ export const column = (p: Provider, offer: Offer = at.offer): string[] => {
    and once, ticked, under the old account. */
 const carried = (m: string): boolean => {
   try {
-    return source().providers().some((q) => q.on && offered(q).some((x) => sameModel(q.id, x, m)))
+    return source().providers().some((q) => q.on && offered(q).some((x) => sameModel(q, x, m)))
   } catch {
     return false
   }
@@ -194,6 +214,7 @@ export async function setProtocol(model: string, provider: string, protocol: Api
 export async function choose(m: string, provider: string, typed = false, kind?: Kind): Promise<void> {
   const src = source()
   const prev = current()
+  const prevAt = currentProvider()
   const after = at.after
   const scope = at.scope
   const { offer } = at
@@ -228,7 +249,7 @@ export async function choose(m: string, provider: string, typed = false, kind?: 
      commits nothing locally and only reflects the settled default through
      `after` once the write lands. */
   if (scope === 'session') {
-    setCurrent(m)
+    setCurrent(m, provider)
     after?.()
     /* Remembered on the pick rather than on the acknowledgement: a model the
        reader reached for belongs at the head of the list whether or not this
@@ -246,7 +267,7 @@ export async function choose(m: string, provider: string, typed = false, kind?: 
       : t('gui.model.pick_switched', { name: short(m) }))
   } catch (e) {
     if (scope === 'session') {
-      setCurrent(prev)
+      setCurrent(prev, prevAt)
       after?.()
     }
     toast(t('gui.op.switch_failed', { detail: detail(e) }))
@@ -266,5 +287,6 @@ export function _resetForTests(): void {
   at = CLOSED
   epoch = 0
   selected = 'minimax-m3'
+  selectedAt = ''
   subs.clear()
 }

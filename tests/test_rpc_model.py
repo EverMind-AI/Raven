@@ -149,6 +149,21 @@ async def test_options_rows_carry_the_gateway_flag(fake_home: Path) -> None:
     assert _entry(result, "anthropic")["gateway"] is False
 
 
+async def test_options_rows_carry_every_prefix_that_names_the_provider(fake_home: Path) -> None:
+    """The set ``merge_key`` strips, so a client can ask the same identity.
+
+    A page holding only the current slug cannot tell that a model id written
+    before a rename names the same model; ``ProviderSpec.route_names`` is what
+    says so, and it has to reach the client rather than be rebuilt there.
+    """
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    result = await model_options({})
+    assert _entry(result, "zai")["route_names"] == ["zai", "zhipu"]
+    assert _entry(result, "anthropic")["route_names"] == ["anthropic"]
+    for row in result["providers"]:
+        assert row["slug"] in row["route_names"], row["slug"]
+
+
 async def test_model_labels_carry_a_kind(fake_home: Path) -> None:
     # openrouter with a key and one configured model whose name is the only
     # thing that says what it is
