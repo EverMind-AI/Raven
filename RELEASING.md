@@ -33,18 +33,20 @@ Highlights before publishing. Structure:
 ## Install
   install.sh one-liner for Linux / macOS / WSL2
   install.ps1 one-liner for native Windows (plus the PowerShell 5.1 direct URL)
-  then: raven onboard
+  then: the installer ends on `raven web` (first-run setup is on that page);
+  `raven` for the TUI, `raven onboard` to reconfigure
 
 ## Upgrade
-  raven upgrade, with its limits (latest stable only, editable checkouts
-  untouched, external helper on native Windows)
+  raven web --stop / raven upgrade / raven web, with its limits (latest stable
+  only, plugin wheels included, editable checkouts untouched, detached helper on
+  every platform)
 
 ## Release Status
 - Version: `X.Y.Z`
 - Tag: `vX.Y.Z`
 - Stability: <public preview patch | public preview minor | ...>   # fill by hand per release type
-- Assets: wheel, source distribution, and locked constraints
-  (`raven-constraints.txt`) attached to this release
+- Assets: wheel, source distribution, the three plugin wheels, locked
+  constraints (`raven-constraints.txt`) and the plugin list (`raven-plugins.txt`)
 
 ## Notes
 - pre-1.0 evolution caveat
