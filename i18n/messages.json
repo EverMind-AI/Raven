@@ -2232,7 +2232,7 @@
       "zh": "搜索"
     },
     "gui.onb.step_agents": {
-      "en": "Agents",
+      "en": "Agent Connector",
       "zh": "Agent 接入"
     },
     "gui.onb.step_sync": {
@@ -2271,9 +2271,25 @@
       "en": "EN",
       "zh": "EN"
     },
+    "gui.onb.lang_en_name": {
+      "en": "English",
+      "zh": "English"
+    },
+    "gui.onb.lang": {
+      "en": "Language",
+      "zh": "语言"
+    },
     "gui.onb.loading": {
       "en": "Loading...",
       "zh": "正在加载..."
+    },
+    "gui.onb.sync_empty": {
+      "en": "Nothing on this machine that Raven can import yet",
+      "zh": "本机暂未发现可以导入到 Raven 的数据"
+    },
+    "gui.onb.sync_needs_memory": {
+      "en": "Importing other agents' data and extracting memories needs an embedding model",
+      "zh": "导入其他 Agent 数据并提取记忆需要使用 Embedding 模型"
     },
     "gui.onb.sync_title": {
       "en": "Import agent data",
@@ -2284,8 +2300,8 @@
       "zh": "{files} 个记忆文件"
     },
     "gui.onb.sync_unsupported": {
-      "en": "Not supported",
-      "zh": "暂不支持"
+      "en": "Coming soon",
+      "zh": "即将支持"
     },
     "gui.onb.sync_skills": {
       "en": "{n} skills",
@@ -3478,6 +3494,10 @@
     "gui.picker.no_match": {
       "en": "No matching model",
       "zh": "没有匹配的模型"
+    },
+    "gui.picker.search_or_type_ph": {
+      "en": "Search or type a model id...",
+      "zh": "搜索或输入模型 ID…"
     },
     "gui.picker.search_ph": {
       "en": "Search models...",
@@ -5243,6 +5263,14 @@
       "en": "Connect a provider first",
       "zh": "先接入一个模型供应商"
     },
+    "gui.agent.g_shipped": {
+      "en": "Raven ships {n} specialists for different fields",
+      "zh": "Raven 内置了 {n} 个不同领域的专家"
+    },
+    "gui.agent.setup_none": {
+      "en": "No other agents on this machine can connect to Raven yet",
+      "zh": "本机暂无可以连接到 Raven 使用的其他 Agent"
+    },
     "gui.agent.setup_scanning": {
       "en": "Scanning",
       "zh": "检测中"
@@ -6595,10 +6623,6 @@
       "en": "Loading",
       "zh": "加载中"
     },
-    "gui.settings.saved": {
-      "en": "Saved",
-      "zh": "已保存"
-    },
     "gui.settings.update": {
       "en": "Update",
       "zh": "更新"
@@ -6911,6 +6935,58 @@
       "en": "Connected",
       "zh": "已连接"
     },
+    "gui.settings.providers.probe_checking": {
+      "en": "Testing…",
+      "zh": "测试中…"
+    },
+    "gui.settings.providers.probe_valid": {
+      "en": "Verified · {n} models",
+      "zh": "已验证 · {n} 个模型"
+    },
+    "gui.settings.providers.probe_valid_plain": {
+      "en": "Verified",
+      "zh": "已验证"
+    },
+    "gui.settings.providers.probe_invalid_saved": {
+      "en": "The provider rejects the saved key",
+      "zh": "服务商拒绝了已保存的 Key"
+    },
+    "gui.settings.providers.probe_no_credits": {
+      "en": "The key works, but the account has no credit",
+      "zh": "Key 有效，但账户余额不足"
+    },
+    "gui.settings.providers.probe_rate_limited": {
+      "en": "The key works, but is rate limited right now",
+      "zh": "Key 有效，当前被限流"
+    },
+    "gui.settings.providers.probe_unreachable": {
+      "en": "Couldn't reach the service, saved anyway",
+      "zh": "连不上服务，已先保存"
+    },
+    "gui.settings.providers.probe_proxy": {
+      "en": "The proxy this machine is set to use isn't reachable, saved anyway",
+      "zh": "本机设置的代理连不上，已先保存"
+    },
+    "gui.settings.providers.probe_unchecked": {
+      "en": "This provider's model list doesn't check keys, so the key can't be confirmed; saved",
+      "zh": "这家的模型列表不校验 Key，无法确认是否填对，已保存"
+    },
+    "gui.settings.providers.probe_no_endpoint": {
+      "en": "This provider offers no way to check a key online, saved",
+      "zh": "这家不支持在线验证 Key，已保存"
+    },
+    "gui.settings.providers.probe_unknown": {
+      "en": "Couldn't verify ({status}), saved anyway",
+      "zh": "未能验证（{status}），已先保存"
+    },
+    "gui.settings.providers.probe_check": {
+      "en": "Check connection",
+      "zh": "检测连接"
+    },
+    "gui.settings.providers.probe_recheck": {
+      "en": "Check again",
+      "zh": "重新检测"
+    },
     "gui.settings.providers.subscription": {
       "en": "Subscription",
       "zh": "订阅制"
@@ -6978,6 +7054,10 @@
     "gui.settings.providers.key_first": {
       "en": "Enter the API key first",
       "zh": "先填入 API Key"
+    },
+    "gui.settings.providers.key_not_ascii": {
+      "en": "This doesn't look like an API key: it has characters a key never contains. Check what was pasted",
+      "zh": "这不像是 API Key：里面有 Key 不会包含的字符，请检查粘贴的内容"
     },
     "gui.settings.providers.base": {
       "en": "Service address",
@@ -7244,8 +7324,12 @@
       "zh": "先连接一个供应商"
     },
     "gui.settings.roles.no_vendor_for_role": {
-      "en": "No connected vendor serves this role",
-      "zh": "已连接的供应商都不支持这个角色"
+      "en": "No connected vendor has a rerank API EverOS can call",
+      "zh": "已连接的供应商里没有 EverOS 能调用的 Rerank 接口"
+    },
+    "gui.settings.roles.everos_missing": {
+      "en": "The EverOS memory plugin isn't installed",
+      "zh": "未安装 EverOS 记忆插件"
     },
     "gui.settings.roles.locked_foreign": {
       "en": "This EverOS install is yours to manage, so Raven reads its config and does not write it",
@@ -7399,8 +7483,16 @@
       "en": "Effort",
       "zh": "思考"
     },
+    "gui.settings.roles.sum_iters_n": {
+      "en": "{n}",
+      "zh": "{n} 次"
+    },
+    "gui.settings.roles.sum_ctx_auto": {
+      "en": "Auto",
+      "zh": "跟随模型"
+    },
     "gui.settings.roles.sum_iters": {
-      "en": "Tools",
+      "en": "Tool calls",
       "zh": "工具"
     },
     "gui.settings.roles.sum_ctx": {

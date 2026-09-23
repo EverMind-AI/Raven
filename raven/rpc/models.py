@@ -1883,6 +1883,9 @@ class ModelFetchModelsParams(_Strict):
     """Ask a provider what it serves right now."""
 
     slug: str
+    # Also confirm the stored key is what the vendor accepted, for a vendor
+    # whose catalogue answers without looking at keys. Costs a request or two.
+    verify: bool = False
 
 
 class ModelCandidate(_Strict):

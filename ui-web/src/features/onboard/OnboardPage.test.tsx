@@ -60,6 +60,7 @@ interface Harness {
   model: FakeBody
   search: FakeBody
   agents: FakeBody
+  memory: FakeBody
   source: OnboardSource
   runs: Array<[string[], string]>
   configured: boolean
@@ -71,6 +72,7 @@ function install(scan: ImportScan = SCAN_NONE): Harness {
     model: fakeBody('model'),
     search: fakeBody('search'),
     agents: fakeBody('agents'),
+    memory: fakeBody('memory'),
     runs: [],
     configured: true,
     started: true,
@@ -86,7 +88,10 @@ function install(scan: ImportScan = SCAN_NONE): Harness {
   }
   setTranslator((key, vars) => (vars ? `${key}:${JSON.stringify(vars)}` : key))
   setSources({ onboard: h.source })
-  store.setBodies({ model: h.model, search: h.search, agents: h.agents })
+  /* An embedding model set is the ordinary case; the case that has none says so. */
+  h.memory.setDone(true)
+  h.memory.setLoaded(true)
+  store.setBodies({ model: h.model, search: h.search, agents: h.agents, memory: h.memory })
   document.body.innerHTML = '<div id="onb" hidden></div>'
   return h
 }
@@ -145,11 +150,13 @@ describe('the onboarding wizard', () => {
     expect(h.agents.load).toHaveBeenCalledTimes(1)
   })
 
-  it('offers three steps when nothing can be synced, the first with only Next', async () => {
+  it('offers all four steps from the start, the first with only Next', async () => {
     const h = install()
     mount()
     await open()
-    expect(steps()).toEqual(['1gui.onb.step_model:current', '2gui.onb.step_search:upcoming', '3gui.onb.step_agents:upcoming'])
+    expect(steps()).toEqual([
+      '1gui.onb.step_model:current', '2gui.onb.step_search:upcoming', '3gui.onb.step_agents:upcoming', '4gui.onb.step_sync:upcoming',
+    ])
     expect(buttons().map((b) => b.textContent)).toEqual(['gui.onb.next'])
     expect(button('gui.onb.next').disabled).toBe(true)
     await act(async () => { h.model.setDone(true) })
@@ -177,7 +184,9 @@ describe('the onboarding wizard', () => {
     expect(button('gui.onb.next').disabled).toBe(true)
     expect(button('gui.onb.skip').disabled).toBe(false)
     await click(button('gui.onb.skip'))
-    expect(steps()).toEqual(['✓gui.onb.step_model:done', '-gui.onb.step_search:skipped', '3gui.onb.step_agents:current'])
+    expect(steps()).toEqual([
+      '✓gui.onb.step_model:done', '-gui.onb.step_search:skipped', '3gui.onb.step_agents:current', '4gui.onb.step_sync:upcoming',
+    ])
     await click(button('gui.onb.back'))
     expect(steps()[1]).toBe('2gui.onb.step_search:current')
   })
@@ -193,7 +202,7 @@ describe('the onboarding wizard', () => {
     expect(button('gui.onb.next').disabled).toBe(false)
   })
 
-  it('ends on Start chatting when there is nothing to sync, and re-reads the first-run verdict', async () => {
+  it('ends on the sync step saying there is nothing to import, and Start chatting re-reads the first-run verdict', async () => {
     const h = install()
     h.configured = true
     mount()
@@ -201,10 +210,11 @@ describe('the onboarding wizard', () => {
     await act(async () => { h.model.setDone(true) })
     await click(button('gui.onb.next'))
     await click(button('gui.onb.skip'))
-    expect(steps()[2]).toBe('3gui.onb.step_agents:current')
-    expect(button('gui.onb.enter')).toBeDefined()
-    expect(button('gui.onb.enter').disabled).toBe(true)
-    await act(async () => { h.agents.setDone(true) })
+    await click(button('gui.onb.skip'))
+    expect(steps()[3]).toBe('4gui.onb.step_sync:current')
+    expect(document.querySelector('.ob-empty')!.textContent).toBe('gui.onb.sync_empty')
+    expect(button('gui.onb.start_sync')).toBeUndefined()
+    expect(button('gui.onb.enter').disabled).toBe(false)
     await click(button('gui.onb.enter'))
     expect(host().dataset.off).toBe('1')
     expect(setupState.providerConfigured).toBe(true)
@@ -244,30 +254,6 @@ describe('the onboarding wizard', () => {
     expect(host().dataset.off).toBe('1')
   })
 
-  it('re-reads the importer when the primary is pressed on the agents step, and moves to the step it adds', async () => {
-    /* On the answer from opening the agents step is the last one, so the
-       footer offers Start chatting; a reader who connected an agent presses
-       that, not Skip -- and by then the model step may have made the import
-       possible. */
-    const h = install({ ready: false, reason: 'no memory backend', platforms: [] })
-    h.agents.agents = [{ id: 'claude_code', name: 'Claude Code' }]
-    mount()
-    await open()
-    expect(steps().length).toBe(3)
-    await act(async () => { h.model.setDone(true); h.search.setDone(true); h.agents.setDone(true) })
-    await click(button('gui.onb.next'))
-    await click(button('gui.onb.next'))
-    expect(button('gui.onb.enter')).toBeDefined()
-
-    h.source.scan = async () => SCAN_CLAUDE
-    await click(button('gui.onb.enter'))
-
-    expect(steps()[3]).toBe('4gui.onb.step_sync:current')
-    expect(button('gui.onb.start_sync')).toBeDefined()
-    expect(store.isOpen()).toBe(true)
-    expect(host().dataset.off).toBeUndefined()
-  })
-
   it('says the gateway needs a restart once the model step reports it, on every step after', async () => {
     /* A first run: the gateway started with no model, the write landed, and
        this process cannot chat on it until it comes back. Said in the frame
@@ -298,12 +284,25 @@ describe('the onboarding wizard', () => {
     expect(document.querySelector('.ob-err')!.textContent).toBe('nothing to import')
   })
 
-  it('leaves the sync step out when the importer cannot run', async () => {
-    const h = install({ ...SCAN_CLAUDE, ready: false, reason: 'no memory backend' })
+  it('asks for an embedding model right on the sync step, only while none is set', async () => {
+    const h = install(SCAN_CLAUDE)
     h.agents.agents = [{ id: 'claude_code', name: 'Claude Code' }]
+    h.memory.setDone(false)
     mount()
     await open()
-    expect(steps().length).toBe(3)
+    expect(steps().length).toBe(4)
+    await act(async () => { h.model.setDone(true) })
+    await click(button('gui.onb.next'))
+    await click(button('gui.onb.skip'))
+    await click(button('gui.onb.skip'))
+    expect(document.querySelector('.ob-needs')!.textContent).toContain('gui.onb.sync_needs_memory')
+    expect(document.querySelector('.ob-needs .fake-memory')).not.toBeNull()
+    await click(document.querySelector('.ob-row [role=switch]')!)
+    expect(button('gui.onb.start_sync').disabled).toBe(true)
+    await act(async () => { h.memory.setDone(true) })
+    expect(document.querySelector('.ob-mem')).toBeNull()
+    expect(button('gui.onb.start_sync').disabled).toBe(false)
+    expect(document.querySelector('.ob-col')!.getAttribute('data-step')).toBe('sync')
   })
 
   it('switches the language through the page pick, persisted', async () => {
@@ -311,10 +310,33 @@ describe('the onboarding wizard', () => {
     const pick = vi.spyOn(langPick, 'pick').mockImplementation(async () => {})
     mount()
     await open()
-    const [zh, en] = [...document.querySelectorAll<HTMLButtonElement>('.ob-lang button')]
-    expect(zh!.textContent).toBe('gui.onb.lang_zh')
-    await click(en!)
-    expect(pick).toHaveBeenCalledWith('en', { persist: true })
+    const trigger = document.querySelector<HTMLButtonElement>('.ob-langbtn')!
+    expect(document.querySelector('.ob-langmenu')).toBeNull()
+    await click(trigger)
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    const opts = [...document.querySelectorAll<HTMLButtonElement>('.ob-langopt')]
+    expect(opts.map((o) => o.firstElementChild!.textContent)).toEqual(['gui.onb.lang_zh', 'gui.onb.lang_en_name'])
+    expect(opts.map((o) => o.getAttribute('aria-checked'))).toEqual(['false', 'true'])
+    await click(opts[1]!)
+    expect(pick).not.toHaveBeenCalled()
+    await click(trigger)
+    await click(document.querySelectorAll<HTMLButtonElement>('.ob-langopt')[0]!)
+    expect(pick).toHaveBeenCalledWith('zh', { persist: true })
+    expect(document.querySelector('.ob-langmenu')).toBeNull()
+  })
+
+  it('the language menu closes on a click elsewhere and on Escape, picking nothing', async () => {
+    install()
+    const pick = vi.spyOn(langPick, 'pick').mockImplementation(async () => {})
+    mount()
+    await open()
+    await click(document.querySelector<HTMLButtonElement>('.ob-langbtn')!)
+    await act(async () => { document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })) })
+    expect(document.querySelector('.ob-langmenu')).toBeNull()
+    await click(document.querySelector<HTMLButtonElement>('.ob-langbtn')!)
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+    expect(document.querySelector('.ob-langmenu')).toBeNull()
+    expect(pick).not.toHaveBeenCalled()
   })
 
   it('keeps its rendered shape', async () => {

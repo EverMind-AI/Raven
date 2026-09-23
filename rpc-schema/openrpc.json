@@ -1208,6 +1208,14 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "name": "verify",
+          "description": "Also confirm the stored key is one the vendor accepts, for a vendor whose catalogue answers without checking keys. `status` is then `key_unchecked` when no way to check it exists, or `invalid_key` when it was refused.",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
         }
       ],
       "result": {

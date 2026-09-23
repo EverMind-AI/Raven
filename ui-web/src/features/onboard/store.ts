@@ -109,15 +109,18 @@ export const found = (): FoundAgent[] => get().bodies?.agents.found() ?? []
 export const platformOf = (agent: FoundAgent): ImportPlatform | undefined =>
   get().scan?.platforms.find((p) => p.platform === agent.id)
 
-/* The sync step exists only where there is something to sync: an import that
-   can run, and an agent the importer can read. */
-export function syncVisible(): boolean {
-  const scan = get().scan
-  return !!scan && scan.ready && found().some((a) => platformOf(a)?.scannable)
-}
+/* Whether there is anything to import, and whether an import can run yet,
+   are the sync step's to say. The step itself is always on the strip: one
+   that came and went with the memory model or the agents found left the
+   reader no way to learn what it waited on. */
+export const syncable = (): FoundAgent[] => found().filter((a) => platformOf(a)?.scannable)
+
+/* An import waits on an embedding model, picked on this very step when step
+   one did not set one. */
+export const syncReady = (): boolean => !!get().bodies?.memory.done()
 
 export function visibleSteps(): StepId[] {
-  return STEPS.filter((id) => id !== 'sync' || syncVisible())
+  return [...STEPS]
 }
 
 export function stepDone(id: StepId): boolean {
@@ -126,7 +129,9 @@ export function stepDone(id: StepId): boolean {
   if (id === 'model') return s.bodies.model.done()
   if (id === 'search') return s.bodies.search.done()
   if (id === 'agents') return s.bodies.agents.done()
-  return Object.values(s.syncPick).some(Boolean)
+  /* Nothing to import is a finished step: the wizard ends on it. */
+  if (!syncable().length) return true
+  return syncReady() && Object.values(s.syncPick).some(Boolean)
 }
 
 export function isLast(id: StepId): boolean {
@@ -184,7 +189,7 @@ export function toggleSync(platform: string): void {
 export async function finish(): Promise<void> {
   await settleAfterAgents()
   if (!isLast(get().step)) { move(1); return }
-  if (get().step === 'sync') {
+  if (get().step === 'sync' && syncable().length) {
     const platforms = Object.entries(get().syncPick).filter(([, on]) => on).map(([id]) => id)
     set({ busy: true, error: '' })
     try {

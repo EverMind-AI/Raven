@@ -159,7 +159,8 @@ describe('provider detail', () => {
     const box = screen.getByLabelText('gui.settings.providers.api_key') as HTMLInputElement
     await act(async () => { fireEvent.change(box, { target: { value: 'sk-new' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
-    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'openai', api_key: 'sk-new' }]])
+    /* The save, then the test it kicks off on the side. */
+    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'openai', api_key: 'sk-new' }], ['fetchModels:verify', 'openai']])
   })
 
   it('a local provider connects by address alone and refuses an empty one', async () => {
@@ -171,7 +172,7 @@ describe('provider detail', () => {
     expect(calls).toEqual([])
     await act(async () => { fireEvent.change(box, { target: { value: 'http://localhost:11434' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
-    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'ollama', api_base: 'http://localhost:11434' }]])
+    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'ollama', api_base: 'http://localhost:11434' }], ['fetchModels:verify', 'ollama']])
   })
 
   it('a header is added as a one-name patch and removed as a one-name null', async () => {

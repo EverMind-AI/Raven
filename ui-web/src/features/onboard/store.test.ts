@@ -32,9 +32,11 @@ afterEach(() => {
   resetSources()
 })
 
-const opened = async (scan: ImportScan, found: FoundAgent[], done = false): Promise<void> => {
+/* `embedding` is whether the data-sync step's embedding model is set -- the
+   one thing an import waits on. */
+const opened = async (scan: ImportScan, found: FoundAgent[], done = false, embedding = true): Promise<void> => {
   setSources({ onboard: source(scan) })
-  store.setBodies({ model: body(done) as StepBody, search: body(done) as StepBody, agents: body(done, found) })
+  store.setBodies({ model: body(done) as StepBody, search: body(done) as StepBody, agents: body(done, found), memory: body(embedding) })
   store.open()
   await Promise.resolve()
   await Promise.resolve()
@@ -47,17 +49,26 @@ describe('the wizard store', () => {
     expect(store.isOpen()).toBe(false)
   })
 
-  it('offers the sync step only for an agent the importer can read', async () => {
+  it('always shows the sync step, and offers in it only an agent the importer can read', async () => {
     await opened(READY, [{ id: 'codex', name: 'Codex' }])
-    expect(store.visibleSteps()).toEqual(['model', 'search', 'agents'])
-    await opened(READY, [{ id: 'hermes', name: 'Hermes' }])
     expect(store.visibleSteps()).toEqual(['model', 'search', 'agents', 'sync'])
+    expect(store.syncable()).toEqual([])
+    await opened(READY, [{ id: 'hermes', name: 'Hermes' }])
+    expect(store.syncable().map((a) => a.id)).toEqual(['hermes'])
     expect(store.platformOf({ id: 'hermes', name: 'Hermes' })?.conversations).toBe(52)
   })
 
-  it('needs the importer to be ready as well', async () => {
-    await opened({ ...READY, ready: false, reason: 'off' }, [{ id: 'hermes', name: 'Hermes' }])
-    expect(store.syncVisible()).toBe(false)
+  it('shows the sync step before an embedding model is set, and will not start it until then', async () => {
+    /* The step used to stay hidden until the memory model was set on step one,
+       which left the reader no way to learn that was what it waited on. */
+    await opened(READY, [{ id: 'hermes', name: 'Hermes' }], false, false)
+    expect(store.visibleSteps()).toContain('sync')
+    expect(store.syncReady()).toBe(false)
+    store.toggleSync('hermes')
+    expect(store.stepDone('sync')).toBe(false)
+    await opened(READY, [{ id: 'hermes', name: 'Hermes' }])
+    store.toggleSync('hermes')
+    expect(store.stepDone('sync')).toBe(true)
   })
 
   it('asks the importer again on the way out of the agents step', async () => {
@@ -80,11 +91,12 @@ describe('the wizard store', () => {
       model: body(true) as StepBody,
       search: body(true) as StepBody,
       agents: body(true, [{ id: 'hermes', name: 'Hermes' }]),
+      memory: body(false),
     })
     store.open()
     await Promise.resolve()
     await Promise.resolve()
-    expect(store.visibleSteps()).toEqual(['model', 'search', 'agents'])
+    expect(store.get().scan?.ready).toBe(false)
 
     answer = READY
     await store.next()
@@ -93,33 +105,25 @@ describe('the wizard store', () => {
     await store.next()
 
     expect(scans.length).toBe(2)
-    expect(store.visibleSteps()).toEqual(['model', 'search', 'agents', 'sync'])
+    expect(store.get().scan?.ready).toBe(true)
     expect(store.get().step).toBe('sync')
   })
 
-  it('finish on the agents step asks again and moves on when the answer adds a step', async () => {
-    /* The footer picks finish when the agents step reads as the last one on
-       the answer from opening; a reader who connected an agent presses it. */
-    let answer: ImportScan = { ...READY, ready: false, reason: 'no memory backend' }
-    setSources({ onboard: { ...source(READY), scan: async () => answer } })
+  it('waits on the embedding model alone, picked on the sync step itself', async () => {
+    let memory = false
+    setSources({ onboard: source(READY) })
     store.setBodies({
       model: body(true) as StepBody,
       search: body(true) as StepBody,
       agents: body(true, [{ id: 'hermes', name: 'Hermes' }]),
+      memory: { ...body(false), done: () => memory },
     })
     store.open()
     await Promise.resolve()
     await Promise.resolve()
-    await store.next()
-    await store.next()
-    expect(store.isLast('agents')).toBe(true)
-
-    answer = READY
-    await store.finish()
-
-    expect(store.isOpen()).toBe(true)
-    expect(store.get().closing).toBe(false)
-    expect(store.get().step).toBe('sync')
+    expect(store.syncReady()).toBe(false)
+    memory = true
+    expect(store.syncReady()).toBe(true)
   })
 
   it('ignores an earlier read that lands after a later one', async () => {
@@ -131,6 +135,7 @@ describe('the wizard store', () => {
       model: body(true) as StepBody,
       search: body(true) as StepBody,
       agents: body(true, [{ id: 'hermes', name: 'Hermes' }]),
+      memory: body(false),
     })
     store.open()
     await store.next()
@@ -156,13 +161,13 @@ describe('the wizard store', () => {
       model: body(true) as StepBody,
       search: body(true) as StepBody,
       agents: body(false, [{ id: 'hermes', name: 'Hermes' }]),
+      memory: body(false),
     })
     store.open()
     await Promise.resolve()
     await Promise.resolve()
     await store.next()
     await store.next()
-    expect(store.isLast('agents')).toBe(true)
 
     answer = READY
     await store.skip()
@@ -171,6 +176,7 @@ describe('the wizard store', () => {
     expect(store.get().closing).toBe(false)
     expect(store.get().step).toBe('sync')
     expect(store.get().skipped.agents).toBe(true)
+    expect(store.get().scan?.ready).toBe(true)
   })
 
   it('reads each step\'s verdict from its body, and the sync step from the picks', async () => {
@@ -190,8 +196,9 @@ describe('the wizard store', () => {
     await store.next()
     await store.next()
     await store.next()
-    expect(store.get().step).toBe('agents')
-    expect(store.isLast('agents')).toBe(true)
+    await store.next()
+    expect(store.get().step).toBe('sync')
+    expect(store.isLast('sync')).toBe(true)
   })
 
   it('records a skip and lands on the next step', async () => {
@@ -215,7 +222,7 @@ describe('the tier', () => {
         startImport: async (platforms, tier) => { runs.push([platforms, tier]); return { started: true, total: 1, detail: '' } },
       },
     })
-    store.setBodies({ model: body(true) as StepBody, search: body(true) as StepBody, agents: body(true, HERMES) })
+    store.setBodies({ model: body(true) as StepBody, search: body(true) as StepBody, agents: body(true, HERMES), memory: body(false) })
     store.open()
     await Promise.resolve()
     await Promise.resolve()

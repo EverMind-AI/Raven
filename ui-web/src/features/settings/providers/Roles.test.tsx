@@ -108,13 +108,13 @@ describe('model roles', () => {
     expect(screen.getAllByText('gui.settings.roles.connect_openrouter').length).toBeGreaterThan(0)
   })
 
-  it('an EverOS role offers only vendors that serve it, and writes the pair', async () => {
-    /* Anthropic is connected and holds a key, and used to be offered here for
-       every role. It serves no embeddings, which is what the slot has to ask
-       about -- a key was never the question. */
+  it('an EverOS role offers every connected vendor, and writes the pair', async () => {
+    /* Which models a vendor serves is the vendor's to say: a catalogue that
+       lags it is no reason to refuse the slot, and an id can be typed. The
+       fixture's table leaves Anthropic out of embedding; it is offered anyway. */
     const { calls } = install()
     await mount('model')
-    expect(roleProviders(role('embedding'), snap()).map((p) => p.id)).toEqual(['openrouter'])
+    expect(roleProviders(role('embedding'), snap()).map((p) => p.id)).toEqual(['anthropic', 'openrouter'])
     expect(pill('gui.settings.roles.memllm').textContent).toContain('openai/gpt-4o')
     await pick('gui.settings.roles.embedding', 'text-embedding-3-small', 'OpenRouter')
     expect(calls).toEqual([
@@ -217,7 +217,7 @@ describe('model roles', () => {
     const { calls } = install()
     await mount('model')
     await act(async () => { fireEvent.click(pill('gui.settings.roles.gate')) })
-    const box = screen.getByPlaceholderText('gui.picker.search_ph') as HTMLInputElement
+    const box = screen.getByPlaceholderText('gui.picker.search_or_type_ph') as HTMLInputElement
     await act(async () => { fireEvent.change(box, { target: { value: 'claude-haiku-4-5' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.model.pick_use {"id":"claude-haiku-4-5"}')) })
     expect(calls).toEqual([
@@ -227,6 +227,16 @@ describe('model roles', () => {
     ])
   })
 
+  it('a pick shows in the slot before the write answers, and a refused one is put back', async () => {
+    let refuse: (e: unknown) => void = () => {}
+    install(snap(), { set: () => new Promise((_res, rej) => { refuse = rej }) })
+    await mount('model')
+    await pick('gui.settings.roles.title', 'claude-sonnet-4-5')
+    expect(pill('gui.settings.roles.title').textContent).toContain('claude-sonnet-4-5')
+    await act(async () => { refuse({ handled: true }) })
+    expect(pill('gui.settings.roles.title').textContent).not.toContain('claude-sonnet-4-5')
+  })
+
   it('a slot with no provider offers the providers page and goes there', async () => {
     /* A fresh install starts here: every slot empty, and the way out has to be
        reachable. A sentence naming the page is not. */
@@ -234,10 +244,59 @@ describe('model roles', () => {
     data.providers = data.providers.map((p) => ({ ...p, on: false }))
     install(data)
     await mount('model')
-    const out = screen.getAllByText('gui.settings.roles.no_provider')[0]!
-    expect(out.tagName).toBe('BUTTON')
+    const out = screen.getAllByText('gui.settings.roles.no_provider')[0]!.closest('button')!
     await act(async () => { fireEvent.click(out) })
     expect(store.get().tab).toBe('provider')
+  })
+
+  it('every slot says to connect a provider until one is connected, then names what it is missing', async () => {
+    /* "None of the connected vendors serves this role" read as a claim about
+       vendors the reader had never connected. */
+    const none = snap()
+    none.providers = none.providers.map((p) => ({ ...p, on: false }))
+    install(none)
+    await mount('model')
+    expect(screen.queryAllByText('gui.settings.roles.no_vendor_for_role')).toHaveLength(0)
+    expect(screen.queryAllByText('gui.settings.roles.connect_openrouter')).toHaveLength(0)
+    for (const media of ['image', 'speech', 'video']) {
+      const row = screen.getByText(`gui.settings.roles.${media}`).closest('.settings-row')!
+      expect(row.querySelector('.settings-ctl')!.textContent).toContain('gui.settings.roles.no_provider')
+    }
+    cleanup()
+    store._resetForTests()
+    const some = snap()
+    some.everos = { ...some.everos!, supports: {}, sections: {} }
+    install(some)
+    await mount('model')
+    /* Only rerank still names a missing capability: the other memory slots
+       take any connected vendor. */
+    expect(screen.getAllByText('gui.settings.roles.no_vendor_for_role')).toHaveLength(1)
+    expect(screen.getByText('gui.settings.roles.rerank').closest('.settings-row')!.textContent)
+      .toContain('gui.settings.roles.no_vendor_for_role')
+  })
+
+  it('with no EverOS installed the memory slots say so instead of blaming the vendors', async () => {
+    const data = snap()
+    data.everos = { available: false, note: 'install everos-memory', sections: {} }
+    install(data)
+    await mount('model')
+    const row = screen.getByText('gui.settings.roles.embedding').closest('.settings-row')!
+    expect(row.textContent).toContain('gui.settings.roles.everos_missing')
+    expect(row.querySelector('[title="install everos-memory"]')).not.toBeNull()
+    expect(screen.queryAllByText('gui.settings.roles.no_vendor_for_role')).toHaveLength(0)
+  })
+
+  it('a slot with no provider sits in the same box as a slot with a model', async () => {
+    /* Three labels of three lengths drawn as buttons sized to their words made
+       a ragged column beside the served rows' pills. */
+    const data = snap()
+    data.providers = data.providers.map((p) => (p.id === 'openrouter' ? { ...p, on: false } : p))
+    install(data)
+    await mount('model')
+    const served = pill('gui.settings.roles.title').closest('.settings-ctl > *')!
+    const unserved = screen.getAllByText('gui.settings.roles.connect_openrouter')[0]!.closest('.settings-ctl > *')!
+    expect(unserved.className.split(' ')).toContain('settings-mpill')
+    expect(served.className.split(' ')).toContain('settings-mpill')
   })
 
   it('a media slot with OpenRouter off opens that row on the providers page', async () => {
@@ -256,13 +315,13 @@ describe('model roles', () => {
     const { calls } = install()
     await mount('model')
     await act(async () => { fireEvent.click(pill('gui.settings.roles.embedding')) })
-    const box = screen.getByPlaceholderText('gui.picker.search_ph') as HTMLInputElement
+    const box = screen.getByPlaceholderText('gui.picker.search_or_type_ph') as HTMLInputElement
     await act(async () => { fireEvent.change(box, { target: { value: 'our-finetune' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.model.pick_use {"id":"our-finetune"}')) })
-    expect(calls[0]).toEqual(['provider', {
-      op: 'add_model', slug: 'openrouter', model: 'our-finetune',
-      capabilities: ['embedding'], output_modalities: ['vector'],
-    }])
+    expect(calls[0]![0]).toBe('provider')
+    expect(calls[0]![1]).toMatchObject({
+      op: 'add_model', model: 'our-finetune', capabilities: ['embedding'], output_modalities: ['vector'],
+    })
   })
 
   it('rolesUsing counts a role following the chat model through the chat provider', () => {
@@ -322,10 +381,12 @@ describe('model roles', () => {
     const disc = screen.getByText('gui.settings.roles.params').closest('button') as HTMLButtonElement
     const chunks = (): string[] => [...disc.querySelectorAll('.settings-sv')].map((n) => n.textContent || '')
     expect(disc.getAttribute('aria-expanded')).toBe('false')
+    /* One truncating line: the values sit in a single span that can ellipsize. */
+    expect(disc.querySelectorAll('.settings-sum > .settings-sv')).toHaveLength(3)
     expect(chunks()).toEqual([
       'gui.settings.roles.sum_effortgui.settings.roles.effort_low',
-      'gui.settings.roles.sum_iters40 gui.settings.roles.times',
-      'gui.settings.roles.sum_ctxgui.settings.roles.ctx_auto',
+      'gui.settings.roles.sum_itersgui.settings.roles.sum_iters_n {"n":40}',
+      'gui.settings.roles.sum_ctxgui.settings.roles.sum_ctx_auto',
     ])
     expect(document.querySelector('.settings-cfg')).toBeNull()
     const row = disc.closest('.settings-row') as HTMLElement

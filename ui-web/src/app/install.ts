@@ -28,8 +28,8 @@ import { onboardSource } from '../features/onboard/source'
 import { isOpen as onboardOpen, setBodies as setOnboardBodies, subscribe as onOnboard } from '../features/onboard/store'
 import { markNew } from '../features/rail/store'
 import { installSessionActions } from '../features/rail/wire'
-import { ModelStepBody, WebStepBody } from '../features/settings/SetupBodies'
-import { bannerSource, modelStepDone, settingsSource, webStepDone } from '../features/settings/source'
+import { MemoryStepBody, ModelStepBody, WebStepBody } from '../features/settings/SetupBodies'
+import { bannerSource, memoryStepDone, modelStepDone, settingsSource, webStepDone } from '../features/settings/source'
 import * as settingsStore from '../features/settings/store'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
 import { tasksSource } from '../features/tasks/source'
@@ -183,6 +183,13 @@ export function installSources(): void {
       loaded: () => true,
       done: extAgentsStore.stepDone,
       found: () => extAgentsStore.found().map((row) => ({ id: row.preset ?? row.name, name: row.name })),
+    },
+    memory: {
+      Body: MemoryStepBody,
+      load: () => settingsStore.refresh(),
+      subscribe: settingsStore.subscribe,
+      loaded: () => settingsStore.get().loaded,
+      done: memoryStepDone,
     },
   })
   sources.importSync = importSyncSource

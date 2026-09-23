@@ -7,7 +7,7 @@ import { setGateway } from '../../rpc/gateway'
 import { resetSources, setSources } from '../../state/sources'
 import { install, modelSource, mount, snap, source as settingsSource } from '../../test/settingsHarness'
 import { _resetForTests as resetModelSource, setDefaultPair } from '../model/source'
-import { ModelStepBody, WebStepBody } from './SetupBodies'
+import { MemoryStepBody, ModelStepBody, WebStepBody } from './SetupBodies'
 import { _resetForTests as resetSettingsSource, loadSettingsWithProviders, modelStepDone, webStepDone } from './source'
 import * as store from './store'
 
@@ -46,6 +46,49 @@ function noneConnected(): SettingsSnapshot {
 }
 
 describe('ModelStepBody', () => {
+  it('a role row with no provider opens the add form above on a vendor that serves it', async () => {
+    /* The wizard has no providers page to switch to; sending the reader there
+       changed a tab nobody can see. */
+    const data = snap()
+    data.providers = data.providers.map((p) => (p.id === 'openrouter' ? { ...p, on: false } : p))
+    install(data)
+    await openBody(ModelStepBody)
+    expect(document.querySelector('.settings-padd')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getAllByText('gui.settings.roles.connect_openrouter')[0]!) })
+    expect(store.get().provAdd).toBe('openrouter')
+    expect(store.get().tab).not.toBe('provider')
+    expect(document.querySelector('.settings-padd .settings-vpick')!.lastElementChild!.textContent).toBe('OpenRouter')
+  })
+
+  it('the vendor dropdown opens a scrolling list of fixed height and a pick swaps the form', async () => {
+    /* A native select opens a popup as tall as the screen for fifty-odd
+       vendors, and its height is not the page's to set. */
+    install(noneConnected())
+    await openBody(ModelStepBody)
+    const field = document.querySelector('.settings-padd .settings-vpick') as HTMLButtonElement
+    await act(async () => { fireEvent.click(field) })
+    const list = document.querySelector('.settings-vlist') as HTMLElement
+    expect(list.parentElement).toBe(document.body)
+    expect(list.style.maxHeight).toBe('300px')
+    const openrouter = screen.getByRole('option', { name: 'OpenRouter' })
+    await act(async () => { fireEvent.click(openrouter) })
+    expect(document.querySelector('.settings-vlist')).toBeNull()
+    expect(store.get().provAdd).toBe('openrouter')
+    expect(document.querySelector('.settings-padd .settings-vpick')!.lastElementChild!.textContent).toBe('OpenRouter')
+  })
+
+  it('Escape closes the vendor list without reaching anything behind it', async () => {
+    install(noneConnected())
+    await openBody(ModelStepBody)
+    const behind = vi.fn()
+    document.addEventListener('keydown', behind)
+    await act(async () => { fireEvent.click(document.querySelector('.settings-padd .settings-vpick')!) })
+    await act(async () => { fireEvent.keyDown(document.activeElement || document.body, { key: 'Escape' }) })
+    document.removeEventListener('keydown', behind)
+    expect(document.querySelector('.settings-vlist')).toBeNull()
+    expect(behind).not.toHaveBeenCalled()
+  })
+
   it('shows the loading line until the store has loaded, then the model cards', async () => {
     install()
     render(createElement(ModelStepBody))
@@ -60,10 +103,26 @@ describe('ModelStepBody', () => {
   it('a connected row\'s trailing button disconnects it, calling the provider op directly', async () => {
     const { calls } = install()
     await openBody(ModelStepBody)
-    const row = [...document.querySelectorAll('.settings-prow2')].find((r) => r.textContent?.includes('anthropic'))!
+    const row = [...document.querySelectorAll('.settings-prow2')].find((r) => r.textContent?.includes('Anthropic'))!
     expect(row.querySelector('button')!.textContent).toBe('gui.settings.providers.disconnect')
     await act(async () => { fireEvent.click(row.querySelector('button')!) })
     expect(calls).toEqual([['provider', { op: 'disconnect', slug: 'anthropic' }]])
+  })
+
+  it('a connected row names the vendor once', async () => {
+    install()
+    await openBody(ModelStepBody)
+    const row = [...document.querySelectorAll('.settings-prow2')].find((r) => r.textContent?.includes('Anthropic'))!
+    expect(row.textContent).not.toContain('anthropic')
+  })
+
+  it('draws the rule under the add form, not between the card title and the form', async () => {
+    install()
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    const form = document.querySelector('.settings-padd')!
+    expect(form.previousElementSibling!.className).toContain('settings-ch')
+    expect(form.nextElementSibling!.className).toContain('settings-prow2')
   })
 
   it('opens the add block on its own on an empty machine, with no Cancel button', async () => {
@@ -82,19 +141,20 @@ describe('ModelStepBody', () => {
     )
     install(data)
     await openBody(ModelStepBody)
-    const groups = [...document.querySelectorAll('.settings-padd select optgroup')]
-    expect(groups.map((g) => g.getAttribute('label'))).toEqual([
+    await act(async () => { fireEvent.click(document.querySelector('.settings-padd .settings-vpick')!) })
+    const groups = [...document.querySelectorAll('.settings-vlist [role="group"]')]
+    expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual([
       'gui.settings.providers.filter_direct',
       'gui.settings.providers.filter_gateway',
       'gui.settings.providers.filter_oauth',
       'gui.model.kind.local',
     ])
     const inGroup = (label: string): string[] =>
-      [...groups.find((g) => g.getAttribute('label') === label)!.querySelectorAll('option')].map((o) => o.getAttribute('value')!)
-    expect(inGroup('gui.settings.providers.filter_gateway')).toEqual(['openrouter', 'custom'])
-    expect(inGroup('gui.settings.providers.filter_direct')).toEqual(['anthropic', 'openai', 'azure_openai'])
-    expect(inGroup('gui.settings.providers.filter_oauth')).toEqual(['minimax_global'])
-    expect(inGroup('gui.model.kind.local')).toEqual(['ollama'])
+      [...groups.find((g) => g.getAttribute('aria-label') === label)!.querySelectorAll('[role="option"]')].map((o) => o.lastElementChild!.textContent!)
+    expect(inGroup('gui.settings.providers.filter_gateway')).toEqual(['OpenRouter', 'Custom'])
+    expect(inGroup('gui.settings.providers.filter_direct')).toEqual(['Anthropic', 'OpenAI', 'Azure'])
+    expect(inGroup('gui.settings.providers.filter_oauth')).toEqual(['MiniMax Global'])
+    expect(inGroup('gui.model.kind.local')).toEqual(['Ollama'])
   })
 
   it('an aggregator takes an address too, filled and hinted from the one it ships with', async () => {
@@ -102,12 +162,174 @@ describe('ModelStepBody', () => {
     data.providers = data.providers.map((p) => (p.id === 'openrouter' ? { ...p, apiBase: '' } : p))
     install(data)
     await openBody(ModelStepBody)
-    const select = document.querySelector('.settings-padd select') as HTMLSelectElement
     expect(screen.queryByLabelText('gui.settings.providers.base')).toBeNull()
-    await act(async () => { fireEvent.change(select, { target: { value: 'openrouter' } }) })
+    await act(async () => { fireEvent.click(document.querySelector('.settings-padd .settings-vpick')!) })
+    await act(async () => { fireEvent.click(screen.getByRole('option', { name: 'OpenRouter' })) })
     const address = screen.getByLabelText('gui.settings.providers.base') as HTMLInputElement
     expect(address.value).toBe('https://openrouter.ai/api/v1')
     expect(address.placeholder).toBe('https://openrouter.ai/api/v1')
+  })
+
+  it('connect saves at once, closes the form, and the row tests the key on the side', async () => {
+    let answer: (v: unknown) => void = () => {}
+    const data = snap()
+    const { calls } = install(data, {
+      provider: async (op, params) => {
+        calls.push(['provider', { op, ...params }])
+        data.providers = data.providers.map((p) => (p.id === params.slug ? { ...p, on: true } : p))
+        return { ...data }
+      },
+      fetchModels: (slug, verify) => {
+        calls.push([verify ? 'fetchModels:verify' : 'fetchModels', slug])
+        return new Promise((r) => { answer = r as (v: unknown) => void })
+      },
+    })
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.settings.providers.api_key'), { target: { value: '111' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    const saved = calls.find(([m]) => m === 'provider')![1] as { op: string; slug: string }
+    expect(saved.op).toBe('save_key')
+    expect(document.querySelector('.settings-padd')).toBeNull()
+    expect(calls).toContainEqual(['fetchModels:verify', saved.slug])
+    const row = (): Element => [...document.querySelectorAll('.settings-prow2')].find((r) => r.querySelector('.settings-pnote'))!
+    expect(row().querySelector('.settings-pnote')!.textContent).toBe('gui.settings.providers.probe_checking')
+    expect(row().querySelector('.settings-chip')!.className).toContain('settings-on')
+    await act(async () => { answer({ models: [], status: 'invalid_key', error: 'HTTP 401' }) })
+    expect(row().querySelector('.settings-pnote')!.textContent).toContain('gui.settings.providers.probe_invalid_saved')
+    expect(row().querySelector('.settings-chip')!.className).toContain('settings-warn')
+    expect(screen.getByText('gui.settings.providers.probe_recheck')).toBeTruthy()
+  })
+
+  it('a verified key says how many models the vendor named', async () => {
+    const data = snap()
+    install(data, {
+      provider: async (_op, params) => {
+        data.providers = data.providers.map((p) => (p.id === params.slug ? { ...p, on: true } : p))
+        return { ...data }
+      },
+      fetchModels: async () => ({
+        status: 'ok',
+        models: [
+          { id: 'a', label: 'a', kind: 'text', added: false, source: 'live' },
+          { id: 'b', label: 'b', kind: 'text', added: false, source: 'live' },
+          { id: 'c', label: 'c', kind: 'text', added: false, source: 'registry' },
+        ],
+      }),
+    })
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.settings.providers.api_key'), { target: { value: 'sk-1' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    const note = document.querySelector('.settings-pnote')!
+    expect(note.getAttribute('data-tone')).toBe('ok')
+    expect(note.textContent).toBe('gui.settings.providers.probe_valid {"n":2}')
+  })
+
+  it('a live read that succeeds reloads the offer, so the pickers list what the vendor named', async () => {
+    const data = snap()
+    let status = 'ok'
+    const { calls } = install(data, {
+      provider: async (_op, params) => {
+        data.providers = data.providers.map((p) => (p.id === params.slug ? { ...p, on: true } : p))
+        return { ...data }
+      },
+      fetchModels: async () => ({ status, models: [] }),
+      reloadProviders: async () => {
+        calls.push(['reloadProviders', null])
+        return { ...data, model: 'from-the-reload' }
+      },
+    })
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.settings.providers.api_key'), { target: { value: 'sk-1' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    expect(calls.filter(([m]) => m === 'reloadProviders')).toHaveLength(1)
+    expect(store.get().snap.model).toBe('from-the-reload')
+
+    status = 'invalid_key'
+    await act(async () => { await store.recheck('openrouter') })
+    await act(async () => { await store.sheetOpen('openrouter') })
+    expect(calls.filter(([m]) => m === 'reloadProviders')).toHaveLength(1)
+
+    status = 'ok'
+    await act(async () => { await store.sheetOpen('openrouter') })
+    expect(calls.filter(([m]) => m === 'reloadProviders')).toHaveLength(2)
+  })
+
+  it('a key with characters no key has is refused before anything is saved', async () => {
+    const { calls } = install(snap())
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('gui.settings.providers.api_key'), { target: { value: '\u{1F916} Generated with Claude Code' } })
+    })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    expect(calls.find(([m]) => m === 'provider')).toBeUndefined()
+    expect(document.querySelector('.settings-padd')).not.toBeNull()
+    expect(screen.getByText('gui.settings.providers.key_not_ascii').closest('.settings-padd')).not.toBeNull()
+    expect(document.querySelector('.settings-inline-err')).toBeNull()
+  })
+
+  it('the data-sync body draws the embedding row alone, without calling it optional', async () => {
+    install(snap())
+    await openBody(MemoryStepBody)
+    const names = [...document.querySelectorAll('.settings-rt')].map((el) => el.firstChild!.textContent)
+    expect(names).toEqual(['gui.settings.roles.embedding'])
+    expect(document.querySelectorAll('.settings-mpill').length).toBe(1)
+    expect(document.querySelector('.settings-opttag')).toBeNull()
+  })
+
+  it('a key a public catalogue cannot confirm is said so plainly, with nothing to retry', async () => {
+    const data = snap()
+    install(data, {
+      provider: async (_op, params) => {
+        data.providers = data.providers.map((p) => (p.id === params.slug ? { ...p, on: true } : p))
+        return { ...data }
+      },
+      fetchModels: async () => ({ status: 'key_unchecked', models: [] }),
+    })
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.settings.providers.api_key'), { target: { value: '111' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    const note = document.querySelector('.settings-pnote')!
+    expect(note.textContent).toBe('gui.settings.providers.probe_unchecked')
+    expect(note.getAttribute('data-tone')).toBe('muted')
+    expect(screen.queryByText('gui.settings.providers.probe_recheck')).toBeNull()
+  })
+
+  it('a failed test checks again on request', async () => {
+    const data = snap()
+    let status = 'network_error'
+    install(data, {
+      provider: async (_op, params) => {
+        data.providers = data.providers.map((p) => (p.id === params.slug ? { ...p, on: true } : p))
+        return { ...data }
+      },
+      fetchModels: async () => ({ status, models: [] }),
+    })
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.settings.providers.api_key'), { target: { value: 'sk-1' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    expect(document.querySelector('.settings-pnote')!.textContent).toContain('gui.settings.providers.probe_unreachable')
+    status = 'ok'
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.probe_recheck')) })
+    expect(document.querySelector('.settings-pnote')!.getAttribute('data-tone')).toBe('ok')
+  })
+
+  it('a save that fails leaves the form open and tests nothing', async () => {
+    const data = snap()
+    const { calls } = install(data, {
+      provider: async () => { throw { handled: true } },
+    })
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.settings.providers.api_key'), { target: { value: 'sk-1' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    expect(document.querySelector('.settings-padd')).not.toBeNull()
+    expect(calls.filter(([m]) => String(m).startsWith('fetchModels'))).toEqual([])
   })
 
   it('the Cancel button is back once a provider is connected', async () => {

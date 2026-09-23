@@ -520,15 +520,23 @@ async def test_a_write_to_a_root_the_user_manages_is_refused_readably(everos_cfg
         await rpc_console.settings_everos_set({"section": "llm", "model": "m", "provider": "deepinfra"})
 
 
-async def test_clearing_a_required_role_is_refused(everos_cfg):
-    """Clearing llm turns long-term memory off outright and embedding is what
-    every stored vector was written under. The page reads the same list now, so
-    this is the second line of the same defence rather than the only one."""
-    everos_cfg(providers={})
+async def test_the_page_may_clear_embedding_but_not_llm(everos_cfg):
+    """Clearing llm turns long-term memory off outright, so the page's clear
+    button refuses it. Embedding is optional -- recall falls back to keyword
+    search -- and a click on its clear button is a person asking for exactly
+    that, so it goes; the wizard's skip still cannot take it (see
+    test_everos_config)."""
+    from raven_everos.config import role_pin
 
-    for section in ("llm", "embedding"):
-        with pytest.raises(ConfigValidationError, match="cannot be cleared"):
-            await rpc_console.settings_everos_set({"section": section, "clear": True})
+    everos_cfg(providers={}, embedding={"model": "bge-m3", "provider": "deepinfra"})
+    assert role_pin("embedding") is not None
+
+    with pytest.raises(ConfigValidationError, match="cannot be cleared"):
+        await rpc_console.settings_everos_set({"section": "llm", "clear": True})
+
+    await rpc_console.settings_everos_set({"section": "embedding", "clear": True})
+    assert role_pin("embedding") is None
+    assert (await rpc_console.settings_everos({}))["required"] == ["llm"]
 
 
 class TestTheRoleCardReadsAndWritesRavensOwnRecord:

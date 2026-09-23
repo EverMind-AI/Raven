@@ -869,6 +869,37 @@ async def test_options_lists_the_codex_models_the_account_reports(
     assert entry["models"] == ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.4"]
 
 
+async def test_the_picker_offers_what_the_vendor_last_named_with_its_kind(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A vendor's own list outruns the bundled catalogue; once asked, the picker offers it."""
+    _write_config(fake_home, {"providers": {"openrouter": {"apiKey": "sk-or"}}})
+
+    def probe(name: str, **kwargs) -> dict:
+        return {
+            "ok": True,
+            "status": "valid",
+            "model_ids": ["zz-vendor/brand-new-model", "zz-vendor/new-embed"],
+            "implied_capabilities": {"zz-vendor/new-embed": "embedding"},
+        }
+
+    monkeypatch.setattr("raven.config.update_providers.test_provider", probe)
+    before = _entry(await model_options({}), "openrouter")
+    assert not any("brand-new-model" in m for m in before["models"])
+
+    await model_fetch_models({"slug": "openrouter", "verify": True})
+    after = _entry(await model_options({}), "openrouter")
+    new = next(m for m in after["models"] if m.endswith("brand-new-model"))
+    embed = next(m for m in after["models"] if m.endswith("new-embed"))
+    assert after["model_labels"][embed]["kind"] == "embedding"
+    assert after["model_labels"][new]["kind"] == "text"
+
+    await model_disconnect({"slug": "openrouter"})
+    _write_config(fake_home, {"providers": {"openrouter": {"apiKey": "sk-or"}}})
+    again = _entry(await model_options({}), "openrouter")
+    assert not any("brand-new-model" in m for m in again["models"])
+
+
 async def test_options_lists_lm_studio_models_from_the_local_server(
     fake_home: Path,
     monkeypatch: pytest.MonkeyPatch,

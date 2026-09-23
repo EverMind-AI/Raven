@@ -422,6 +422,31 @@ describe('the two provider scopes', () => {
   })
 })
 
+describe('the default-scoped provider read', () => {
+  const row = (slug: string, current = false) => ({ slug, name: slug, authenticated: true, current, models: [] })
+  it('asks once when the page and the picker both refresh with no conversation open', async () => {
+    /* A provider write refreshes both; with no session the two reads are the
+       same live round trip to every vendor, most of a second each. */
+    const h = await live({ session: null })
+    const a = h.settings.loadDefaultProviders()
+    const b = h.settings.loadProviders()
+    expect(h.inFlight()).toEqual(['model.options'])
+    await h.settle(0, { model: 'deepseek/d', provider: 'deepseek', providers: [row('deepseek', true)] })
+    await Promise.all([a, b])
+    expect(h.settings.defaultProvidersLive.map((p) => p.id)).toEqual(['deepseek'])
+    expect(h.settings.providersLive.map((p) => p.id)).toEqual(['deepseek'])
+  })
+
+  it('asks again once the shared read has answered', async () => {
+    const h = await live({ session: null })
+    const a = h.settings.loadDefaultProviders()
+    await h.settle(0, { providers: [] })
+    await a
+    void h.settings.loadDefaultProviders()
+    expect(h.inFlight()).toEqual(['model.options', 'model.options'])
+  })
+})
+
 describe('the follows-default repaint under navigation', () => {
   it('drops the repaint when the reader left during the write', async () => {
     const h = await live({ session: 'a' })

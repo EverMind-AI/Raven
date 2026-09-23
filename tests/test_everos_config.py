@@ -876,6 +876,23 @@ class TestTheEdgesThatOnlyShowUpWhenSomethingIsWrong:
 
         assert role_pin("embedding") == ("bge-m3", "deepinfra")
 
+    def test_a_deliberate_clear_takes_embedding_and_never_llm(self, pinned) -> None:
+        """The page's clear button is a person asking for it: embedding is
+        optional and goes, llm is what EverOS will not start without and stays."""
+        import json
+
+        from raven_everos.config import RoleRequiredError, clear_role, role_pin
+
+        raw = json.loads(pinned.read_text(encoding="utf-8"))
+        raw["embedding"] = {"model": "bge-m3", "provider": "deepinfra"}
+        pinned.write_text(json.dumps(raw), encoding="utf-8")
+
+        with pytest.raises(RoleRequiredError, match="cannot be cleared"):
+            clear_role("llm", deliberate=True)
+
+        clear_role("embedding", deliberate=True)
+        assert role_pin("embedding") is None
+
     def test_a_role_that_is_not_required_still_clears(self, pinned) -> None:
         """The control: the guard refuses the two named roles and nothing else."""
         from raven_everos.config import clear_role, role_pin, set_role
