@@ -162,10 +162,10 @@ function Prose({ text, cls, caret = false }: { text: string; cls: string; caret?
 }
 
 /* `running`: this node has no token stream of its own, but `useNodeRecord`
-   re-reads the record on every live `node_updated` event, so a trailing
-   answer that arrives while the node is still `running` is not necessarily
-   the final one -- the caret says so the way the main chat's does, rather
-   than a second "in progress" sentence. */
+   re-reads the record on a beat while the node runs, so a trailing answer
+   that arrives while the node is still `running` is not necessarily the
+   final one -- the caret says so the way the main chat's does, rather than
+   a second "in progress" sentence. */
 export function Answer({ text, at, running = false }: { text: string; at: number | null; running?: boolean }): JSX.Element {
   return (
     <div className="tkanswer">

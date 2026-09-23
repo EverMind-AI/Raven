@@ -778,10 +778,11 @@ describe('the node panel', () => {
       expect(document.querySelector('.tkans')?.textContent).toBe('second answer')
     })
 
-    /* A spawn's lane sends no per-step event -- `subagent.status` moves on
-       pending, running and the terminal word only -- so a running spawn's
-       record is re-read on a beat, the transcript's spawn card's own
-       cadence, rather than left at whatever the first read saw. */
+    /* No lane sends a per-step event -- `subagent.status` moves on pending,
+       running and the terminal word only, and `dag.node_updated` marks a dag
+       node's transitions -- so a running node's record is re-read on a beat,
+       the transcript's spawn card's own cadence, rather than left at whatever
+       the first read saw. */
     it("a running spawn's record is re-read on a beat, so its steps keep arriving", async () => {
       vi.useFakeTimers()
       try {
@@ -831,10 +832,13 @@ describe('the node panel', () => {
       }
     })
 
-    it('a running dag node is not re-read on a beat: its node_updated events already do that', async () => {
+    /* The dag lane too: its frames mark a node's transitions only, so a node
+       opened as it started used to freeze at its dispatch until it settled. */
+    it("a running dag node's record is re-read on the beat as well, so its steps keep arriving", async () => {
       vi.useFakeTimers()
       try {
         const calls: string[] = []
+        record = { dispatch: 'go', steps: [], answer: null, outputTruncated: false }
         setSources({
           tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
           workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
@@ -844,8 +848,56 @@ describe('the node panel', () => {
         })
         pick(running)
         await act(async () => {})
-        await act(async () => { vi.advanceTimersByTime(3000) })
         expect(calls).toEqual(['fetch'])
+
+        record = { dispatch: 'go', steps: [{ kind: 'say', text: 'first step' }], answer: null, outputTruncated: false }
+        await act(async () => { vi.advanceTimersByTime(1000) })
+        expect(calls).toEqual(['fetch', 'fetch'])
+        expect(document.querySelector('.tkprocb .tkans')?.textContent).toBe('first step')
+
+        await act(async () => { vi.advanceTimersByTime(1000) })
+        expect(calls).toEqual(['fetch', 'fetch', 'fetch'])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("stops a dag node's beat once its terminal frame lands, after the one read that frame earns", async () => {
+      vi.useFakeTimers()
+      try {
+        const calls: string[] = []
+        record = { dispatch: 'go', steps: [], answer: null, outputTruncated: false }
+        setSources({
+          tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
+          workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+        })
+        const running = task({
+          id: 'r1', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'running', started_at: 1000 })],
+        })
+        rows = [running]
+        store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
+        pick(running)
+        await act(async () => {})
+        await act(async () => { vi.advanceTimersByTime(1000) })
+        expect(calls).toEqual(['fetch', 'fetch'])
+
+        record = { dispatch: 'go', steps: [], answer: 'the answer', outputTruncated: false }
+        rows = [{
+          ...running, status: 'completed',
+          nodes: [node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 2000 })],
+        }]
+        await act(async () => {
+          store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'completed', started_at: 1000, ended_at: 2000 })
+        })
+        /* The frame itself earns a read (the status key and the version bump
+           each re-run the effect); what matters here is that nothing follows. */
+        const onSettle = calls.length
+        expect(onSettle).toBeGreaterThan(2)
+        expect(document.querySelector('.tkanswer .tkans')?.textContent).toBe('the answer')
+
+        /* Settled: the beat has nothing left to follow. */
+        await act(async () => { vi.advanceTimersByTime(3000) })
+        expect(calls.length).toBe(onSettle)
       } finally {
         vi.useRealTimers()
       }
