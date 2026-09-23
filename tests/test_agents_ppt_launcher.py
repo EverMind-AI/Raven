@@ -918,6 +918,58 @@ def test_a_host_config_serper_key_reaches_both_search_consumers(grounded, tmp_pa
     assert data["plugins"]["config"]["ppt-engine"]["imageSearch"]["apiKey"] == "host-serper"
 
 
+def _host(tmp_path: Path, web: dict) -> None:
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"tools": {"web": web}}))
+
+
+def test_a_host_on_the_vendor_table_hands_its_web_keys_down(grounded, tmp_path, monkeypatch):
+    """A host set up on a current raven keeps its keys under tools.web.providers,
+    not in the two pre-vendor leaves the secret slots read. Rendered from the
+    leaves alone, this lane launched keyless on such a host: web_search withheld
+    and ppt_image_search declined, while the host's own tools searched fine."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    _host(tmp_path, {"providers": {"serper": {"apiKey": "host-serper"}, "jina": {"apiKey": "host-jina"}}})
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    providers = data["tools"]["web"]["providers"]
+    assert providers["serper"]["apiKey"] == "host-serper"
+    assert providers["jina"]["apiKey"] == "host-jina"
+    assert data["plugins"]["config"]["ppt-engine"]["imageSearch"]["apiKey"] == "host-serper"
+    assert data["tools"]["web"]["search"]["maxResults"] == 10, "the product's own search knobs stay"
+
+
+def test_an_own_web_key_outranks_the_hosts_vendor_slot(grounded, tmp_path, monkeypatch):
+    """PPT_SERPER_API_KEY lands in the pre-vendor leaf, which trunk reads only
+    after an empty vendor slot; inheriting the host's slot beside it would have
+    the host's key silently answer for the one this product set."""
+    monkeypatch.setenv("PPT_SERPER_API_KEY", "sk-own-serper")
+    _host(tmp_path, {"providers": {"serper": {"apiKey": "host-serper"}}})
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["tools"]["web"]["search"]["apiKey"] == "sk-own-serper"
+    assert "serper" not in data["tools"]["web"].get("providers", {})
+    assert data["plugins"]["config"]["ppt-engine"]["imageSearch"]["apiKey"] == "sk-own-serper"
+
+
+def test_the_hosts_vendor_choice_travels_with_its_key(grounded, tmp_path, monkeypatch):
+    """A host that searches through another vendor hands down the choice and the
+    key together; the key alone would sit unread beside a Serper default."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    _host(
+        tmp_path,
+        {
+            "providers": {"tavily": {"apiKey": "host-tavily"}},
+            "search": {"provider": "tavily"},
+            "fetch": {"provider": "tavily"},
+        },
+    )
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    web = data["tools"]["web"]
+    assert web["providers"]["tavily"]["apiKey"] == "host-tavily"
+    assert web["search"]["provider"] == "tavily" and web["fetch"]["provider"] == "tavily"
+    assert "imageSearch" not in data["plugins"]["config"]["ppt-engine"], "the picture search is Serper's alone"
+
+
 def test_the_render_loads_through_trunks_own_loader(grounded):
     from raven.config.loader import load_config
     from raven.config.raven import load_raven_config
@@ -1149,6 +1201,17 @@ def test_a_host_config_serper_key_admits_the_same_pair(grounded, tmp_path, monke
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
     (home / "config.json").write_text(json.dumps({"tools": {"web": {"search": {"apiKey": "host-serper"}}}}))
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    visible = _hermetic_build(rendered, tmp_path, monkeypatch)
+    assert visible == VENDORED_TOOL_FACE | KEY_GATED
+
+
+def test_a_host_vendor_table_serper_key_admits_the_same_pair(grounded, tmp_path, monkeypatch):
+    """The symptom itself: on a host keyed through tools.web.providers the lane's
+    face lacked both searches, so the author paged a wiki API for picture names."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("PPT_SERPER_API_KEY", raising=False)
+    _host(tmp_path, {"providers": {"serper": {"apiKey": "host-serper"}}})
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     visible = _hermetic_build(rendered, tmp_path, monkeypatch)
     assert visible == VENDORED_TOOL_FACE | KEY_GATED

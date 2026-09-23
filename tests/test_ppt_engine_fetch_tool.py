@@ -317,6 +317,37 @@ async def test_a_failed_request_says_so_rather_than_writing_nothing_quietly(fetc
 
 
 @pytest.mark.asyncio
+async def test_the_download_names_itself_rather_than_sending_the_library_default(monkeypatch, tmp_path: Path) -> None:
+    """Wikimedia's hosts answer httpx's own `python-httpx/<version>` with a 403 and
+    serve the same file to an agent that names itself and a contact. The handler
+    here is that policy, so the fetch has to arrive with a name of its own."""
+    agents: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        agent = request.headers.get("user-agent", "")
+        agents.append(agent)
+        if agent.startswith("python-httpx"):
+            return httpx.Response(403)
+        return httpx.Response(200, content=_png())
+
+    transport = httpx.MockTransport(handler)
+    real = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs.pop("proxy", None)
+        return real(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+    monkeypatch.setattr("raven.security.network.validate_url_target", lambda url: (True, ""))
+
+    body = await _run(PptFetchTool(tmp_path), url="https://upload.wikimedia.org/wikipedia/commons/a/a4/x.jpg")
+
+    assert body["ok"] is True, body
+    (agent,) = agents
+    assert agent.startswith("raven-ppt/") and "https://github.com/EverMind-AI/Raven" in agent
+
+
+@pytest.mark.asyncio
 async def test_there_is_no_materials_path_to_point_anywhere(fetch) -> None:
     """The parameter is gone, not defaulted: it existed to let a fetch land somewhere
     other than the deck's sources, and there was never a good reason to."""

@@ -32,6 +32,7 @@ import io
 import json
 import re
 import zipfile
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,26 @@ from raven_ppt.tools import _return
 
 MAX_BYTES = 32 * 1024 * 1024
 TIMEOUT_S = 60.0
+
+
+def _user_agent() -> str:
+    """Who is downloading, in the ``name/version (contact)`` form hosts ask for.
+
+    httpx's default ``python-httpx/<version>`` is refused outright by Wikimedia's
+    hosts (upload.wikimedia.org, thumb.wikimedia.org, *.wikipedia.org) and by some
+    government sites, whose policy is to block generic library agents. One live
+    deck had all five of its Commons pictures come back 403 while the same URLs
+    answered 200 to an agent that named itself, and the author fell back to curl,
+    which lands a picture without its caption.
+    """
+    try:
+        release = version("ppt-engine")
+    except PackageNotFoundError:
+        release = "0"
+    return f"raven-ppt/{release} (+https://github.com/EverMind-AI/Raven)"
+
+
+USER_AGENT = _user_agent()
 
 # What the bytes may turn out to be, and where each kind belongs.
 _DOCUMENT, _IMAGE, _TEMPLATE = "document", "image", "template"
@@ -362,6 +383,7 @@ class PptFetchTool(Tool):
             follow_redirects=True,
             timeout=TIMEOUT_S,
             trust_env=False,
+            headers={"User-Agent": USER_AGENT},
         ) as client:
             async with client.stream("GET", url) as response:
                 response.raise_for_status()
