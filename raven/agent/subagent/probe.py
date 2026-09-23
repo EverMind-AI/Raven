@@ -174,7 +174,50 @@ def _missing_exe_detail(cfg: Any, exe: str) -> str:
     return _missing_detail(exe, install_hint_for(cfg))
 
 
-def _refusal_detail(cfg: Any, said: str) -> str:
+def _auth_line(stderr: str) -> str | None:
+    """The first line of a child's stderr that reads as a credential failure.
+
+    For the agents that answer the protocol with a bare code and write the
+    reason nowhere but here. Measured 2026-09-23: `hermes acp` returned
+    ``[-32603] Internal error`` -- six words, none of them actionable -- while
+    its own stderr carried "Hermes is not logged into Nous Portal. Run `hermes
+    model` to re-authenticate." The tail this reads is already kept, for the
+    neighbouring case where the protocol reports success and only stderr says
+    the provider refused (`AcpClient.stderr_tail`).
+
+    The *first* such line rather than the newest, because the lines after it
+    are the same missing credential reported again downstream: hermes names the
+    Portal once, then its auxiliary client reports what it could not do without
+    it. Taking the newest would quote a consequence and, in that agent's case,
+    a command that does not address the cause.
+    """
+    from raven.acp_client.capabilities import looks_like_auth
+
+    for line in stderr.splitlines():
+        text = line.strip()
+        if text and looks_like_auth(text):
+            return text
+    return None
+
+
+def _launched_stderr(pool: Any, cfg: Any) -> str:
+    """What this ping's own agent wrote to its stderr, or ``""``.
+
+    Read before the pool is closed, and only from this call's pool, which holds
+    nothing but the connection this ping opened.
+
+    Guarded whole because the two callers of this module promise never to
+    raise, and a pool whose connection died mid-ping is exactly when this is
+    asked: losing the words is a worse message, not a crash.
+    """
+    try:
+        name = getattr(cfg, "name", "") or ""
+        return "\n".join(c.client.stderr_tail() for c in pool.connections(name) if c.client is not None)
+    except Exception:  # noqa: BLE001 - the detail is a courtesy, never the verdict
+        return ""
+
+
+def _refusal_detail(cfg: Any, said: str, *, stderr: str = "") -> str:
     """What the reader is told when the test message came back a failure.
 
     The agent's own words are the evidence and they are kept, but they are not
@@ -187,9 +230,17 @@ def _refusal_detail(cfg: Any, said: str) -> str:
     sentence says to sign in, and nothing says where.
 
     So a refusal that reads as one about a credential is named as one, with the
-    command where the command is known. The rest are unchanged: a failure this
-    cannot classify keeps the words it came with rather than being given a
-    guess about what they mean.
+    command where the command is known -- or, for a row that is an endpoint and
+    a key rather than an installed agent, with where the key goes, since
+    "sign in" is not a thing its reader can do.
+
+    Two sources, in that order. The words the protocol carried are read first.
+    Where they carry nothing -- measured, an agent whose whole answer was
+    ``[-32603] Internal error`` while its own stderr named the missing
+    credential and the command for it -- the child's stderr is read instead,
+    and that line becomes the evidence. The rest are unchanged: a failure
+    neither source can classify keeps the words it came with rather than being
+    given a guess about what they mean.
 
     The same question the roster asks (`acp_client.capabilities.looks_like_auth`)
     rather than a second spelling of it -- the roster already marks such a row
@@ -197,22 +248,40 @@ def _refusal_detail(cfg: Any, said: str) -> str:
     """
     from raven.acp_client.capabilities import looks_like_auth
 
-    if not looks_like_auth(said):
-        return said[:_DETAIL_CAP]
-    hint = sign_in_hint_for(cfg)
-    lead = "it is installed but has no usable credential"
-    if hint is None:
-        advice = "sign in to it and connect again"
+    evidence = said
+    if not looks_like_auth(evidence):
+        # The words the protocol carried say nothing. Before giving up on
+        # classifying, ask the child what it said on its own channel -- and
+        # keep that line as the evidence, since the one that came back is the
+        # one that carried nothing.
+        told = _auth_line(stderr)
+        if told is None:
+            return said[:_DETAIL_CAP]
+        evidence = told
+    if getattr(cfg, "kind", None) == "openai":
+        # Nothing was installed and there is nothing to sign in to: this row is
+        # an endpoint and a key. Telling its reader to sign in would send them
+        # looking for a CLI that does not exist -- measured, the row that
+        # prompted this answers `HTTP 401: {"error":"missing api key"}` against
+        # a preset whose `apiKey` ships empty on purpose.
+        lead = "it has no usable API key"
+        advice = "add one in this agent's settings and connect again"
     else:
-        # Which spelling, decided on this machine rather than in the table: a
-        # shim-launched row runs where the agent's CLI was never installed
-        # globally, and naming a command that is not there answers a credential
-        # failure with a second one. Resolved against the same PATH the probe
-        # resolves every other executable against, so the hint and the probe
-        # cannot disagree about what this machine has.
-        local = shutil.which(hint.exe, path=_login_path()) is not None
-        advice = f"sign in with `{hint.local if local else hint.anywhere}` and connect again"
-    return f"{lead}; {advice}. It said: {said}"[:_DETAIL_CAP]
+        hint = sign_in_hint_for(cfg)
+        lead = "it is installed but has no usable credential"
+        if hint is None:
+            advice = "sign in to it and connect again"
+        else:
+            # Which spelling, decided on this machine rather than in the table: a
+            # shim-launched row runs where the agent's CLI was never installed
+            # globally, and naming a command that is not there answers a credential
+            # failure with a second one. Resolved against the same PATH the probe
+            # resolves every other executable against, so the hint and the probe
+            # cannot disagree about what this machine has.
+            local = shutil.which(hint.exe, path=_login_path()) is not None
+            command = hint.local if local or hint.anywhere is None else hint.anywhere
+            advice = f"sign in with `{command}` and connect again"
+    return f"{lead}; {advice}. It said: {evidence}"[:_DETAIL_CAP]
 
 
 def _missing_detail(exe: str, hint: str | None) -> str:
@@ -581,7 +650,9 @@ async def ping_agent(cfg: Any) -> PingResult:
     except asyncio.TimeoutError:
         return PingResult(False, f"it did not answer within {_ENABLE_PING_TIMEOUT_SECONDS}s")
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
-        return PingResult(False, _refusal_detail(cfg, str(exc)))
+        # Composed before the `finally` closes the pool, which is what makes the
+        # child's own stderr still reachable here.
+        return PingResult(False, _refusal_detail(cfg, str(exc), stderr=_launched_stderr(pool, cfg)))
     finally:
         # The pool is this call's alone, so nothing else will ever close it, and a
         # pool left open holds the child process it launched for the rest of the

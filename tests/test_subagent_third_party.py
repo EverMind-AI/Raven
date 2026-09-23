@@ -4251,10 +4251,217 @@ def test_a_credential_refusal_is_named_as_one_with_its_command() -> None:
     assert said in known, "the agent's own words stay as the evidence"
 
     # A row whose sign-in command this repo does not know still gets the fact.
-    unknown = _refusal_detail(SimpleNamespace(preset="hermes"), said)
+    unknown = _refusal_detail(SimpleNamespace(preset="opencode"), said)
     assert "no usable credential" in unknown
     assert "sign in to it" in unknown
     assert "`" not in unknown, "no command is better than a guessed one"
+
+
+def test_the_shim_row_that_reported_this_gets_its_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The failure that prompted this, with the machine it was measured on.
+
+    Measured 2026-09-23 from the shipped preset: the agent answered
+    ``[-32000] Authentication required: Your access token could not be
+    refreshed. Please log out and sign in again.`` That already read as a
+    credential failure -- the fact reached the reader -- but the row had no
+    entry, so the sentence ended "sign in to it and connect again" with nothing
+    to run. On the same machine ``codex`` was not on the login PATH, because
+    the row is shim-launched and the adapter never links its copy: the spelling
+    that fires here is the one that needs no install.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.presets import SHIM_LAUNCHED_PRESETS, SIGN_IN_HINTS
+
+    assert "codex" in SHIM_LAUNCHED_PRESETS, "both spellings are only warranted for a shim row"
+    said = (
+        "request failed: [-32000] Authentication required: "
+        "Your access token could not be refreshed. Please log out and sign in again."
+    )
+    cfg = SimpleNamespace(preset="codex")
+    hint = SIGN_IN_HINTS["codex"]
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    clean = probe_mod._refusal_detail(cfg, said)
+    assert hint.anywhere in clean, "the measured machine had no codex on PATH"
+    assert f"`{hint.local}`" not in clean
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/opt/homebrew/bin/codex")
+    assert hint.local in probe_mod._refusal_detail(cfg, said)
+
+
+def test_a_row_with_one_spelling_is_not_offered_a_second(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A locally installed agent has one command, and it is offered as one.
+
+    The two spellings exist for a shim-launched row, which runs where the
+    agent's CLI was never installed globally. ``hermes`` is not such a row --
+    its command is a bare ``hermes``, so a reader who has no ``hermes`` stops
+    at the absent executable, a different message with a different answer.
+
+    The hazard this pins is the ``None`` half being read as a command: with the
+    executable off PATH, the shim row's branch would print "sign in with
+    `None`", which is the one thing worse than no command at all.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.presets import SIGN_IN_HINTS
+
+    assert SIGN_IN_HINTS["hermes"].anywhere is None, "a bare-command row has no second spelling"
+    said = "Failed to authenticate: OAuth session expired and could not be refreshed."
+    cfg = SimpleNamespace(preset="hermes")
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/Users/somebody/.local/bin/hermes")
+    assert "`hermes model`" in probe_mod._refusal_detail(cfg, said)
+
+    # The same row on a machine where the executable is not resolvable: there
+    # is no second spelling to fall back to, so the one command stands.
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    off_path = probe_mod._refusal_detail(cfg, said)
+    assert "`hermes model`" in off_path
+    assert "None" not in off_path
+
+
+def test_an_endpoint_row_is_told_where_its_key_goes() -> None:
+    """A row that is a URL and a key cannot be signed in to, so it is not told to.
+
+    Measured 2026-09-23 against the shipped preset, whose ``apiKey`` is empty on
+    purpose: the agent answered ``HTTP 401: {"error":"missing api key"}``. That
+    reads as a credential failure to the same rule the roster uses, so before
+    this the reader was told to "sign in to it and connect again" -- advice with
+    no referent, since nothing was installed and there is no CLI to sign in to.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.probe import _refusal_detail
+
+    said = 'OpenAI-API agent \'MiroThinker\' HTTP 401: {"error":"missing api key"}'
+    out = _refusal_detail(SimpleNamespace(preset="mirothinker", kind="openai"), said)
+
+    assert "API key" in out
+    assert "settings" in out, "where the key goes is the whole of what this reader can act on"
+    assert "sign in" not in out, "there is no CLI here to sign in to"
+    assert said in out, "the agent's own words stay as the evidence"
+
+
+def test_an_agent_that_answers_nothing_is_read_from_its_own_stderr() -> None:
+    """Some agents report the credential only on the channel nobody was reading.
+
+    Measured 2026-09-23: ``hermes acp`` answered the protocol with
+    ``[-32603] Internal error`` -- six words, none of them actionable -- while
+    writing the cause and its command to stderr. The reader got the six words.
+
+    The first auth line rather than the newest: hermes names the Portal once,
+    then its auxiliary client reports the consequence and, in doing so, a
+    command (``hermes auth``) that manages something else entirely. Quoting the
+    newest would hand the reader that one.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.probe import _refusal_detail
+
+    stderr = "\n".join(
+        (
+            "2026-09-23 14:28:23 [INFO] hermes_cli.plugins: Plugin 'openai' registered image_gen provider: openai",
+            "2026-09-23 14:28:42 [WARNING] agent.auxiliary_unavailable: Auxiliary Nous client unavailable: "
+            "Nous Portal runtime credentials unavailable: Hermes is not logged into Nous Portal. "
+            "Run `hermes model` to re-authenticate. (code: nous_auth_missing)",
+            "2026-09-23 14:28:42 [WARNING] agent.auxiliary_client: Auxiliary Nous client unavailable: "
+            "no Nous authentication found (run: hermes auth).",
+        )
+    )
+    cfg = SimpleNamespace(preset="hermes")
+
+    bare = _refusal_detail(cfg, "request failed: [-32603] Internal error")
+    assert bare == "request failed: [-32603] Internal error", "with no stderr there is nothing to add"
+
+    told = _refusal_detail(cfg, "request failed: [-32603] Internal error", stderr=stderr)
+    assert "no usable credential" in told
+    assert "`hermes model`" in told
+    assert "not logged into Nous Portal" in told, "the agent's own sentence is the evidence"
+    assert "hermes auth" not in told, "the consequence line names a command for something else"
+
+
+async def test_the_child_is_asked_before_its_connection_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one ordering the stderr half stands on, pinned where it can break.
+
+    ``ping_agent`` closes its pool in a ``finally``, and a closed pool has no
+    connection left to ask. It works today because a ``return`` evaluates its
+    expression before the ``finally`` runs -- an ordering nothing in the
+    function states, and one that a later refactor moving the compose into the
+    cleanup, or closing the pool earlier, would undo silently: every message
+    would keep its shape and quietly lose the only sentence worth reading.
+
+    So the fake pool here empties itself on close, the way a real one does.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client import pool as acp_pool
+    from raven.agent.subagent import probe as probe_mod
+
+    said = "Hermes is not logged into Nous Portal. Run `hermes model` to re-authenticate."
+
+    class _Client:
+        def __init__(self) -> None:
+            self.name = "Hermes Agent"
+
+        def stderr_tail(self, max_chars: int = 2000) -> str:
+            return f"2026-09-23 14:28:42 [WARNING] agent.auxiliary_unavailable: {said}"
+
+    class _Pool:
+        def __init__(self) -> None:
+            self._conns = [SimpleNamespace(client=_Client())]
+
+        def connections(self, name: str) -> list:
+            return self._conns
+
+        async def close_all(self) -> None:
+            self._conns = []
+
+    monkeypatch.setattr(acp_pool, "AcpConnectionPool", _Pool)
+
+    def _no_backend(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("request failed: [-32603] Internal error")
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", _no_backend)
+
+    result = await probe_mod.ping_agent(SimpleNamespace(name="Hermes Agent", preset="hermes", kind="acp"))
+
+    assert result.ok is False
+    assert said in result.detail, "the child was asked after its connection had gone"
+    assert "`hermes model`" in result.detail
+
+
+def test_stderr_is_read_only_when_the_answer_carried_nothing() -> None:
+    """The channel that answered is preferred, and noise is not promoted to a cause.
+
+    Two ways this could go wrong. A refusal that already says what it is must
+    keep its own words as the evidence rather than being restated in a log
+    line. And a failure that is about neither must stay unclassified: a stderr
+    full of an agent's ordinary chatter is not a credential failure just
+    because the run ended badly.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.probe import _refusal_detail
+
+    cfg = SimpleNamespace(preset="hermes")
+
+    spoke = "Failed to authenticate: OAuth session expired and could not be refreshed."
+    out = _refusal_detail(cfg, spoke, stderr="WARNING: no Nous authentication found (run: hermes auth).")
+    assert spoke in out
+    assert "hermes auth" not in out, "the answer that carried the reason is the one quoted"
+
+    noise = "\n".join(
+        (
+            "2026-09-23 14:28:23 [INFO] hermes_cli.plugins: Plugin 'fal' registered video_gen provider: fal",
+            "2026-09-23 14:28:42 [WARNING] acp_adapter.session: Background MCP discovery exited with no servers",
+        )
+    )
+    unclassified = _refusal_detail(cfg, "connection ended (exit 127)", stderr=noise)
+    assert unclassified == "connection ended (exit 127)"
+    assert "credential" not in unclassified
 
 
 def test_a_failure_that_is_not_about_credentials_keeps_its_own_words() -> None:

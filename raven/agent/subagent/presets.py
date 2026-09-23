@@ -333,11 +333,17 @@ class SignIn(NamedTuple):
     is what makes the second one an answer rather than a detour. Measured --
     the adapter's own bundled binary and the published CLI fetched fresh report
     the same `auth status` on one machine.
+
+    ``anywhere`` is ``None`` for a row whose command names a local install
+    rather than a shim -- there is no second spelling to offer, because a
+    reader who has no such install never reaches a credential failure in the
+    first place: the probe stops at the absent executable, which is a different
+    message with a different answer.
     """
 
     exe: str
     local: str
-    anywhere: str
+    anywhere: str | None = None
 
 
 SIGN_IN_HINTS: dict[str, SignIn] = {
@@ -346,6 +352,18 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
         local="claude auth login",
         anywhere="npx -y @anthropic-ai/claude-code auth login",
     ),
+    "codex": SignIn(
+        exe="codex",
+        local="codex login",
+        anywhere="npx -y @openai/codex login",
+    ),
+    # Not `hermes auth`, which the agent's own auxiliary client names and which
+    # does exist -- it manages external secret sources. The credential missing
+    # here is the Nous Portal one, and `hermes model` ("Interactively select
+    # your inference provider and default model") is what the runtime's own
+    # check tells the reader to run. Shim-launched it is not: the command is a
+    # bare `hermes`, so the local spelling is the only one it can reach.
+    "hermes": SignIn(exe="hermes", local="hermes model"),
 }
 """How to sign in to the agent a row defers to, by preset key.
 
@@ -354,6 +372,11 @@ answers "the agent is not installed", which the probe can see before it spends
 anything; this answers "it is installed and has no credential", which only the
 agent itself can report, and which it reports as prose in whatever words its
 vendor chose.
+
+Every command here was read from the installed tool's own help rather than
+from its documentation, because the two disagree: measured on 2026-09-23,
+`codex --help` lists `login`, and `hermes model` is the command `hermes`
+itself names when its runtime reports the Portal credential missing.
 
 Only agents whose sign-in was read from the installed tool are listed. An
 unlisted agent gets the sentence without a command, which is still the
