@@ -394,6 +394,8 @@ class TestTheCommand:
         started one, whose gateway could only come up on `serve` -- no channels."""
         monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
         monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: 4321)
+        # So a regression that does spawn fails here, not after the attach ceiling.
+        monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: None)
 
         with pytest.raises(typer.Exit) as exit_info:
             serve_commands._web(port=18999)
@@ -1947,6 +1949,41 @@ class TestStoppingARealTree:
                 os.killpg(sup, signal.SIGKILL)
             with suppress(OSError):
                 os.kill(gw, signal.SIGKILL)
+
+    def test_a_second_sigterm_does_not_cut_the_supervisor_s_cleanup_short(self, home: Path) -> None:
+        """`--stop` signals the supervisor and then the gateway, and a person may
+        send another; one landing while the supervisor waits on its gateway used
+        to raise out of that wait, leaving the gateway up and web.json behind."""
+        import os
+        import signal
+        import subprocess
+        import time
+
+        from raven.utils.pid import pid_alive
+
+        home.mkdir(parents=True, exist_ok=True)
+        script = (
+            "import sys\n"
+            "from raven.cli import serve_commands as sc\n"
+            f"sc._gateway_argv = lambda port: [sys.executable, '-c', {_STUBBORN!r}, {str(home)!r}]\n"
+            "sc._CHILD_STOP_S = 2.0\n"
+            "sc._supervise(18999)\n"
+        )
+        proc = subprocess.Popen([sys.executable, "-c", script], env={**os.environ, "RAVEN_HOME": str(home)})
+        try:
+            _wait_for(home / "serve.json")
+            gw = json.loads((home / "serve.json").read_text())["pid"]
+            _wait_for(home / "web.json")
+            proc.send_signal(signal.SIGTERM)
+            _wait_for(home / "gw-sigterm")  # the supervisor is now inside its cleanup
+            time.sleep(0.2)
+            proc.send_signal(signal.SIGTERM)
+            assert proc.wait(timeout=20) == 0
+            assert not pid_alive(gw)
+            assert not (home / "web.json").exists()
+        finally:
+            with suppress(OSError):
+                proc.kill()
 
     def test_a_real_supervisor_kills_its_stubborn_gateway_before_removing_web_json(self, home: Path) -> None:
         import os
