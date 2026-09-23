@@ -6572,8 +6572,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .tkview:not(.full) .tkrunchip { display: none; }
 .tkline { font-size: 11.5px; color: var(--faint); }
 .tkview > .tkchips { margin: 2px 0 4px; }
-.tkchips .add { color: var(--moss); font-style: normal; }
-.tkchips .del { color: var(--clay); font-style: normal; }
 /* Why a run stopped, at the top, where a reader looks before reading the
    steps. One line: the steps below say the rest. */
 .tkfail { font-size: 12px; line-height: 1.6; color: var(--clay);
@@ -6749,7 +6747,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .tkdetail .kv .k { color: var(--faint); }
 .tkdetail .kv .v { color: var(--muted); font-family: var(--mono); }
 .tknote { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
-.tkchips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 /* A door, not a label: each chip opens the thing it names -- the product in the
    preview, the changed file in its diff -- so it is a control and wears the
    affordances of one. */

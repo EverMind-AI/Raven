@@ -24,6 +24,7 @@ import { layout } from '../dag/graph'
 import * as desk from '../desk/store'
 import * as workspace from '../workspace/store'
 import { BoardCard } from './BoardCard'
+import { fitChips } from './chipFit'
 import { Answer, StepList } from './NodeRecord'
 import * as store from './store'
 
@@ -1070,48 +1071,137 @@ const DiffGlyph = (): JSX.Element => (
 function Chips({ row }: { row: TaskRow }): JSX.Element | null {
   const all: Array<{ node: TaskNode; file: TaskFile }> = []
   row.nodes.forEach((n) => n.files.forEach((f) => all.push({ node: n, file: f })))
-  if (!all.length) return null
   const writes = all.filter(({ file }) => file.op === 'write' || file.op === 'add')
   const edits = all.filter(({ file }) => file.op === 'edit')
   const gone = all.filter(({ file }) => file.op === 'delete')
+  const chips: JSX.Element[] = [
+    ...writes.map(({ node, file }) => (
+      <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => workspace.openPath(file.path)}>
+        <DocGlyph />
+        {nameOf(file)}{file.size != null ? <span className="tkkd">{humanSize(file.size)}</span> : null}
+      </button>
+    )),
+    ...edits.map(({ node, file }) => (
+      <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => void openNodeDiff(row, node, file)}>
+        <DiffGlyph />
+        {nameOf(file)}
+        <span className="tkdstat">
+          <b className="add">+{file.add}</b> <b className="del">&minus;{file.del}</b>
+        </span>
+      </button>
+    )),
+    ...gone.map(({ node, file }) => (
+      <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => void openNodeDiff(row, node, file)}>
+        <DiffGlyph />
+        {nameOf(file)}
+        {/* Nothing was added, so the `+0` half would only be noise. */}
+        <span className="tkdstat">
+          <b className="del">&minus;{file.del}</b>
+        </span>
+      </button>
+    )),
+  ]
+  return chips.length ? <ChipStrip chips={chips} /> : null
+}
+
+const nameOf = (file: TaskFile): string => file.path.split('/').pop() || file.path
+
+/* Folded, the strip holds this many lines and no more: a run that wrote forty
+   files would otherwise push the board below the fold of its own pane. */
+const CHIP_ROWS = 2
+/* Unfolded, it shows this many lines at once and scrolls the rest inside a box
+   that stops growing -- and the stylesheet caps that box again at a share of
+   the pane, so a short pane still keeps its board. */
+const CHIP_ROWS_OPEN = 6
+
+/* The chips past the fold stay mounted, out of flow and invisible
+   (`.tkover`), because their widths are what the next fit is computed from --
+   a chip that is not laid out has none. The `+N` chip is always mounted for
+   the same reason, hidden while nothing is folded away. Measured on every
+   render as well as on a resize: the embedded pane delivers no ResizeObserver
+   notifications (see dag/Board.tsx), and a strip that was `display: none`
+   while a node was picked comes back through a render, not a resize. */
+function ChipStrip({ chips }: { chips: JSX.Element[] }): JSX.Element {
+  const box = useRef<HTMLDivElement | null>(null)
+  const [open, setOpen] = useState(false)
+  const [fit, setFit] = useState(chips.length)
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    let frame = 0
+    let tries = 0
+    const measure = (): void => {
+      const avail = el.getBoundingClientRect().width
+      if (avail <= 0) {
+        if (tries++ < 60) frame = requestAnimationFrame(measure)
+        return
+      }
+      const kids = Array.from(el.children) as HTMLElement[]
+      const gap = parseFloat(getComputedStyle(el).rowGap) || 0
+      const tall = kids[0] ? kids[0].getBoundingClientRect().height : 0
+      if (tall) el.style.setProperty('--tkopen-h', `${tall * CHIP_ROWS_OPEN + gap * (CHIP_ROWS_OPEN - 1)}px`)
+      markEdges(el)
+      if (open) return
+      const more = kids.pop()
+      const widths = kids.map((k) => k.getBoundingClientRect().width)
+      setFit(fitChips(widths, avail, gap, more ? more.getBoundingClientRect().width : 0, CHIP_ROWS))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    if (ro) ro.observe(el)
+    return () => {
+      if (frame) cancelAnimationFrame(frame)
+      window.removeEventListener('resize', measure)
+      if (ro) ro.disconnect()
+    }
+  })
+  const shown = open ? chips.length : Math.min(fit, chips.length)
+  const rest = chips.length - shown
+  const flip = (): void => {
+    if (open && box.current) box.current.scrollTop = 0
+    setOpen(!open)
+  }
   return (
-    <div className="tkchips">
-      {writes.map(({ node, file }) => {
-        const name = file.path.split('/').pop() || file.path
-        return (
-          <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => workspace.openPath(file.path)}>
-            <DocGlyph />
-            {name}{file.size != null ? <span className="tkkd">{humanSize(file.size)}</span> : null}
+    <div className="tkchips" data-open={open || undefined}>
+      <div className="tkstrip" ref={box} onScroll={(e) => markEdges(e.currentTarget)}>
+        {chips.map((chip, i) => (i < shown ? chip : <span key={chip.key} className="tkover" aria-hidden="true">{chip}</span>))}
+        {open ? null : (
+          <button type="button" className={'wchip tkfold' + (rest ? '' : ' tkover')}
+            aria-expanded={false} tabIndex={rest ? undefined : -1}
+            aria-label={t('gui.tasks.files_more', { n: rest })} onClick={flip}>
+            {'+' + rest}
+            <ChipChev />
           </button>
-        )
-      })}
-      {edits.map(({ node, file }) => {
-        const name = file.path.split('/').pop() || file.path
-        return (
-          <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => void openNodeDiff(row, node, file)}>
-            <DiffGlyph />
-            {name}
-            <span className="tkdstat">
-              <b className="add">+{file.add}</b> <b className="del">&minus;{file.del}</b>
-            </span>
-          </button>
-        )
-      })}
-      {gone.map(({ node, file }) => {
-        const name = file.path.split('/').pop() || file.path
-        return (
-          <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => void openNodeDiff(row, node, file)}>
-            <DiffGlyph />
-            {name}
-            {/* Nothing was added, so the `+0` half would only be noise. */}
-            <span className="tkdstat">
-              <b className="del">&minus;{file.del}</b>
-            </span>
-          </button>
-        )
-      })}
+        )}
+      </div>
+      {/* Outside the scroller, so folding back never needs a scroll to the
+          end first. */}
+      {open ? (
+        <button type="button" className="tkless" aria-expanded={true} onClick={flip}>
+          {t('gui.tasks.files_less', { n: chips.length })}
+          <ChipChev />
+        </button>
+      ) : null}
     </div>
   )
+}
+
+const ChipChev = (): JSX.Element => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+    <path d="m7 10 5 5 5-5" />
+  </svg>
+)
+
+/* Which edges of the unfolded box still have chips past them, for the fade
+   that says so: the page hides every scrollbar, so without it a box cut
+   mid-list reads as the whole list. Written to the element rather than to
+   state -- a scroll is not a reason to render. */
+function markEdges(el: HTMLElement): void {
+  const below = el.scrollHeight - el.clientHeight - el.scrollTop > 1
+  const above = el.scrollTop > 1
+  el.toggleAttribute('data-below', below)
+  el.toggleAttribute('data-above', above)
 }
 
 export function TaskPane({ task, full = false }: { task: TaskRow; full?: boolean }): JSX.Element {
