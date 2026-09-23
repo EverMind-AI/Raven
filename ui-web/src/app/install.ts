@@ -38,7 +38,7 @@ import {
   refresh as refreshTasks, reset as resetTasks,
 } from '../features/tasks/store'
 import {
-  actLabel, branch, cleanPreview, dagRun, okOf, openDagRun, openSpawn, spawnList, spawnRecord,
+  actLabel, branch, cleanPreview, dagRun, okOf, openDagRun, openSpawn, spawnList,
 } from '../features/transcript/source'
 import {
   proseSource, setHostPlatformReader, setShortener, workspaceSource,
@@ -126,7 +126,6 @@ export function installSources(): void {
   transcript.openDagRun = openDagRun
   transcript.branch = branch
   transcript.dagRun = dagRun
-  transcript.spawnRecord = spawnRecord
   transcript.spawnList = spawnList
   transcript.openSpawn = openSpawn
   /* Read by the tasks domain's own tool rows (features/tasks/NodeRecord.tsx)

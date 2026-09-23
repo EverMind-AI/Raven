@@ -46,11 +46,6 @@ export interface SpawnListRow {
   status?: string
 }
 
-export interface SpawnRecordLike {
-  messages?: HistoryMessage[]
-  status?: string | null
-}
-
 /* One `subagent.status` frame, as the live layer forwards it. The fields this
    card reads, not the whole wire shape: `task_id`, `started_at` and `ended_at`
    are the live-agents strip's business, and the card has its own clock. */
@@ -116,14 +111,6 @@ export interface CallData {
      run that had taken eight seconds. Zero means unknown. */
   spawnT0: number
   spawnT1: number
-  /* The run's own messages, newest last, as `subagent.context` answers them.
-     Live while it runs: the acp backend republishes its transcript into the
-     activity index on every update, and the method serves that when the record's
-     file does not exist yet. */
-  stream: HistoryMessage[]
-  /* Whether a read is in flight, so a slow answer cannot stack up behind the
-     heartbeat. */
-  reading: boolean
   runId: string | null
   /* What the graph was dispatched for. On the arguments for a model-composed
      graph, and only from `dag.get` for a playbook load, whose arguments name
@@ -430,13 +417,9 @@ export interface TranscriptSource {
      which is why the card could name every node and never the graph: a field
      this seam did not return was a field no card could draw. */
   dagRun?: (runId: string) => Promise<DagRunLike>
-  /* One spawned run's messages so far, by the record id `subagent.status`
-     reported. Answers a moving stream while the run is live, not a finished
-     transcript: see MsgLike. */
-  spawnRecord?: (callId: string) => Promise<SpawnRecordLike>
   /* Every delegated call this conversation made, as `subagent.list` answers it.
-     Read to turn a restored card's task id into the record id its stream is
-     read by -- once per conversation, not once per card. */
+     Read to find the record a restored card's run wrote -- once per
+     conversation, not once per card. */
   spawnList?: () => Promise<SpawnListRow[]>
   /* `nodeId` is the tasks store's own id for the spawn (present on the wire's
      `delegated` payload once the run is live). When it names a row there,

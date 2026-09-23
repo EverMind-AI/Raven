@@ -792,12 +792,16 @@ const fromListStatus = (raw: unknown): string => LIST_STATUS[String(raw || '')] 
    in the same tick share one request. */
 let spawnRoster: Promise<SpawnListRow[]> | null = null
 
-/* Turn a restored card's task id into the record id its stream is read by.
+/* Find the record a restored card's run wrote, which is what fills its header
+   and clock: a conversation restored from history saw no `subagent.status`
+   frame, so nothing else says which instance ran or for how long.
 
-   A spawn record's directory is `<stamp>-<task_id>` (the manager's own
-   `make_call_id`), and the task id is what the tool's result sentence names --
-   stamped onto the transcript row as `spawn_task_id` by the server that writes
-   that sentence. So the row is found by suffix, the same match
+   A record is named by the call's own `node_id` -- required on every spawn, and
+   unique in the conversation because it doubles as the record's filename -- so
+   the arguments name the row exactly. Records written before the id was the
+   model's word are `<stamp>-<task_id>` (the manager's own `make_call_id`), and
+   for those the task id the tool's result sentence names -- stamped onto the
+   transcript row as `spawn_task_id` -- is found by suffix, the same match
    ui-tui/src/domain/spawnRun.ts makes.
 
    Called on open, not at restore: a transcript can hold a dozen delegated calls
@@ -809,14 +813,17 @@ let spawnRoster: Promise<SpawnListRow[]> | null = null
    never the instance. Nothing the card already knows is overwritten -- a live
    card never comes here, and if one did, the event is the fresher word. */
 export function resolveSpawn(lane: Lane, c: CallData): void {
-  if (c.spawnId || !c.spawnTaskId || c.spawnAsked) return
+  const node = String(c.args.node_id || c.args.call_id || '')
+  if (c.spawnId || (!node && !c.spawnTaskId) || c.spawnAsked) return
   const read = source().spawnList
   if (!read) return
   c.spawnAsked = true
   if (!spawnRoster) spawnRoster = read()
-  const want = `-${c.spawnTaskId}`
+  const suffix = c.spawnTaskId ? `-${c.spawnTaskId}` : ''
   spawnRoster.then((rows) => {
-    const row = (rows || []).find((r) => (r.kind || 'spawn') === 'spawn' && String(r.id || '').endsWith(want))
+    const spawns = (rows || []).filter((r) => (r.kind || 'spawn') === 'spawn' && r.id)
+    const row = (node ? spawns.find((r) => String(r.id) === node) : undefined)
+      || (suffix ? spawns.find((r) => String(r.id).endsWith(suffix)) : undefined)
     if (!row || !row.id) return
     c.spawnId = String(row.id)
     c.spawnAgent = c.spawnAgent || String(row.agent || '')
@@ -826,7 +833,6 @@ export function resolveSpawn(lane: Lane, c: CallData): void {
     c.spawnT0 = c.spawnT0 || msOfIso(row.started_at)
     c.spawnT1 = c.spawnT1 || msOfIso(row.ended_at)
     bump(lane, c)
-    readSpawn(lane, c)
   }).catch(() => {
     /* Asked again if the reader reopens the card, and the memoised promise goes
        with it -- kept, every later card would inherit this one rejection. */
@@ -834,76 +840,6 @@ export function resolveSpawn(lane: Lane, c: CallData): void {
     spawnRoster = null
   })
 }
-
-/* Read one spawned run's messages, once.
-
-   Called on a beat by the card that draws it, not by a store-owned timer: the
-   card's own mount decides when the read is worth making, so a run scrolled out
-   of the trail or a session left mid-run stops costing anything without a
-   reaper.
-
-   `reading` rather than a queue: a read slower than the beat is answered by the
-   next beat, and stacking them would multiply requests against a sub-agent that
-   is already the slow part. A failure clears the flag and keeps whatever the card
-   had -- the failure is about the read, not about the run. */
-export function readSpawn(lane: Lane, c: CallData): void {
-  const read = source().spawnRecord
-  if (!read || !c.spawnId || c.reading) return
-  c.reading = true
-  read(c.spawnId).then((rec) => {
-    c.reading = false
-    const msgs = (rec && rec.messages) || []
-    /* Length, not identity: the method rebuilds the list from the activity
-       collector on every call, so every answer is a fresh array and a reference
-       check would repaint on every beat. A stream only ever grows, and the last
-       row's own text moves as it streams -- so both are compared. */
-    if (msgs.length === c.stream.length && tailText(msgs) === tailText(c.stream)) return
-    c.stream = msgs
-    bump(lane, c)
-  }).catch(() => {
-    c.reading = false
-  })
-}
-
-/* The newest thing the run said, flattened to one line for the collapsed row.
-
-   Three sources in falling order of "is this what it is doing right now": the
-   message's own text, the thought it is forming, and failing both the tool it
-   just reached for. The third matters most -- a sub-agent spends most of a run
-   inside tool calls, where there is no text yet, and a tail that went blank
-   there would stop moving during exactly the stretch the reader is watching.
-
-   Scanned from the newest backwards rather than reading the last row: the last
-   row can be one with nothing to show yet, and taking it would blank a tail that
-   had been moving. */
-export function tailText(msgs: HistoryMessage[]): string {
-  for (let i = msgs.length - 1; i >= 0; i -= 1) {
-    const m = msgs[i] as HistoryMessage
-    const body = flat(m.text) || flat(m.reasoning_content) || flat(toolNames(m))
-    if (!body) continue
-    /* A tool's result named by the tool that produced it. The name alone is the
-       row before this one; what makes this row worth a line is that an answer
-       came back, and whose. */
-    return m.role === 'tool' && m.name ? `${m.name} · ${body}` : body
-  }
-  return ''
-}
-
-
-
-/* The calls one message reached for, named. Joined rather than counted: a name
-   says what is happening, `2 calls` does not. */
-function toolNames(m: HistoryMessage): string {
-  return (m.tool_calls || []).map((call) => call && call.name).filter(Boolean).join(', ')
-}
-
-/* `defence` and not a marker-stripping regex: the fence is nonce-tagged on both
-   ends precisely so a forged close cannot end it, and the one place that check
-   lives is `defence`. Without it the tail spent whole tool calls showing
-   `[BEGIN UNTRUSTED list_dir #7d8064e3 - everything below until the matching...]`
-   -- a boundary written for the model -- instead of what the run had found. */
-const flat = (v: unknown): string =>
-  (typeof v === 'string' ? defence(v).replace(/\s+/g, ' ').trim() : '')
 
 /* The header one spawn card carries: `Spawn <instance>@<agent>: <task_summary>`.
 
@@ -1124,7 +1060,7 @@ function newCallData(
     open: false, t0: Date.now(), runId: null, runTitle: '', nodes: [], live: false, asked: false,
     callId: callId ? String(callId) : '',
     spawnAgent: '', spawnInstance: '', spawnLabel: '', spawnStatus: '', spawnId: '',
-    spawnTaskId: '', spawnAsked: false, spawnT0: 0, spawnT1: 0, stream: [], reading: false,
+    spawnTaskId: '', spawnAsked: false, spawnT0: 0, spawnT1: 0,
   }
   if (kind === 'dag') c.runTitle = String(a.task_summary || '')
   if (kind === 'spawn') {
@@ -2134,9 +2070,9 @@ export function openDagRun(runId: string): void {
   try { source().openDagRun?.(runId) } catch { /* no opener wired */ }
 }
 
-export function openSpawn(agent: string, label: string): void {
+export function openSpawn(agent: string, label: string, nodeId?: string): void {
   const src = source()
-  if (src.openSpawn) { src.openSpawn(agent, label); return }
+  if (src.openSpawn) { src.openSpawn(agent, label, nodeId); return }
   pane().show('agents')
 }
 
