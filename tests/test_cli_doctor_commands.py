@@ -1243,11 +1243,11 @@ def test_the_browser_state_reaches_the_json_output(
 
 # --------------------------------------------------------------------------- --install-summary
 
-_SUMMARY_LABELS = ("Long-term memory", "Design engine", "PPT engine", "Deck preview", "Browser")
+_SUMMARY_LABELS = ("Long-term memory", "Design engine", "PPT engine", "Agent products", "Deck preview", "Browser")
 
 
 def test_install_summary_answers_without_a_config(tmp_config: Path) -> None:
-    """The whole point of the flag: five verdicts and exit 0 on a machine whose
+    """The whole point of the flag: six verdicts and exit 0 on a machine whose
     missing config would fail every other doctor check."""
     assert not tmp_config.exists()
 
@@ -1268,11 +1268,58 @@ def test_install_summary_answers_on_an_invalid_config(tmp_config: Path) -> None:
     assert r.exit_code == 0, r.stdout
 
 
-def test_install_summary_prints_exactly_five_rows(tmp_config: Path) -> None:
+def test_install_summary_prints_exactly_six_rows(tmp_config: Path) -> None:
     r = runner.invoke(app, ["doctor", "--install-summary"])
 
     labeled = [line for line in r.stdout.splitlines() if any(label in line for label in _SUMMARY_LABELS)]
-    assert len(labeled) == 5, r.stdout
+    assert len(labeled) == 6, r.stdout
+
+
+def test_install_summary_names_the_tree_the_products_were_discovered_from(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row answers where discovery looked, not only whether it found something:
+    an empty installed tree is a place that discovers nothing and says nothing."""
+    from raven.agent.subagent import vendored_agents as va
+
+    tree = tmp_path / "agents"
+    (tree / "raven-probe").mkdir(parents=True)
+    (tree / "raven-probe" / "run.py").write_text("", encoding="utf-8")
+    (tree / "raven-probe" / "subagent.json").write_text(
+        json.dumps(
+            {
+                "name": "Raven-Probe",
+                "kind": "acp",
+                "description": "probe",
+                "command": "{PYTHON} {SUBAGENT_DIR}/run.py --acp",
+                "cwd": "{SUBAGENT_DIR}",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(va, "agents_root", lambda: tree)
+
+    r = runner.invoke(app, ["doctor", "--install-summary"])
+
+    # Whitespace dropped, not normalised: the console folds a long path at the
+    # terminal width, and the fold lands inside the path.
+    products_row = "".join(r.stdout.split()).split("Agentproducts:")[1].split("Deckpreview:")[0]
+    assert "1discoveredat" in products_row and str(tree) in products_row, r.stdout
+
+
+def test_install_summary_flags_a_tree_that_holds_no_product(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent import vendored_agents as va
+
+    tree = tmp_path / "agents"
+    tree.mkdir()
+    monkeypatch.setattr(va, "agents_root", lambda: tree)
+
+    r = runner.invoke(app, ["doctor", "--install-summary"])
+
+    products_row = "".join(r.stdout.split()).split("Agentproducts:")[1].split("Deckpreview:")[0]
+    assert "holdsnoproductfolder" in products_row and str(tree) in products_row, r.stdout
 
 
 def test_install_summary_browser_row_names_the_installer_when_the_package_is_missing(

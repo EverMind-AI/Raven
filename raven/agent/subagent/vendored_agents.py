@@ -83,6 +83,11 @@ the calling task's workspace, which is part of the pool's launch key -- so
 every new workspace would relaunch the server and kill the sessions the old
 one was serving."""
 
+_VERSION_STAMP = ".raven-version"
+"""The file :func:`_install_packaged_tree` leaves beside the folders it copied
+out. Its presence is what makes a home tree count as installed even after every
+product folder in it has been removed -- see :func:`_holds_products`."""
+
 _ENGINE_FIELD = "engine"
 """The manifest key declaring the product's engine wheel, as
 ``{"package": "<import name>", "wheel": "<distribution name>"}``. Declared in
@@ -107,6 +112,13 @@ def agents_root() -> Path | None:
     - **inside the package** -- a wheel carries the tree at ``raven/agents``,
       the same way ``bridge`` is packaged.
 
+    The home copy counts only once raven or a person has put something in it:
+    the version stamp the copy-out leaves, or a product manifest. A bare,
+    unstamped directory -- an aborted scaffold, a stray ``mkdir`` -- is not a
+    tree, and taking it for one shadows the checkout beside the package with a
+    place that discovers nothing: every product silently gone from the roster,
+    with no error anywhere to say why.
+
     An install with none of the three has nothing to discover, and that is the
     whole gate: no flag, no setting, and a table byte-identical to what it was
     before discovery existed.
@@ -118,10 +130,23 @@ def agents_root() -> Path | None:
     installed, packaged = raven_home() / "agents", package / "agents"
     if packaged.is_dir():
         _install_packaged_tree(packaged, installed)
-    for candidate in (installed, package.parent / "agents", packaged):
+    if installed.is_dir() and _holds_products(installed):
+        return installed
+    for candidate in (package.parent / "agents", packaged):
         if candidate.is_dir():
             return candidate
     return None
+
+
+def _holds_products(tree: Path) -> bool:
+    """Whether ``tree`` is a populated installed tree rather than a bare directory.
+
+    The stamp is checked as well as the manifests so that a user who removed
+    every product under one raven version keeps that decision: the stamp is
+    what :func:`_install_packaged_tree` keys its "stays deleted" rule on, and a
+    fall-through here would bring the products back through the checkout.
+    """
+    return (tree / _VERSION_STAMP).is_file() or any(tree.glob("*/subagent.json"))
 
 
 def _install_packaged_tree(packaged: Path, installed: Path) -> None:
@@ -150,7 +175,7 @@ def _install_packaged_tree(packaged: Path, installed: Path) -> None:
 
     from raven import __version__
 
-    stamp = installed / ".raven-version"
+    stamp = installed / _VERSION_STAMP
     try:
         if stamp.is_file() and stamp.read_text(encoding="utf-8").strip() == __version__:
             return
