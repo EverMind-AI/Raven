@@ -211,10 +211,9 @@ def test_the_config_ports_the_forks_leaves_onto_the_trunk_schema():
     assert ours["language"] == fork["language"] == "zh"
     assert "providers" not in ours
     assert not {"model", "provider", "reasoningEffort"} & ours["agents"]["defaults"].keys()
-    # Five of the fork's seven disable rows survive; ask_user is dropped on
+    # Six of the fork's seven disable rows survive; ask_user is dropped on
     # purpose, because the roster row tells the host to leave a brief's gaps
-    # to this agent and only ask_user can collect them, and deep_research
-    # because the trunk retired that tool. The six extras are the
+    # to this agent and only ask_user can collect them. The six extras are the
     # swap ledger's trunk-born names still held out of the face by config
     # rather than by luck (the w96 discipline). emit_session_title is deliberately NOT
     # among them: it is the session-namer's side-call schema, not a loop
@@ -222,7 +221,7 @@ def test_the_config_ports_the_forks_leaves_onto_the_trunk_schema():
     # not -- the live acp lane adds it beside the pinned face, one call per
     # new session (the same +1 ppt's A/B measured; owner adjudicated it a
     # host gain, and that ruling carries forward).
-    assert set(fork["tools"]["disabledTools"]) - set(ours["tools"]["disabledTools"]) == {"ask_user", "deep_research"}
+    assert set(fork["tools"]["disabledTools"]) - set(ours["tools"]["disabledTools"]) == {"ask_user"}
     assert set(ours["tools"]["disabledTools"]) - set(fork["tools"]["disabledTools"]) == TRUNK_HELD_OUT
     assert not UNGATED & set(ours["tools"]["disabledTools"])
     assert ours["tools"]["toolSearch"] == {"enabled": True}, (

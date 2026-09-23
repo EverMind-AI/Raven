@@ -40,6 +40,7 @@
       "read_skill",
       "use_skill",
       "hub",
+      "deep_research",
       "image_generate",
       "text_to_speech",
       "video_generate",
