@@ -520,7 +520,7 @@ function ScanWizard({ c }: { c: ConnChannel }): JSX.Element {
    polled while the dialog is open and stopped the moment it is not: the code
    rotates, and a poll left running after the dialog closed would keep a
    socket busy for a picture nobody is looking at. Unmounting is the stop. */
-type QrView = { phase: 'wait' | 'scan' | 'done' | 'noenc'; img: string | null }
+type QrView = { phase: 'wait' | 'scan' | 'done' | 'noenc' | 'down'; img: string | null }
 
 function QrPanel({ c }: { c: ConnChannel }): JSX.Element {
   const [view, setView] = useState<QrView>({ phase: 'wait', img: null })
@@ -547,6 +547,16 @@ function QrPanel({ c }: { c: ConnChannel }): JSX.Element {
         void store.refresh()
         return
       }
+      /* The adapter is gone -- it gave up on the login, or nothing is running
+         it any more -- and any code it left pending expired with it. The row
+         behind this panel still reads as up until the list is re-read, which
+         is what puts the wizard's own retry out of reach, so ask for that read
+         and carry the verb here until it lands. */
+      if (r.running === false) {
+        setView({ phase: 'down', img: null })
+        void store.refresh()
+        return
+      }
       if (r.qr) {
         setView({ phase: 'scan', img: r.qr })
         return
@@ -564,6 +574,8 @@ function QrPanel({ c }: { c: ConnChannel }): JSX.Element {
       stop()
     }
   }, [c.id])
+  /* Down reads the host the same way the wizard does: only a known host shifts
+     the blame to the adapter, and not knowing keeps the advice to open the app. */
   const say =
     view.phase === 'done'
       ? t('gui.conn.qr_done')
@@ -571,11 +583,29 @@ function QrPanel({ c }: { c: ConnChannel }): JSX.Element {
         ? t('gui.conn.qr_scan')
         : view.phase === 'noenc'
           ? t('gui.conn.qr_noenc')
-          : t('gui.conn.qr_wait')
+          : view.phase === 'down'
+            ? t(store.get().host === true ? 'gui.conn.w2_down' : 'gui.conn.w2_blocked')
+            : t('gui.conn.qr_wait')
   return (
     <div className="qrbox">
-      <div className="qrshot">{view.img ? <img src={view.img} alt={t('gui.conn.qr_alt')} /> : null}</div>
+      {view.phase === 'down' ? null : (
+        <div className="qrshot">{view.img ? <img src={view.img} alt={t('gui.conn.qr_alt')} /> : null}</div>
+      )}
       <div className={view.phase === 'done' ? 'qrsay ok' : 'qrsay'}>{say}</div>
+      {view.phase === 'down' ? (
+        <button
+          className="mini key"
+          onClick={() => {
+            /* The press is answered in the panel it was made in, not three
+               seconds later by the poll: a start that did not take reads as down
+               again on the next tick anyway. */
+            setView({ phase: 'wait', img: null })
+            void store.apply(c, {}, true)
+          }}
+        >
+          {t('gui.conn.w_retry')}
+        </button>
+      ) : null}
     </div>
   )
 }
