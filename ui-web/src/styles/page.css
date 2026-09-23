@@ -1264,11 +1264,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* thinking: a shimmering one-liner while streaming, a quiet fold after */
 .think {
   display: flex; align-items: center; gap: 4px;
-  font-size: 11px; line-height: 15px; color: var(--chat-quiet);
+  font-size: 14px; line-height: 22px; color: var(--chat-quiet);
   padding: 0; margin: 0; border-radius: 0;
 }
 .think { width: fit-content; max-width: 100%; }
-.think .g { color: var(--faint); flex: none; width: 10px; font-size: 11px; }
+.think .g { color: var(--faint); flex: none; width: 12px; font-size: 14px; }
 .think .lb { flex: none; }
 .think.live .lb {
   background: linear-gradient(90deg, var(--chat-quiet) 30%, var(--chat-shine) 50%, var(--chat-quiet) 70%);
@@ -1309,23 +1309,26 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    744px column: the track went to 923px and the row with it. The sibling
    fit-content rows (.think, .tfh) sit in block parents, where 100% is already
    the column, which is why only this one needed it. */
-/* The design's process line (Figma: Raven / Thinking): 11px in the one quiet
-   grey, a 12px glyph, 4px between the parts and 8px between the lines. */
+/* The design's process line (Figma: Raven / Thinking): the one quiet grey, a
+   glyph the size of the type, 4px between the parts and 8px between the lines.
+   It reads at the answer's own 14px: a reader who opens the fold is reading the
+   trail, not glancing past it, and type below the copy it sits in made them
+   lean in for the one thing they had asked to see. */
 .wrow {
   display: flex; align-items: center; gap: 4px; color: var(--chat-quiet);
   width: fit-content; max-width: 100%; min-width: 0;
-  font-size: 11px; line-height: 15px; padding: 0; margin: 0;
+  font-size: 14px; line-height: 22px; padding: 0; margin: 0;
   border-radius: 0; text-align: left;
 }
 .wrow.tog:hover .vb, .wrow.tog:hover .ar { color: var(--text); }
 .wrow.tog:hover .ic, .wrow.tog:hover .cv { color: var(--muted); }
-.wrow .ic { width: 12px; height: 12px; flex: none; color: var(--chat-quiet); }
+.wrow .ic { width: 14px; height: 14px; flex: none; color: var(--chat-quiet); }
 .wrow.run .ic { animation: breathe 1.5s ease-in-out infinite; }
 /* The one animation in this file with no reduced-motion answer, which mattered
    while it was the only sign a step was alive. The clock beside it is not an
    animation, so honouring the setting here now costs nothing. */
 @media (prefers-reduced-motion: reduce) { .wrow.run .ic { animation: none; opacity: .62; } }
-.wrow .g { color: var(--faint); flex: none; width: 12px; font-size: 11px; }
+.wrow .g { color: var(--faint); flex: none; width: 14px; font-size: 14px; }
 /* the verb is the quiet part; what it acted on is what the eye wants */
 .wrow .vb { flex: none; }
 .wrow .vb .srv { color: var(--faint); }
@@ -1509,7 +1512,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* A process line's glyph, where the design draws one from its own icon set
    (Figma: Raven / Thinking): the same 12px and the same grey as the drawn
    glyphs beside it, and the same three states. */
-.wrow .transcript-ic { width: 12px; height: 12px; flex: none; color: var(--chat-quiet); }
+.wrow .transcript-ic { width: 14px; height: 14px; flex: none; color: var(--chat-quiet); }
 .wrow.tog:hover .transcript-ic { color: var(--muted); }
 .wrow.bad .transcript-ic { color: var(--chat-danger); }
 .wrow.run .transcript-ic { animation: breathe 1.5s ease-in-out infinite; }
@@ -1569,10 +1572,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* How long a step in flight has been going. Monospace so the digits do not
    shuffle the row as they tick, and `flex: none` so a long verb clips before
    this does -- the number is the part that says the step is alive. */
-.wrow .runms { flex: none; font-variant-numeric: tabular-nums; font-size: 11px; color: var(--chat-quiet); }
-.wrow .chip { flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 8px; line-height: 16px; }
+.wrow .runms { flex: none; font-variant-numeric: tabular-nums; font-size: 14px; color: var(--chat-quiet); }
+.wrow .chip { flex: none; font-size: 12px; padding: 0 7px; border-radius: 9px; line-height: 18px; }
 /* diff counts read as plain numbers next to the path, not as a pill */
-.wrow .diffn { flex: none; font-variant-numeric: tabular-nums; font-size: 11px; }
+.wrow .diffn { flex: none; font-variant-numeric: tabular-nums; font-size: 14px; }
 .wrow .diffn .a { color: var(--moss); }
 .wrow .diffn .d { color: var(--clay); }
 .chip.bad { color: var(--clay); background: color-mix(in oklab, var(--clay) 12%, transparent); }
@@ -1700,7 +1703,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    underneath, so the gap stays small enough to read as one block. */
 .tfh {
   display: flex; align-items: center; gap: 4px; width: fit-content; max-width: 100%;
-  text-align: left; color: var(--chat-quiet); font-size: 11px; line-height: 15px;
+  text-align: left; color: var(--chat-quiet); font-size: 14px; line-height: 22px;
   padding: 0; margin: 0;
   border: 0; border-radius: 0; background: none; cursor: pointer;
 }
@@ -1711,18 +1714,19 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .tfb[hidden] { display: none; }
 
 /* One type for every line that stands in for finished work -- "thought",
-   "done", a stretch summary. They had drifted to 13 / 13.5px in two different
-   greys, which made three lines of the same kind read as three kinds of thing.
-   Declared together so they cannot drift again. */
-.think, .tfh, .wrow.sum { font-size: 11px; color: var(--chat-quiet); }
-.tfh .tm { color: var(--chat-quiet); font-size: 11px; font-variant-numeric: tabular-nums; }
+   "done", a stretch summary. They had once drifted to 13 / 13.5px in two
+   different greys, which made three lines of the same kind read as three kinds
+   of thing. Declared together so they cannot drift again: change the size here
+   and every line of the kind moves with it. */
+.think, .tfh, .wrow.sum { font-size: 14px; color: var(--chat-quiet); }
+.tfh .tm { color: var(--chat-quiet); font-size: 14px; font-variant-numeric: tabular-nums; }
 /* An empty clock still spends its flex gap, which pushed the caret one whole
    gap further from the label on every line whose time happened to be blank --
    two folds side by side then looked like two different components. */
 .tfh .tm:empty { display: none; }
 .think:hover, .tfh:hover, .wrow.sum:hover { color: var(--text); }
 /* the phrase is a summary of the rows underneath, not a target of its own */
-.wrow.sum .ar { color: inherit; font-size: 11px; }
+.wrow.sum .ar { color: inherit; font-size: 14px; }
 .wrow.sum:hover .ar { color: var(--text); }
 
 /* the turn is never silent: a breathing dot fills the gap before events */
