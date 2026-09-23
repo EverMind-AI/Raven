@@ -44,22 +44,30 @@ the TUI, and `raven onboard` stays the explicit way to reconfigure later. Set
 ## Upgrade
 
 Already running Raven? Upgrade in place -- configuration, sessions, and memory
-are preserved:
+are preserved. Stop the page first, then upgrade:
 
 ```bash
 raven web --stop
 raven upgrade
+```
+
+On Linux and macOS `raven upgrade` runs the install in the foreground and
+returns when it is done. On native Windows it hands the install to a separate
+helper and returns at once; wait for the helper's completion message. Then
+start Raven again:
+
+```bash
 raven web
 ```
 
 `raven upgrade` installs the latest stable release together with the plugin
-wheels it ships, so it never picks up a pre-release. The install runs in a
-detached helper on every platform; wait for its `Raven upgraded` line before
-starting Raven again. `raven upgrade --check` reports whether a newer release
-exists without installing it. Editable source checkouts are never overwritten:
-`raven upgrade` reports the checkout path and how far it is ahead of or behind
-`origin/main`, and the remedy is `git pull && ./install.sh` in the checkout.
-Rerunning the one-line installer also upgrades, and ends on the running page.
+wheels it ships. It never picks up a pre-release unless this install has joined
+the beta channel (a `~/.raven/beta.json` that only the beta installer writes).
+`raven upgrade --check` reports whether a newer release exists without
+installing it. Editable source checkouts are never overwritten: `raven upgrade`
+reports the checkout path and how far it is ahead of or behind `origin/main`,
+and the remedy is `git pull && ./install.sh` in the checkout. Rerunning the
+one-line installer also upgrades, and ends on the running page.
 
 ## Release Status
 

@@ -37,9 +37,10 @@ Highlights before publishing. Structure:
   `raven` for the TUI, `raven onboard` to reconfigure
 
 ## Upgrade
-  raven web --stop / raven upgrade / raven web, with its limits (latest stable
-  only, plugin wheels included, editable checkouts untouched, detached helper on
-  every platform)
+  raven web --stop, raven upgrade, then raven web once the upgrade has finished,
+  with its limits (latest stable unless on the beta channel, plugin wheels
+  included, editable checkouts untouched, foreground on POSIX, external helper
+  on native Windows)
 
 ## Release Status
 - Version: `X.Y.Z`
