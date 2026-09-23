@@ -519,6 +519,9 @@ async def test_a_pin_above_the_model_ceiling_is_clamped_before_it_is_sent() -> N
 
 
 class _NoSandbox:
+    # Host execution: ExecTool reads this at construction.
+    is_sandboxed = False
+
     async def __aenter__(self):
         return self
 
