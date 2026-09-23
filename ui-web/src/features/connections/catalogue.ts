@@ -1,8 +1,8 @@
 /* The twelve entrances raven can be reached through.
  *
  * Production data, not a fixture: the live source merges `channels.status`
- * onto these same rows, so the ids, the two naming spellings and the
- * scan-login marker are what the page draws from in both modes. It lived in
+ * onto these same rows, so the ids, the message keys and the scan-login
+ * marker are what the channels section draws from in both modes. It lived in
  * the demo shell's fixture table only because that is where the offline page
  * first needed it.
  *
