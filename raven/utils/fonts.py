@@ -33,6 +33,16 @@ missing is a configuration, and :func:`render_env` writes one naming the
 directories the Mac already keeps its fonts in. ``Arial Unicode.ttf``, stock in
 ``/System/Library/Fonts/Supplemental``, then draws the page.
 
+That configuration only helps a conversion that is given it, and raven's own
+converter is not the only one. The model checks its deck by running
+``soffice --headless --convert-to pdf`` itself, through its shell tool -- the
+deck skill says to -- and that command reached LibreOffice with none of this:
+the shell hands a command an allowlisted environment, and a variable set for
+one conversion is not in it. So the same configuration is handed to every
+command the agent runs on this host (``raven.sandbox.direct_executor``), which
+is the only place a render the model starts, directly or from a script it
+wrote, can be reached from.
+
 The rest is the part an installer cannot do, because it happens on a machine
 the installer never ran on: asking at render time whether this host can draw
 Han, so that a page about to come out as boxes says so rather than being
@@ -47,9 +57,10 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from xml.sax.saxutils import escape
+
+from raven.home import raven_home
 
 ENV_FONT_DIR = "RAVEN_FONT_DIR"
 """Points the whole mechanism somewhere else, for a deployment that manages its
@@ -91,6 +102,24 @@ def bundled_face() -> Path | None:
 
 SYSTEM_FONTCONFIG = "/etc/fonts/fonts.conf"
 
+# The configuration a host's own fontconfig reads when nothing overrides it: the
+# system's on Linux, Homebrew's on a Mac (Apple Silicon prefix, then Intel). The
+# first that exists is the one a render inherits, so that a command run with the
+# configuration below -- which is every command the agent runs on a Mac, not
+# only LibreOffice -- keeps the aliases and directories that tool read before.
+_HOST_FONTCONFIGS = (
+    SYSTEM_FONTCONFIG,
+    "/opt/homebrew/etc/fonts/fonts.conf",
+    "/usr/local/etc/fonts/fonts.conf",
+)
+
+# Where macOS keeps the faces it downloads rather than ships in
+# /System/Library/Fonts -- PingFang among them, on macOS 15 at
+# AssetsV2/com_apple_MobileAsset_Font7/<hash>.asset/AssetData/PingFang.ttc. The
+# number after "Font" moves with the OS release, so the directories are found,
+# not named.
+MACOS_ASSET_ROOTS = (Path("/System/Library/AssetsV2"), Path("/System/Library/Assets"))
+
 
 def _fontconfig_xml(directories: list[Path], cache: Path, *, inherit: str) -> str:
     """A fontconfig configuration naming the directories a render may draw from.
@@ -115,17 +144,91 @@ def _fontconfig_xml(directories: list[Path], cache: Path, *, inherit: str) -> st
     )
 
 
+def macos_asset_font_dirs() -> tuple[Path, ...]:
+    """The directories macOS downloads faces into, PingFang's among them.
+
+    Not optional on a current Mac: a deck written there names PingFang SC more
+    often than any other face, and PingFang is not under /System/Library/Fonts
+    at all. Measured on macOS 15.7 with LibreOffice 26.8: a configuration naming
+    only the Fonts directories drew such a deck's Chinese in a substitute, one
+    naming the asset directory as well drew it in PingFang itself -- which is
+    what the reader's Keynote or PowerPoint on the same Mac draws, so what the
+    render measures is the page they will see.
+    """
+    found: list[Path] = []
+    for root in MACOS_ASSET_ROOTS:
+        try:
+            found += sorted(entry for entry in root.glob("com_apple_MobileAsset_Font*") if entry.is_dir())
+        except OSError:
+            continue
+    return tuple(found)
+
+
 def unconfigured_font_dirs() -> tuple[Path, ...]:
     """Directories holding fonts the converter would otherwise never be told about.
 
     Empty everywhere but macOS, where the converter's own fontconfig starts with
     no configuration and so reaches none of the machine's fonts. These are the
-    four places a Mac keeps faces; naming them is what turns the host's Han
-    coverage, stock or installed, into something a conversion can draw with.
+    places a Mac keeps faces -- shipped, downloaded, and installed by a user;
+    naming them is what turns the host's Han coverage, stock or installed, into
+    something a conversion can draw with.
     """
     if sys.platform != "darwin":
         return ()
-    return (Path("/System/Library/Fonts"), Path("/System/Library/Fonts/Supplemental"), *user_font_dirs())
+    return (
+        Path("/System/Library/Fonts"),
+        Path("/System/Library/Fonts/Supplemental"),
+        *macos_asset_font_dirs(),
+        *user_font_dirs(),
+    )
+
+
+def config_dir() -> Path:
+    """Where the configuration :func:`render_env` writes, and fontconfig's cache for it, live.
+
+    Under raven's own home rather than beside a conversion: the cache is what
+    fontconfig builds by opening every face the configuration names, which on a
+    Mac is a few hundred files and was measured at over a second a conversion
+    when it was rebuilt each time. And the configuration is no longer read by
+    conversions alone -- every command the agent runs is given it (see
+    ``raven.sandbox.direct_executor``), so it has to outlive any one of them.
+    """
+    return raven_home() / "cache" / "fontconfig"
+
+
+def _inherited_config(env: dict[str, str], ours: Path) -> str:
+    """The configuration already in force, which the one written here includes.
+
+    A deployment that set ``FONTCONFIG_FILE`` chose its fonts on purpose, and
+    swapping that for the host default would undo the choice while appearing to
+    respect it -- so that comes first. Unless it is this module's own file: a
+    ``raven`` run from a command the agent started inherits the variable, and a
+    configuration that included itself would be read as a loop.
+    """
+    chosen = env.get("FONTCONFIG_FILE")
+    if chosen and Path(chosen).expanduser().resolve() != ours.resolve():
+        return chosen
+    for candidate in _HOST_FONTCONFIGS:
+        if Path(candidate).is_file():
+            return candidate
+    return SYSTEM_FONTCONFIG
+
+
+def _write_if_changed(path: Path, text: str) -> None:
+    """Put ``text`` at ``path`` whole, and not at all when it is already there.
+
+    Whole because a conversion and a command can be started at the same moment
+    and each may read the file the other is writing: a half-written
+    configuration is a malformed one, which fontconfig discards entirely.
+    """
+    try:
+        if path.read_text(encoding="utf-8") == text:
+            return
+    except OSError:
+        pass
+    partial = path.with_name(f".{path.name}.{os.getpid()}.part")
+    partial.write_text(text, encoding="utf-8")
+    os.replace(partial, path)
 
 
 def render_env(base: dict[str, str] | None = None, *, scratch: Path | None = None) -> dict[str, str]:
@@ -133,7 +236,8 @@ def render_env(base: dict[str, str] | None = None, *, scratch: Path | None = Non
 
     Returns the environment unchanged where there is nothing to add, so a caller
     passes the result straight to ``Popen`` without asking whether anything
-    happened.
+    happened -- and where the configuration cannot be written, since a command
+    that runs with the fonts it had is better than one that does not run.
     """
     env = dict(os.environ if base is None else base)
     face = bundled_face()
@@ -142,17 +246,16 @@ def render_env(base: dict[str, str] | None = None, *, scratch: Path | None = Non
     if not directories:
         return env
     # The configuration and its cache have to land somewhere writable, which
-    # rules out the system directories above; a conversion passes its own
-    # scratch so the pair is thrown away with the run.
-    where = scratch or (face.parent if face is not None else Path(tempfile.gettempdir()) / "raven-fontconfig")
-    where.mkdir(parents=True, exist_ok=True)
+    # rules out the system directories above -- and the deployment's own font
+    # directory, which may well be read-only.
+    where = scratch or config_dir()
     config = where / "fonts.conf"
-    # Inherit whatever configuration was already in force, not the system
-    # default: a deployment that set FONTCONFIG_FILE chose its fonts on purpose,
-    # and silently swapping that for /etc/fonts would undo the choice while
-    # appearing to respect it.
-    inherit = env.get("FONTCONFIG_FILE") or SYSTEM_FONTCONFIG
-    config.write_text(_fontconfig_xml(directories, where / "fc-cache", inherit=inherit), encoding="utf-8")
+    text = _fontconfig_xml(directories, where / "fc-cache", inherit=_inherited_config(env, config))
+    try:
+        where.mkdir(parents=True, exist_ok=True)
+        _write_if_changed(config, text)
+    except OSError:
+        return env
     env["FONTCONFIG_FILE"] = str(config)
     return env
 
@@ -193,8 +296,8 @@ def host_han_faces() -> list[str]:
     return sorted({line.split(",")[0].strip() for line in out.splitlines() if line.strip()})
 
 
-# "pingfang" is absent for the reason given below: the renderer draws nothing
-# from it, so a copy of it in a user's font directory is not a face.
+# "pingfang" is absent for the reason given below: a list of files to open is
+# the wrong place for a face that has no fixed file.
 _HAN_NAME_HINTS = ("cjk", "notosanssc", "notosanstc", "notoserifsc", "sourcehan", "heiti", "msyh", "simsun")
 
 _SYSTEM_HAN_FACES = (
@@ -204,11 +307,12 @@ _SYSTEM_HAN_FACES = (
     # because it is a plain TrueType and measurement has to open what it gets;
     # Songti is a collection and answers only where that one is gone.
     #
-    # PingFang is the obvious candidate and is deliberately not here. Handed to
-    # LibreOffice on its own (macOS 15, LibreOffice 26.8) it drew no Han at all,
-    # while Songti, STHeiti and Hiragino from the same directories all drew
-    # correctly -- so the one face a Mac is named for is the one face this must
-    # not promise.
+    # PingFang is the obvious candidate and is deliberately not here: it is a
+    # downloaded asset under a hashed directory that moves with the OS release,
+    # so there is no path to promise. The renderer does draw it once
+    # render_env names that directory (measured 2026-09-23, macOS 15.7,
+    # LibreOffice 26.8: a configuration naming the asset directory alone drew a
+    # PingFang SC deck in PingFang).
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/System/Library/Fonts/Supplemental/Songti.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",

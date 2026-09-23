@@ -634,9 +634,10 @@ have_han_font() {
   # A Mac is asked first and separately, because nothing is missing there: it
   # ships Arial Unicode and Songti, and what kept LibreOffice from drawing with
   # them was a bundled fontconfig left unconfigured, which raven now configures
-  # per conversion. Downloading a face would not have helped and is not needed.
-  # PingFang is not asked about: it is the one stock face the renderer draws
-  # nothing from, so counting it would skip an install that was needed. The
+  # for every conversion and every command the agent runs. Downloading a face
+  # would not have helped and is not needed. PingFang is not asked about: it is
+  # a downloaded asset with no fixed path to test for, and the two above are
+  # stock on every macOS release raven supports. The
   # host's own fc-list must not be consulted here either -- brew installs it
   # alongside plenty of formulae, and it describes a configuration the converter
   # does not read.

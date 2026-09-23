@@ -291,9 +291,8 @@ def test_a_conversion_carries_the_font_directory_it_was_given(tmp_path: Path, mo
     captured: dict[str, str] = {}
 
     def _fake(command, *, timeout_s, env=None):
-        # Read here rather than afterwards: the configuration lives in the
-        # conversion's own scratch directory and is gone with it, which is the
-        # point -- it describes one run and outlives nothing.
+        # Read here, while the conversion is the one being run: what matters is
+        # what this run was handed, not what the file says afterwards.
         config = (env or {}).get("FONTCONFIG_FILE", "")
         captured["config"] = config
         captured["text"] = Path(config).read_text(encoding="utf-8") if config else ""

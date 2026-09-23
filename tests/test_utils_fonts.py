@@ -308,3 +308,102 @@ def test_a_user_directory_face_is_preferred_over_asking_the_host(
     monkeypatch.setattr(fonts, "_fc_listed_han", lambda: Path("/somewhere/Other.ttc"))
 
     assert fonts.han_face() == face
+
+
+def test_a_mac_names_the_directories_it_downloads_faces_into(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PingFang, the face a deck written on a Mac names most, is not under
+    /System/Library/Fonts but in a downloaded-asset directory whose number moves
+    with the OS release. Leaving it out drew such a deck in a substitute rather
+    than in the face the reader's own Keynote uses."""
+    assets = tmp_path / "AssetsV2"
+    (assets / "com_apple_MobileAsset_Font7").mkdir(parents=True)
+    (assets / "com_apple_MobileAsset_Font8").mkdir()
+    (assets / "com_apple_MobileAsset_Voice").mkdir()
+    monkeypatch.setattr(fonts, "MACOS_ASSET_ROOTS", (assets, tmp_path / "absent"))
+    monkeypatch.setattr(fonts.sys, "platform", "darwin")
+
+    named = fonts.unconfigured_font_dirs()
+
+    assert assets / "com_apple_MobileAsset_Font7" in named
+    assert assets / "com_apple_MobileAsset_Font8" in named
+    assert assets / "com_apple_MobileAsset_Voice" not in named
+
+
+def test_the_configuration_is_shared_and_written_only_when_it_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every command the agent runs is given this file, and a conversion started
+    at the same moment may be reading it, so an unchanged one is left alone
+    rather than rewritten under a reader -- and it lives where the font cache
+    beside it survives from one conversion to the next."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(fonts, "bundled_face", lambda: None)
+    faces = tmp_path / "faces"
+    faces.mkdir()
+    monkeypatch.setattr(fonts, "unconfigured_font_dirs", lambda: (faces,))
+
+    first = fonts.render_env(base={})
+    config = Path(first["FONTCONFIG_FILE"])
+    stamp = config.stat().st_mtime_ns
+    second = fonts.render_env(base={})
+
+    assert config == fonts.config_dir() / "fonts.conf"
+    assert config.is_relative_to(tmp_path / "home")
+    assert second["FONTCONFIG_FILE"] == str(config)
+    assert config.stat().st_mtime_ns == stamp, "an unchanged configuration was rewritten"
+    assert list(config.parent.glob(".*.part")) == [], "a partial write was left behind"
+
+
+def test_its_own_configuration_is_never_what_it_inherits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A `raven` run from a command the agent started inherits FONTCONFIG_FILE
+    pointing at this very file. Including it would make the configuration
+    include itself."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(fonts, "bundled_face", lambda: None)
+    faces = tmp_path / "faces"
+    faces.mkdir()
+    monkeypatch.setattr(fonts, "unconfigured_font_dirs", lambda: (faces,))
+    host = tmp_path / "host-fonts.conf"
+    host.write_text("<fontconfig/>", encoding="utf-8")
+    monkeypatch.setattr(fonts, "_HOST_FONTCONFIGS", (str(host),))
+
+    once = fonts.render_env(base={})
+    again = fonts.render_env(base=once)
+    root = ElementTree.fromstring(Path(again["FONTCONFIG_FILE"]).read_text(encoding="utf-8"))
+
+    assert [element.text for element in root.findall("include")] == [str(host)]
+
+
+def test_the_host_default_inherited_is_the_first_one_that_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a Mac there is no /etc/fonts, and Homebrew's configuration is the one
+    its own tools read. The agent's commands are all given this file, so
+    including nothing there would take those tools' aliases away."""
+    brew = tmp_path / "homebrew-fonts.conf"
+    brew.write_text("<fontconfig/>", encoding="utf-8")
+    monkeypatch.setattr(fonts, "_HOST_FONTCONFIGS", (str(tmp_path / "absent.conf"), str(brew)))
+    monkeypatch.setattr(fonts, "bundled_face", lambda: None)
+    faces = tmp_path / "faces"
+    faces.mkdir()
+    monkeypatch.setattr(fonts, "unconfigured_font_dirs", lambda: (faces,))
+
+    env = fonts.render_env(base={}, scratch=tmp_path / "scratch")
+    root = ElementTree.fromstring(Path(env["FONTCONFIG_FILE"]).read_text(encoding="utf-8"))
+
+    assert [element.text for element in root.findall("include")] == [str(brew)]
+
+
+def test_a_configuration_that_cannot_be_written_leaves_the_command_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """This runs before every command the agent starts. A home that cannot be
+    written must cost that command its extra fonts, never the command."""
+    monkeypatch.setattr(fonts, "bundled_face", lambda: None)
+    faces = tmp_path / "faces"
+    faces.mkdir()
+    monkeypatch.setattr(fonts, "unconfigured_font_dirs", lambda: (faces,))
+    blocked = tmp_path / "not-a-directory"
+    blocked.write_text("", encoding="utf-8")
+
+    assert fonts.render_env(base={"PATH": "/bin"}, scratch=blocked) == {"PATH": "/bin"}

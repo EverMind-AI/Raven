@@ -169,12 +169,13 @@ def to_pdf(
         profile = Path(scratch) / "profile"
         profile.mkdir()
         command = convert_command(Path(source), Path(staged), profile, executable=executable, fmt=fmt)
-        # The face raven brought, offered to the renderer for this run. Without
-        # it the conversion draws whatever the host happens to have, which on a
-        # stock Mac and on a Linux host installed the usual way is nothing that
-        # carries Han -- and the boxes that come back are not reported by
-        # anything, because the conversion itself succeeds.
-        returncode, stdout, stderr = _run(command, timeout_s=timeout_s, env=fonts.render_env(scratch=Path(scratch)))
+        # The faces the host has, named for the renderer. Without them the
+        # conversion draws whatever the converter can find on its own, which on
+        # a stock Mac is nothing that carries Han -- and the boxes that come back
+        # are not reported by anything, because the conversion itself succeeds.
+        # The configuration is the shared one rather than this run's own: its
+        # font cache is what makes the second conversion cheap.
+        returncode, stdout, stderr = _run(command, timeout_s=timeout_s, env=fonts.render_env())
     return Converted(
         produced=sorted(Path(staged).glob(f"*.{fmt}")), returncode=returncode, stdout=stdout, stderr=stderr
     )

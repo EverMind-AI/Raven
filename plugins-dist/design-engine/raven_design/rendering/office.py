@@ -17,7 +17,7 @@ from raven_design.rendering.models import (
     RenderRequest,
 )
 from raven_design.rendering.spreadsheet import SpreadsheetRenderer
-from raven_design.rendering.util import command_version
+from raven_design.rendering.util import command_version, font_env
 
 OFFICE_FORMATS = frozenset({"docx", "pptx", "xlsx"})
 _LOG_TAIL_LENGTH = 1000
@@ -129,6 +129,7 @@ class LibreOfficeBackend:
                 text=True,
                 timeout=self.config.timeout_seconds,
                 check=False,
+                env=font_env(),
             )
         except subprocess.TimeoutExpired as exc:
             raise RenderError(
