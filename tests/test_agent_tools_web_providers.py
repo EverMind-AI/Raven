@@ -351,6 +351,11 @@ def _open_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     gate has its own suite (``test_security_web_ssrf``)."""
     monkeypatch.setattr(web_mod, "validate_url_target", lambda url: (True, ""))
 
+    async def unavailable(self, url):
+        raise httpx.ConnectError("Direct origin unavailable")
+
+    monkeypatch.setattr(WebFetchTool, "_direct_fetch", unavailable)
+
 
 _FETCH_CASES: dict[str, tuple[str, str, dict[str, Any], Any]] = {
     "jina": ("GET", "https://r.jina.ai/https://a.example", {}, None),

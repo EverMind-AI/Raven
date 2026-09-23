@@ -19,10 +19,11 @@ from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
+from lxml import etree, html
 
 from raven.config.schema import WEB_VENDOR_ENV_VARS
 from raven.contracts.tool import Tool
-from raven.security.network import validate_url_target
+from raven.security.network import guarded_fetch, validate_url_target
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,8 @@ class FetchProviderSpec:
 
 DEFAULT_SEARCH_PROVIDER = "serper"
 DEFAULT_FETCH_PROVIDER = "jina"
+DIRECT_FETCH_MAX_BYTES = 2 * 1024 * 1024
+DIRECT_FETCH_TIMEOUT_S = 10.0
 
 SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
     "serper": SearchProviderSpec("serper", "Serper", WEB_VENDOR_ENV_VARS["serper"], "https://serper.dev"),
@@ -914,15 +917,18 @@ def _rows(items: Any, *, url: str, snippet: str) -> list[dict[str, Any]]:
 
 
 class WebFetchTool(Tool):
-    """Fetch and extract readable content from a URL through the selected vendor."""
+    """Read data directly and extract HTML through the selected vendor, with a direct fallback."""
 
     name = "web_fetch"
-    description = "Fetch URL and extract readable content."
+    description = (
+        "Fetch a URL. XML, JSON and plain text are read directly (up to maxChars and a 2 MiB download cap). "
+        "HTML is extracted through a third-party service (Jina by default), which receives the full URL; "
+        "direct reading is used as a fallback when the service fails."
+    )
     parameters = {
         "type": "object",
         "properties": {
             "url": {"type": "string", "description": "URL to fetch"},
-            "extractMode": {"type": "string", "enum": ["markdown", "text"], "default": "markdown"},
             "maxChars": {"type": "integer", "minimum": 100},
         },
         "required": ["url"],
@@ -1009,16 +1015,31 @@ class WebFetchTool(Tool):
         )
         return DEFAULT_FETCH_PROVIDER
 
-    async def execute(self, url: str, extractMode: str = "markdown", maxChars: int | None = None, **kwargs: Any) -> str:  # noqa: N803  (LLM tool schema uses camelCase)
+    async def execute(self, url: str, maxChars: int | None = None, **kwargs: Any) -> str:  # noqa: N803  (LLM tool schema uses camelCase)
         max_chars = maxChars or self.max_chars
         is_valid, error_msg = validate_url_target(url)
         if not is_valid:
             # The same rule as the handlers below: most of these reasons name the
             # hostname, and a reader whose every target is refused is one cause.
             return json.dumps({"error": "URL validation failed", "detail": error_msg, "url": url}, ensure_ascii=False)
+        direct = None
+        direct_error = ""
+        try:
+            direct = await self._direct_fetch(url)
+        except httpx.HTTPStatusError as exc:
+            direct_error = f"Direct fetch answered HTTP {exc.response.status_code}"
+        except _ProviderPageError as exc:
+            direct_error = str(exc)
+        except (httpx.RequestError, TimeoutError) as exc:
+            direct_error = f"Direct fetch failed: {type(exc).__name__}"
+        if direct is not None and self._is_raw_content(direct):
+            return self._direct_result(url, direct, max_chars)
+
         vendor, key = self._resolve()
         spec = FETCH_PROVIDERS[vendor]
         if (refused := self._refusal.active(vendor, key)) is not None:
+            if direct is not None:
+                return self._direct_result(url, direct, max_chars)
             error, detail = refusal_text(spec, refused, kind="fetch", sent=False)
             return json.dumps({"error": error, "detail": detail, "paused": True, "url": url}, ensure_ascii=False)
 
@@ -1036,7 +1057,6 @@ class WebFetchTool(Tool):
                     "finalUrl": url,
                     "status": status,
                     "extractor": spec.extractor,
-                    "extractMode": extractMode,
                     "truncated": truncated,
                     "length": len(text),
                     **extras,
@@ -1049,10 +1069,16 @@ class WebFetchTool(Tool):
             # message that repeats the request URL.
             status = e.response.status_code
             logger.error("WebFetch error for {}: {} answered HTTP {}", url, spec.label, status)
-            if self._refusal.note(status, vendor, key):
+            paused = self._refusal.note(status, vendor, key)
+            if direct is not None:
+                return self._direct_result(url, direct, max_chars)
+            if paused:
                 error, detail = refusal_text(spec, status, kind="fetch", sent=True)
                 return json.dumps({"error": error, "detail": detail, "paused": True, "url": url}, ensure_ascii=False)
-            return json.dumps({"error": f"{spec.label} answered HTTP {status}", "url": url}, ensure_ascii=False)
+            return json.dumps(
+                {"error": f"{spec.label} answered HTTP {status}", "detail": direct_error, "url": url},
+                ensure_ascii=False,
+            )
         except httpx.ProxyError as e:
             # The same rule as the status half above, and it reaches past the log line:
             # ``failure_class`` keys the loop's streak on this envelope's ``error``
@@ -1061,6 +1087,8 @@ class WebFetchTool(Tool):
             # text moves to ``detail``, which keeps it in front of the model and inside
             # ``is_hard_tool_failure``'s transient-marker scan.
             logger.error("WebFetch proxy error for {}: {}", url, e)
+            if direct is not None:
+                return self._direct_result(url, direct, max_chars)
             return json.dumps({"error": "Proxy error", "detail": str(e), "url": url}, ensure_ascii=False)
         except _ProviderPageError as e:
             # Not folded into the transport case below: this type exists to say the
@@ -1069,12 +1097,61 @@ class WebFetchTool(Tool):
             # the vocabulary the streak wants. Naming it by type would make every
             # vendor's refusal one class.
             logger.error("WebFetch error for {}: {}", url, e)
+            if direct is not None:
+                return self._direct_result(url, direct, max_chars)
             return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
         except Exception as e:
             # The type, not the text: an SSL or connection failure spells the host in
             # its message, and two hosts behind one broken reader are one cause.
             logger.error("WebFetch error for {}: {}", url, e)
+            if direct is not None:
+                return self._direct_result(url, direct, max_chars)
             return json.dumps({"error": type(e).__name__, "detail": str(e), "url": url}, ensure_ascii=False)
+
+    async def _direct_fetch(self, url: str) -> httpx.Response:
+        async with asyncio.timeout(DIRECT_FETCH_TIMEOUT_S):
+            async with httpx.AsyncClient(timeout=DIRECT_FETCH_TIMEOUT_S, proxy=self.proxy) as client:
+                response = await guarded_fetch(_DirectFetcher(client), url, what="web_fetch")
+        if response is None:
+            raise _ProviderPageError("Direct fetch blocked by URL or redirect validation")
+        response.raise_for_status()
+        return response
+
+    @staticmethod
+    def _is_raw_content(response: httpx.Response) -> bool:
+        media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        return media_type in {"application/json", "application/xml", "text/xml", "text/plain"} or (
+            media_type != "application/xhtml+xml" and media_type.endswith(("+json", "+xml"))
+        )
+
+    def _direct_result(self, url: str, response: httpx.Response, max_chars: int) -> str:
+        text = response.text
+        if not self._is_raw_content(response):
+            media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if media_type not in {"text/html", "application/xhtml+xml", ""}:
+                return json.dumps({"error": "Unsupported direct content type", "detail": media_type, "url": url})
+            if text.strip():
+                try:
+                    document = html.document_fromstring(
+                        response.content, parser=html.HTMLParser(encoding=response.encoding)
+                    )
+                except (etree.ParserError, ValueError):
+                    return json.dumps({"error": "Direct HTML could not be parsed", "url": url})
+                for element in document.xpath("//script|//style|//noscript"):
+                    element.drop_tree()
+                text = "\n".join(part.strip() for part in document.itertext() if isinstance(part, str) and part.strip())
+        return json.dumps(
+            {
+                "url": url,
+                "status": response.status_code,
+                "extractor": "direct-http",
+                "contentType": response.headers.get("content-type", ""),
+                "truncated": bool(response.extensions.get("direct_truncated")) or len(text) > max_chars,
+                "length": len(text[:max_chars]),
+                "text": text[:max_chars],
+            },
+            ensure_ascii=False,
+        )
 
     async def _provider_fetch(self, url: str, vendor: str, key: str) -> tuple[str, int, dict[str, Any]]:
         """One page, read the way ``vendor`` serves it, carrying ``key``.
@@ -1169,3 +1246,42 @@ class WebFetchTool(Tool):
         if not text:
             raise _ProviderPageError("AnySearch returned no page content")
         return text, r.status_code, {"title": str(body["title"])} if body.get("title") else {}
+
+
+class _DirectFetcher:
+    """Adapt guarded_fetch to bounded streaming without changing its per-hop checks."""
+
+    def __init__(self, client: httpx.AsyncClient) -> None:
+        self.client = client
+
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        headers = {**kwargs.pop("headers", {}), "Accept-Encoding": "identity"}
+        async with self.client.stream("GET", url, headers=headers, **kwargs) as response:
+            if response.status_code in (301, 302, 303, 307, 308):
+                return response
+            response.raise_for_status()
+            media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if not WebFetchTool._is_raw_content(response) and media_type not in {
+                "text/html",
+                "application/xhtml+xml",
+                "",
+            }:
+                raise _ProviderPageError("Unsupported direct content type")
+            # Refuse compressed bodies before HTTPX can inflate a small chunk into unbounded output.
+            if response.headers.get("content-encoding", "identity").strip().lower() not in {"", "identity"}:
+                raise _ProviderPageError("Unsupported direct content encoding")
+            body = bytearray()
+            truncated = False
+            async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                remaining = DIRECT_FETCH_MAX_BYTES - len(body)
+                body.extend(chunk[:remaining])
+                if len(chunk) > remaining:
+                    truncated = True
+                    break
+            return httpx.Response(
+                response.status_code,
+                headers=response.headers,
+                content=bytes(body),
+                request=response.request,
+                extensions={"direct_truncated": truncated},
+            )
