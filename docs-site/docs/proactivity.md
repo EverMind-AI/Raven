@@ -1,7 +1,7 @@
-# Proactivity Guide { #proactivity-reference }
+# Proactive reminders and follow-ups { #proactivity-reference }
 
-For users and operators who want Raven to offer reminders and follow-up work
-without a new request each time. This page covers enabling, configuring,
+This page is for users and operators who want Raven to offer reminders and
+follow-up work without a new request each time. It covers enabling, configuring,
 observing, and stopping **Sentinel**. Developers should use
 [Proactivity Design and Implementation](proactivity-design.md) for the
 decision pipeline and execution contracts.

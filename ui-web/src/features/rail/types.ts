@@ -26,7 +26,7 @@ export interface SessRow {
 
 /* What one draw reads: the list plus the two page facts a row's look depends
  * on (the current session, and whether a turn is running). The search term is
- * NOT in here: it belongs to the row that produces it (shell/find.ts), and
+ * NOT in here: it belongs to the row that produces it (state/find.ts), and
  * asking the demo and live sources to carry a value only the bundle can
  * produce was coupling with nothing on the other end of it.
  */

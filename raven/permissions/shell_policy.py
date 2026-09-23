@@ -999,6 +999,26 @@ _FETCH_SEND_FLAGS = frozenset(
 )
 
 
+# What a forge CLI's publishing group does when the verb only reads. ``gh pr``
+# and ``glab mr`` are matched as a group because enumerating their writing verbs
+# means missing the next one; the cost is that ``gh pr view`` was asked about in
+# the words of a push ("others will see it"), which is not what it does. A verb
+# that only reads leaves the family: the prompt then words it as the plain
+# command it is.
+#
+# Scoped to these executable/group pairs rather than to every publisher, because
+# the word after a publishing verb is usually an operand and not a verb at all:
+# ``docker push status`` pushes an image called status, ``git push view`` pushes
+# to a remote called view. Relief written for a forge group must not reach them.
+# ``gh secret`` is absent for its own reason -- naming an organisation's secrets
+# is itself the thing worth asking about.
+_FORGE_READ_GROUPS: dict[str, frozenset[str]] = {
+    "gh": frozenset({"pr", "repo", "release", "workflow"}),
+    "glab": frozenset({"mr", "repo", "release"}),
+}
+_READ_ONLY_VERBS = frozenset({"list", "view", "status", "diff", "checks"})
+
+
 def _matches_publish_command(command: str) -> bool:
     """A command that pushes work somewhere other people can see it."""
 
@@ -1007,7 +1027,16 @@ def _matches_publish_command(command: str) -> bool:
         if executable in _PUBLISH_EXECUTABLES:
             return True
         allowed = _PUBLISH_SUBCOMMANDS.get(executable)
-        if allowed and any(word in allowed for word in _subcommands(argv)):
+        if not allowed:
+            continue
+        groups = _FORGE_READ_GROUPS.get(executable, frozenset())
+        words = _subcommands(argv)
+        for i, word in enumerate(words):
+            if word not in allowed:
+                continue
+            after = words[i + 1] if i + 1 < len(words) else ""
+            if word in groups and after in _READ_ONLY_VERBS:
+                continue
             return True
     return False
 
@@ -1109,6 +1138,19 @@ def _matches_fetch_side_effect(command: str) -> bool:
 _SURFACE_FAMILIES: ContextVar[tuple[tuple[str, ApprovalMatcher], ...]] = ContextVar(
     "raven_surface_approval_families", default=()
 )
+
+
+def declare_default_families() -> tuple[tuple[str, ApprovalMatcher], ...]:
+    """Declare the set every surface that serves a person asks about, and name it.
+
+    The terminal, the page, the channels and the ACP editor all want the same
+    answer here, and each writing out which matchers that is was how they came
+    to be able to disagree. Returns what it declared so a caller can say how
+    many, without reaching for the lists again.
+    """
+    families = DELETE_MATCHERS + EXTERNAL_EFFECT_MATCHERS
+    set_surface_approval_families(families)
+    return families
 
 
 def set_surface_approval_families(families: tuple[tuple[str, ApprovalMatcher], ...]) -> None:
@@ -1271,6 +1313,7 @@ class ShellCommandPolicy:
 __all__ = [
     "DELETE_MATCHERS",
     "EXTERNAL_EFFECT_MATCHERS",
+    "declare_default_families",
     "ApprovalMatcher",
     "CommandDecision",
     "PolicyOutcome",

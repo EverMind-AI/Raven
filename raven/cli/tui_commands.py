@@ -358,8 +358,8 @@ async def _run_rpc_server_until_done(
     emitter = SubscriptionEmitter(send_frame=server.send_frame)
     # Prompt brokers share the gateway's send_frame sink but retain separate
     # semantics. Shell approval is not a conversational confirmation: it binds
-    # one exact command to one turn, has dual deadlines, and always fails closed
-    # when the transport disappears.
+    # one exact command to one turn, waits for a person rather than a clock, and
+    # always fails closed when the transport disappears.
     confirm_broker = ConfirmBroker(send_frame=server.send_frame)
     approval_broker = ApprovalBroker(send_frame=server.send_frame)
     # QuestionBroker shares the same send_frame sink: the ask_user tool emits a
@@ -572,7 +572,7 @@ async def _run_rpc_server_until_done(
 
             begin_drain()
             if agent_loop is not None:
-                await agent_loop.subagents.cancel_all()
+                await agent_loop.subagents.cancel_all(reason="the TUI exited")
         except Exception:
             from loguru import logger as _logger
 

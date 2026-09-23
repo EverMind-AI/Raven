@@ -1,26 +1,33 @@
-import { ds, t } from '../../shell/bridge'
-import * as attachmentCache from '../../shell/attachment-cache'
-import { formatDuration } from '../../shell/duration'
-import { SEND, SEND_PX, SEND_STROKE } from '../../shell/ico'
-import { current as currentSession } from '../../shell/session'
-import { show as toast } from '../../shell/toast'
+import { SEND, SEND_PX, SEND_STROKE } from '../../components/Ico'
+import { t } from '../../i18n/t'
+import * as attachmentCache from '../../lib/attachmentCache'
+import { formatDuration } from '../../lib/duration'
+import { current as currentSession } from '../../lib/session'
+import { draw as plusDraw } from '../../state/plus'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
+import { show as toast } from '../../state/toast'
 import { note as transcriptNote } from '../transcript/mount'
 import * as tail from '../transcript/tail'
 import * as turn from './turn'
 
-import type { Attachment, ComposerSource, SlashCmd } from './types'
+import type { Attachment, ComposerSource, SlashCmd, TemplateRow } from './types'
 
 /* Plain external store, same shape as the other islands: the dock is driven
- * imperatively by the legacy page (the turn machine advances phase, the queue
- * drains into `send`, a session switch resets everything), so the state lives
- * here where the shims can reach it and the views subscribe.
+ * by callers that are not React. The turn machine advances the phase, the
+ * queue drains into `send` and a session switch swaps in that conversation's
+ * own draft and tray -- all of it state/session's (pipeline, runtime, registry,
+ * residency, stages) -- so the state lives here where those can reach it and
+ * the views subscribe.
  *
- * `use` remains demo fixture state. The live phase and the queue are composer
- * state: every path that changes, parks, or restores them goes through this
- * island, so their ownership and rendering cannot diverge.
+ * The live phase and the queue are composer state: every path that changes,
+ * parks, or restores them goes through this island, so their ownership and
+ * rendering cannot diverge.
  */
 
 export interface ComposerState {
+  /* The open conversation's tray, mirrored for the views: what is staged
+     belongs to `trays`, keyed like the text draft. */
   atts: Attachment[]
   queue: string[]
   /* The queue row being edited, by index, or null. The text itself stays in
@@ -34,8 +41,9 @@ export interface ComposerState {
      `liveT0` and ticking through `tick`. */
   live: boolean
   tick: number
-  /* Bumped by every paint the legacy shims ask for. The views read the page's
-     own arrays through the source, so one counter is the whole subscription. */
+  /* Bumped by every paint asked for through features/composer/mount.tsx. The
+     views read the page's own arrays through the source, so one counter is the
+     whole subscription. */
   v: number
 }
 
@@ -44,22 +52,16 @@ const initial: ComposerState = {
   live: false, tick: 0, v: 0,
 }
 
-let state: ComposerState = { ...initial }
-const listeners = new Set<() => void>()
+const store = makeStore<ComposerState>({ ...initial })
 
-export const getState = (): ComposerState => state
+export const { get, subscribe } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
+/** A patch, merged into the page's state, with the version bumped. */
+export function set(p: Partial<ComposerState>): void {
+  store.set((prev) => ({ ...prev, ...p, v: prev.v + 1 }))
 }
 
-function set(p: Partial<ComposerState>): void {
-  state = { ...state, ...p, v: state.v + 1 }
-  for (const l of listeners) l()
-}
-
-export const source = (): ComposerSource => ds<ComposerSource>('composer')
+export const source = (): ComposerSource => ds('composer')
 
 const el = <T extends HTMLElement>(id: string): T | null => document.getElementById(id) as T | null
 
@@ -104,8 +106,13 @@ function draftsWrite(all: Drafts): void {
   }
 }
 
+/* What the unsent belongs to: the open conversation, or 'new' while the first
+   message has no session yet. The text draft and the tray share it, so a
+   switch moves both. */
+const ownerKey = (): string => draftOwner || currentSession() || 'new'
+
 export function parkDraft(): void {
-  const key = draftOwner || currentSession() || 'new'
+  const key = ownerKey()
   const text = field()?.value || ''
   const all = draftsRead()
   if (text.trim()) all[key] = { t: text, at: Date.now() }
@@ -115,6 +122,10 @@ export function parkDraft(): void {
 
 export function loadDraft(id: string | null): void {
   draftOwner = id || 'new'
+  /* Above the guard: the tray is swapped even on the paths that run before the
+     field is mounted, or the files of the conversation left behind stay on
+     screen and ride the next message out. */
+  traySet(draftOwner, trayOf(draftOwner))
   const ta = field()
   if (!ta) return
   ta.value = draftsRead()[draftOwner]?.t || ''
@@ -122,14 +133,30 @@ export function loadDraft(id: string | null): void {
   goPaint()
 }
 
-export function dropDraft(id: string | null): void {
+function dropDraftText(key: string): void {
   const all = draftsRead()
-  delete all[id || 'new']
+  delete all[key]
   draftsWrite(all)
 }
 
+/* The conversation itself is gone -- this is the rail's delete -- so its tray
+   goes with its text. Through the writer rather than the map, because the one
+   deleted may be the conversation on screen. */
+export function dropDraft(id: string | null): void {
+  const key = id || 'new'
+  dropDraftText(key)
+  traySet(key, [])
+}
+
 export function claimDraft(id: string | null): void {
-  if (draftOwner === 'new') draftOwner = id || currentSession() || 'new'
+  if (draftOwner !== 'new') return
+  const key = id || currentSession() || 'new'
+  const staged = trays.get('new')
+  if (staged) {
+    trays.delete('new')
+    trays.set(key, staged)
+  }
+  draftOwner = key
 }
 
 export function touchDraft(): void {
@@ -137,15 +164,20 @@ export function touchDraft(): void {
   draftTick = setTimeout(parkDraft, 250)
 }
 
+/* Consuming the draft this conversation owns -- a send, a slash command -- takes
+   the text only: what is staged has not been handed to anyone yet, and a command
+   that compresses or clears the history is not the reader saying to throw the
+   files away. `fireSend` empties the tray itself, through `takeAtts`, because
+   the message it builds is where those files went. */
 export function dropOwnedDraft(): void {
   if (draftTick) clearTimeout(draftTick)
   draftTick = null
-  dropDraft(draftOwner)
+  dropDraftText(draftOwner || 'new')
 }
 
 /* A file on its own is a message -- "look at this" is what dropping it already
    said -- so an empty field with something attached must still be sendable. */
-export const hasAtts = (): boolean => state.atts.length > 0
+export const hasAtts = (): boolean => get().atts.length > 0
 
 /* From the shared constants, not from its own copy of them: a sub-agent's
    composer renders the same arrow through `SendGlyph`, and the two drifted into
@@ -157,8 +189,15 @@ const ICON_STOP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="current
 
 /* The send/stop button. Written imperatively rather than rendered: it is one
    static element in page.html that half the page reaches by id, and the whole
-   of its state is four attributes. */
+   of its get() is four attributes. */
 export function goPaint(): void {
+  /* The "+" button rides this paint because it has no moment of its own: the
+     dock is wired before the composer source exists (src/main.tsx installs the
+     dock, then boots), and this is the repaint every state change and the boot
+     itself ask for. */
+  plusDraw()
+  const ta = field()
+  if (ta) ta.placeholder = placeholder()
   const b = el<HTMLButtonElement>('go')
   if (!b) return
   if (turn.busy() && turn.cancellable()) {
@@ -168,11 +207,18 @@ export function goPaint(): void {
     b.setAttribute('aria-label', t('gui.stop'))
     return
   }
-  const ta = field()
   b.disabled = !(ta && ta.value.trim()) && !hasAtts()
   b.classList.remove('halt')
   b.innerHTML = ICON_SEND
   b.setAttribute('aria-label', t('gui.send'))
+}
+
+/* What the empty field says: the task on a draft, a continuation once the
+   conversation exists, and while a turn is running, that a message typed now
+   waits for it -- the one fact about the queue a reader cannot see. */
+function placeholder(): string {
+  if (currentSession() === null) return t('gui.composer_ph')
+  return t(turn.busy() ? 'gui.composer.ph_busy' : 'gui.composer.ph_session')
 }
 
 /* A textarea cannot size itself to its content, so the height is set here --
@@ -253,15 +299,15 @@ export function wheeled(up: boolean): void {
 
 /* ── the queue ────────────────────────────────────────────────────────── */
 
-export const queue = (): string[] => state.queue
+export const queue = (): string[] => get().queue
 
 export function queuePush(text: string): void {
-  set({ queue: [...state.queue, text], editing: null })
+  set({ queue: [...get().queue, text], editing: null })
 }
 
 export function queueShift(): string | undefined {
-  if (!state.queue.length) return undefined
-  const [first, ...rest] = state.queue
+  if (!get().queue.length) return undefined
+  const [first, ...rest] = get().queue
   set({ queue: rest, editing: null })
   return first
 }
@@ -270,7 +316,7 @@ export function queueClear(): void {
   set({ queue: [], editing: null })
 }
 
-export const queueSnapshot = (): string[] => [...state.queue]
+export const queueSnapshot = (): string[] => [...get().queue]
 
 export function queueRestore(items: string[]): void {
   set({ queue: [...items], editing: null })
@@ -285,7 +331,7 @@ export function editRow(i: number): void {
 }
 
 export function commitRow(i: number, text: string): void {
-  const next = [...state.queue]
+  const next = [...get().queue]
   if (text.trim()) next[i] = text.trim()
   set({ queue: next, editing: null })
 }
@@ -295,7 +341,7 @@ export function cancelRow(): void {
 }
 
 export function removeRow(i: number): void {
-  set({ queue: state.queue.filter((_, n) => n !== i), editing: null })
+  set({ queue: get().queue.filter((_, n) => n !== i), editing: null })
 }
 
 /* ── the meter and the live turn row ──────────────────────────────────── */
@@ -335,19 +381,19 @@ export function drawTurnLive(): void {
       liveTick = null
     }
     liveT0 = 0
-    if (state.live) set({ live: false })
+    if (get().live) set({ live: false })
     return
   }
   if (!liveT0) liveT0 = Date.now()
-  if (!state.live) set({ live: true })
-  else set({ tick: state.tick + 1 })
+  if (!get().live) set({ live: true })
+  else set({ tick: get().tick + 1 })
   if (liveTick) return
   liveTick = setInterval(() => {
     if (!turn.busy()) {
       drawTurnLive()
       return
     }
-    set({ tick: state.tick + 1 })
+    set({ tick: get().tick + 1 })
   }, 250)
 }
 
@@ -364,22 +410,43 @@ function trayPaint(atts: Attachment[]): void {
   set({ atts })
 }
 
+/* One tray per conversation, filed under the draft's key: a file staged in one
+   conversation is as unsent as the text typed next to it, and must not leave
+   with another's message. Not persisted, unlike the text: a screenshot's data
+   URL blows the storage quota on its own, and an upload still in flight means
+   nothing after a reload. */
+const trays = new Map<string, Attachment[]>()
+
+const trayOf = (key: string): Attachment[] => trays.get(key) || []
+
+/* The only writer. An upload that lands after the reader has moved on writes
+   the tray it was staged in, and only the open one is painted. */
+function traySet(key: string, next: Attachment[]): void {
+  if (next.length) trays.set(key, next)
+  else trays.delete(key)
+  if (key !== ownerKey()) return
+  /* Empty replacing empty is not a change: every rail click would otherwise
+     repaint the dock of conversations that never staged a file. */
+  if (!next.length && !get().atts.length) return
+  trayPaint(next)
+}
+
 export function removeAtt(i: number): void {
-  const atts = state.atts.slice()
+  const atts = get().atts.slice()
   atts.splice(i, 1)
-  trayPaint(atts)
+  traySet(ownerKey(), atts)
   goPaint()
 }
 
 /* How many staged files are still on their way up. A message must not leave
    carrying a path the server has not written yet. */
-export const attsPending = (): number => state.atts.filter((a) => a.uploading).length
+export const attsPending = (): number => get().atts.filter((a) => a.uploading).length
 
 /* Hand the staged paths to whoever is sending, and clear the tray: the message
    itself is the record of what was handed over from here on. */
 export function takeAtts(): string[] {
-  const paths = state.atts.map((a) => String(a.path || '')).filter(Boolean)
-  trayPaint([])
+  const paths = get().atts.map((a) => String(a.path || '')).filter(Boolean)
+  traySet(ownerKey(), [])
   goPaint()
   return paths
 }
@@ -387,6 +454,15 @@ export function takeAtts(): string[] {
 const failDetail = (e: unknown): string => {
   const o = e as { data?: { detail?: string }; message?: string }
   return (o && o.data && o.data.detail) || (o && o.message) || String(e)
+}
+
+/* Where a failed upload is reported: the transcript of the conversation it was
+   staged in, or a toast once the reader has moved on -- a note written then
+   would land in whatever conversation is open instead of that one. */
+function sayFailed(owner: string, label: string, e: unknown): void {
+  const detail = failDetail(e)
+  if (owner === ownerKey()) transcriptNote(label, detail)
+  else toast(`${label} · ${detail}`)
 }
 
 /* Whether files can be staged at all. False on the demo canvas, which has
@@ -399,19 +475,62 @@ export function canAttach(): boolean {
   }
 }
 
+/* Whether a deck template can be picked here: the live page installs the
+   picker's calls, the demo canvas does not. */
+export function canPickTemplate(): boolean {
+  try {
+    return !!source().templates
+  } catch {
+    return false
+  }
+}
+
+/* A picked template is staged like a file that is still uploading -- the
+   server is copying it under uploads -- and becomes an ordinary attachment
+   once the path lands. The cover rides as the chip's picture, so the tray
+   shows which template was picked rather than a file name. */
+export function addTemplate(row: TemplateRow): void {
+  const api = source().templates
+  if (!api) return
+  /* Captured once, so what the pick lands in is the conversation it was picked
+     for however long the copy takes. */
+  const owner = ownerKey()
+  const entry: Attachment = { name: `${row.name}.pptx`, size: row.size, uploading: true, path: null, url: row.cover || null }
+  traySet(owner, trayOf(owner).concat([entry]))
+  goPaint()
+  api.pick(row.name)
+    .then((r) => {
+      entry.path = r.path
+      entry.size = r.size
+      entry.uploading = false
+      if (entry.url) attachmentCache.set(r.path, entry.url)
+      traySet(owner, trayOf(owner).slice())
+      goPaint()
+    })
+    .catch((e: unknown) => {
+      traySet(owner, trayOf(owner).filter((a) => a !== entry))
+      goPaint()
+      sayFailed(owner, t('gui.tpl.fail', { name: row.label }), e)
+    })
+}
+
 /* Files are uploaded into <workspace>/uploads and handed to the agent as
    paths: every file tool is already workspace-scoped, so a path is all it
    needs. Bytes never ride inside the message. */
 export function addFiles(files: ArrayLike<File>): void {
   const up = source().upload
   if (!up) return
+  /* Captured once, before the read and the round trip: an upload that lands or
+     fails after the reader has switched conversations belongs to the tray it
+     was staged in, and a failure must clear the chip there rather than leave a
+     ghost that refuses that conversation every later send. */
+  const owner = ownerKey()
   Array.from(files).forEach((file) => {
     const entry: Attachment = { name: file.name, size: file.size, uploading: true, path: null, url: null }
-    trayPaint(state.atts.concat([entry]))
+    traySet(owner, trayOf(owner).concat([entry]))
     goPaint()
     const drop = (): void => {
-      const rest = state.atts.filter((a) => a !== entry)
-      trayPaint(rest)
+      traySet(owner, trayOf(owner).filter((a) => a !== entry))
       goPaint()
     }
     const reader = new FileReader()
@@ -427,12 +546,12 @@ export function addFiles(files: ArrayLike<File>): void {
           entry.size = r.size
           entry.uploading = false
           if (entry.url) attachmentCache.set(r.path, entry.url)
-          trayPaint(state.atts.slice())
+          traySet(owner, trayOf(owner).slice())
           goPaint()
         })
         .catch((e: unknown) => {
           drop()
-          transcriptNote(t('gui.att.fail', { name: file.name }), failDetail(e))
+          sayFailed(owner, t('gui.att.fail', { name: file.name }), e)
         })
     }
     reader.onerror = drop
@@ -450,7 +569,7 @@ function popOpen(on: boolean): void {
   if (pop) pop.dataset.open = String(on)
 }
 
-export const slashIsOpen = (): boolean => state.slashOpen
+export const slashIsOpen = (): boolean => get().slashOpen
 
 export function drawSlash(term: string): void {
   const q = term.slice(1).toLowerCase()
@@ -467,13 +586,13 @@ export function drawSlash(term: string): void {
 
 export function closeSlash(): void {
   popOpen(false)
-  if (state.slashOpen || state.slashRows.length) set({ slashOpen: false, slashRows: [] })
+  if (get().slashOpen || get().slashRows.length) set({ slashOpen: false, slashRows: [] })
 }
 
 export function moveSlash(d: number): void {
-  const n = state.slashRows.length
+  const n = get().slashRows.length
   if (!n) return
-  set({ slashSel: (state.slashSel + d + n) % n })
+  set({ slashSel: (get().slashSel + d + n) % n })
 }
 
 export function runSlash(x: SlashCmd | undefined): void {
@@ -482,12 +601,12 @@ export function runSlash(x: SlashCmd | undefined): void {
   const ta = field()
   if (ta) ta.value = ''
   fitField()
-  goPaint()
   dropOwnedDraft()
+  goPaint()
   x.fn()
 }
 
-export const slashSelected = (): SlashCmd | undefined => state.slashRows[state.slashSel]
+export const slashSelected = (): SlashCmd | undefined => get().slashRows[get().slashSel]
 
 /* ── sending ──────────────────────────────────────────────────────────── */
 
@@ -498,9 +617,7 @@ export function fireSend(): void {
   if (source().beforeSend?.()) return
   /* The tray is this island's, and so is what becomes of a staged file when the
      message leaves: the note is what the reader's own bubble renders from and
-     what survives into session history. The page layer used to do this by
-     reaching back in here (RavenIslands.composer.attsPending / takeAtts), which
-     was the only direction available while `send` was a shell verb. */
+     what survives into session history. */
   const pending = attsPending()
   if (pending) {
     /* Before the field is cleared, which is a change: the page layer ran this
@@ -528,6 +645,14 @@ export function fireSend(): void {
   dropOwnedDraft()
   source().send(text)
   goPaint()
+}
+
+/* A sentence sent on the reader's behalf from outside the field -- the note
+   typed after a refused approval. Same door the field's Enter uses, so a busy
+   turn queues it and an idle one sends it. */
+export function say(text: string): void {
+  const v = text.trim()
+  if (v) source().send(v)
 }
 
 export function goClick(): void {
@@ -577,7 +702,7 @@ export function fieldKeydown(e: KeyboardEvent): void {
   /* the whole handler, not just Enter: arrows and Tab drive the candidate list
      while an IME is composing */
   if (composing(e)) return
-  if (state.slashOpen) {
+  if (get().slashOpen) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       moveSlash(1)
@@ -616,6 +741,6 @@ export function _resetForTests(): void {
   liveT0 = 0
   draftOwner = null
   draftTick = null
-  state = { ...initial }
-  listeners.clear()
+  trays.clear()
+  store.set({ ...initial })
 }

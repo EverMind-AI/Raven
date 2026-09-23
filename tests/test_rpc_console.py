@@ -8,6 +8,7 @@ those, so the property it pins is one somebody already proved was unguarded.
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -87,6 +88,23 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         # chip and /perm) since the gate landed; this lets the settings panel
         # write the default a new conversation starts on.
         "permissions.mode",
+        # The settings page's model page. Two more pins of the sessionTitle
+        # shape (curator, skill gate) with their pair keys, the speech and video
+        # selections in the image selection's shape, and three integers: the
+        # tool-iteration cap, the context window override and the auto-archive
+        # age. None names an address or carries a key; the pins reach only
+        # providers the deployment has already credentialed.
+        "context.curatorModel",
+        "context.curatorProvider",
+        "skillForge.llmGateModel",
+        "skillForge.llmGateProvider",
+        "context",
+        "skillForge",
+        "tools.media.speech",
+        "tools.media.video",
+        "agents.defaults.maxToolIterations",
+        "agents.defaults.contextWindowTokens",
+        "sessions.autoArchiveAfterDays",
     }
 
 
@@ -170,7 +188,7 @@ async def test_ext_list_still_reports_skills_without_the_market(
     monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
     loop = SimpleNamespace(
         context=SimpleNamespace(skills=_Catalog()),
-        tools=SimpleNamespace(tool_names=[], get=lambda _name: None),
+        tools=SimpleNamespace(tool_names=[], get=lambda _name: None, schema_hidden_names=frozenset),
     )
 
     result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
@@ -379,6 +397,108 @@ async def test_a_rejected_edit_leaves_the_job_alone(tmp_path: Path) -> None:
     jobs = (await console_module.cron_list({}, agent_loop_factory=lambda: loop))["jobs"]
     assert [j["id"] for j in jobs] == [job_id]
     assert jobs[0]["name"] == "hourly"
+
+
+def _cron_job(loop):
+    """One recurring job on the stub loop's service, whose id keys its session."""
+    from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+    return loop.cron_service.add_job(
+        name="hourly",
+        schedule=CronSchedule(kind="every", every_ms=3_600_000),
+        message="ping",
+        channel="tui",
+        to="direct",
+    )
+
+
+def _cron_session(monkeypatch: pytest.MonkeyPatch, messages: list[dict]) -> None:
+    """Hand ``cron.runs`` one stored ``cron:<id>`` transcript.
+
+    The handler reaches for the shared session manager and the config from
+    inside the call, so both are replaced here rather than on an object.
+    """
+    monkeypatch.setattr("raven.config.loader.load_config", lambda: SimpleNamespace())
+    monkeypatch.setattr("raven.rpc.methods.session._safe_invoke_factory", lambda _factory: None)
+    monkeypatch.setattr(
+        "raven.session.resolve.manager_for",
+        lambda _loop, _config: SimpleNamespace(peek=lambda _key: SimpleNamespace(messages=messages)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_cron_runs_reads_a_failed_run_from_its_turn_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed cron turn leaves two assistant messages behind -- the half
+    answer that had already streamed, then the marker naming the failure -- and
+    both used to read as a reply, so the run was drawn ok and the job's error
+    was tacked on as a second, phantom run."""
+    loop = _cron_loop(tmp_path)
+    job = _cron_job(loop)
+    job.state.last_status = "error"
+    job.state.last_error = "RateLimitError: 429 slow down"
+    _cron_session(
+        monkeypatch,
+        [
+            {"role": "user", "content": "ping", "timestamp": "2026-09-22T10:00:00"},
+            {"role": "assistant", "content": "starting on it"},
+            {
+                "role": "assistant",
+                "content": "(turn failed: RateLimitError: 429 slow down)",
+                "turn_ended": {"status": "failed", "reason": "RateLimitError: 429 slow down"},
+            },
+        ],
+    )
+
+    runs = (await console_module.cron_runs({"id": job.id}, agent_loop_factory=lambda: loop))["runs"]
+
+    assert len(runs) == 1, "the failure is the run, not a row of its own"
+    assert runs[0]["ok"] is False
+    assert runs[0]["preview"] == "RateLimitError: 429 slow down"
+
+
+@pytest.mark.asyncio
+async def test_cron_runs_keeps_a_cancelled_runs_text_when_the_marker_names_no_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cancel files a marker with no reason, so what the reader gets is what
+    the turn had already said -- but the run is still not an ok one."""
+    loop = _cron_loop(tmp_path)
+    job = _cron_job(loop)
+    _cron_session(
+        monkeypatch,
+        [
+            {"role": "user", "content": "ping", "timestamp": "2026-09-22T10:00:00"},
+            {"role": "assistant", "content": "starting on it"},
+            {
+                "role": "assistant",
+                "content": "(turn cancelled by the user)",
+                "turn_ended": {"status": "cancelled"},
+            },
+        ],
+    )
+
+    runs = (await console_module.cron_runs({"id": job.id}, agent_loop_factory=lambda: loop))["runs"]
+
+    assert [(r["ok"], r["preview"]) for r in runs] == [(False, "starting on it")]
+
+
+@pytest.mark.asyncio
+async def test_cron_runs_still_reads_a_delivered_run_as_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = _cron_loop(tmp_path)
+    job = _cron_job(loop)
+    _cron_session(
+        monkeypatch,
+        [
+            {"role": "user", "content": "ping", "timestamp": "2026-09-22T10:00:00"},
+            {"role": "assistant", "content": "reminder delivered"},
+        ],
+    )
+
+    runs = (await console_module.cron_runs({"id": job.id}, agent_loop_factory=lambda: loop))["runs"]
+
+    assert [(r["ok"], r["preview"]) for r in runs] == [(True, "reminder delivered")]
 
 
 # ---------------------------------------------------------------------------
@@ -1524,7 +1644,7 @@ async def test_a_rejected_language_changes_nothing(tmp_path, monkeypatch) -> Non
 # ---------------------------------------------------------------------------
 
 
-def _console_loop(workspace: Path, monkeypatch: pytest.MonkeyPatch, raw: dict):
+def _console_loop(workspace: Path, monkeypatch: pytest.MonkeyPatch, raw: dict, **extra):
     """A real on-disk config, and a loop assembled from it the production way.
 
     Both halves matter. A hand-built stand-in is what let this defect hide: an
@@ -1555,7 +1675,7 @@ def _console_loop(workspace: Path, monkeypatch: pytest.MonkeyPatch, raw: dict):
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        **wire(media_config=config.effective_media_config(), **kw),
+        **wire(media_config=config.effective_media_config(), **kw, **extra),
     )
     # No withheld source installed here on purpose: AgentLoop installs its own,
     # which reads the live config -- the file above -- and unions the off switch
@@ -1780,6 +1900,114 @@ async def test_fs_dirs_marks_the_listed_directory_itself(tmp_path: Path, monkeyp
     assert beside["ok"] is True
 
 
+# ---------------------------------------------------------------------------
+# fs.pick_dir -- the host's own folder dialog
+# ---------------------------------------------------------------------------
+
+
+def _dialog_answers(monkeypatch, answer: str | None) -> list[list[str]]:
+    """Stand in for the dialog: record the command, answer with a folder or a dismissal.
+
+    The command itself is stood in for as well, because which one a host has is
+    not what these cases are about: a headless runner has neither zenity nor
+    kdialog, and without this they failed at `_pick_dir_argv` before reaching
+    the answer they were written to pin.
+    """
+    asked: list[list[str]] = []
+
+    async def run(argv: list[str]) -> str | None:
+        asked.append(argv)
+        return answer
+
+    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: ["dialog"])
+    monkeypatch.setattr(console_module, "_run_pick_dir", run)
+    return asked
+
+
+async def test_fs_pick_dir_hands_back_the_chosen_folder_resolved_and_judged(tmp_path: Path, monkeypatch) -> None:
+    """The folder comes back absolute and resolved, with the same `ok` fs.dirs
+    puts on an entry, so the page needs no second call to know the create
+    would take it. macOS prints the path with a trailing slash; it is gone."""
+    (tmp_path / "proj").mkdir()
+    _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
+    asked = _dialog_answers(monkeypatch, str(tmp_path / "proj") + "/")
+
+    r = await console_module.fs_pick_dir({})
+    assert r == {"path": str((tmp_path / "proj").resolve()), "ok": True}
+    assert len(asked) == 1
+
+
+async def test_fs_pick_dir_marks_the_agents_own_data_not_ok(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / ".raven" / "workspace"
+    (home / "skills").mkdir(parents=True)
+    _agent_home(monkeypatch, home)
+    _dialog_answers(monkeypatch, str(home / "skills"))
+
+    r = await console_module.fs_pick_dir({})
+    assert r["ok"] is False
+    assert r["path"] == str((home / "skills").resolve())
+
+
+async def test_fs_pick_dir_reads_a_dismissed_dialog_as_no_folder(monkeypatch) -> None:
+    """Cancel is not an error: the answer carries no path, and the page leaves
+    the menu where it was."""
+    _dialog_answers(monkeypatch, None)
+    assert await console_module.fs_pick_dir({}) == {"ok": False}
+
+
+async def test_fs_pick_dir_refuses_a_host_with_no_dialog(monkeypatch) -> None:
+    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: None)
+    with pytest.raises(ConfigValidationError, match="no folder dialog"):
+        await console_module.fs_pick_dir({})
+
+
+async def test_fs_pick_dir_refuses_a_path_that_is_not_a_directory(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "notes.md").write_text("x")
+    _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
+    _dialog_answers(monkeypatch, str(tmp_path / "notes.md"))
+    with pytest.raises(ConfigValidationError, match="not a directory"):
+        await console_module.fs_pick_dir({})
+
+
+async def test_run_pick_dir_reads_what_the_dialog_printed_and_nothing_else() -> None:
+    """The runner is the one piece a stub cannot stand in for: it is where a
+    dialog's stdout becomes a path, and where silence becomes no path. A
+    python that prints and one that does not stand in for the two answers,
+    with no dialog and no desktop needed to ask.
+    """
+    said = await console_module._run_pick_dir([sys.executable, "-c", "print('  /tmp/picked  ')"])
+    assert said == "/tmp/picked"
+    assert await console_module._run_pick_dir([sys.executable, "-c", "pass"]) is None
+
+
+async def test_fs_pick_dir_reports_a_dialog_that_would_not_start(monkeypatch) -> None:
+    """A dialog that cannot be launched at all fails the call rather than
+    reading as a dismissal: nobody was asked, so answering "no folder" would
+    leave the menu looking as though they had said no.
+    """
+
+    async def boom(argv: list[str]) -> str | None:
+        raise OSError("dialog: not executable")
+
+    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: ["dialog"])
+    monkeypatch.setattr(console_module, "_run_pick_dir", boom)
+    with pytest.raises(ConfigValidationError, match="folder dialog failed"):
+        await console_module.fs_pick_dir({})
+
+
+def test_fs_pick_dir_knows_a_dialog_for_each_desktop(monkeypatch) -> None:
+    """One command per platform, the Linux one only where a tool is on PATH."""
+    monkeypatch.setattr(console_module.sys, "platform", "darwin")
+    assert console_module._pick_dir_argv()[0] == "osascript"
+    monkeypatch.setattr(console_module.sys, "platform", "win32")
+    assert console_module._pick_dir_argv()[0] == "powershell"
+    monkeypatch.setattr(console_module.sys, "platform", "linux")
+    monkeypatch.setattr(console_module.shutil, "which", lambda name: name == "kdialog")
+    assert console_module._pick_dir_argv()[0] == "kdialog"
+    monkeypatch.setattr(console_module.shutil, "which", lambda name: False)
+    assert console_module._pick_dir_argv() is None
+
+
 async def test_fs_dirs_refuses_a_relative_path_and_a_file(tmp_path: Path, monkeypatch) -> None:
     _agent_home(monkeypatch, tmp_path / "home")
     (tmp_path / "f.txt").write_text("x")
@@ -1863,3 +2091,481 @@ async def test_fs_dirs_skips_a_child_that_vanishes_mid_listing(tmp_path: Path, m
     monkeypatch.setattr(console_module.os, "scandir", lambda path: _Scan())
     r = await console_module.fs_dirs({"path": str(root)})
     assert [e["name"] for e in r["entries"]] == ["keep"]
+
+
+async def test_ext_list_reports_how_each_server_authenticates_and_whether_it_can(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The panel draws its 'needs setup' chip and its credential form from two
+    facts the row used to lack: the auth mode and whether the credential is
+    there. Read from config and the credential store, never the catalog."""
+
+    def _server(**kw) -> SimpleNamespace:
+        base = dict(
+            enabled=True, type=None, command=None, url="https://example.invalid/mcp", auth="none", headers={}, env={}
+        )
+        base.update(kw)
+        return SimpleNamespace(**base)
+
+    cfg = SimpleNamespace(
+        tools=SimpleNamespace(
+            mcp_servers={
+                "oauthed": _server(auth="oauth"),
+                "oauth_bare": _server(auth="oauth"),
+                "keyed": _server(auth="apikey", headers={"Authorization": "Bearer x"}),
+                "key_bare": _server(auth="apikey", headers={"Authorization": ""}),
+                "plain": _server(),
+            }
+        )
+    )
+    from raven.config import loader as config_loader
+    from raven.config import raven as raven_config
+
+    monkeypatch.setattr(config_loader, "load_config", lambda: cfg)
+    monkeypatch.setattr(
+        raven_config,
+        "load_raven_config",
+        lambda: SimpleNamespace(skill_forge=None, plugins=SimpleNamespace(disabled=[])),
+    )
+    monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
+    from raven.mcp import oauth as oauth_module
+
+    monkeypatch.setattr(oauth_module, "pending_url", lambda name: None)
+    monkeypatch.setattr(oauth_module, "has_stored_tokens", lambda name, scope=None: name == "oauthed")
+
+    class _Catalog:
+        def gather_all_skills(self):
+            return []
+
+    class _Manager:
+        def status(self):
+            return []
+
+    from raven.agent.tools.registry import ToolRegistry
+
+    loop = SimpleNamespace(
+        context=SimpleNamespace(skills=_Catalog()), tools=ToolRegistry(), mcp_manager_if_started=_Manager()
+    )
+    rows = {m["name"]: m for m in (await console_module.ext_list({}, agent_loop_factory=lambda: loop))["mcp"]}
+
+    assert (rows["oauthed"]["auth"], rows["oauthed"]["credentialed"]) == ("oauth", True)
+    assert (rows["oauth_bare"]["auth"], rows["oauth_bare"]["credentialed"]) == ("oauth", False)
+    assert (rows["keyed"]["auth"], rows["keyed"]["credentialed"]) == ("apikey", True)
+    assert (rows["key_bare"]["auth"], rows["key_bare"]["credentialed"]) == ("apikey", False)
+    assert (rows["plain"]["auth"], rows["plain"]["credentialed"]) == ("none", True)
+
+
+def test_mcp_credential_state_reads_a_broken_token_store_as_not_credentialed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import raven.mcp.oauth as oauth
+
+    def broken(name: str) -> bool:
+        raise OSError("store unreadable")
+
+    monkeypatch.setattr(oauth, "has_stored_tokens", broken)
+    assert console_module._mcp_credential_state("svc", SimpleNamespace(auth="oauth")) == ("oauth", False)
+
+
+def test_configured_provider_section_reads_an_unreadable_config_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.config import loader
+
+    def broken(path):
+        raise OSError("gone")
+
+    monkeypatch.setattr(loader, "read_raw_or_raise", broken)
+    assert console_module._configured_provider_section("anthropic") is False
+
+
+async def test_ext_list_marks_only_the_tools_whose_switch_the_loop_ignores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`builtin` answers the question the switch answers, not a schema question.
+
+    Hidden from the schema and withheld from the model are different
+    mechanisms: ``offers()`` consults ``withheld_names()``, which reads
+    ``tools.disabledTools`` whatever the schema shows. Asking the hidden set
+    drew the DAG controls as fixed while their switch worked -- measured on a
+    real gateway, putting ``cancel_dag`` in that list flips its ``enabled`` to
+    false.
+
+    What the loop really refuses is an entry naming an MCP resource or prompt
+    meta-tool, which it registers and withdraws on its own
+    (``_report_reserved_disabled_tools``), plus the two tool-search meta-tools,
+    fixed by product decision as the doorway.
+    """
+    from raven.agent.tools.tool_search import META_TOOL_NAMES
+    from raven.mcp.prompts import PROMPT_TOOL_NAMES
+    from raven.mcp.resources import RESOURCE_TOOL_NAMES
+
+    loop = _console_loop(tmp_path, monkeypatch, {"providers": {}})
+    rows = await _ext_rows(loop, monkeypatch)
+
+    fixed = META_TOOL_NAMES | RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES
+    assert "tool_call" in rows and rows["tool_call"]["builtin"] is True
+
+    hidden = loop.tools.schema_hidden_names()
+    assert hidden, "no hidden tool registered: the case below would pass on an empty set"
+    for name in hidden - fixed:
+        if name in rows:
+            assert rows[name]["builtin"] is False, f"{name} answers to the switch, so it carries one"
+
+    switchable = [n for n, r in rows.items() if n not in fixed and "builtin" in r]
+    assert switchable, "no switchable tool reported"
+    assert all(rows[n]["builtin"] is False for n in switchable)
+
+
+async def test_ext_list_reports_tool_search_even_when_the_fold_is_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A meta-tool the loop skipped is still the page's to draw.
+
+    ``tool_search`` is registered only when progressive tool disclosure is on
+    (``tools.toolSearch.enabled``, which ships on); ``tool_call`` is registered
+    either way. Reporting only what the registry holds left an install that
+    turned the fold off with a card named after tool search containing the one
+    meta-tool that is not tool search, and nothing said the feature existed. The
+    same reasoning as ``_gated_tools``: absent from the list reads as deleted.
+
+    The fold is switched off here rather than left to the default, which is what
+    puts the tool in the absent state this case is about.
+    """
+    from raven.agent.tools.tool_search import TOOL_CALL_NAME, TOOL_SEARCH_NAME
+    from raven.config.schema import ToolSearchConfig
+
+    loop = _console_loop(tmp_path, monkeypatch, {"providers": {}}, tool_search_config=ToolSearchConfig(enabled=False))
+    assert TOOL_SEARCH_NAME not in loop.tools.tool_names, (
+        "the fold is on in this fixture, so the absent case below is not being exercised"
+    )
+
+    rows = await _ext_rows(loop, monkeypatch)
+    assert TOOL_SEARCH_NAME in rows, "the page cannot draw a row it is never told about"
+    # True because this page writes `tools.disabledTools`, and no entry there
+    # registers this tool: its switch is `tools.toolSearch.enabled`.
+    assert rows[TOOL_SEARCH_NAME]["builtin"] is True
+    assert rows[TOOL_SEARCH_NAME]["enabled"] is False
+    assert rows[TOOL_CALL_NAME]["builtin"] is True
+
+
+async def test_ext_list_reports_a_registered_meta_tool_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The absent-row pass must not double a tool the registry already holds."""
+    from raven.agent.tools.tool_search import TOOL_CALL_NAME
+
+    loop = _console_loop(tmp_path, monkeypatch, {"providers": {}})
+    from raven.config import raven as raven_config
+
+    monkeypatch.setattr(
+        raven_config,
+        "load_raven_config",
+        lambda: SimpleNamespace(skill_forge=None, plugins=SimpleNamespace(disabled=[])),
+    )
+    monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
+    payload = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
+    names = [t["name"] for t in payload["tools"]]
+    assert names.count(TOOL_CALL_NAME) == 1
+
+
+# ---------------------------------------------------------------------------
+# deck.templates.*: the picker's list, and a pick that lands as an upload would
+# ---------------------------------------------------------------------------
+
+
+def _bundled_templates(monkeypatch, root: Path, names: tuple[str, ...]) -> None:
+    """Stand in for the installed engine's template directory, and for a host
+    that cannot draw covers -- the picture is the renderer's business, tested
+    where it lives; what these handlers owe is the list and the copy."""
+    from raven.rpc import deck_templates
+
+    root.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (root / f"{name}.pptx").write_bytes(b"PK" + name.encode())
+    monkeypatch.setattr(deck_templates, "templates_dir", lambda: root)
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: False)
+
+
+async def test_deck_templates_list_names_every_bundled_template_in_a_stable_order(tmp_path: Path, monkeypatch) -> None:
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("warm_bauhaus_quarterly_review", "amber_wave_quarterly_summary"))
+
+    r = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+
+    assert r["available"] is True
+    assert [row["name"] for row in r["templates"]] == ["amber_wave_quarterly_summary", "warm_bauhaus_quarterly_review"]
+    assert r["templates"][0]["label"] == "Amber Wave Quarterly Summary"
+    assert r["templates"][0]["size"] == len(b"PKamber_wave_quarterly_summary")
+    # No renderer here, so no picture and nothing on its way -- and still a
+    # list, because a picker with names alone still picks.
+    assert all(row["cover"] is None for row in r["templates"])
+    assert r["pending"] is False
+
+
+async def test_deck_templates_list_answers_at_once_and_draws_the_covers_behind_it(tmp_path: Path, monkeypatch) -> None:
+    """Ten templates are a minute and a half of LibreOffice on first sight. The
+    list does not wait for that: it answers with what is on disk, says a cover
+    is pending, and the next ask finds the picture."""
+    import base64
+
+    from raven.rpc import deck_templates
+
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("gold_panel_year_end_summary",))
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
+    drawn: list[str] = []
+
+    async def draw(template, *_):
+        drawn.append(template.name)
+        target = deck_templates.cover_cache_dir() / f"{deck_templates._cover_key(template.path)}.jpg"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"\xff\xd8jpeg")
+        return target
+
+    monkeypatch.setattr(deck_templates, "cover_for", draw)
+
+    first = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert first["pending"] is True and first["templates"][0]["cover"] is None
+    await asyncio.sleep(0)
+    again = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert again["pending"] is False
+    assert again["templates"][0]["cover"] == "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8jpeg").decode()
+    assert drawn == ["gold_panel_year_end_summary"], "one render per template, not one per ask"
+
+
+async def test_deck_templates_list_draws_at_most_three_covers_at_once(tmp_path: Path, monkeypatch) -> None:
+    """A cold gallery asks for every template in one walk. The covers are still
+    drawn behind the answer, but three LibreOffice at a time, not ten: the
+    fourth waits for one of the first three to finish."""
+    from raven.rpc import deck_templates, pdf_preview
+
+    names = tuple(f"template_{n}" for n in range(10))
+    _bundled_templates(monkeypatch, tmp_path / "tpl", names)
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
+    monkeypatch.setattr(deck_templates, "_failed", set())
+    monkeypatch.setattr(deck_templates, "_drawing", {})
+    monkeypatch.setattr(deck_templates, "_render_gate", asyncio.Semaphore(deck_templates.COVER_RENDERS_AT_ONCE))
+    in_flight = 0
+    peak = 0
+    release = asyncio.Event()
+
+    async def slow_pdf(path, **_):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await release.wait()
+        in_flight -= 1
+        return path
+
+    def rasterise(pdf, target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"\xff\xd8jpeg")
+
+    monkeypatch.setattr(pdf_preview, "pdf_for", slow_pdf)
+    monkeypatch.setattr(deck_templates, "_rasterise_first_page", rasterise)
+
+    first = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert first["pending"] is True
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert peak == deck_templates.COVER_RENDERS_AT_ONCE, "ten misses start three conversions, not ten"
+    release.set()
+    await asyncio.gather(*deck_templates._drawing.values())
+    again = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert again["pending"] is False and all(row["cover"] for row in again["templates"])
+    assert peak == deck_templates.COVER_RENDERS_AT_ONCE
+
+
+async def test_deck_templates_list_stops_asking_for_a_cover_that_cannot_be_drawn(tmp_path: Path, monkeypatch) -> None:
+    """A render that fails is not retried on the next ask, and the answer stops
+    saying pending -- or the page would poll forever and start LibreOffice each
+    time for a picture that never comes."""
+    from raven.rpc import deck_templates, pdf_preview
+
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("teal_illustrated_work_analysis",))
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
+    monkeypatch.setattr(deck_templates, "_failed", set())
+    asked: list[str] = []
+
+    async def no_pdf(source, **_kw):
+        asked.append(source.name)
+        raise pdf_preview.PdfPreviewUnavailableError("no soffice")
+
+    monkeypatch.setattr(pdf_preview, "pdf_for", no_pdf)
+
+    first = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert first["pending"] is True
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    again = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+    assert again["pending"] is False and again["templates"][0]["cover"] is None
+    assert asked == ["teal_illustrated_work_analysis.pptx"]
+
+
+async def test_deck_templates_list_is_empty_and_unavailable_without_the_engine(monkeypatch) -> None:
+    from raven.rpc import deck_templates
+
+    monkeypatch.setattr(deck_templates, "templates_dir", lambda: None)
+
+    r = await console_module.deck_templates_list({}, agent_loop_factory=_loop_factory(None))
+
+    assert r == {"templates": [], "available": False, "pending": False}
+
+
+async def test_deck_templates_pick_lands_under_uploads_as_fs_upload_answers(tmp_path: Path, monkeypatch) -> None:
+    """The route to the deck engine opens on a .pptx the turn hands over, and
+    turn.send admits the paths fs.upload mints; a pick is made into one of those."""
+    home = tmp_path / "home"
+    home.mkdir()
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("mint_memphis_thesis_defense",))
+
+    r = await console_module.deck_templates_pick(
+        {"name": "mint_memphis_thesis_defense"}, agent_loop_factory=_loop_factory(None)
+    )
+
+    assert r["path"] == "uploads/mint_memphis_thesis_defense.pptx"
+    assert r["abs_path"] == str(home.resolve() / "uploads" / "mint_memphis_thesis_defense.pptx")
+    assert r["size"] == len(b"PKmint_memphis_thesis_defense")
+    assert (home / "uploads" / "mint_memphis_thesis_defense.pptx").read_bytes() == b"PKmint_memphis_thesis_defense"
+
+    # Picked twice, the second copy sits beside the first rather than over it,
+    # the way a second upload of the same name does.
+    again = await console_module.deck_templates_pick(
+        {"name": "mint_memphis_thesis_defense.pptx"}, agent_loop_factory=_loop_factory(None)
+    )
+    assert again["path"] == "uploads/mint_memphis_thesis_defense-1.pptx"
+
+
+async def test_deck_templates_pick_says_why_when_the_copy_cannot_land(tmp_path: Path, monkeypatch) -> None:
+    from raven.rpc import deck_templates
+    from raven.rpc.errors import ConfigValidationError
+
+    home = tmp_path / "home"
+    home.mkdir()
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("mint_memphis_thesis_defense",))
+
+    def full_disk(template, uploads, *_):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(deck_templates, "deposit", full_disk)
+    with pytest.raises(ConfigValidationError, match="cannot place the template under uploads"):
+        await console_module.deck_templates_pick(
+            {"name": "mint_memphis_thesis_defense"}, agent_loop_factory=_loop_factory(None)
+        )
+
+
+async def test_deck_templates_pick_refuses_a_name_that_is_not_a_bundled_template(tmp_path: Path, monkeypatch) -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    home = tmp_path / "home"
+    home.mkdir()
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("mint_memphis_thesis_defense",))
+
+    for name in ("", "nope", "../mint_memphis_thesis_defense", "tpl/mint_memphis_thesis_defense", ".hidden"):
+        with pytest.raises(ConfigValidationError):
+            await console_module.deck_templates_pick({"name": name}, agent_loop_factory=_loop_factory(None))
+    assert not (home / "uploads").exists()
+
+
+async def test_deck_templates_pages_renders_every_page_once_and_refuses_a_stranger(tmp_path: Path, monkeypatch) -> None:
+    from raven.rpc import deck_templates
+    from raven.rpc.errors import ConfigValidationError
+
+    _bundled_templates(monkeypatch, tmp_path / "tpl", ("blue_minimal_general_analysis",))
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "cover_cache_dir", lambda: tmp_path / "covers")
+    rendered: list[str] = []
+
+    async def pdf_for(source, **_kw):
+        return source
+
+    def every_page(pdf, stem):
+        out = []
+        for n in (1, 2, 3):
+            target = stem.with_name(f"{stem.name}-p{n:02d}.jpg")
+            if not target.is_file():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"jpeg%d" % n)
+                rendered.append(target.name)
+            out.append(target)
+        return out
+
+    monkeypatch.setattr(
+        deck_templates.pdf_preview
+        if hasattr(deck_templates, "pdf_preview")
+        else __import__("raven.rpc.pdf_preview", fromlist=["x"]),
+        "pdf_for",
+        pdf_for,
+    )
+    monkeypatch.setattr(deck_templates, "_rasterise_every_page", every_page)
+
+    r = await console_module.deck_templates_pages(
+        {"name": "blue_minimal_general_analysis"}, agent_loop_factory=_loop_factory(None)
+    )
+    assert r["pages"] == [
+        "data:image/jpeg;base64," + __import__("base64").b64encode(b"jpeg%d" % n).decode() for n in (1, 2, 3)
+    ]
+    again = await console_module.deck_templates_pages(
+        {"name": "blue_minimal_general_analysis"}, agent_loop_factory=_loop_factory(None)
+    )
+    assert again == r and len(rendered) == 3, "the second ask reads the cache"
+
+    with pytest.raises(ConfigValidationError):
+        await console_module.deck_templates_pages({"name": "nope"}, agent_loop_factory=_loop_factory(None))
+
+
+def test_viewer_root_serves_a_session_its_own_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The session's own directory answers first, whatever the path is called."""
+    session = tmp_path / "project"
+    (session / "uploads").mkdir(parents=True)
+    (session / "uploads" / "shot.png").write_bytes(b"session copy")
+    home = tmp_path / "agent-home"
+    (home / "uploads").mkdir(parents=True)
+    (home / "uploads" / "shot.png").write_bytes(b"agent home copy")
+    monkeypatch.setattr(console_module, "_upload_root", lambda: home)
+
+    assert console_module.viewer_root(session, Path("uploads/shot.png")) == session
+
+
+def test_viewer_root_finds_an_upload_a_pinned_session_cannot_see(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An upload is relative to agent home, not to the session that asked for it.
+
+    `fs.upload` deposits there whichever session asked and answers with a path
+    relative to it, while the viewer resolves a relative path against the
+    session's own working directory. For a session pinned elsewhere the two
+    part company, and a picture the reader attached came back 404.
+    """
+    session = tmp_path / "project"
+    session.mkdir()
+    home = tmp_path / "agent-home"
+    (home / "uploads").mkdir(parents=True)
+    (home / "uploads" / "shot.png").write_bytes(b"the picture")
+    monkeypatch.setattr(console_module, "_upload_root", lambda: home)
+
+    assert console_module.viewer_root(session, Path("uploads/shot.png")) == home
+
+
+def test_viewer_root_leaves_every_other_path_with_the_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only an upload may come from the other root.
+
+    A file the session does not have stays the session's question: answering it
+    from agent home would widen what the viewer serves past the one ambiguity
+    this is for, and a missing file has to read as missing.
+    """
+    session = tmp_path / "project"
+    session.mkdir()
+    home = tmp_path / "agent-home"
+    (home / "notes").mkdir(parents=True)
+    (home / "notes" / "secret.md").write_text("not this session's")
+    (home / "uploads").mkdir(parents=True)
+    monkeypatch.setattr(console_module, "_upload_root", lambda: home)
+
+    assert console_module.viewer_root(session, Path("notes/secret.md")) == session
+    assert console_module.viewer_root(session, Path("uploads/absent.png")) == session

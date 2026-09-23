@@ -22,7 +22,7 @@ from raven.agent.window import shrink
 from raven.contracts.tool import Tool, ToolResult
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
-from raven.spine.turn import Origin, TurnRequest
+from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 from raven.utils.images import image_block, is_image_part, text_block
 
 
@@ -100,10 +100,11 @@ async def test_the_ladder_is_the_budget(workspace):
     provider = _FailsThenAnswers(3, ErrorClassification("server", retryable=True, should_fallback=True))
     agent = _agent(workspace, provider, delays=(0.0, 0.0))
 
-    out = await _turn(agent)
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _turn(agent)
 
-    assert provider.calls == 3, "two waits, three calls, then the turn ends on the third error"
-    assert out is not None and "Error calling LLM" in (out[0] or "")
+    assert provider.calls == 3, "two waits, three calls, then the turn fails on the third error"
+    assert "Error calling LLM" in str(failed.value)
 
 
 @pytest.mark.asyncio
@@ -111,10 +112,11 @@ async def test_a_non_retryable_error_is_not_asked_again(workspace):
     provider = _FailsThenAnswers(1, ErrorClassification("invalid_request", retryable=False))
     agent = _agent(workspace, provider, delays=(0.0, 0.0, 0.0))
 
-    out = await _turn(agent)
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _turn(agent)
 
     assert provider.calls == 1
-    assert out is not None and "Error calling LLM" in (out[0] or "")
+    assert "Error calling LLM" in str(failed.value)
 
 
 class _StallsThenAnswers(LLMProvider):
@@ -181,6 +183,63 @@ async def test_a_stall_after_streamed_output_is_not_retried_by_the_outer_ladder_
     assert seen == ["partial"]
 
     provider = _StallsThenAnswers()
+    seen = []
+    out = await _streamed_turn(_streaming_agent(workspace, provider, retry_after_output=True), seen)
+
+    assert out is not None and out[0] == "answer"
+    assert provider.calls == 2
+    assert seen == ["partial", "answer"]
+
+
+class _StreamsThenReportsFailure(LLMProvider):
+    """Streams a word, then reports the failure as its terminal delta; answers whole
+    next time. The shape the Anthropic adapter produces: it catches the exception
+    its own stream raised and hands it on as a delta."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the stream path is under test
+        raise NotImplementedError
+
+    async def chat_stream(self, *args, **kwargs):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content="partial")
+            yield ChatDelta(
+                content="Error calling LLM (server@stub): 503 upstream connect error",
+                finish_reason="error",
+                error_classification=ErrorClassification("server", retryable=True, should_fallback=True),
+            )
+            return
+        yield ChatDelta(content="answer")
+
+
+@pytest.mark.asyncio
+async def test_a_failure_delta_after_streamed_output_is_not_retried_unless_asked(workspace):
+    """The twin of the stall above, in the shape the tree's own adapter produces:
+    the failure arrives as a delta rather than as a raise, so the rule that a
+    rendered stream is not asked again was never reached and the outer ladder
+    asked anyway -- the watcher saw the answer start over, up to four times. Off,
+    the turn fails on the first attempt and says why; on, the retry's answer is
+    the answer and the caller saw both, as agreed."""
+    provider = _StreamsThenReportsFailure()
+    seen: list[str] = []
+
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _streamed_turn(_streaming_agent(workspace, provider, retry_after_output=False), seen)
+
+    assert provider.calls == 1, "the reader had seen words, so the ladder did not ask again"
+    assert seen == ["partial"]
+    assert "503 upstream connect error" in str(failed.value)
+
+    provider = _StreamsThenReportsFailure()
     seen = []
     out = await _streamed_turn(_streaming_agent(workspace, provider, retry_after_output=True), seen)
 
@@ -865,10 +924,11 @@ async def test_an_image_refusal_with_nothing_to_withdraw_is_not_waited_out(works
     provider = _FailsThenAnswers(5, ErrorClassification("image_too_large", strip_images=True))
     agent = _agent(workspace, provider, delays=(0.0, 0.0, 0.0))
 
-    out = await _turn(agent)
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _turn(agent)
 
     assert provider.calls == 1
-    assert out is not None and "Error calling LLM" in (out[0] or "")
+    assert "Error calling LLM" in str(failed.value)
 
 
 async def _watch(text: str) -> None:

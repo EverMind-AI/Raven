@@ -39,8 +39,6 @@
       "spawn",
       "message",
       "hub",
-      "tool_search",
-      "tool_call",
       "deep_research",
       "image_generate",
       "text_to_speech",
@@ -51,7 +49,15 @@
       "load_playbook",
       "plugin",
       "run_subagent_dag",
-      "cron"
+      "cron",
+      "browser_click",
+      "browser_navigate",
+      "browser_press",
+      "browser_screenshot",
+      "browser_scroll",
+      "browser_snapshot",
+      "browser_tabs",
+      "browser_type"
     ]
   },
   "memory": {

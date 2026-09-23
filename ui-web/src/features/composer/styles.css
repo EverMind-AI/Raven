@@ -1,0 +1,158 @@
+/* This domain's own stylesheet.
+ *
+ * Every class this domain introduces carries the domain's prefix (`cp`), and
+ * the file is imported by the domain's mount -- see mount.tsx -- so nothing
+ * outside features/composer/ has to know it exists. Vite collects the imported
+ * stylesheets of every domain into one asset, which ui-web/build.py inlines
+ * into the page's single <style> block after styles/page.css, in domain order.
+ *
+ * The composer's older rules (the dock, the tray, the queue, the sheets) are
+ * still in styles/page.css, where they landed before there was a per-domain
+ * sheet to put them in; the gate's LEGACY_LOCAL row is what carries that debt
+ * down.
+ */
+
+/* The deck template picker: a rack sheet (it wears page.css's `.csheet` too) whose body is a
+   grid of covers, and behind any cover the template's pages in a strip that
+   snaps one at a time.
+
+   The head and the line under it stay put and the GRID scrolls, capped at
+   about two rows of covers with a third just showing: a host with the template
+   pack lists dozens, and a sheet that grew with them stood as tall as the
+   window and scrolled its own title away. */
+.cp-tpl-sheet { max-height: none; overflow: hidden; display: flex; flex-direction: column; }
+/* One height for both views. The body is a fixed box: the grid fills it and
+   scrolls, and the open template's pages fit inside the same box, so going
+   in and coming back moves nothing around the sheet. */
+.cp-tpl-sheet .body { height: 356px; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
+.cp-tpl-sheet .cp-tpl-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows: max-content;
+  gap: 10px; margin-top: 8px; min-height: 0; overflow-y: auto; padding: 2px 2px 6px; align-content: start;
+  scrollbar-width: thin;
+}
+.cp-tpl-sheet .cp-tpl-empty { color: var(--faint); font-size: 12px; margin-top: 8px; }
+.cp-tpl-card { display: block; padding: 0; border: 0; background: none; cursor: pointer; min-width: 0; }
+/* The box carries the shape with padding, which nothing in a flex or grid
+   parent can shrink; the picture fills it. */
+.cp-tpl-card .cp-tpl-coverbox { display: block; position: relative; width: 100%; padding-bottom: 56.25%; }
+.cp-tpl-card .cp-tpl-cover {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 8px;
+  border: 1px solid var(--line-soft); background: var(--surface); transition: border-color .12s;
+}
+.cp-tpl-card .cp-tpl-cover.cp-tpl-empty { display: grid; place-items: center; color: var(--faint); font-size: 11px; padding: 6px; text-align: center; }
+.cp-tpl-card:hover .cp-tpl-cover, .cp-tpl-card:focus-visible .cp-tpl-cover { border-color: var(--text); }
+/* Spanning both of the body's rows: alone in the body, the pages would sit in
+   the `auto` row meant for the hint, and a percentage height of an auto row
+   is nothing -- which left the strip at the size of its placeholder text. */
+.cp-tpl-sheet .cp-tpl-pages { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; height: 100%; min-height: 0;
+  grid-row: 1 / -1; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-bar { display: flex; align-items: center; gap: 10px; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-back {
+  display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: 12.5px;
+  padding: 4px 8px 4px 4px; border-radius: 7px;
+}
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-back svg { width: 14px; height: 14px; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-back:hover { color: var(--text); background: var(--raised); }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-count { flex: 1; text-align: center; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-use {
+  background: var(--black); color: var(--ink); font-size: 12.5px; font-weight: 600;
+  padding: 6px 14px; border-radius: 8px;
+}
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-use:hover { opacity: .88; }
+/* The one row is a definite track, not `auto`: the strip's height is a
+   percentage of its grid area, and a percentage of an auto row is nothing. */
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-view { display: grid; grid-template-columns: 28px minmax(0, 1fr) 28px;
+  grid-template-rows: minmax(0, 1fr); align-items: center; gap: 4px; min-height: 0; height: 100%; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-arrow { color: var(--faint); padding: 6px 2px; border-radius: 7px; display: grid; place-items: center; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-arrow svg { width: 18px; height: 18px; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-arrow:hover:not(:disabled) { color: var(--text); background: var(--raised); }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-arrow:disabled { opacity: .25; cursor: default; }
+/* Sized by the box's height, not the sheet's width: the strip takes the height
+   the body leaves it and its width follows the 16:9, centred, so the open
+   template is as tall as the grid was and no taller. */
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip {
+  display: flex; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; scrollbar-width: none;
+  border-radius: 10px; border: 1px solid var(--line-soft); background: var(--surface); aspect-ratio: 16 / 9; outline: 0;
+  height: 100%; max-width: 100%; justify-self: center;
+}
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip::-webkit-scrollbar { display: none; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip:focus-visible { border-color: var(--text); }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > img { flex: none; width: 100%; height: 100%; object-fit: contain; scroll-snap-align: start; user-select: none; }
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > .cp-tpl-cover.cp-tpl-empty { position: static; width: 100%; height: 100%; border: 0; }
+/* The wait for a template's pages, in the shape of the page that is coming.
+   The pages are rendered on the other end and it takes seconds, which the
+   strip used to spend holding the template's name, saying nothing about
+   whether anything was happening. A wash rather than a named surface, for the
+   reason the rail's skeleton gives: it has to hold its contrast on whatever
+   is behind it, in both themes. */
+.cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > .cp-tpl-load {
+  flex: none; width: 100%; height: 100%; border-radius: 9px;
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--text) 5%, transparent) 30%,
+    color-mix(in oklab, var(--text) 12%, transparent) 50%,
+    color-mix(in oklab, var(--text) 5%, transparent) 70%);
+  background-size: 300% 100%; animation: cptplwait 1.3s linear infinite;
+}
+@keyframes cptplwait { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .cp-tpl-sheet .cp-tpl-pages .cp-tpl-strip > .cp-tpl-load { animation: none; }
+}
+
+/* The permission sheet's own parts: why the agent is asking, the evidence
+   block by kind, the landed line an answer leaves. The row of answers is laid
+   out in styles/page.css beside the rack's `.opt`, which is the rack's class. */
+.cp-why { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-bottom: 8px; }
+.cp-ev { display: grid; gap: 6px; }
+.cp-ev-path { font-weight: 600; }
+.cp-ev-none { color: var(--faint); font-style: italic; }
+/* Not faint like `.cp-ev-none`: that says there was nothing to show, this says
+   there is more than is shown, and the reader is about to answer about it. */
+.cp-ev-cut { color: var(--amber); font-size: 12px; }
+.cp-diff, .cp-json { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cp-add { color: var(--moss); }
+.cp-del { color: var(--clay); }
+.cp-hunk { color: var(--faint); }
+.cp-land { display: flex; align-items: center; gap: 10px; min-height: 27px; font-size: 12.5px; color: var(--muted); }
+.cp-land-text { flex: 1; min-width: 0; }
+.cp-undo {
+  border: 0; background: none; color: var(--amber); font: inherit; font-size: 12px;
+  cursor: pointer; padding: 2px 6px; border-radius: 6px;
+}
+.cp-undo:hover { text-decoration: underline; }
+
+/* The clarify sheet's stepper. The sheet wears the rack's `.csheet` clothes,
+   which are styles/page.css's -- the question, the numbered rows and the foot
+   are the same ones the approval sheet wears -- so what the form adds of its
+   own is this domain's vocabulary and lives here: the progress row over a
+   batch, the mark on a row the reader has chosen but not yet reported, and the
+   multi-select box. */
+.cp-ask .hd { flex-wrap: wrap; }
+/* A line of its own above the question: in the head's flex row the chips would
+   otherwise stand beside it and squeeze it. Gone when the sheet is folded,
+   which is one line by design. */
+.cp-ask .cp-steps { display: flex; flex-wrap: wrap; gap: 4px; flex-basis: 100%; margin-bottom: 6px; }
+.cp-ask[data-fold="true"] .cp-steps { display: none; }
+.cp-ask .cp-step {
+  font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--line-soft); background: var(--surface); color: var(--faint); cursor: pointer;
+}
+.cp-ask .cp-step.cp-done { color: var(--muted); }
+.cp-ask .cp-step.cp-skip { text-decoration: line-through; }
+.cp-ask .cp-step.cp-on { color: var(--text); border-color: var(--text); }
+.cp-ask .cp-step:disabled { cursor: default; opacity: .6; }
+/* A pick the reader can still take back: nothing is reported until the last
+   step, so a chosen row has to read as held rather than as spent. */
+.cp-ask .opt.cp-on { background: var(--raised); box-shadow: inset 0 0 0 1px var(--text); }
+.cp-ask .opt.cp-on .n { background: var(--text); color: var(--ink); }
+/* On a multi-select row the box is the mark, so the row itself only warms:
+   half a dozen ringed rows at once would read as a wall. */
+.cp-ask .opt.cp-multi.cp-on { box-shadow: none; }
+.cp-ask .cp-box {
+  margin-left: auto; width: 14px; height: 14px; border-radius: 4px;
+  border: 1px solid var(--faint); flex: none;
+}
+.cp-ask .opt.cp-on .cp-box { background: var(--text); border-color: var(--text); }
+.cp-ask .cp-rec { margin-left: auto; font-size: 10.5px; color: var(--faint); }
+.cp-ask .opt .cp-rec + .cp-box { margin-left: 8px; }
+.cp-ask .cp-hint { font-size: 11.5px; color: var(--faint); margin-top: 2px; }
+.cp-ask .foot .cp-back { margin-right: auto; }

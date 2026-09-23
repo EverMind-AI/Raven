@@ -18,6 +18,7 @@ single-argument dispatcher handlers.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -25,7 +26,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from raven.rpc.connection import claim_conversation, declared_surface
-from raven.rpc.errors import RpcError, TurnInProgressError
+from raven.rpc.errors import InvalidParamsError, RpcError, TurnInProgressError
 from raven.rpc.models import (
     TurnCancelParams,
     TurnSendParams,
@@ -127,6 +128,35 @@ def is_session_busy(session_key: str) -> bool:
     though it runs on a lane of its own.
     """
     return any(session_of(lane) == session_key for lane in _active_turns)
+
+
+# The spine's scheduler, bound by ``register_turn_methods`` from the same
+# build_rpc_spine bundle the handlers close over. ``_active_turns`` above is
+# this surface's own bookkeeping and knows only the turns ``turn.send``
+# submitted; the scheduler owns every lane, whoever filed the work onto it.
+_scheduler: Scheduler | None = None
+
+
+def bind_scheduler(scheduler: Scheduler | None) -> None:
+    """Hand the spine's scheduler to the module-level readers below."""
+    global _scheduler
+    _scheduler = scheduler
+
+
+def is_session_answering(session_key: str) -> bool:
+    """True if the conversation's own lane has a turn in flight, whoever started it.
+
+    The main lane exactly, not ``is_session_busy``'s any-lane view: this is
+    what ``session.list`` and ``session.resume`` report to a page, and a page
+    arms its main composer on it. A sub-agent's direct chat runs on a lane of
+    its own and its events are routed to that chat, so counting it here left
+    the main composer with a stop button that cancelled the wrong lane.
+    ``_active_turns`` knows only the turns ``turn.send`` submitted; a cron run
+    or a channel turn is on the scheduler's lane and nowhere else.
+    """
+    if is_turn_active(session_key):
+        return True
+    return _scheduler is not None and _lane_in_flight(_scheduler, session_key)
 
 
 def clear_active(session_key: str) -> None:
@@ -374,14 +404,19 @@ async def turn_send(
     this owns the turn_id.
 
     Errors:
+      -32602 (InvalidParamsError) — params do not fit TurnSendParams.
       -32003 (TurnInProgressError) — session already has an active turn.
       -32008 (ModelNotAvailableError) — no provider/model routable.
     """
     try:
         parsed = TurnSendParams.model_validate(params)
     except ValidationError as exc:
-        # Re-raise as-is; dispatcher will catch and emit -32603 internal_error.
-        raise exc
+        # The caller sent the wrong shape, which is a -32602 and not a server
+        # fault: escaping as -32603 put a traceback in the log and a red
+        # "internal_error" row in front of a reader whose page had simply raced
+        # itself (a second send while the conversation was still being made).
+        first = exc.errors()[0] if exc.errors() else {}
+        raise InvalidParamsError(str(first.get("msg", "invalid params"))) from exc
 
     # Fail-fast: model availability before the active-turn slot, so a -32008
     # reject does not lock the session out of subsequent sends.
@@ -488,23 +523,29 @@ async def turn_send(
     # the browser page and any other attached terminal.
     claim_conversation(lane)
 
-    if emitter is not None:
-        # The question rides the event that opens the turn so a client which
-        # did not send it can still draw it: the user entry is written to the
-        # transcript only at turn end, so until then this is the only place a
-        # second window can learn what was asked.
-        await emitter.emit(
-            parsed.session_key,
-            {"type": "message.start", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
-        )
-
     # After the submit, so a turn that was never accepted does not name a session
     # that has nothing in it; and only for the main conversation, since a direct
     # chat's opening line names its instance's lane, not this session. Returns
     # immediately -- the call it may start runs on its own task.
+    #
+    # Before the emit below, and that ordering is load-bearing: the namer reads
+    # "no user message on disk" as the mark of an opening turn, the worker files
+    # the question as its first act, and the emit is the first await the
+    # submitted worker can run inside. Naming from the far side of it saw a
+    # session that already had its question and declined to name anything.
     naming = False
     if parsed.target is None:
         naming = _name_session(parsed, agent_loop_factory=agent_loop_factory, emitter=emitter)
+
+    if emitter is not None:
+        # The question rides the event that opens the turn so a client which did
+        # not send it can draw it at once: the turn files it before the first
+        # model call, but a client that waited for the transcript would be
+        # watching a blank screen until it re-read the session.
+        await emitter.emit(
+            parsed.session_key,
+            {"type": "message.start", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
+        )
 
     return {"turn_id": turn_id, "accepted": True, "naming": naming}
 
@@ -532,6 +573,12 @@ async def _inject_into_running(
     reach it after the host has released those slots, and so the sink can
     promote the fallback turn into them when it starts. The id answered is that
     one: it is what the fallback turn's events will carry.
+
+    The merge path announces itself with ``message.injected``: this call is the
+    only place that knows the text, and every window -- the sender's included --
+    draws its bubble from that one frame. The fallback path still opens with
+    ``message.start`` (``RpcOutlet.emit_start``), under the same id, so a client
+    can tell that it is the same message and not draw it twice.
     """
     turn_id = uuid4().hex
     target = _target_payload(parsed)
@@ -550,6 +597,10 @@ async def _inject_into_running(
         direct_target=(parsed.target.agent, parsed.target.handle) if parsed.target is not None else None,
         busy=BusyPolicy.INJECT,
         turn_id=turn_id,
+        # The text waits for the running turn's next gap, which is minutes away
+        # on exactly the turns people correct; the stored entry is stamped from
+        # here so it keeps the moment it was sent.
+        received_at=datetime.now().isoformat(),
     )
     try:
         handle = scheduler.submit(req)
@@ -560,6 +611,13 @@ async def _inject_into_running(
             await _emit_start_then_error(emitter, parsed.session_key, turn_id, _TURN_FAILED_CODE, "turn_failed", target)
         return {"turn_id": turn_id, "accepted": True, "naming": False}
     _pending_injects.setdefault(lane, {})[turn_id] = (handle, parsed.content)
+    if emitter is not None:
+        # After the submit and the registration: a frame drawn for text the
+        # scheduler refused would leave a bubble no turn ever answers.
+        await emitter.emit(
+            parsed.session_key,
+            {"type": "message.injected", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
+        )
 
     async def _forget_when_done() -> None:
         # Merged, ran, or cancelled: the future resolves on every exit.
@@ -575,14 +633,21 @@ async def turn_subscribe(
     *,
     emitter: SubscriptionEmitter | None = None,
 ) -> dict[str, Any]:
-    """``turn.subscribe`` — open a subscription, return ``{subscription_id}``."""
+    """``turn.subscribe`` — open a subscription, return ``{subscription_id, running}``.
+
+    ``running`` is taken on the far side of the publish, which is what makes it
+    trustworthy where ``session.resume``'s answer is not: a turn that ends after
+    this reading emits its completion into this very subscription, so a client
+    armed by ``session.resume`` and told ``false`` here knows the turn ended in
+    the gap between the two calls and that nothing is coming to end it.
+    """
     parsed = TurnSubscribeParams.model_validate(params)
     if emitter is None:
         raise RuntimeError(
             "turn.subscribe requires a SubscriptionEmitter; register_turn_methods must be called with emitter=...",
         )
     sub_id = await emitter.register(parsed.session_key)
-    return {"subscription_id": sub_id}
+    return {"subscription_id": sub_id, "running": emitter.in_flight(parsed.session_key)}
 
 
 async def turn_unsubscribe(
@@ -753,6 +818,8 @@ def register_turn_methods(
     dropped. Defaults to ``"tui"``.
     """
 
+    bind_scheduler(scheduler)
+
     async def _send(params: dict[str, Any]) -> dict[str, Any]:
         return await turn_send(
             params,
@@ -781,6 +848,7 @@ def register_turn_methods(
 
 
 __all__ = [
+    "bind_scheduler",
     "register_turn_methods",
     "register_session_interrupt_method",
     "turn_send",

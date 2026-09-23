@@ -90,7 +90,7 @@ class RavenRuntime:
         process-lifetime transports are interleaved.
         """
         await self.loop.stop_plugin_services()
-        await self.loop.subagents.cancel_all()
+        await self.loop.subagents.cancel_all(reason="the gateway reloaded")
         await self.loop.close_mcp()
         self.loop.stop()
         # The context builder started a skill watcher in __init__, so it goes
@@ -99,6 +99,11 @@ class RavenRuntime:
         # under that call whenever the process later exits.
         self.loop.context.skills.stop_file_watcher()
         if self.backend is not None:
+            # Awaited, and before the drain: a start still polling for
+            # readiness would otherwise outlive the generation it belongs to,
+            # and returning at ``cancel()`` would let ``stop()`` run while
+            # ``start()`` is still inside the backend.
+            await plugin_stack.cancel_pending_backend_starts(self.backend)
             await self.loop.drain_backend_stores()
             try:
                 await self.backend.stop()
@@ -197,13 +202,25 @@ def build_runtime(
             memory=MemoryStore(config.workspace_path),
             config=ec_config.eval_engine,
         )
-    if eval_engine is not None or plugin_hooks:
-        host = replace(
-            host,
-            hooks=hooks_stack.build_hooks_stack(
-                eval_engine=eval_engine, plugin_hooks=plugin_hooks, extra_hooks=host.hooks
-            ),
-        )
+    from raven.agent.hook.participant import ParticipantHook
+    from raven.agent.subagent.charter import CharterParticipant
+
+    charter_hook = ParticipantHook("generated-charter", CharterParticipant, rolls_back=False)
+    host = replace(
+        host,
+        hooks=hooks_stack.build_hooks_stack(
+            eval_engine=eval_engine,
+            plugin_hooks=plugin_hooks,
+            extra_hooks=[charter_hook, *(host.hooks or ())],
+        ),
+    )
+    # Before the loop builds its gate, so every surface this runtime serves --
+    # terminal, page, channels -- names the command family on an approval
+    # prompt the way the ACP editor does. A family only words the prompt; the
+    # tiers still decide whether one is shown.
+    from raven.permissions.shell_policy import declare_default_families
+
+    declare_default_families()
     loop = agent_loop.AgentLoop(
         provider=provider,
         workspace=config.workspace_path,

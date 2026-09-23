@@ -5,8 +5,9 @@ list holds catastrophe-class commands only -- disk devices, fork bombs, power
 control, and a recursive delete aimed at the filesystem root or the home tree;
 it outranks everything including a user allow rule, in every mode. The
 command families the running surface declared via
-``shell_policy.set_surface_approval_families`` (none by default; the ACP editor
-declares deletion and the external-effect families) do not decide anything:
+``shell_policy.set_surface_approval_families`` (none by default; the runtime
+and the ACP editor both declare deletion and the external-effect families
+before building their loop) do not decide anything:
 they name the prompt -- "Publish or push work to a remote" rather than the bare
 command -- when the tiers land the call on one. Every mutation, deletes
 included, answers to the permission tiers.
@@ -106,9 +107,11 @@ def session_keys(tool_name: str, params: dict[str, Any], ask_segments: tuple[str
     (stable for a conversation, so leaving it empty still distinguishes). The
     two builtin file writers are keyed by path and directory: the content
     changes every call, the path is what the human looked at, and a relative
-    path names another file once the directory is rebound. Every other tool
-    keys the exact call -- a `path` field on an unknown tool says nothing about
-    what its other fields do.
+    path names another file once the directory is rebound. The browser's acting
+    tools share one key per site: what the human approved was letting the agent
+    work on that site, and a click and the typing that follows it are one such
+    piece of work, not two. Every other tool keys the exact call -- a `path`
+    field on an unknown tool says nothing about what its other fields do.
     """
     if tool_name == "exec" and ask_segments:
         working_dir = params.get("working_dir")
@@ -121,10 +124,18 @@ def session_keys(tool_name: str, params: dict[str, Any], ask_segments: tuple[str
     if tool_name in PATH_KEYED_TOOLS and isinstance(path, str) and path.strip():
         material = f"{tool_name}\x00path:{os.path.normpath(path.strip())}\x00cwd:{_bound_workdir()}"
         return (sha256(material.encode()).hexdigest(),)
+    site = params.get(BROWSER_SITE_PARAM)
+    if tool_name in BROWSER_SITE_KEYED_TOOLS and isinstance(site, str) and site.strip():
+        return (sha256(f"browser\x00site:{site.strip().lower()}".encode()).hexdigest(),)
     return (action_digest(tool_name, params),)
 
 
 PATH_KEYED_TOOLS: frozenset[str] = frozenset({"edit_file", "write_file"})
+
+BROWSER_SITE_KEYED_TOOLS: frozenset[str] = frozenset({"browser_click", "browser_type", "browser_press"})
+# The parameter the browser tools write the site into before the gate reads
+# the call; spelled here as well as there so neither side can rename it alone.
+BROWSER_SITE_PARAM = "site"
 
 
 def _bound_workdir() -> str:

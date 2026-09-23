@@ -29,11 +29,14 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from raven.config.update_providers import (
+    _redact_headers,
     add_provider_endpoint,
     add_provider_model,
+    add_provider_models,
     get_provider_config,
     list_provider_endpoints,
     list_providers,
+    provider_extra_headers,
     remove_provider_endpoint,
     remove_provider_model,
     reset_provider,
@@ -59,13 +62,16 @@ from raven.rpc.errors import (
 from raven.rpc.models import (
     ModelAddEndpointParams,
     ModelAddModelParams,
+    ModelAddModelsParams,
     ModelDisconnectParams,
     ModelEndpointsParams,
     ModelFetchModelsParams,
+    ModelOauthLoginParams,
     ModelOptionsParams,
     ModelRemoveEndpointParams,
     ModelRemoveModelParams,
     ModelSaveKeyParams,
+    ModelSetFieldsParams,
     ModelSetProtocolParams,
 )
 
@@ -237,6 +243,7 @@ def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -
     """
     from raven.providers.catalog import describe
     from raven.providers.rates import resolve_context_window
+    from raven.providers.registry_data import kind_of
 
     overlays = _configured_overlays(slug, section=section)
     out: dict[str, dict[str, Any]] = {}
@@ -245,7 +252,7 @@ def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -
         window = resolve_context_window(model, allow_fetch=False)
         if not (row.described or row.tagged or window):
             continue
-        entry: dict[str, Any] = {"label": row.label}
+        entry: dict[str, Any] = {"label": row.label, "kind": kind_of(row.capabilities, row.output_modalities)}
         if row.description:
             entry["description"] = row.description
         if row.capabilities:
@@ -365,6 +372,7 @@ def _build_provider_entry(
         "slug": slug,
         "name": info.get("display_name") or (spec.label if spec else slug),
         "homepage": (spec.homepage or None) if spec else None,
+        "key_url": (spec.key_url or None) if spec else None,
         # Where this vendor documents its models, as the registry files it. The
         # homepage is not that link: a settings page asking "which model do I
         # put here" wants the model index, not a marketing front page.
@@ -374,6 +382,11 @@ def _build_provider_entry(
         "auth_type": kind,
         "key_env": (spec.env_key or None) if spec else None,
         "api_base": info.get("api_base"),
+        # Each header's name with its value redacted: the advanced card lists
+        # what is configured and removes by name, and never sees a value.
+        "extra_headers": (_redact_headers(getattr(section, "extra_headers", None) or {}) or {})
+        if section is not _UNLOADED
+        else {},
         # `display_api_base`, not `default_api_base`: the pane wants the vendor
         # address even where the spec states none for its own use.
         "default_api_base": (spec.display_api_base or None) if spec else None,
@@ -385,6 +398,12 @@ def _build_provider_entry(
         "protocols": protocols,
         "protocol_overrides": overrides,
         "total_models": len(models),
+        "gateway": bool(spec and spec.is_gateway),
+        # Every prefix that names this provider, for a client comparing two
+        # spellings of one model: `route_names` is what `merge_key` strips, and
+        # the spec says to compare against it rather than rebuild it, so it
+        # travels instead of being mirrored on each surface.
+        "route_names": sorted(spec.route_names) if spec else [],
         # "An address must be supplied" -- the gate's answer, not the shape's:
         # an endpoint-credential spec that ships a usable default (custom's
         # localhost gateway) runs on a bare key, and the picker must not
@@ -474,6 +493,16 @@ async def model_options(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     ``agents.defaults`` would star the wrong row for every session that has
     switched -- the picker would disagree with the status bar it sits under.
     """
+    from raven.providers.rates import warm_catalog_in_background
+
+    # The windows below are read from whatever catalogue is already in hand
+    # (``_model_labels`` never fetches on a UI call), and nothing else on this
+    # page would ever fill it: the warm otherwise runs only when a vision probe
+    # misses, so a home whose models all answer that question keeps showing the
+    # figures it cached weeks ago -- or none at all. Asking here is what makes
+    # the window a picker shows follow the vendor's published one. Guarded
+    # inside against a fresh table and against retry storms, and off the loop.
+    warm_catalog_in_background()
     parsed = _parse(ModelOptionsParams, params)
     current_model, current_provider = _current_selection()
     session_model = _session_model(agent_loop_factory, getattr(parsed, "session_id", None))
@@ -614,8 +643,10 @@ def _stated_overlay(parsed: "ModelAddModelParams") -> dict[str, object]:
     from raven.providers.registry_data import CAPABILITIES, MODALITIES, clean_tags
 
     stated: dict[str, object] = {}
-    if parsed.label:
+    if parsed.label is not None:
         stated["label"] = parsed.label
+    if parsed.description is not None:
+        stated["description"] = parsed.description
     for field, values, allowed in (
         ("capabilities", parsed.capabilities, CAPABILITIES),
         ("inputModalities", parsed.input_modalities, MODALITIES),
@@ -754,6 +785,81 @@ async def model_add_model(params: dict) -> dict:
     }
 
 
+async def model_add_models(params: dict) -> dict:
+    parsed = _parse(ModelAddModelsParams, params)
+    stored = list(dict.fromkeys(_stored_spelling(parsed.slug, m) for m in parsed.models if m.strip()))
+    if not stored:
+        raise ConfigValidationError("models must name at least one model", data={"slug": parsed.slug})
+    try:
+        await asyncio.to_thread(add_provider_models, parsed.slug, stored)
+    except KeyError as exc:
+        raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+    _, current_provider = _current_selection()
+    return {"provider": await _entry_off_loop(parsed.slug, current_provider)}
+
+
+_SETTABLE_FIELDS = frozenset({"api_base", "deployment", "api_version", "extra_headers"})
+
+
+async def model_set_fields(params: dict) -> dict:
+    """Patch a provider's non-credential fields; the key stays with save_key.
+
+    ``extra_headers`` arrives as a patch (``{name: value | null}``) and is merged
+    into the stored headers here, because the page only ever holds the stored
+    values masked and could not send the map back whole.
+    """
+    parsed = _parse(ModelSetFieldsParams, params)
+    fields = dict(parsed.fields)
+    unknown = sorted(set(fields) - _SETTABLE_FIELDS)
+    if unknown:
+        raise ConfigValidationError(f"fields not settable here: {unknown}", data={"slug": parsed.slug})
+    if not fields:
+        raise ConfigValidationError("fields is empty", data={"slug": parsed.slug})
+    if "extra_headers" in fields:
+        patch = fields["extra_headers"]
+        if not isinstance(patch, dict):
+            raise ConfigValidationError("extra_headers must be an object of header names", data={"slug": parsed.slug})
+        try:
+            current = await asyncio.to_thread(provider_extra_headers, parsed.slug)
+        except Exception as exc:
+            raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+        for name, value in patch.items():
+            if value is None:
+                current.pop(str(name), None)
+            elif isinstance(value, str) and value:
+                current[str(name)] = value
+            else:
+                raise ConfigValidationError(
+                    f"header {name!r} must be a non-empty string or null", data={"slug": parsed.slug}
+                )
+        fields["extra_headers"] = current
+    try:
+        previous = await asyncio.to_thread(set_provider_fields, parsed.slug, fields)
+    except (KeyError, RuntimeError, ValidationError) as exc:
+        raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+    if "extra_headers" in previous:
+        previous["extra_headers"] = _redact_headers(previous["extra_headers"])
+    return {"previous": previous}
+
+
+async def model_oauth_login(params: dict) -> dict:
+    """Start an OAuth provider's device flow for a page; see providers.oauth_login."""
+    parsed = _parse(ModelOauthLoginParams, params)
+    spec = find_by_name(parsed.slug)
+    if spec is None or not spec.is_oauth:
+        raise NotSupportedError(f"{parsed.slug} does not sign in with OAuth", data={"slug": parsed.slug})
+    from raven.providers import oauth_login
+
+    try:
+        return await oauth_login.start(parsed.slug)
+    except LookupError as exc:
+        raise NotSupportedError(str(exc), data={"slug": parsed.slug}) from exc
+    except (RuntimeError, TimeoutError) as exc:
+        raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+    except Exception as exc:  # noqa: BLE001 -- the vendor's own failure, named to the page
+        raise ConfigValidationError(f"device sign-in could not start: {exc}", data={"slug": parsed.slug}) from exc
+
+
 async def model_remove_model(params: dict) -> dict:
     parsed = _parse(ModelRemoveModelParams, params)
     try:
@@ -834,6 +940,9 @@ def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "Age
     dispatcher.register("model.disconnect", model_disconnect)
     dispatcher.register("model.fetch_models", model_fetch_models)
     dispatcher.register("model.add_model", model_add_model)
+    dispatcher.register("model.add_models", model_add_models)
+    dispatcher.register("model.set_fields", model_set_fields)
+    dispatcher.register("model.oauth_login", model_oauth_login)
     dispatcher.register("model.remove_model", model_remove_model)
     dispatcher.register("model.endpoints", model_endpoints)
     dispatcher.register("model.add_endpoint", model_add_endpoint)

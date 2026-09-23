@@ -68,7 +68,11 @@ def test_the_manifest_names_the_ten_templates_and_a_real_endpoint(manifest):
 def test_git_tracks_every_pinned_template(manifest):
     """The whole point of the change: a clone has the templates. Every pinned
     file must be tracked -- an untracked one means the payload rides on the
-    committer's disk and a fresh clone builds a wheel with an empty catalogue."""
+    committer's disk and a fresh clone builds a wheel with an empty catalogue.
+    The deck payload is what the manifest signs, so that is what is compared:
+    an unpinned .pptx beside them is still refused, while data the templates are
+    read with -- the phrasebook under ``i18n/`` -- is reviewed as source is, in
+    the diff, and is not a deck for the manifest to sign."""
     dest = (MANIFEST.parent / manifest["destination"]).resolve()
     listed = subprocess.run(
         ["git", "-C", str(REPO), "ls-files", "--", str(dest)],
@@ -76,7 +80,7 @@ def test_git_tracks_every_pinned_template(manifest):
         text=True,
         check=True,
     ).stdout.split()
-    tracked = {Path(line).name for line in listed}
+    tracked = {Path(line).name for line in listed if line.endswith(".pptx")}
     assert tracked == {entry["name"] for entry in manifest["files"]}
 
 

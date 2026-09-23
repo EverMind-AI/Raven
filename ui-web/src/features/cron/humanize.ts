@@ -1,4 +1,4 @@
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 
 import type { CronJob } from './types'
 
@@ -11,8 +11,14 @@ export function cronExprHuman(expr: string): string {
   const raw = `cron ${expr}`
   if (p.length !== 5) return raw
   const [m, h, dom, mon, dow] = p as [string, string, string, string, string]
-  if (dom !== '*' || mon !== '*') return raw
+  if (mon !== '*') return raw
   const pad = (n: string | number) => String(n).padStart(2, '0')
+  /* A day of the month is the one shape the rest of this reader cannot word:
+     everything below is a weekday-and-time sentence. */
+  if (dom !== '*') {
+    if (dow !== '*' || !/^\d{1,2}$/.test(dom) || !/^\d+$/.test(m) || !/^\d+$/.test(h)) return raw
+    return t('gui.cron.h.monthly', { d: Number(dom), hm: `${pad(h)}:${pad(m)}` })
+  }
   let day: string
   if (dow === '*') day = t('gui.cron.h.daily')
   else if (dow === '1-5') day = t('gui.cron.h.weekdays')

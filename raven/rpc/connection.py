@@ -137,6 +137,21 @@ def claim_conversation(conversation_id: str) -> bool:
     return True
 
 
+def owns_conversation(conversation_id: str | None) -> bool:
+    """Whether this connection is the surface that conversation speaks through.
+
+    The read side of :func:`claim_conversation`, for a handler that hands back
+    something the engine would otherwise have pushed. True when nobody owns the
+    conversation, mirroring :func:`conversation_scoped`'s broadcast fallback: an
+    unowned conversation's frames reach every attached surface anyway, so hiding
+    them here would lose a question no other surface can answer either.
+    """
+    if not conversation_id:
+        return False
+    owner = _owners.get(conversation_id)
+    return True if owner is None else owner is _state.get()
+
+
 def frame_sink_for(conversation_id: str | None) -> SendFrame | None:
     """The owning connection's sink, or ``None`` when nobody owns it."""
     if not conversation_id:
@@ -203,6 +218,7 @@ __all__ = [
     "declare_surface",
     "declared_surface",
     "frame_sink_for",
+    "owns_conversation",
     "is_bound",
     "set_frame_sink",
     "unbind_connection",

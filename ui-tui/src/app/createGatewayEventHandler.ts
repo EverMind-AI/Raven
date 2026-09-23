@@ -549,14 +549,18 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       }
       case 'approval.request': {
         const description = String(ev.payload.description ?? 'dangerous command')
+        // Only a sub-agent's name is worth a line: the main agent asking is the
+        // ordinary case and naming it every time would say nothing.
+        const origin = ev.payload.origin
+        const asker = origin?.kind === 'subagent' && origin.name ? origin.name : ''
 
         patchOverlayState({
           approval: {
             approvalId: String(ev.payload.approval_id ?? ''),
+            ...(asker ? { asker } : {}),
             command: String(ev.payload.command ?? ''),
             conversationId: String(ev.payload.conversation_id ?? ''),
             description,
-            expiresAt: Number(ev.payload.expires_at) * 1000,
             ...(ev.payload.suggested_pattern ? { suggestedPattern: String(ev.payload.suggested_pattern) } : {})
           }
         })

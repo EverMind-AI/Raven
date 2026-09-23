@@ -16,6 +16,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import aclosing
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -66,6 +67,25 @@ def _transport_failed(
     )
 
 
+def _spent(
+    verdict: ErrorClassification | None,
+    provider: "LLMProvider | Any",
+    content: str | None,
+) -> ErrorClassification | None:
+    """The same verdict with its retryability used up.
+
+    Kept as a verdict rather than raised so the recoveries reading its other
+    flags -- shrink the window, take the pictures out -- still run. A response
+    that carries none is classified here first: the caller classifies the error
+    text itself when the verdict is missing, and would read a retryable failure
+    straight back out of it.
+    """
+    if verdict is None:
+        classify = getattr(provider, "classify_error", None)
+        verdict = classify(content=content or None) if classify is not None else None
+    return replace(verdict, retryable=False) if verdict is not None else None
+
+
 async def stream_llm_call(
     provider: "LLMProvider | Any",
     *,
@@ -91,7 +111,10 @@ async def stream_llm_call(
     concatenation of the per-fragment argument strings.
 
     A failure that already streamed deltas is not retried -- the caller has
-    rendered them, so a second attempt would duplicate its output. Before the
+    rendered them, so a second attempt would duplicate its output. The rule holds
+    however the failure arrives: a provider that hands one back as its terminal
+    error delta instead of raising has that delta's verdict spent of its
+    retryability, so the caller's own ladder does not ask again either. Before the
     first delta there is nothing to duplicate, so a retryable error reconnects up
     to ``max_reconnects`` times at once, then waits out ``retry_delays`` -- the
     loop's own ladder, seconds to minutes, for a gateway that serves error pages
@@ -258,10 +281,12 @@ async def stream_llm_call(
                     reasoning_chars,
                 )
                 stop_thinking()
+                # In the canonical error shape, so the readers of that shape (the
+                # loop's failure report, the CLI's diagnosis) keep this account.
                 return LLMResponse(
                     content=(
-                        f"The model's reply was cut off by the connection after {elapsed:.0f}s, before any "
-                        f"content arrived ({reasoning_chars} chars of reasoning were lost)."
+                        f"Error calling LLM (network): the model's reply was cut off by the connection after "
+                        f"{elapsed:.0f}s, before any content arrived ({reasoning_chars} chars of reasoning were lost)"
                     ),
                     finish_reason="error",
                     error_classification=ErrorClassification("network", retryable=True, should_fallback=True),
@@ -297,16 +322,16 @@ async def stream_llm_call(
             if rendered() and not retry_after_output:
                 raise
             # Classified from the live exception rather than a fresh
-            # TimeoutError, and its text kept when nothing was streamed: a
-            # first-byte timeout says which bound it was and how long it waited,
-            # and a stall before the first chunk leaves an empty buffer -- so
-            # throwing both away left the loop logging an error whose message was
-            # the empty string, which is how fifteen minutes of silence came to be
-            # recorded as nothing at all.
+            # TimeoutError: a first-byte timeout says which bound it was and how
+            # long it waited, and throwing that away left the loop logging an
+            # error whose message was the empty string, which is how fifteen
+            # minutes of silence came to be recorded as nothing at all. The words
+            # that had streamed are not the content here -- a failed call's
+            # content is the account of the failure, and the caller keeps its own
+            # copy of what the reader already saw.
             classification = provider.classify_error(exc)
-            streamed = "".join(content_buf)
             return LLMResponse(
-                content=streamed or format_llm_error(exc, classification),
+                content=format_llm_error(exc, classification),
                 finish_reason="error",
                 error_classification=classification,
                 usage=final_usage or {},
@@ -384,6 +409,19 @@ async def stream_llm_call(
             await asyncio.sleep(delay)
 
     if had_error:
+        if rendered() and not retry_after_output:
+            # A provider that swallows a mid-stream failure into its terminal
+            # delta reports it as retryable, and the caller's own ladder then
+            # asks the same question again -- with words already on the reader's
+            # screen, the answer is drawn from the top a second time. The retry
+            # is spent here, the last place that knows something was rendered.
+            error_classification = _spent(error_classification, provider, error_content)
+            logger.warning(
+                "Stream LLM error [{}] after {} chars of output; not asking again: {}",
+                error_classification.category if error_classification is not None else "unclassified",
+                sum(len(part) for part in content_buf),
+                (error_content or "")[:160],
+            )
         return LLMResponse(
             content=error_content,
             finish_reason="error",

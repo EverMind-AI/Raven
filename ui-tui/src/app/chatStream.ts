@@ -36,7 +36,14 @@ import type { Msg, TurnArtifacts } from '../types.js'
 import type { DirectTargetRef } from './directChatStore.js'
 
 import { TOOL_PREVIEW_TRUNCATED_SUFFIX } from '../domain/episodeFold.js'
-import { deliveredMessageKey, noticeLine } from '../domain/messages.js'
+import {
+  deliveredMessageKey,
+  failedTurnLine,
+  haltedLine,
+  keptOutput,
+  noticeLine,
+  turnErrorLine
+} from '../domain/messages.js'
 import { addUnique, artifactMessage, changedFile, deliveryFiles } from '../domain/turnArtifacts.js'
 import { t } from '../i18n/index.js'
 import { argPreview, dagPromptTemplates } from '../lib/toolArgs.js'
@@ -48,6 +55,7 @@ import {
   directKey,
   disarmEscape,
   getDirectChat,
+  getDirectTranscript,
   MAIN_VIEW_KEY,
   markRunning,
   viewKeyOf
@@ -210,14 +218,20 @@ const dispatchDirect = (
     case 'error': {
       state.turns.delete(viewKeyOf(target))
       clearRunning(target)
-      const { code, message, reason } = event.payload
+      // The same reading the main lane's `onError` gets, so one frame cannot
+      // be worded two ways depending on which view it belongs to.
       appendDirectMessage(key, {
         role: 'system',
-        text: reason === 'cancelled_by_client' ? 'interrupted' : `error: ${message} (code=${code})`
+        text: turnErrorLine(event.payload, keptOutput(getDirectTranscript(key)))
       })
       disarmEscape(target)
       patchUiState({ status: 'ready' })
-      sys?.(`${target.agent}/${target.handle}: ${message}`)
+      // Kept, and now in the same words: the main view is where the user is
+      // looking when a direct turn they left dies, and the settled read that
+      // follows a turn's end replaces the instance's own rows, not this one.
+      // The main transcript never holds the instance's output, so the echo of
+      // a stop makes no promise about what is kept above it.
+      sys?.(`${target.agent}/${target.handle}: ${turnErrorLine(event.payload)}`)
       // As `message.complete` does: this end of a turn moves the instance's
       // registry row too -- the manager writes `cancelled` or `failed` where a
       // clean turn writes `completed`. Without the re-read the strip keeps the
@@ -431,6 +445,13 @@ const dispatch = (
       // "every variant was considered", not "every variant the union happened
       // to list when this was written".
       return
+    case 'message.injected':
+      // A message another window sent into the turn that is running. This
+      // surface queues its own follow-ups rather than injecting them, and it
+      // draws no user row for a message it did not send: putting one on screen
+      // here is a product call for the terminal, not a consequence of the wire
+      // event. Named for the same reason `turn.started` is.
+      return
     default: {
       // Exhaustiveness — if a new TurnEvent variant lands the type-checker
       // will complain here, forcing this file to be updated.
@@ -526,7 +547,7 @@ const onError = (
   sys?: (msg: string) => void,
   appendMessage?: (msg: Msg) => void
 ): void => {
-  const { reason, message, code, detail } = ev.payload
+  const { reason, message } = ev.payload
   state.turns.delete(MAIN_VIEW_KEY)
   clearRunning(null)
   if (reason === 'cancelled_by_client') {
@@ -538,15 +559,15 @@ const onError = (
   appendArtifacts(state, appendMessage)
   state.artifacts = { changes: [], deliveries: [] }
   // Non-cancellation error: surface a sys note, idle the turn, and reset
-  // the live anchor so the user can submit again. Append the real failure
-  // detail (e.g. the underlying exception) when present, so a generic
-  // `turn_failed` code is not the only thing the user sees.
+  // the live anchor so the user can submit again. A turn that died reads by
+  // the line a resumed transcript gives it, with the real failure detail (e.g.
+  // the underlying exception); any other code keeps its own name and detail.
+  const died = message === 'turn_failed'
   if (sys) {
-    const extra = detail ? `: ${detail.split('\n')[0].slice(0, 200)}` : ''
-    sys(`error: ${message} (code=${code})${extra}`)
+    sys(turnErrorLine(ev.payload))
   }
   turnController.recordError({ appendMessage })
-  patchUiState({ status: `error: ${message.slice(0, 80)}` })
+  patchUiState({ status: (died ? failedTurnLine('') : `error: ${message}`).slice(0, 80) })
   patchTurnState({ activity: [], outcome: '' })
 }
 
@@ -634,7 +655,9 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
       // The instance's own transcript, where dispatchDirect writes a cancelled
       // turn's marker. Not restoreInputPrompt: that commits turnController's
       // buffer into the main transcript, and a direct turn never filled it.
-      appendDirectMessage(directKey(active.agent, active.handle), { role: 'system', text: 'interrupted' })
+      const key = directKey(active.agent, active.handle)
+
+      appendDirectMessage(key, { role: 'system', text: haltedLine(keptOutput(getDirectTranscript(key))) })
       disarmEscape(active)
       patchUiState({ status: 'ready' })
 

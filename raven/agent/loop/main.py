@@ -233,8 +233,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # case for 65536: the retired default the old bootstrap wrote to disk is
         # cleared where it lives by ``config.loader``, so what arrives here is a
         # real choice.
-        self._configured_window = context_window_tokens or None
-        self._default_binding = ModelBinding(provider, model or provider.get_default_model(), self._configured_window)
+        self._default_binding = ModelBinding(
+            provider, model or provider.get_default_model(), context_window_tokens or None
+        )
         self._session_bindings: dict[str, ModelBinding] = {}
         # Per-session operating policy (iteration cap, mode overlay); set by a
         # transport that speaks modes, read once at each turn's start.
@@ -251,14 +252,17 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # ``_forget_transport_verdicts`` is what the binding setters call.
         self._image_tool_result_ok: dict[str, bool] = {}
         self._vision_ok: dict[str, bool] = {}
-        self.max_iterations = max_iterations
+        self._default_max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
         self.search_api_key = search_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
-        self.web_search_provider = web_search_provider
-        self.web_fetch_provider = web_fetch_provider
+        # What this process was built with. The selection itself is a property
+        # over the file (see ``wiring.web_search_provider``); these answer when
+        # the file names nothing.
+        self._boot_web_search_provider = web_search_provider
+        self._boot_web_fetch_provider = web_fetch_provider
         self.web_provider_keys = web_provider_keys
         self.image_search = image_search
         from raven.config.raven import MemoryConfig, SubagentDagConfig, SubagentQuestionsConfig
@@ -318,10 +322,14 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # ``SkillsSegmentBuilder.build``.
         self._last_injected_skill_sources: dict[str, str] = {}
 
+        from raven.config.live import LiveConfig, skill_blocklist
+
+        self._live_config = LiveConfig()
         self.context = ContextBuilder(
             workspace,
             skill_forge_config=skill_forge_config,
             now_fn=now_fn,
+            blocklist_reader=lambda: skill_blocklist(self._live_config),
         )
         self.sessions = session_manager or SessionManager(workspace)
         # Off switches with no config file behind them: an eval harness that
@@ -335,9 +343,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # take it out of a set captured before the process started, so a tool that
         # was off at launch could never be turned back on.
         self._disabled_tools = set(disabled_tools or [])
-        from raven.config.live import LiveConfig
-
-        self._live_config = LiveConfig()
         # Entries already reported as naming a tool this switch does not own, so
         # the notice lands once rather than on every MCP connect.
         self._disabled_tools_reserved_warned: set[str] = set()
@@ -409,6 +414,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             getattr(getattr(skill_forge_router_config, "hub", None), "min_safety", 0.7),
         )
         self._skill_blocklist = list(getattr(skill_forge_config, "blocklist", None) or [])
+        # What the three skill tools screen against, asked per call: the list
+        # at construction is the one the operator had when the loop started,
+        # and a skill enabled on the settings page has to stop being refused.
+        self._skill_blocklist_reader = lambda: skill_blocklist(self._live_config)
         self._skill_auto_install = str(getattr(skill_forge_config, "auto_install", "auto") or "auto")
 
         self.context_engine: "ContextEngine"
@@ -442,6 +451,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 skill_forge_config=skill_forge_config,
                 skill_hub_client=self._skill_hub_client,
                 provider_pool=provider_pool,
+                # The same reader the catalog gets: the pool drop and the
+                # scent menu screen against the list on disk now, so a skill
+                # switched off -- or back on -- reaches the next turn.
+                blocklist_reader=lambda: skill_blocklist(self._live_config),
             )
 
         # The four strategy roles this generation runs on. Assembled here
@@ -528,6 +541,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             target_ready=self._routed_target_ready,
             retry_delays=tuple(self._recovery_limits.llm_error_retry_delays),
             retry_after_output=bool(self._recovery_limits.llm_retry_after_output),
+            provider_pool=self._provider_pool,
         )
         # Reads the live direct chats through a lambda for the reason the identity
         # segment does: the manager is rebuilt on a hot config apply.
@@ -755,6 +769,21 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             except Exception as exc:  # noqa: BLE001 -- teardown must not die on bookkeeping
                 logger.warning("Error marking MCP servers after executor close: %s", exc)
 
+    def _register_deep_research_offer(self) -> None:
+        """Register the offer stand-in with the broker this host wired.
+
+        The broker arrives after construction (``set_deep_research_broker``),
+        which applies it to whatever is registered at that moment. A stand-in
+        registered later -- when a credential is cleared mid-session -- is past
+        that call, so it has to be handed the stored one here. Without it
+        ``_ask_search_mode`` answers None and the offer degrades to regular
+        search silently, for the rest of the process.
+        """
+        offer = DeepResearchOfferTool()
+        if self._deep_research_broker is not None:
+            offer.set_broker(self._deep_research_broker)
+        self.tools.register(offer)
+
     def _register_real_deep_research(self, cfg: DeepResearchToolConfig) -> None:
         """Build the working deep_research tool (+ async manager) and register it.
         Shared by initial registration and mid-session promotion."""
@@ -787,17 +816,23 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             tool.set_broker(broker)
 
     def _maybe_promote_deep_research(self) -> None:
-        """Swap the offer stand-in for the working tool once a key appears on disk,
-        so a mid-session ``raven deep-research enable`` is picked up on the next
-        turn without a restart. Called from ``run_turn`` before the per-turn tool
-        wiring, so the promoted tool gets this turn's stream callback and routing.
+        """Take the deep-research key the file has now, on the next turn.
+
+        Swaps the offer stand-in for the working tool once a key appears, so a
+        mid-session ``raven deep-research enable`` is picked up without a
+        restart -- and swaps it back when the credential is cleared, so a
+        removed key stops being spent rather than outliving its removal. Called from ``run_turn`` before the per-turn tool wiring, so
+        the tool gets this turn's stream callback and routing.
+
+        A key *replaced* counts too: the working tool holds the key it was built
+        with, so rotating one on the settings page used to leave every call on
+        the old credential until a restart -- the same "saved and nothing
+        happened" the promotion path exists to prevent, one step later.
 
         Re-reads config (the in-memory copy is fixed at startup); a corrupt config
         must not fail the turn, so a read error just skips promotion. The promoted
         manager inherits the gateway's async-delivery handle via
         ``set_deep_research_submit``, so a channel keeps the async path."""
-        if not isinstance(self.tools.get("deep_research"), DeepResearchOfferTool):
-            return
         from raven.config.loader import ConfigReadError
         from raven.config.schema import DeepResearchToolConfig
         from raven.config.update_tools import get_deep_research
@@ -807,11 +842,42 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         except ConfigReadError as exc:
             logger.warning("deep_research: skipping promotion, config unreadable: {}", exc)
             return
+        # Identity, not the name: a plugin that shadows ``deep_research``, or a
+        # test double that replaced it, owns that entry and none of this is
+        # about it. Only the two tools this method registers are its to move.
+        current = self.tools.get("deep_research")
+        working = isinstance(current, DeepResearchTool)
+        offered = isinstance(current, DeepResearchOfferTool)
+        if not working and not offered:
+            return
         if not DeepResearchTool.is_configured(cfg):
+            if not working:
+                return
+            # Cleared on the settings page. Returning here would leave the
+            # working tool registered on the credential that was just removed,
+            # and it would keep spending against it until a restart.
+            self.tools.unregister("deep_research")
+            self.deep_research_config = cfg
+            self.deep_research_manager = None
+            self._register_deep_research_offer()
+            logger.info("deep_research: credential cleared; the offer stand-in is back")
+            return
+        # The whole section, not the credential alone: an endpoint or a model
+        # moved is the same "saved and nothing happened" one field over, and
+        # comparing the section keeps configuredness where it belongs (it was
+        # settled by ``is_configured`` above).
+        if working and cfg == self.deep_research_config:
             return
         self.deep_research_config = cfg
+        if working:
+            # The registry refuses a duplicate name, so the tool this replaces
+            # has to go first.
+            self.tools.unregister("deep_research")
         self._register_real_deep_research(cfg)
-        logger.info("deep_research: promoted offer stand-in to the working tool (key configured mid-session)")
+        logger.info(
+            "deep_research: {} (configured mid-session)",
+            "promoted offer stand-in to the working tool" if offered else "rebuilt the tool on the new section",
+        )
 
     async def run(self) -> None:
         """Bring the agent runtime up and stay alive.
@@ -914,7 +980,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             # which is exactly what the Model Binding contract in CONTEXT.md
             # forbids: a turn resolves its pair once and holds it for the whole
             # turn tree.
-            binding = self.binding_for_session(session_key)
+            binding = self._with_live_window(self.binding_for_session(session_key))
             delegate_table = await self._write_worker_table(req, session_key, binding)
             # The charter a dispatch staged for this session, taken for this turn
             # only. Both scopes below are None on an ordinary turn, which is the
@@ -922,6 +988,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             charter = self._take_session_charter(session_key)
             with (
                 use_binding(binding),
+                # Beside the binding and for the same reason: the settings a
+                # turn reads more than once answer the same way all the way
+                # through it.
+                self._turn_scope(),
                 self.tools.session_scope_for(session_key),
                 self.tools.turn_scope(),
                 delegate_scope(delegate_table),

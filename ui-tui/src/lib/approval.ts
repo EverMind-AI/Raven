@@ -54,8 +54,3 @@ export const buildApprovalRespond = (
 // Missing or malformed acknowledgements fail closed; only the broker's
 // explicit acceptance means that the command was authorized.
 export const approvalResponseAccepted = (response: null | { ok?: boolean }) => response?.ok === true
-
-// The runtime supplies one absolute deadline. Deriving the countdown from it
-// avoids drift when event delivery or React rendering is delayed.
-export const approvalRemainingSeconds = (expiresAt: number, now = Date.now()) =>
-  Math.max(0, Math.ceil((expiresAt - now) / 1000))

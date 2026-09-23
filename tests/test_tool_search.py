@@ -393,8 +393,9 @@ async def test_strategy_none_tools_passthrough() -> None:
 
 @pytest.mark.asyncio
 async def test_strategy_passthrough_when_meta_tools_absent() -> None:
-    # Above threshold but meta-tools missing (e.g. removed via disabled_tools):
-    # expose everything rather than strand cataloged tools.
+    # Above threshold but meta-tools missing (a dispatch charter that narrows the
+    # turn, or a host that never registered them -- tools.disabled_tools cannot
+    # reach them): expose everything rather than strand cataloged tools.
     reg, ctrl = _registry_with_n(40)
     reg.unregister("tool_search")
     reg.unregister(TOOL_CALL_NAME)
@@ -402,6 +403,20 @@ async def test_strategy_passthrough_when_meta_tools_absent() -> None:
     tools = reg.get_definitions()
     _, out, _ = await strat.before_llm_call([], tools, "m")
     assert {t["function"]["name"] for t in out} == {t["function"]["name"] for t in tools}
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_entry_passes_through_instead_of_raising() -> None:
+    # Replay feeds a recorded array back through this chain, so a corrupt
+    # recording arrives as an entry whose "function" is a string. That has to
+    # end at replay's own backstop as an unreplayable recording; a TypeError
+    # here ends the turn instead, and ends it somewhere that cannot say why.
+    reg, ctrl = _registry_with_n(40)
+    strat = ToolSearchStrategy(ctrl, compaction_threshold=25)
+    tools = [*reg.get_definitions(), {"function": "bad"}, "not-a-dict"]
+    _, out, _ = await strat.before_llm_call([], tools, "m")
+    assert {"function": "bad"} in out and "not-a-dict" in out, "what the fold cannot read, it keeps"
+    assert any(t.get("function", {}).get("name") == TOOL_CALL_NAME for t in out if isinstance(t, dict))
 
 
 def test_registry_register_first_runs_before_others() -> None:

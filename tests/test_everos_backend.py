@@ -196,6 +196,109 @@ class TestLifecycle:
             await b.start()
             await b.stop()
 
+    async def test_a_role_the_migration_could_not_move_is_said_out_loud(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A role whose vendor cannot be named is left unset on purpose -- a
+        guess would send memory's traffic to the wrong endpoint. Silent, that is
+        a slot the person has no reason to look at; the notice is the only thing
+        that sends them to it."""
+        said: list[str] = []
+        monkeypatch.setattr(
+            "raven_everos.config.migrate_roles",
+            lambda: ["EverOS llm: could not tell which provider serves https://nobody/v1"],
+        )
+
+        b = EverosBackend(_ctx(tmp_path))
+        b.notify = said.append
+        with patch("raven_everos.server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        assert any("could not tell which provider" in m for m in said), said
+
+    async def test_start_binds_all_four_roles_into_this_process(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`understand_media` runs multimodal *here*, not in the spawned server.
+
+        It reads EverOS's cached settings out of this process's environment, so a
+        role bound only for the child is a role that tool cannot use -- which is
+        how a configured multimodal model went on answering "not configured" to
+        the only caller that needed it.
+        """
+        import json
+
+        from raven import home as raven_home
+        from raven_everos import config as cf
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "providers": {"openrouter": {"apiKey": "sk-or", "apiBase": "https://openrouter.ai/api/v1"}},
+                    "embedding": {"model": "text-embedding-3-small", "provider": "openrouter"},
+                    "plugins": {
+                        "config": {
+                            "everos-memory": {
+                                "owned": True,
+                                "root": str(tmp_path / ".everos"),
+                                "llm": {"model": "the-llm", "provider": "openrouter"},
+                                "multimodal": {"model": "the-pinned-model", "provider": "openrouter"},
+                            }
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        raven_home.set_config_path(cfg)
+        monkeypatch.setattr(cf, "_BOUND_HERE", set())
+        for role in ("LLM", "EMBEDDING", "RERANK", "MULTIMODAL"):
+            for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS", "PROVIDER"):
+                monkeypatch.delenv(f"EVEROS_{role}__{name}", raising=False)
+        monkeypatch.delenv(cf.PROVENANCE_ENV, raising=False)
+
+        try:
+            b = EverosBackend(_ctx(tmp_path))
+            with patch("raven_everos.server.ensure_everos_server", new=AsyncMock()):
+                await b.start()
+
+            assert os.environ["EVEROS_MULTIMODAL__MODEL"] == "the-pinned-model"
+            assert os.environ["EVEROS_LLM__MODEL"] == "the-llm"
+            # Recorded as ours, or the next reader takes raven's own binding for
+            # an operator's export and stops writing the slot at all.
+            assert "EVEROS_MULTIMODAL__MODEL" in os.environ[cf.PROVENANCE_ENV].split(",")
+        finally:
+            raven_home.set_config_path(None)
+
+    async def test_start_migrates_the_roles_before_it_reads_one(self, tmp_path: Path) -> None:
+        """The whole answer to "does the upgrade need a command run by hand".
+
+        An install upgrading into the role pins still has its four roles in
+        everos.toml, which raven no longer reads for them -- so a start that did
+        not migrate would send the service four blank roles and long-term memory
+        would stop. Before the environment is built, not after: the spawn reads
+        the pins this creates.
+        """
+        order: list[str] = []
+
+        def _migrate() -> list[str]:
+            order.append("migrate")
+            return []
+
+        async def _ensure(*a: object, **kw: object) -> None:
+            order.append("ensure")
+
+        b = EverosBackend(_ctx(tmp_path))
+        with (
+            patch("raven_everos.config.migrate_roles", new=_migrate),
+            patch("raven_everos.server.ensure_everos_server", new=_ensure),
+        ):
+            await b.start()
+
+        assert order[:1] == ["migrate"], order
+        assert "ensure" in order
+
     async def test_start_calls_ensure_everos_server(self, tmp_path: Path) -> None:
         b = EverosBackend(_ctx(tmp_path))
         with patch(
@@ -1374,15 +1477,6 @@ class TestServiceStateMachine:
             b._apply_probe(ProbeVerdict.OK)
             assert b._state is terminal
 
-    def test_may_spawn_only_from_states_that_can_be_fixed_by_spawning(self) -> None:
-        from raven_everos.backend import ServiceState
-
-        b = self._backend()
-        can = {ServiceState.UNKNOWN}
-        for state in ServiceState:
-            b._state = state
-            assert b._may_spawn() is (state in can), state
-
     def test_reports_each_state_once(self) -> None:
         """One line per problem per session. Re-reporting on every turn is how
         a warning becomes something users filter out."""
@@ -1645,6 +1739,32 @@ class TestWriteBudgetFollowsTheCaller:
 
         assert seen == [mod._store_budget(100)]
         assert seen[0] > mod._STORE_TIMEOUT_S * 2
+
+    async def test_a_bulk_write_gets_the_extraction_budget_however_small(self, monkeypatch) -> None:
+        """The importer marks its appends ``bulk``: nothing waits on them, and
+        EverOS extracts on the add itself, so a per-message estimate is the
+        wrong shape -- a fifty-message batch measured 24s against a real
+        service and a hundred ran past six minutes. Only the extraction budget
+        holds that, and it must not depend on the slice being large.
+        """
+        from raven_everos import backend as mod
+
+        seen: list[float] = []
+
+        async def _spy(coro, timeout=None):
+            seen.append(timeout)
+            return await coro
+
+        monkeypatch.setattr(mod.asyncio, "wait_for", _spy)
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        b = self._backend(adapter)
+
+        await b.store("s", [{"role": "user", "content": "x"}], metadata={"is_final": False, "bulk": True})
+
+        assert seen == [mod._MEMORIZE_TIMEOUT_S]
+        adapter.memorize.assert_awaited_once()
+        assert adapter.memorize.await_args.kwargs["is_final"] is False
 
     async def test_a_final_flush_gets_the_extraction_budget(self, monkeypatch) -> None:
         from raven_everos import backend as mod
@@ -2479,119 +2599,6 @@ class TestHealth:
         h = await _backend(tmp_path).health()
         assert h.ready is False
         assert any(c.label == "server" and "start it yourself" in (c.hint or "") for c in h.checks)
-
-
-@pytest.mark.asyncio
-class TestTheHostOwnsTheEmbeddingEndpoint:
-    """One installation, one embedding endpoint.
-
-    The knowledge base reads the same block, so the backend takes it from the
-    host rather than keeping a second copy in everos.toml -- two copies of one
-    endpoint is two things to rotate, and the knowledge base used to read this
-    one out of the plugin's file, which made a feature with nothing to do with
-    memory fail whenever the plugin was absent.
-    """
-
-    @staticmethod
-    def _env_keys(monkeypatch) -> None:
-        for key in (
-            "EVEROS_EMBEDDING__MODEL",
-            "EVEROS_EMBEDDING__BASE_URL",
-            "EVEROS_EMBEDDING__API_KEY",
-            "EVEROS_EMBEDDING__DIMENSIONS",
-        ):
-            monkeypatch.delenv(key, raising=False)
-
-    async def test_a_configured_host_endpoint_reaches_everos(self, monkeypatch) -> None:
-        import os
-
-        from raven_everos.config import configure_embedding_env
-
-        self._env_keys(monkeypatch)
-        block = SimpleNamespace(model="m1", base_url="https://e.test/v1", api_key="sk-1", dimensions=1024)
-
-        assert configure_embedding_env(block) is True
-        assert os.environ["EVEROS_EMBEDDING__MODEL"] == "m1"
-        assert os.environ["EVEROS_EMBEDDING__BASE_URL"] == "https://e.test/v1"
-        assert os.environ["EVEROS_EMBEDDING__API_KEY"] == "sk-1"
-        assert os.environ["EVEROS_EMBEDDING__DIMENSIONS"] == "1024"
-
-    async def test_everos_keeps_an_endpoint_of_its_own(self, monkeypatch, tmp_path) -> None:
-        """The host's block is a default to fall back on, not a takeover.
-
-        An operator who wrote ``[embedding]`` into everos.toml chose that
-        endpoint for memory specifically; reusing the host's is a convenience
-        they are entitled to decline. Env beats the file in EverOS's own source
-        order, so deferring has to happen here or the choice is unreachable.
-        """
-        import os
-
-        self._env_keys(monkeypatch)
-        own_toml = tmp_path / "everos.toml"
-        own_toml.write_text(
-            '[embedding]\nmodel = "its-own"\nbase_url = "https://own.test/v1"\napi_key = "sk-own"\n',
-            encoding="utf-8",
-        )
-        monkeypatch.setattr("raven_everos.config.get_everos_config_path", lambda: own_toml)
-        from raven_everos.config import configure_embedding_env
-
-        block = SimpleNamespace(model="host", base_url="https://host.test/v1", api_key="sk-host", dimensions=None)
-
-        assert configure_embedding_env(block) is False
-        assert "EVEROS_EMBEDDING__MODEL" not in os.environ
-
-    async def test_a_template_placeholder_is_not_a_choice(self, monkeypatch, tmp_path) -> None:
-        """The shipped template seeds a ``<...>`` model name. Treating that as
-        "EverOS has its own" would leave a fresh install with no endpoint while
-        the host had one to give."""
-        import os
-
-        self._env_keys(monkeypatch)
-        own_toml = tmp_path / "everos.toml"
-        own_toml.write_text('[embedding]\nmodel = "<pick-a-model>"\n', encoding="utf-8")
-        monkeypatch.setattr("raven_everos.config.get_everos_config_path", lambda: own_toml)
-        from raven_everos.config import configure_embedding_env
-
-        block = SimpleNamespace(model="host", base_url="https://host.test/v1", api_key="sk-host", dimensions=None)
-
-        assert configure_embedding_env(block) is True
-        assert os.environ["EVEROS_EMBEDDING__MODEL"] == "host"
-
-    async def test_a_half_filled_block_sets_nothing(self, monkeypatch) -> None:
-        """All three strings or none: a model with no key cannot embed, and a
-        partial override would shadow a working everos.toml with a broken one."""
-        import os
-
-        from raven_everos.config import configure_embedding_env
-
-        self._env_keys(monkeypatch)
-        block = SimpleNamespace(model="m1", base_url="", api_key="sk-1", dimensions=None)
-
-        assert configure_embedding_env(block) is False
-        assert "EVEROS_EMBEDDING__MODEL" not in os.environ
-
-    async def test_no_host_block_sets_nothing(self, monkeypatch) -> None:
-        import os
-
-        from raven_everos.config import configure_embedding_env
-
-        self._env_keys(monkeypatch)
-
-        assert configure_embedding_env(None) is False
-        assert "EVEROS_EMBEDDING__MODEL" not in os.environ
-
-    async def test_an_unpinned_width_is_left_to_the_model(self, monkeypatch) -> None:
-        """A wrong width sizes the collection to something no vector fits, so
-        an absent one is never invented here."""
-        import os
-
-        from raven_everos.config import configure_embedding_env
-
-        self._env_keys(monkeypatch)
-        block = SimpleNamespace(model="m1", base_url="https://e.test/v1", api_key="sk-1", dimensions=None)
-
-        assert configure_embedding_env(block) is True
-        assert "EVEROS_EMBEDDING__DIMENSIONS" not in os.environ
 
 
 @pytest.mark.asyncio

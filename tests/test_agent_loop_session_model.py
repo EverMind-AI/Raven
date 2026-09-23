@@ -21,6 +21,7 @@ spawned under.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -33,6 +34,21 @@ from raven.providers.base import LLMResponse
 from raven.providers.binding import ModelBinding, active_binding
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
+
+
+def _configure_pins(**blocks: dict) -> None:
+    """Put a subsystem pin where the engine reads it: the config file.
+
+    Both pins are resolved per call from the file now, so a block handed to the
+    constructor is the shape the loader produces rather than the source of
+    truth. ``conftest`` hands every test its own HOME, so this writes a config
+    only this test can see.
+    """
+    from raven.config.loader import get_config_path
+
+    path = get_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(blocks), encoding="utf-8")
 
 
 class _Provider:
@@ -334,8 +350,8 @@ async def test_a_configured_subsystem_uses_its_own_pair(tmp_path) -> None:
     curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
 
     pin = _binding("prov-pin", "vendor-pin/small")
-    skills._gate._pin = pin
-    curator._pin = pin
+    skills._gate._pin_resolver = lambda: pin
+    curator._pin_resolver = lambda: pin
 
     seen: dict[str, object] = {}
 
@@ -356,8 +372,8 @@ def test_the_gate_sends_no_model_outside_a_turn(tmp_path) -> None:
     """
     loop = _loop(tmp_path)
     skills = next(b for b in loop.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
-    skills._gate._model = "openai/gpt-5-mini"
-    skills._gate._pin = None
+    # A configured id the pool could not pair: what the resolver answers for it.
+    skills._gate._pin_resolver = lambda: None
 
     assert active_binding() is None
     assert skills._gate._binding()[1] is None
@@ -403,7 +419,8 @@ def test_a_configured_pin_survives_a_real_factory_build(tmp_path) -> None:
     cfg.providers.anthropic.api_key = "sk-ant"
     cfg.providers.gemini.api_key = "AIza"
 
-    context_config = ContextConfig(curator_model="gemini-2.5-flash")
+    _configure_pins(context={"curatorModel": "gemini-2.5-flash"})
+    context_config = ContextConfig()
     loop = AgentLoop(
         provider=_Provider("boot"),
         workspace=tmp_path,
@@ -413,7 +430,7 @@ def test_a_configured_pin_survives_a_real_factory_build(tmp_path) -> None:
     )
     curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
 
-    assert curator._pin is not None, "a credentialed curator_model must become a pair"
+    assert curator._pin_resolver() is not None, "a credentialed curator_model must become a pair"
     assert curator.curator_model == "gemini-2.5-flash"
     loop.set_session_binding("tui:a", _binding("prov-a", "vendor-a/model"))
     assert curator.curator_model == "gemini-2.5-flash", "a configured subsystem does not follow the turn"
@@ -437,7 +454,8 @@ def test_the_factory_hands_the_pool_the_pin_the_user_configured(tmp_path) -> Non
     cfg.providers.anthropic.api_key = "sk-ant"
     cfg.providers.openrouter.api_key = "sk-or"
 
-    context_config = ContextConfig(curator_model="claude-haiku-4-5", curator_provider="openrouter")
+    _configure_pins(context={"curatorModel": "claude-haiku-4-5", "curatorProvider": "openrouter"})
+    context_config = ContextConfig()
     loop = AgentLoop(
         provider=_Provider("boot"),
         workspace=tmp_path,
@@ -447,8 +465,8 @@ def test_the_factory_hands_the_pool_the_pin_the_user_configured(tmp_path) -> Non
     )
     curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
 
-    assert curator._pin is not None
-    assert curator._pin.provider.api_key == "sk-or", "the configured provider serves the pin"
+    assert curator._pin_resolver() is not None
+    assert curator._pin_resolver().provider.api_key == "sk-or", "the configured provider serves the pin"
 
 
 def test_the_factory_hands_the_pool_the_gate_pin_the_user_configured(tmp_path) -> None:
@@ -463,6 +481,7 @@ def test_the_factory_hands_the_pool_the_gate_pin_the_user_configured(tmp_path) -
     cfg.providers.anthropic.api_key = "sk-ant"
     cfg.providers.openrouter.api_key = "sk-or"
 
+    _configure_pins(skillForge={"llmGateModel": "claude-haiku-4-5", "llmGateProvider": "openrouter"})
     loop = AgentLoop(
         provider=_Provider("boot"),
         workspace=tmp_path,
@@ -470,18 +489,14 @@ def test_the_factory_hands_the_pool_the_gate_pin_the_user_configured(tmp_path) -
         provider_pool=ProviderPool(cfg),
         engine=EngineWiring(
             context_config=ContextConfig(),
-            skill_forge_config=SkillForgeConfig(
-                discovery="push",
-                llm_gate_model="claude-haiku-4-5",
-                llm_gate_provider="openrouter",
-            ),
+            skill_forge_config=SkillForgeConfig(discovery="push"),
         ),
     )
     skills = next(b for b in loop.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
 
     assert skills._gate is not None
-    assert skills._gate._pin is not None
-    assert skills._gate._pin.provider.api_key == "sk-or"
+    assert skills._gate._pin_resolver() is not None
+    assert skills._gate._pin_resolver().provider.api_key == "sk-or"
 
 
 def test_a_stored_model_is_restored_onto_a_resumed_session(tmp_path) -> None:
@@ -659,6 +674,7 @@ def test_a_configured_gate_pin_survives_a_real_factory_build(tmp_path) -> None:
     cfg.providers.anthropic.api_key = "sk-ant"
     cfg.providers.openai.api_key = "sk-openai"
 
+    _configure_pins(skillForge={"llmGateModel": "openai/gpt-5-mini"})
     loop = AgentLoop(
         provider=_Provider("boot"),
         workspace=tmp_path,
@@ -666,13 +682,13 @@ def test_a_configured_gate_pin_survives_a_real_factory_build(tmp_path) -> None:
         provider_pool=ProviderPool(cfg),
         engine=EngineWiring(
             context_config=ContextConfig(),
-            skill_forge_config=SkillForgeConfig(discovery="push", llm_gate_model="openai/gpt-5-mini"),
+            skill_forge_config=SkillForgeConfig(discovery="push"),
         ),
     )
     skills = next(b for b in loop.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
 
     assert skills._gate is not None
-    assert skills._gate._pin is not None, "a credentialed llm_gate_model must become a pair"
+    assert skills._gate._pin_resolver() is not None, "a credentialed llm_gate_model must become a pair"
     assert skills._gate._binding()[1] == "openai/gpt-5-mini"
 
     loop.set_session_binding("tui:a", _binding("prov-a", "vendor-a/model"))
@@ -690,11 +706,11 @@ async def test_a_spawn_holds_its_binding_through_the_gate_and_the_sandbox_boot(t
     import raven.agent.subagent.manager as manager_mod
     from raven.providers.base import LLMResponse as _Resp
 
-    served: list[str] = []
+    served: list[tuple[str, str | None]] = []
 
     class _Recording(_Provider):
         async def chat_with_retry(self, **kwargs) -> _Resp:
-            served.append(self.name)
+            served.append((self.name, kwargs.get("model")))
             return _Resp(content="done", finish_reason="stop")
 
     class _StubExecutor:
@@ -734,7 +750,10 @@ async def test_a_spawn_holds_its_binding_through_the_gate_and_the_sandbox_boot(t
     finally:
         manager_mod.build_executor = original_build
 
-    assert served == ["started-with"], "the spawn ran on the model its conversation had when it asked"
+    # The pair, not just the credential: the built-in backend is cached across
+    # bindings, and a dispatch that withheld the model once ran the switched
+    # conversation's key against the model the backend was first built with.
+    assert served == [("started-with", "started/model")], "the spawn ran on the pair its conversation had when it asked"
 
 
 @pytest.mark.asyncio

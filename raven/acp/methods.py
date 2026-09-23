@@ -337,7 +337,7 @@ class AcpMethods:
         # Offered at creation so a client can put a model picker in the session
         # menu without a second round trip. Absent rather than empty when there
         # is nothing to offer -- an empty list is a menu that opens onto nothing.
-        options = await self._config_options()
+        options = await self._config_options(session.session_key)
         if options:
             result["configOptions"] = options
         return self._with_modes(result, session.session_id)
@@ -663,11 +663,16 @@ class AcpMethods:
             await set_model(self._call, session_id=session.session_key, value=params.get("value"))
         except ValueError as exc:
             raise AcpMethodError(protocol.INVALID_PARAMS, str(exc), {"field": "value"}) from exc
-        return {"configOptions": await self._config_options()}
+        return {"configOptions": await self._config_options(session.session_key)}
 
-    async def _config_options(self) -> list[dict[str, Any]]:
-        """Every configuration option this agent exposes, currently one."""
-        option = await model_option(self._call)
+    async def _config_options(self, session_key: str) -> list[dict[str, Any]]:
+        """Every configuration option this agent exposes, currently one.
+
+        Asked for one session: the model option's current value is that
+        session's, so the answer to a switch shows the switch rather than the
+        configured default the whole process starts on.
+        """
+        option = await model_option(self._call, session_id=session_key)
         return [] if option is None else [option]
 
     async def _session_prompt(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -718,7 +723,11 @@ class AcpMethods:
                         }
                         stored = sessions.get_or_create(session.session_key)
                         stored.metadata["usage_owner"] = owner
-                        sessions.save(stored)
+                        # The turn reads this off the same manager, so the
+                        # in-memory write is what it needs; the patch is for
+                        # the record, and no longer manufactures a transcript
+                        # for a session that has not had one yet.
+                        sessions.append_metadata_patch(session.session_key, {"usage_owner": owner})
                 # The charter this dispatch brought, staged for the turn below.
                 # Held on the loop rather than in session metadata: it describes
                 # one dispatch, and metadata survives the process.

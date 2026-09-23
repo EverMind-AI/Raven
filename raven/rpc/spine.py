@@ -190,6 +190,11 @@ class RpcTurnRunner(AgentTurnRunner):
             conversation_id=cid,
             turn_id=req.turn_id or "",
             on_review=_on_review if watched else None,
+            # A direct chat is a person's turn answered by a named instance, and
+            # the instance's tools are the ones that will ask -- so the prompt
+            # names it, not the main agent.
+            origin="subagent" if req.direct_target else req.origin.value,
+            origin_name=req.direct_target[0] if req.direct_target else "",
         )
         # Function-level on purpose: the acp client family is future shelf
         # cargo and must not be named at this module's import time
@@ -380,6 +385,9 @@ class RpcOutlet:
                             # file, so every payload the wire already carried keeps
                             # its shape.
                             **({"file_change": out.file_change} if out.file_change else {}),
+                            # Same rule, same reason: absent when the call
+                            # removed nothing, which is nearly every call.
+                            **({"file_removed": out.file_removed} if out.file_removed else {}),
                         },
                     },
                 )

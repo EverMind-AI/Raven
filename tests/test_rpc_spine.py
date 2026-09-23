@@ -193,6 +193,30 @@ async def test_user_turn_receives_tui_approval_capability(tmp_path):
 
     assert executor.commands == ["rm file.txt"]
     assert responder.requests[0]["turn_id"] == "turn-a"
+    assert (responder.requests[0]["origin"], responder.requests[0]["origin_name"]) == ("user", "")
+
+
+async def test_a_direct_chat_names_the_instance_on_the_prompt(tmp_path):
+    # The person typed it, but the instance's tools are the ones that will ask,
+    # so the prompt says which sub-agent wants to act.
+    executor = _DirectRecordingExecutor()
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    loop = _ApprovalRunLoop(tool)
+    responder = _ApprovalResponder(True)
+    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {}, approval_responder=responder)
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=_src(),
+        text="delete",
+        conversation="tui:c1#raven-code/h1",
+        turn_id="turn-d",
+        direct_target=("raven-code", "h1"),
+    )
+    _events, emit = _collect()
+
+    await runner.run(req, emit, lambda: [])
+
+    assert (responder.requests[0]["origin"], responder.requests[0]["origin_name"]) == ("subagent", "raven-code")
 
 
 async def test_a_subagent_relay_in_a_watched_conversation_receives_the_approval_capability(tmp_path):
@@ -214,6 +238,7 @@ async def test_a_subagent_relay_in_a_watched_conversation_receives_the_approval_
 
     assert executor.commands == ["rm file.txt"]
     assert responder.requests[0]["turn_id"] == "turn-s"
+    assert responder.requests[0]["origin"] == "subagent"
 
 
 async def test_a_subagent_relay_nobody_watches_does_not_receive_the_approval_capability(tmp_path):
@@ -653,6 +678,46 @@ async def test_outlet_deliver_tool_complete_forwards_the_file_change():
     assert "file_change" not in emitter.emitted[0][1]["payload"]
 
 
+async def test_outlet_deliver_tool_complete_forwards_the_files_that_went():
+    """The deletions, which no tool result carries and no argument records.
+
+    Absent rather than null when the call removed nothing, for the reason
+    ``file_change`` is: nearly every call removes nothing, and a payload that
+    grew a null key under every one of them would change the shape the wire
+    already had. An empty list is the same nothing as no list.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t1",
+            result_preview="ok",
+            truncated=False,
+            file_removed=[{"path": "/tmp/gone.txt", "before": "one\ntwo\n"}, {"path": "/tmp/also.txt"}],
+            conversation_id="tui:c1",
+        )
+    )
+    assert emitter.emitted[0][1]["payload"]["file_removed"] == [
+        {"path": "/tmp/gone.txt", "before": "one\ntwo\n"},
+        {"path": "/tmp/also.txt"},
+    ]
+
+    for nothing in (None, []):
+        emitter.emitted.clear()
+        await outlet.deliver(
+            ToolEvent(
+                phase=ToolPhase.COMPLETE,
+                tool_call_id="t2",
+                result_preview="ok",
+                truncated=False,
+                file_removed=nothing,
+                conversation_id="tui:c1",
+            )
+        )
+        assert "file_removed" not in emitter.emitted[0][1]["payload"], nothing
+
+
 async def test_a_blocked_action_rides_notice_and_never_the_token_stream():
     """The one notice that replaces the answer instead of accompanying it.
 
@@ -712,6 +777,13 @@ async def test_every_outlet_emission_validates_against_the_wire_contract():
             diff="--- a\n+++ b",
             metadata={"k": "v"},
             file_change={"path": "/tmp/a.txt", "after": "new", "before": "old"},
+            conversation_id="tui:c1",
+        ),
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t2",
+            result_preview="ok",
+            file_removed=[{"path": "/tmp/gone.txt", "before": "one\ntwo\n"}],
             conversation_id="tui:c1",
         ),
         Text(content="hello", conversation_id="tui:c1"),

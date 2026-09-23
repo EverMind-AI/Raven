@@ -23,6 +23,7 @@ from typing import Any
 from loguru import logger
 
 from raven.contracts.token_strategy import TokenStrategy, UsageSnapshot
+from raven.token_wise import turn_spend
 
 
 def _default_telemetry_dir() -> Path:
@@ -135,6 +136,11 @@ class UsageTracker(TokenStrategy):
 
     def _accumulate(self, u: UsageSnapshot) -> None:
         key = u.session_key or "__no_session__"
+        if u.root_session_key and u.root_session_key != key:
+            # A delegated call: spent in a session of its own, under a turn
+            # somewhere else that is still running and still has to report what
+            # it cost. This is the one hook that sees both.
+            turn_spend.note_delegated(u.root_session_key, u.cost_usd)
         session_acc = self.per_session.get(key)
         if session_acc is None:
             session_acc = UsageSnapshot(model=u.model, session_key=key)

@@ -15,6 +15,7 @@ import pytest
 from raven.config.update import (
     allow_exec_pattern,
     initialize_a2a_server,
+    remove_exec_pattern,
     reset_cron_config,
     set_a2a_server_enabled,
     set_default_model,
@@ -350,6 +351,23 @@ def test_allow_exec_pattern_roundtrips_through_the_loader(cfg_path: Path) -> Non
     cfg_path.write_text("{}", encoding="utf-8")
     allow_exec_pattern("git push *", config_path=cfg_path)
     assert load_config(cfg_path).permissions.tools == {"exec": {"git push *": "allow"}}
+
+
+def test_remove_exec_pattern_takes_back_an_allow_rule_and_only_that(cfg_path: Path) -> None:
+    cfg_path.write_text(
+        json.dumps({"permissions": {"tools": {"exec": {"git push *": "allow", "rm *": "deny"}}}}), encoding="utf-8"
+    )
+    assert remove_exec_pattern("git push *", config_path=cfg_path) is True
+    assert remove_exec_pattern("git push *", config_path=cfg_path) is False
+    # A deny under the same shape is the user's own rule, not one a prompt wrote.
+    assert remove_exec_pattern("rm *", config_path=cfg_path) is False
+    assert _read(cfg_path)["permissions"]["tools"]["exec"] == {"rm *": "deny"}
+
+
+def test_remove_exec_pattern_leaves_a_plain_tier_alone(cfg_path: Path) -> None:
+    cfg_path.write_text(json.dumps({"permissions": {"tools": {"exec": "ask"}}}), encoding="utf-8")
+    assert remove_exec_pattern("git push *", config_path=cfg_path) is False
+    assert _read(cfg_path)["permissions"]["tools"]["exec"] == "ask"
 
 
 # ---------------------------------------------------------------------------

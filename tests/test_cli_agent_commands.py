@@ -131,10 +131,12 @@ def _invoke_agent_capturing_session(
     *,
     backend: object | None = None,
     drain_outcome: object | None = None,
+    message_args: list[str] | None = None,
 ) -> tuple[object, dict[str, str]]:
     """Run ``agent -m`` with the provider and AgentLoop stubbed out, capturing
     the session_id that reaches the spine turn (req.conversation is the session
-    key, mirroring the old session_key arg)."""
+    key, mirroring the old session_key arg). ``message_args`` replaces the
+    default ``-m hi`` so the --message-file path can be exercised too."""
     from raven.config.loader import save_config
     from raven.config.schema import Config
     from raven.spine import Text, TurnOutcome, Usage
@@ -165,6 +167,7 @@ def _invoke_agent_capturing_session(
 
         async def run_turn(self, req, emit, drain, *, stream, **_kw) -> TurnOutcome:
             captured["session_id"] = req.conversation
+            captured["text"] = str(getattr(req, "text", ""))
             await emit(Text(content="stub-response", source=req.source))
             return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
@@ -193,7 +196,8 @@ def _invoke_agent_capturing_session(
         "raven.core.plugin_stack.build_plugin_tools",
         lambda *a, **k: [],
     )
-    r = runner.invoke(app, ["agent", "-m", "hi", "--home", str(home), *extra_args])
+    message = message_args if message_args is not None else ["-m", "hi"]
+    r = runner.invoke(app, ["agent", *message, "--home", str(home), *extra_args])
     return r, captured
 
 
@@ -573,6 +577,35 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
     assert '{"error"' not in result.output
 
 
+def test_print_turn_failure_draws_a_failure_not_a_reply(capsys: pytest.CaptureFixture) -> None:
+    """A failed turn's words are printed as a failure and the command exits
+    non-zero. The canonical error sentence still takes the diagnosis path; any
+    other text is marked as an error rather than drawn under the answer banner."""
+    from raven.cli import agent_commands
+
+    agent_commands._ONE_SHOT_EXIT["code"] = 0
+    try:
+        agent_commands._print_turn_failure("APIError: OpenrouterException - Cannot connect to host")
+        out = capsys.readouterr().out
+        assert "Error: turn failed: APIError: OpenrouterException - Cannot connect to host" in out
+        assert "Raven" not in out
+        assert agent_commands._ONE_SHOT_EXIT["code"] == 1
+
+        # Provider text is not markup: a bracketed path must print, not raise.
+        agent_commands._print_turn_failure("APIError: bad value [/v1/chat] rejected")
+        out = capsys.readouterr().out
+        assert "[/v1/chat]" in out
+
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
+        agent_commands._print_turn_failure("Error calling LLM (network@openrouter): connection refused")
+        out = capsys.readouterr().out
+        assert "Error: turn failed" not in out
+        assert "connection refused" in out
+        assert agent_commands._ONE_SHOT_EXIT["code"] == 1
+    finally:
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
+
+
 def test_print_llm_error_renders_diagnosis_and_marks_exit(capsys: pytest.CaptureFixture) -> None:
     """``_print_llm_error`` turns the canonical error content into a
     diagnosis + fix hint and marks the one-shot exit code; ordinary reply
@@ -816,3 +849,83 @@ def test_one_shot_teardown_stops_the_skill_file_watcher() -> None:
     src = inspect.getsource(agent_commands.register)
     teardown = src.split("finally:", 1)[1]
     assert "stop_file_watcher()" in teardown
+
+
+def test_agent_help_shows_the_message_file_and_permission_mode_flags() -> None:
+    r = runner.invoke(app, ["agent", "--help"])
+    assert r.exit_code == 0
+    assert "--message-file" in r.stdout
+    assert "--permission-mode" in r.stdout
+
+
+def test_message_file_is_read_instead_of_argv(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unattended driver passes the prompt in a file: it must reach the turn.
+
+    The point of the flag is that the prompt is NOT in this process's argv,
+    where every other process in the sandbox can read it.
+    """
+    ws = tmp_path / "chanwork"
+    ws.mkdir()
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("judge the gates and write the report\n", encoding="utf-8")
+
+    r, captured = _invoke_agent_capturing_session(monkeypatch, ws, [], message_args=["--message-file", str(prompt)])
+    assert r.exit_code == 0, r.stdout
+    assert "judge the gates" in captured["text"]
+
+
+def test_message_and_message_file_are_mutually_exclusive(tmp_config: Path, tmp_path: Path) -> None:
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("hi\n", encoding="utf-8")
+    r = runner.invoke(app, ["agent", "-m", "hi", "--message-file", str(prompt)])
+    assert r.exit_code != 0
+    assert "mutually exclusive" in r.stdout
+
+
+def test_an_empty_message_file_is_a_usage_error(tmp_config: Path, tmp_path: Path) -> None:
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("   \n", encoding="utf-8")
+    r = runner.invoke(app, ["agent", "--message-file", str(prompt)])
+    assert r.exit_code != 0
+    assert "is empty" in r.stdout
+
+
+def test_a_missing_message_file_is_a_usage_error(tmp_config: Path, tmp_path: Path) -> None:
+    r = runner.invoke(app, ["agent", "--message-file", str(tmp_path / "nope.md")])
+    assert r.exit_code != 0
+    assert "--message-file" in r.stdout
+
+
+def test_permission_mode_binds_the_mode_to_this_turns_session(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--permission-mode full`` is how an unattended run says it has no reader."""
+    from raven.permissions import session_mode
+
+    ws = tmp_path / "chanwork"
+    ws.mkdir()
+    r, captured = _invoke_agent_capturing_session(monkeypatch, ws, ["--permission-mode", "full"])
+    assert r.exit_code == 0, r.stdout
+    assert session_mode(captured["session_id"]) == "full"
+
+
+def test_an_unknown_permission_mode_names_the_ones_that_exist(tmp_config: Path) -> None:
+    r = runner.invoke(app, ["agent", "-m", "hi", "--permission-mode", "yolo"])
+    assert r.exit_code != 0
+    assert "ask" in r.stdout and "full" in r.stdout
+
+
+def test_a_plain_reply_is_not_rewrapped_by_the_console(capsys: pytest.CaptureFixture) -> None:
+    """A driver parses what the one-shot printed, so the console adds no newlines.
+
+    Hard-wrapping at the terminal width lands a line break inside a JSON string
+    literal, and the reply the caller has to parse stops being JSON.
+    """
+    from raven.cli.agent_commands import _print_agent_response
+
+    line = '{"text": "' + "word " * 60 + '"}'
+    _print_agent_response(line, render_markdown=False)
+    printed = capsys.readouterr().out
+    assert line in printed

@@ -221,9 +221,15 @@ class LoopOutcome:
     budget" for "done". ``checkpoint_id`` and
     ``edited_files`` carry the shadow-git snapshot info used to build the
     next turn's recovery prompt.
+
+    ``error`` is the loop's own account of a model call it gave up on, in the
+    words a reader is shown; None when the call succeeded or a hook salvaged
+    an answer. The caller fails the turn on it unless the message tool already
+    answered in this turn.
     """
 
     status: str = "completed"  # "completed" | "interrupted" | "error"
+    error: str | None = None
     checkpoint_id: str | None = None
     edited_files: list[str] = field(default_factory=list)
 
@@ -339,6 +345,48 @@ _HOOK_INJECTED_KEY = "_hook_injected"
 #: reader typed -- which is the question now, and which the queue has already
 #: given up -- from the research it is entitled to discard.
 _MID_TURN_USER_KEY = "_mid_turn_user"
+
+#: Introduces the mid-turn arrivals on the way to the provider. Without it the
+#: model reads a correction the reader typed while it worked as a fresh question
+#: and answers it instead of steering, because nothing in the payload says the
+#: two arrived out of band.
+_MID_TURN_HEADER = "[Mid-turn messages — sent by the user while this turn was already running]"
+
+
+def merge_mid_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One user message per adjacent run of mid-turn arrivals, under the header.
+
+    Applied at the call seam, on the payload only: history keeps one entry per
+    message, so a reader and a re-run still see what was sent when. The mark
+    rides the merged message because the re-run seed reads it to find the
+    mid-turn messages again.
+
+    Only the private spelling counts. A replayed transcript carries the plain
+    ``mid_turn`` of an entry already saved, and labelling that again would put
+    the header on a question the model answered turns ago.
+    """
+    if not any(m.get(_MID_TURN_USER_KEY) for m in messages):
+        return messages
+    out: list[dict[str, Any]] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if not run:
+            return
+        body = "\n\n".join(run)
+        out.append({"role": "user", "content": f"{_MID_TURN_HEADER}\n\n{body}", _MID_TURN_USER_KEY: True})
+        run.clear()
+
+    for m in messages:
+        if m.get(_MID_TURN_USER_KEY):
+            # The merged message keeps the mark, so a second pass over the same
+            # list must not stack a second header onto its own output.
+            run.append(str(m.get("content") or "").removeprefix(f"{_MID_TURN_HEADER}\n\n"))
+            continue
+        flush()
+        out.append(m)
+    flush()
+    return out
 
 
 @dataclass(frozen=True)
@@ -500,6 +548,35 @@ def _file_change_payload(change: Any) -> dict[str, Any] | None:
     if before is not None:
         payload["before"] = before
     return payload
+
+
+def _file_removed_payload(removals: Any) -> list[dict[str, Any]] | None:
+    """The files a call made vanish, as plain mappings, or ``None`` for none.
+
+    Flattened here for the reason ``_file_change_payload`` is, and ``None`` rather
+    than an empty list so the emit site can leave the key off a payload entirely:
+    a call that removed nothing is every call, and the wire shape it already had
+    must not change under it.
+
+    ``before`` is dropped past the budget instead of truncated -- half a removed
+    file reads as a smaller deletion than the one that happened -- and the removal
+    is still reported without it. The budget is the event's and not each file's:
+    one command can unlink as many files as it names, and a per-file ceiling would
+    let a single payload carry all of them at full size.
+    """
+    out: list[dict[str, Any]] = []
+    budget = _FILE_CHANGE_MAX_CHARS
+    for removal in removals or ():
+        path = getattr(removal, "path", None)
+        if not isinstance(path, str) or not path:
+            continue
+        entry: dict[str, Any] = {"path": path}
+        before = getattr(removal, "before", None)
+        if isinstance(before, str) and len(before) <= budget:
+            entry["before"] = before
+            budget -= len(before)
+        out.append(entry)
+    return out or None
 
 
 def monotonic() -> float:

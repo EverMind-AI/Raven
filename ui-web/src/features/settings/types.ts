@@ -1,9 +1,17 @@
-import type { ApiUsageModel, SettingsUsageResult } from '../../rpc/generated'
+/* The settings domain's shapes: what one read of the dialog fills, and the
+   seam (`SettingsSource`) the rpc layer implements for it. */
+import type { ModelTagFacts } from '../../components/ModelTags'
+import type {
+  ApiUsageModel,
+  ExtSkillRow,
+  McpSnapshot,
+  ResultOf,
+  SettingsUsageResult,
+  ToolSetupNeed,
+} from '../../rpc/generated'
 
-/* One provider row of the model panel. Each source owns its provider list;
+/* One provider row of the model page. Each source owns its provider list;
    the live source shares its fetched rows with the composer's model picker. */
-import type { ModelTagFacts } from '../../shell/model-tags'
-
 export interface ProviderRow {
   id: string
   name: string
@@ -12,17 +20,32 @@ export interface ProviderRow {
      asks is which model to put in the list, and a front page does not answer
      it. Absent for a provider the registry carries no docs link for. */
   docs?: string
+  /* Where the vendor hands out API keys, drawn as the "get a key" link beside
+     the key field. Absent for a vendor the registry has no page for. */
+  keyUrl?: string
+  /* Custom request headers by name, each value redacted by the server. */
+  headers?: Record<string, string>
   /* The picker's offer: this section's list plus a curated shortlist plus a
      catalogue. What the settings page manages is `configured` below. */
   models: string[]
   configured?: string[]
+  /* Every model-id prefix that names this provider, carried so a page asking
+     whether two spellings are one model can ask what the backend answers
+     (`features/model/types.ts`'s `ModelHost`). These rows are the model
+     feature's own (`features/model/source.ts` builds them), so the field is
+     here to be read rather than to be filled in again. */
+  routes?: readonly string[]
   /* Name and tags per model id, straight off `model.options`. A model with no
      entry is one the registry knows nothing about and nobody has described --
      it lists as its id with no icons. */
   labels?: Record<string, ModelTagFacts & { label?: string; description?: string }>
   on: boolean
-  /* 'api_key' | 'oauth' | 'local' | 'endpoint' */
+  /* 'key' | 'oauth' | 'local' | 'endpoint' -- the registry's auth shape. */
   kind?: string
+  /* Resells other vendors' models under vendor/model ids (the registry's
+     `is_gateway`). The catalogue's filter reads it; no client can derive it
+     from a slug. */
+  gateway?: boolean
   needsBase?: boolean
   /* Whether the provider takes an API key at all. Absent from a source that
      predates the field, where every non-local provider took one. */
@@ -40,8 +63,16 @@ export interface ProviderRow {
 
 export interface EverosSection {
   model?: string
-  base_url?: string
+  /* The vendor serving `model`, as stored. The page used to derive it by
+     matching the section's address against every provider's, which answered
+     blank for any endpoint that did not match character for character. */
+  provider?: string
+  /* Whether that vendor has a usable credential -- the same question the
+     memory gate answers, so the card and the gate cannot disagree. */
   api_key_set?: boolean
+  /* Set from exported EVEROS_<ROLE>__* variables, which outrank raven. The
+     slot is read-only: raven cannot edit a shell. */
+  env_managed?: boolean
 }
 
 export interface EverosInfo {
@@ -52,22 +83,29 @@ export interface EverosInfo {
      in a model and a key and have nothing happen. */
   available?: boolean
   note?: string | null
+  /* False for a root the user manages: raven neither starts it nor writes its
+     config, so the slots are shown and not editable. */
+  owned?: boolean
+  config_path?: string
+  /* Which roles each vendor can serve, by provider id. The rerank slot used to
+     offer OpenAI because it asked only whether a provider had a key. */
+  supports?: Record<string, string[]>
+  /* Roles the server refuses to clear. Read rather than mirrored: this page
+     mirrored it, drifted, and drew a clear button on a slot whose clear the
+     write rejects. */
+  required?: string[]
 }
 
 export type UsageModelRow = ApiUsageModel
 export type UsageStats = SettingsUsageResult
-
-/* One group heading of the toolset panel. */
-export interface ToolGroup {
-  id: string
-  label: string
-  hint?: string
+/* Two ISO dates, inclusive; the server clamps to 90 days back. */
+export interface UsageRange {
+  from: string
+  to: string
 }
 
-/* One built-in tool. Each settings source owns its list. In live mode `on`
-   is an accessor over `tools.disabledTools`, so assigning it persists the
-   flip. In the demo it is a plain field and the flip is local, which is what
-   the offline page always did. */
+/* One built-in tool. In live mode `on` is an accessor over
+   `tools.disabledTools`, so assigning it persists the flip. */
 export interface ToolRow {
   id: string
   name: string
@@ -76,13 +114,26 @@ export interface ToolRow {
   one: string
   on: boolean
   danger?: boolean
-  needs?: string | null
+  /* Set when the tool exists but is withheld for want of a key. The contract's
+     own shape (`ToolSetupNeed`): the page reads it for truth only -- the row is
+     here so a key-gated tool is visible rather than simply absent. */
+  needs?: ToolSetupNeed | null
+  /* The registry's word: a tool the model reaches only through `tool_call`, so
+     no switch belongs on it. Read from the row rather than inferred from the
+     card it sits in -- the DAG controls belong beside the tool they control
+     and are still not switchable. */
+  builtin?: boolean
 }
 
+export type SkillRow = ExtSkillRow
+export type SkillDetail = NonNullable<ResultOf<'skills.manage'>['info']>
+export type ArchivedSession = ResultOf<'session.list'>['sessions'][number]
+export type OauthStart = ResultOf<'model.oauth_login'>
+
 /* Everything the dialog draws from, in one read. `raw` is the config
-   settings.get returned (camelCased keys, one level per dot); the fixture
-   answers an empty object so every V() read falls back to the schema
-   default, exactly as the demo page always painted. */
+   settings.get returned (camelCased keys, one level per dot). The skill and
+   MCP rows are `ext.list`'s own, untouched, because the two pages read fields
+   the inventory's row shapes drop (`always`, `auth`, `credentialed`). */
 export interface SettingsSnapshot {
   raw: Record<string, unknown>
   configPath: string
@@ -90,8 +141,9 @@ export interface SettingsSnapshot {
   providers: ProviderRow[]
   curProvider: string
   model: string
-  toolGroups: ToolGroup[]
   tools: ToolRow[]
+  skills: SkillRow[]
+  mcp: McpSnapshot[]
 }
 
 export type ProviderOp = 'save_key' | 'add_model' | 'remove_model' | 'disconnect'
@@ -116,39 +168,75 @@ export interface ModelCatalogue {
   error?: string | null
 }
 
-/* The DS.settings contract both the fixture source (demo shell) and the rpc
-   source (live layer) implement. Writes in the fixture throw { notLive: true },
-   which the island renders as the in-row refusal the demo page always spoke;
-   the rpc source speaks its own toasts and throws { handled: true } so the
-   island only redraws. `usage` resolving null means "no counter behind this
-   page" (the demo), not zero usage. `pickModel` is the live layer's model
-   picker popover -- absent in the fixture, so the demo refuses the button. */
+/* The DS.settings contract the rpc source implements. A write that fails
+   toasts where the wording lives and throws { handled: true }, so the island
+   only redraws; a write that succeeds resolves to the fresh snapshot where the
+   page behind it changed. */
+/* One credential field of a catalogue entry's MCP contribution: the key it is
+   written under, and what to call it. `label` arrives from the hub as an i18n
+   object and is flattened to this language by the source. */
+export interface AuthField {
+  key: string
+  label?: string
+  secret?: boolean
+  help_url?: string
+}
+
 export interface SettingsSource {
   load(): Promise<SettingsSnapshot>
   set(key: string, value: unknown): Promise<SettingsSnapshot>
-  /* `borrowFrom` names a provider raven is already connected to: the server
-     copies its key and address into the section. It has to resolve there --
-     the page is only ever shown a redacted key, so it has nothing to send. */
-  everosSet(section: string, fields: Record<string, string> | null,
-    borrowFrom?: string): Promise<SettingsSnapshot>
-  usage(sessionKey?: string): Promise<UsageStats | null>
+  /* A role is a pair: a model and the vendor serving it. No credential travels
+     -- the address and key stay on the provider and are resolved at spawn, so
+     rotating a key is one edit and every role on that vendor follows.
+     `protocol` is rerank against a self-hosted endpoint only: the request shape
+     nothing but the operator can name. A null model clears the role. */
+  everosSet(section: string, model: string | null, provider?: string,
+    protocol?: string): Promise<SettingsSnapshot>
+  usage(range: UsageRange): Promise<UsageStats | null>
   provider(op: ProviderOp, params: Record<string, unknown>): Promise<SettingsSnapshot>
-  /* Ask the provider what it serves right now. Optional because the offline
-     demo has no provider to ask -- absent, the button reports that rather than
-     pretending to fetch. A read: nothing is written until a row is added. */
-  fetchModels?(slug: string): Promise<ModelCatalogue>
+  /* Ask the provider what it serves right now. A read: nothing is written
+     until a row is added. */
+  fetchModels(slug: string): Promise<ModelCatalogue>
+  addModels(slug: string, models: string[]): Promise<SettingsSnapshot>
+  /* The non-credential fields: api_base, deployment, api_version, and an
+     extra_headers patch ({name: value | null}). */
+  setFields(slug: string, fields: Record<string, unknown>): Promise<SettingsSnapshot>
+  oauthLogin(slug: string): Promise<OauthStart>
+  /* The chat role: agents.defaults.model and .provider, through the same write
+     the composer's picker makes. */
+  /** Resolves true when the write landed in a gateway that has to restart
+      before it can chat on it (a first run). */
+  pickModel(model: string, provider: string): Promise<boolean>
   model(): string
-  /* The configured default provider, paired with model() above: the default
-     badge must move with a cross-provider default pick without reopening the
-     page. Optional because the offline demo has no live default to track. */
-  defaultProvider?(): string
+  defaultProvider(): string
+  archived(): Promise<ArchivedSession[]>
+  restore(id: string): Promise<void>
+  removeSession(id: string): Promise<void>
+  inspectSkill(name: string): Promise<SkillDetail>
+  openSkillFile(name: string, file: string): Promise<void>
+  uninstallSkill(name: string): Promise<SettingsSnapshot>
+  /* The credential fields the catalogue declares for this server, empty for
+     one nobody installed from the catalogue. A read, so no snapshot back. */
+  serverAuthFields(name: string): Promise<AuthField[]>
+  toggleServer(name: string, on: boolean): Promise<SettingsSnapshot>
+  retryServer(name: string): Promise<SettingsSnapshot>
+  revokeServer(name: string): Promise<SettingsSnapshot>
+  /* An empty form value clears that credential field. */
+  configureServer(name: string, form: Record<string, string>): Promise<SettingsSnapshot>
+  /* Resolves once the browser tab is open; the token lands later. */
+  authServer(name: string): Promise<SettingsSnapshot>
   version(): string | null
-  checkUpdate(btn: HTMLButtonElement): void | Promise<void>
-  pickModel?(anchor: HTMLElement, after: () => void): void
+  /* The newer version when there is one, so the About row can offer the
+     upgrade the way the design asked -- a check that silently starts an
+     upgrade is a second action the reader did not ask for. */
+  checkUpdate(btn: HTMLButtonElement): Promise<void>
+  /* The newer version the page knows about, or null. Read on every draw
+     rather than handed back by the check: the check redraws the dialog, which
+     replaces the row that asked. */
+  newerVersion(): string | null
+  upgrade(): void
   /* The language pick. On the source rather than the shell because what a flip
      MEANS differs between the modes -- live persists it through config.language,
-     which also drives the TUI and the language the agent replies in, while the
-     offline page repaints and has nowhere to persist to. Required, since a
-     settings page that cannot answer the pick would draw a dead control. */
+     which also drives the TUI and the language the agent replies in. */
   setLang(lang: string): void
 }

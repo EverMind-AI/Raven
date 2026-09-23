@@ -120,6 +120,21 @@ def nodes_root(session_dir: Path) -> Path:
     return session_history_root(session_dir) / _NODES_DIRNAME
 
 
+def spawn_live_key(root: Path, node_id: str) -> str:
+    """The live-index key a spawn's activity is collected under.
+
+    The record's own address -- the node root of its conversation plus its
+    id -- rather than the id alone: a node id is unique for one conversation
+    only, and the live index is one per process, so two conversations that
+    named a spawn alike would otherwise share an entry (and the first to
+    finish would drop the other's). Shared with the readers the way the dag
+    side shares ``node_live_key``; the writer holds the root as
+    ``SpawnRecord.dir`` and a reader as the node files' root, which both
+    resolve from the same session directory.
+    """
+    return f"spawn:{root}:{node_id}"
+
+
 def node_file_in(root: Path, node_id: str, name: str) -> Path:
     """One artifact of one node, under a node root the caller already holds.
 
@@ -390,6 +405,14 @@ class SpawnRecord:
                         "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in transcript),
                         encoding="utf-8",
                     )
+                # What it said after its last step, when the lane can tell that
+                # apart from the whole reply. The context read draws this as
+                # the answer row, so a narrating agent's progress notes stay
+                # on the steps they preceded instead of opening the answer a
+                # second time; `out.md` keeps the whole reply for the caller.
+                closing = getattr(activity, "closing", None)
+                if output is not None and isinstance(closing, str) and closing.strip():
+                    self.file("closing.md").write_text(closing, encoding="utf-8")
             self._write_meta(meta)
         except OSError as exc:
             logger.warning("Subagent history at {} could not be finished: {}", self.dir, exc)

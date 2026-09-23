@@ -18,12 +18,14 @@ import pytest
 from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.hook.adapters import DecisionConsumerAdapter
 from raven.agent.loop import AgentLoop
+from raven.agent.loop._shared import _MID_TURN_HEADER
 from raven.agent.loop.bundles import HostWiring, ToolWiring
 from raven.agent.tools.deep_research import DeepResearchOfferTool
 from raven.config.schema import DeepResearchToolConfig
 from raven.contracts.llm_provider import ChatDelta, LLMResponse, ToolCallRequest
 from raven.contracts.loop_hooks import AgentHook, HookDecision
 from raven.contracts.tool import Tool, ToolResult
+from raven.providers.base import ErrorClassification
 from raven.sandbox import SandboxInitError
 from raven.spine.events import EpisodeStart as EvEpisodeStart
 from raven.spine.events import MediaOut as EvMediaOut
@@ -33,7 +35,7 @@ from raven.spine.events import Reasoning as EvReasoning
 from raven.spine.events import StreamDelta as EvStreamDelta
 from raven.spine.events import Text as EvText
 from raven.spine.events import ToolEvent as EvToolEvent
-from raven.spine.message import ChatType, Source
+from raven.spine.message import ChatType, Media, Source
 from raven.spine.turn import Origin, TurnRequest
 
 
@@ -673,6 +675,146 @@ async def test_inject_message_merged_before_next_iteration(tmp_path):
     )
 
 
+class _RecordingStreamProvider:
+    """Plays one scripted stream per iteration and keeps every call's messages."""
+
+    def __init__(self, scripts):
+        self._scripts = scripts
+        self._i = 0
+        self.calls: list[list[dict]] = []
+
+    async def chat_stream(self, **kwargs):
+        self.calls.append(list(kwargs.get("messages") or []))
+        script = self._scripts[min(self._i, len(self._scripts) - 1)]
+        self._i += 1
+        for chunk in script:
+            yield chunk
+
+    def get_default_model(self) -> str:
+        return "fake/model"
+
+
+def _stream_scripts(gaps: int) -> list[list[ChatDelta]]:
+    """A tool call per gap -- each one drives another iteration -- then the answer."""
+    tool_calls = [
+        [
+            ChatDelta(
+                content=None,
+                tool_call_delta={
+                    "tool_calls": [{"index": 0, "id": f"t{i}", "function": {"name": "faketool", "arguments": "{}"}}]
+                },
+            )
+        ]
+        for i in range(gaps)
+    ]
+    return [*tool_calls, [ChatDelta(content="done")]]
+
+
+def _labelled(messages: list[dict]) -> list[dict]:
+    return [m for m in messages if str(m.get("content") or "").startswith(_MID_TURN_HEADER)]
+
+
+def _gap_drain(gaps: list[list]):
+    """A drain that answers one gap's arrivals per iteration, in order."""
+    state = {"n": 0}
+
+    def _drain_inject() -> list:
+        out = gaps[state["n"]] if state["n"] < len(gaps) else []
+        state["n"] += 1
+        return out
+
+    return _drain_inject
+
+
+async def test_mid_turn_messages_reach_the_model_as_one_labelled_message(tmp_path):
+    # Two corrections typed into one gap are one user message on the wire, under
+    # the header: as two bare user messages the model reads the second as a new
+    # question and answers that instead of steering the work it is doing.
+    provider = _RecordingStreamProvider(_stream_scripts(1))
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+
+    drain = _gap_drain([[], [_req("wait, skip the 2023 numbers"), _req("Q4 only")]])
+    await loop.run_turn(_req("summarise the report"), _EmitCollector(), drain, stream=True)
+
+    second = provider.calls[1]
+    labelled = _labelled(second)
+    assert len(labelled) == 1, second
+    assert labelled[0]["role"] == "user"
+    # In the order they arrived, joined by a blank line, under the one header.
+    assert labelled[0]["content"] == f"{_MID_TURN_HEADER}\n\nwait, skip the 2023 numbers\n\nQ4 only"
+    assert len([m for m in second if m.get("role") == "user"]) == 2, "the question, and the two arrivals as one"
+
+
+async def test_a_single_mid_turn_message_is_labelled_too(tmp_path):
+    # The header is what says "this arrived while you worked", so it is not an
+    # artifact of there being two: one correction needs it just as much.
+    provider = _RecordingStreamProvider(_stream_scripts(1))
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+
+    drain = _gap_drain([[], [_req("only the last quarter")]])
+    await loop.run_turn(_req("summarise the report"), _EmitCollector(), drain, stream=True)
+
+    assert [m["content"] for m in _labelled(provider.calls[1])] == [f"{_MID_TURN_HEADER}\n\nonly the last quarter"]
+
+
+async def test_a_mid_turn_attachment_the_message_already_names_is_not_named_twice(tmp_path):
+    # The page bakes its own attachment note into the text and derives `media`
+    # from it, so the drain's note repeated the path -- and the reader, whose
+    # live bubble showed the bare sentence, came back from a reload to an
+    # absolute path written into their own words.
+    provider = _RecordingStreamProvider(_stream_scripts(1))
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+
+    typed = "please look at the attached note\n\n[attachments]\n- /tmp/rt_note.txt"
+    drain = _gap_drain([[], [_req(typed, media=(Media(path="/tmp/rt_note.txt", mime="text/plain", kind="file"),))]])
+    await loop.run_turn(_req("summarise the report"), _EmitCollector(), drain, stream=True)
+
+    assert [m["content"] for m in _labelled(provider.calls[1])] == [f"{_MID_TURN_HEADER}\n\n{typed}"]
+
+
+async def test_a_mid_turn_attachment_the_message_does_not_name_is_still_named(tmp_path):
+    # The other half: a sender that hands over a file without naming it -- a
+    # channel's own intake -- must still have it reach the model.
+    provider = _RecordingStreamProvider(_stream_scripts(1))
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+
+    drain = _gap_drain(
+        [[], [_req("look at this", media=(Media(path="/tmp/rt_note.txt", mime="text/plain", kind="file"),))]]
+    )
+    await loop.run_turn(_req("summarise the report"), _EmitCollector(), drain, stream=True)
+
+    assert [m["content"] for m in _labelled(provider.calls[1])] == [
+        f"{_MID_TURN_HEADER}\n\nlook at this\n[injected message; attached files: /tmp/rt_note.txt]"
+    ]
+
+
+async def test_mid_turn_messages_from_different_gaps_stay_apart(tmp_path):
+    # Folding is per adjacent run, not per turn: the work between two gaps is
+    # what the second correction is about, so merging across it would present
+    # the two as one thought and place them both before that work.
+    provider = _RecordingStreamProvider(_stream_scripts(2))
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+
+    drain = _gap_drain([[], [_req("skip the 2023 numbers")], [_req("Q4 only")]])
+    await loop.run_turn(_req("summarise the report"), _EmitCollector(), drain, stream=True)
+
+    third = provider.calls[2]
+    assert [m["content"] for m in _labelled(third)] == [
+        f"{_MID_TURN_HEADER}\n\nskip the 2023 numbers",
+        f"{_MID_TURN_HEADER}\n\nQ4 only",
+    ]
+
+
 async def test_autofill_rows_are_written_in_as_a_tool_call(tmp_path):
     loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path)
     messages: list[dict] = []
@@ -905,6 +1047,33 @@ async def test_run_message_tool_text_streams_and_dissolves(tmp_path):
     assert any(isinstance(e, EvStreamDelta) and e.delta == "hi via tool" for e in sink.events)
     assert not any(isinstance(e, EvText) for e in sink.events)  # tool reply dissolves
     assert outcome.explicit_reply is True
+
+
+async def test_run_message_tool_reply_outlives_a_failed_follow_up_call(tmp_path):
+    # The tool delivered the reply; the model call after it failed for good. The
+    # turn is answered, so it ends as it always has -- no AnswerlessTurnError, no
+    # error text delivered as a second reply.
+    provider = _FakeStreamToolProvider(
+        [
+            [_message_tool_call('{"content": "hi via tool"}')],
+            [
+                ChatDelta(
+                    content="Error calling LLM (network@fake): boom",
+                    finish_reason="error",
+                    error_classification=ErrorClassification("network", retryable=False),
+                )
+            ],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("hi"), sink, _drain)
+
+    assert outcome.explicit_reply is True
+    assert not any(isinstance(e, EvText) for e in sink.events)
+    assert not any(isinstance(e, EvStreamDelta) and "Error calling LLM" in e.delta for e in sink.events)
 
 
 async def test_run_message_tool_media_is_not_dropped(tmp_path):

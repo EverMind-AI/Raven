@@ -113,6 +113,15 @@ class TestTranslatedFrames:
         assert translate({"type": "token.delta", "payload": {"text": ""}}).updates == ()
         assert translate({"type": "token.delta", "payload": {}}).updates == ()
 
+    def test_a_mid_turn_message_produces_no_frame(self):
+        """The client's own steer request is the record that it sent a message
+        mid-turn, the way ``session/prompt`` is the record that a turn began; an
+        update echoing the text would be a second one."""
+        result = translate({"type": "message.injected", "payload": {"turn_id": "t1", "content": "only Q4"}})
+
+        assert result.updates == ()
+        assert result.stop is None
+
     def test_a_tool_start_is_in_progress_not_pending(self):
         """``pending`` means "not started -- streaming input or awaiting
         approval". By the time this event exists the call is running, and a
@@ -1081,6 +1090,7 @@ class TestTerminationIsExactlyOnce:
         "tool.start": {"tool_call_id": "t", "name": "exec", "arguments": {"command": "ls"}},
         "tool.complete": {"tool_call_id": "t", "result_preview": "ok"},
         "message.start": {"turn_id": "t"},
+        "message.injected": {"turn_id": "t", "content": "only Q4"},
         "turn.started": {"turn_id": "t"},
         "message.complete": {"turn_id": "t", "usage": {}},
         # turn_id is part of the shape now: the sink stamps the ending turn's own
@@ -1698,6 +1708,66 @@ class TestTheFileChangePayload:
 
         assert self._payload(FileChange(path="/w/a.py", after=after, before=None)) is not None
         assert self._payload(FileChange(path="/w/a.py", after=after, before="z" * 20)) is None
+
+
+class TestTheFileRemovedPayload:
+    """The same hop for the other half: what a call made vanish.
+
+    A list rather than one mapping -- a single command removes as many files as
+    it names -- and ``None`` rather than an empty list, so the emit site can
+    leave the key off a payload entirely.
+    """
+
+    @staticmethod
+    def _payload(removals):
+        from raven.agent.loop._shared import _file_removed_payload
+
+        return _file_removed_payload(removals)
+
+    def test_a_removal_flattens_to_the_wire_shape(self):
+        from raven.contracts.tool import FileRemoval
+
+        assert self._payload([FileRemoval(path="/w/a.py", before="one\n")]) == [{"path": "/w/a.py", "before": "one\n"}]
+
+    def test_a_removal_whose_text_was_never_captured_carries_only_its_path(self):
+        """Absent, not empty. The file is gone either way; only its body is."""
+        from raven.contracts.tool import FileRemoval
+
+        assert self._payload([FileRemoval(path="/w/a.py")]) == [{"path": "/w/a.py"}]
+
+    def test_nothing_in_gives_nothing_out(self):
+        assert self._payload(None) is None
+        assert self._payload(()) is None
+
+    def test_a_malformed_removal_is_dropped_rather_than_forwarded(self):
+        from types import SimpleNamespace
+
+        assert self._payload([SimpleNamespace(path=None, before="x")]) is None
+        assert self._payload([SimpleNamespace(path="", before="x")]) is None
+
+    def test_an_oversized_body_is_dropped_but_the_removal_is_not(self):
+        """Half a removed file reads as a smaller deletion than the one that
+        happened, so the text goes rather than being cut -- and the row stays,
+        because the deletion is the fact being reported."""
+        from raven.agent.loop._shared import _FILE_CHANGE_MAX_CHARS
+        from raven.contracts.tool import FileRemoval
+
+        big = "x" * (_FILE_CHANGE_MAX_CHARS + 1)
+
+        assert self._payload([FileRemoval(path="/w/a.py", before=big)]) == [{"path": "/w/a.py"}]
+
+    def test_the_budget_is_the_events_and_not_each_files(self):
+        """One command can unlink every file it names; a per-file ceiling would
+        put all of them on one event at full size."""
+        from raven.agent.loop._shared import _FILE_CHANGE_MAX_CHARS
+        from raven.contracts.tool import FileRemoval
+
+        half = "x" * (_FILE_CHANGE_MAX_CHARS // 2 + 10)
+
+        assert self._payload([FileRemoval(path="/w/a.py", before=half), FileRemoval(path="/w/b.py", before=half)]) == [
+            {"path": "/w/a.py", "before": half},
+            {"path": "/w/b.py"},
+        ]
 
 
 class TestTheLiveTranslationPathRedactsWhatItPublishes:

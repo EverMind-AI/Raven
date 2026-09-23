@@ -5,10 +5,13 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noEmit": true,
     "skipLibCheck": true,
     "types": [],
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "allowJs": true
   },
   "include": [
     "src"

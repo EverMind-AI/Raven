@@ -17,6 +17,7 @@ from raven.agent.tools.ask_user import AskUserTool
 from raven.config.raven import SubagentQuestionsConfig
 from raven.gateway.spine import _DELIVERY_GRACE, build_gateway
 from raven.spine import (
+    AnswerlessTurnError,
     ChatType,
     MediaOut,
     Origin,
@@ -273,6 +274,28 @@ async def test_gateway_sink_sends_error_reply_on_failure():
     assert len(ch.sent) == 1 and ch.sent[0][1] == "Sorry, I encountered an error."
     assert ch.sent[0][0] == "c9"  # chat_id (channel routing is by source.channel)
     assert agent.notify_count >= 1
+
+
+async def test_gateway_sink_tells_the_channel_the_model_calls_own_words():
+    """A turn the loop gave up on carries the provider's canonical sentence, and
+    that is what the channel reader gets; a crash keeps the canned reply."""
+
+    class _GaveUpAgent(_ReplyAgent):
+        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None):
+            raise AnswerlessTurnError("Error calling LLM (network@openrouter): connection refused")
+
+    agent = _GaveUpAgent()
+    ch = _FakeChannel("telegram")
+    scheduler, hub, readback_texts, _sources, teardown = build_gateway(agent, {"telegram": ch})
+    try:
+        try:
+            await scheduler.submit(_req(channel="telegram", chat_id="c9")).result()
+        except Exception:
+            pass
+        await hub.wait_idle("telegram")
+    finally:
+        await teardown()
+    assert [sent[1] for sent in ch.sent] == ["Error calling LLM (network@openrouter): connection refused"]
 
 
 async def test_gateway_sink_tells_the_channel_when_a_reload_cut_the_turn():

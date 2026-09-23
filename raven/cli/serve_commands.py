@@ -42,7 +42,7 @@ import webbrowser
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 
@@ -80,11 +80,58 @@ def port_strict() -> bool:
 
 
 def resolve_ui_dist() -> Optional[Path]:
-    """Locate the built ui page: wheel-packaged copy first, then source tree."""
+    """Locate the built ui page: wheel-packaged copy first, then source tree.
+
+    A source-tree page older than what it is built from is reported here on
+    every resolve, because every path that serves or opens the page resolves
+    it once -- `raven serve`, the gateway's page mount and `raven web` alike --
+    and the terminal is where the rebuild happens.
+    """
     for candidate in (_PACKAGED_UI_DIST, _UI_DIR / "dist"):
         if (candidate / "index.html").exists():
+            if page_behind_sources(candidate):
+                from loguru import logger
+
+                logger.warning(
+                    "the built page is older than ui-web/src or i18n/messages.json; run `make build-ui` to rebuild it"
+                )
             return candidate
     return None
+
+
+_PAGE_SOURCE_SKIP = frozenset({"test", "__snapshots__", "__golden__"})
+_PAGE_BUILD_FILES = ("build.py", "vite.config.ts", "package.json", "package-lock.json", "icon/raven.svg")
+
+
+def page_behind_sources(dist: Optional[Path]) -> bool:
+    """Whether the source-tree page was built before its inputs last changed.
+
+    Only the checkout's own ``ui-web/dist`` can fall behind: the wheel's copy
+    ships beside the code it was built with. Judged by mtime, the way make
+    would -- a pull that touches ``ui-web/src`` or the message catalogue leaves
+    those files newer than ``dist/index.html`` until the next build. The
+    build's own files count too (the assembler, the bundler config, the
+    dependency lock, the icon it copies): a pull that moves only those changes
+    the page as surely as a source edit. Tests, the test harness layer and
+    snapshots are left out: they change without changing the page.
+    """
+    if dist is None or dist != _UI_DIR / "dist":
+        return False
+    try:
+        built = (dist / "index.html").stat().st_mtime
+    except OSError:
+        return False
+    inputs = [_UI_DIR.parent / "i18n" / "messages.json", *(_UI_DIR / name for name in _PAGE_BUILD_FILES)]
+    inputs.extend(
+        path
+        for path in (_UI_DIR / "src").rglob("*")
+        if path.is_file() and ".test." not in path.name and not _PAGE_SOURCE_SKIP.intersection(path.parts)
+    )
+    newest = 0.0
+    for path in inputs:
+        with suppress(OSError):
+            newest = max(newest, path.stat().st_mtime)
+    return newest > built
 
 
 def _state_path() -> Path:
@@ -282,13 +329,72 @@ async def _announce_updates(broadcast, stop: asyncio.Event) -> None:
             announced = None
 
 
+class _ServedStack:
+    """The RPC stack this process serves, and the one build a loop-less start owes.
+
+    A gateway that came up with no model configured has no agent loop, and the
+    wiring a turn needs is assembled with it -- so the process is not serving
+    turns and cannot until something builds what was skipped. ``config.set``
+    asks for that through :meth:`ensure` once the config on disk can support it.
+
+    Only that state is reachable here. Such a process owns no cron, no plugin
+    services, no memory backend and no MCP transports, so there is nothing
+    running to preserve and no process-global singleton for a second assembly
+    to collide with. That is what makes this a one-shot build rather than the
+    gateway's generation swap (``gateway_commands._request_swap``), which has
+    to keep generation N serving while N+1 comes up.
+    """
+
+    def __init__(self, gateway: Any) -> None:
+        self._gateway = gateway
+        self._building = asyncio.Lock()
+        self.current: Any = None
+
+    async def start(self) -> Any:
+        """Assemble the first stack and bind it to the transport."""
+        from raven.rpc.bootstrap import build_rpc_stack
+
+        self.current = await build_rpc_stack(self._gateway.broadcast, ensure_stack=self.ensure)
+        self._gateway.dispatcher = self.current.dispatcher
+        return self.current
+
+    async def ensure(self) -> bool:
+        """Build the stack this process started without; True when it has one.
+
+        The stack left behind is dropped rather than torn down: its teardown
+        ends by closing the browser and the ACP pool, and both are
+        process-global -- the new stack's now. A first-run stack owns nothing
+        else, so there is nothing else to release.
+
+        The replacement is handed the emitter it replaces: a subscription lives
+        there, and the page re-subscribes only when its socket reconnects.
+        """
+        from raven.rpc.bootstrap import build_rpc_stack
+
+        if self.current.agent_loop is not None:
+            return True
+        async with self._building:
+            # Asked again under the lock: two writes can both find no loop.
+            if self.current.agent_loop is not None:
+                return True
+            nxt = await build_rpc_stack(
+                self._gateway.broadcast,
+                emitter=self.current.emitter,
+                ensure_stack=self.ensure,
+            )
+            if nxt.agent_loop is None:
+                return False
+            self.current = nxt
+            self._gateway.dispatcher = nxt.dispatcher
+            return True
+
+
 async def _serve_main(port: int, open_browser: bool) -> None:
 
     from aiohttp import web
     from loguru import logger
 
     from raven.cli._console_feature import register_console_feature
-    from raven.rpc.bootstrap import build_rpc_stack
     from raven.rpc.transports.ws import WsGateway, build_app, pick_port
 
     register_console_feature()
@@ -323,14 +429,19 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     # the /oauth/callback route below stays for registrations made under the
     # old scheme, which still point at a gateway port.
 
-    stack = await build_rpc_stack(gateway.broadcast)
-    gateway.dispatcher = stack.dispatcher
+    served = _ServedStack(gateway)
+    stack = await served.start()
 
+    dist = resolve_ui_dist()
     app = build_app(
         gateway,
-        resolve_ui_dist(),
-        deliverables=stack.deliverables,
-        agent_loop_factory=lambda: stack.agent_loop,
+        dist,
+        # Read per request, not once: a first run assembles its stack after the
+        # app is built, and a store captured here would leave that process with
+        # no download surface for the rest of its life.
+        deliverables=lambda: served.current.deliverables,
+        agent_loop_factory=lambda: served.current.agent_loop,
+        page_behind=lambda: page_behind_sources(dist),
     )
     runner = web.AppRunner(app)
     await runner.setup()
@@ -349,6 +460,12 @@ async def _serve_main(port: int, open_browser: bool) -> None:
         maybe_refresh_async()
     except Exception as exc:  # never let a version check keep the gateway down
         logger.debug("serve: update check skipped ({})", exc)
+
+    # The deck template gallery's covers, drawn now rather than on the click that
+    # opens the gallery; a no-op without the engine or once the cache is warm.
+    from raven.rpc import deck_templates
+
+    deck_templates.warm_covers_in_background()  # pragma: no cover
 
     base_url = f"http://127.0.0.1:{bound_port}"
     typer.echo(f"raven serve listening on {base_url} (rpc: {base_url}/rpc)")
@@ -371,11 +488,14 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     finally:
         logger.info("serve: shutting down")
         announcer.cancel()
+        from raven.rpc import deck_templates as _deck_templates  # pragma: no cover
+
+        _deck_templates.stop_warming()  # pragma: no cover
         SERVE.disarm()
         if state_path is not None:
             state_path.unlink(missing_ok=True)
         try:
-            await stack.teardown()
+            await served.current.teardown()
         finally:
             await runner.cleanup()
 
@@ -835,6 +955,8 @@ def _supervise(port: int) -> None:
 _STOP_WAIT_S = 20.0
 """How long ``--stop`` waits for a signalled process to actually be gone.
 
+Per signalled process, not per command: the supervisor and the gateway are
+stopped in sequence, so a stop that has to wait out both can take twice this.
 Generous on purpose. Exceeding it means a process ignored SIGTERM, which is a
 thing to report rather than to paper over with a longer sleep; the cost of
 waiting is paid only when something is genuinely wedged."""
@@ -842,10 +964,18 @@ waiting is paid only when something is genuinely wedged."""
 _STOP_POLL_S = 0.05
 
 
-def _await_exit(pid: int, deadline: float) -> bool:
-    """Whether ``pid`` is gone by ``deadline`` (a ``time.monotonic`` stamp)."""
+def _await_exit(pid: int, timeout_s: float) -> bool:
+    """Whether ``pid`` is gone within ``timeout_s`` seconds from now.
+
+    A duration, and the deadline derived from it here, so that two waits cannot
+    share one: the caller signals the supervisor and the gateway in sequence, so
+    a single stamp handed to both charges the second for however long the first
+    took -- down to no wait at all -- while the failure it prints still names the
+    whole budget.
+    """
     import time
 
+    deadline = time.monotonic() + timeout_s
     while _pid_alive(pid):
         if time.monotonic() >= deadline:
             return False
@@ -878,18 +1008,16 @@ def _stop_resident() -> bool:
     """
     import os
     import signal
-    import time
 
     stopped = False
     unresponsive: list[str] = []
-    deadline = time.monotonic() + _STOP_WAIT_S
 
     supervisor = _read_web_state()
     if supervisor is not None:
         try:
             os.kill(supervisor, signal.SIGTERM)
             stopped = True
-            if not _await_exit(supervisor, deadline):
+            if not _await_exit(supervisor, _STOP_WAIT_S):
                 unresponsive.append(f"supervisor (pid {supervisor})")
         except OSError as exc:
             typer.echo(f"warning: could not stop the supervisor (pid {supervisor}): {exc}")
@@ -899,7 +1027,7 @@ def _stop_resident() -> bool:
         try:
             os.kill(gateway, signal.SIGTERM)
             stopped = True
-            if not _await_exit(gateway, deadline):
+            if not _await_exit(gateway, _STOP_WAIT_S):
                 unresponsive.append(f"gateway (pid {gateway})")
         except ProcessLookupError:
             pass
@@ -1005,7 +1133,7 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
         return
 
     if resolve_ui_dist() is None:
-        typer.echo("No page is built. Run `python ui-web/build.py`, or install raven from a release wheel.")
+        typer.echo("No page is built. Run `make build-ui`, or install raven from a release wheel.")
         raise typer.Exit(1)
 
     if supervise:

@@ -298,10 +298,12 @@ async def test_run_exception_yields_turn_failed_and_resolves_future():
     events, sink = _collector()
     lane = Lane(runner=runner, pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
     result = await lane.submit(_req())
-    assert result is None
     failed = next(e for e in events if isinstance(e, TurnFailed))
     assert failed.cancelled is False
     assert failed.error == "ValueError: boom"
+    # The future carries the same report, not a bare None: the awaiting
+    # submitter and the event subscriber learn the failure in one wording.
+    assert result is failed
 
 
 async def test_a_failure_with_no_message_still_names_itself():
@@ -332,6 +334,18 @@ def test_a_message_that_already_names_its_class_is_not_prefixed_twice():
     assert describe_failure(APIError("rate limited")) == "APIError: rate limited"
     assert describe_failure(APIError("")) == "APIError"
     assert describe_failure(ValueError("boom")) == "ValueError: boom"
+
+
+def test_a_turn_failure_is_reported_in_its_own_words():
+    """A runner that raises ``AnswerlessTurnError`` has already worded the failure for a
+    reader, so the event carries the text as it is, with no class name in front."""
+    from raven.spine import AnswerlessTurnError
+    from raven.spine.scheduler import describe_failure
+
+    assert describe_failure(AnswerlessTurnError("Error calling LLM (first_byte_timeout): no first byte")) == (
+        "Error calling LLM (first_byte_timeout): no first byte"
+    )
+    assert describe_failure(AnswerlessTurnError("")) == "AnswerlessTurnError"
 
 
 async def test_run_exception_is_logged_with_a_traceback():
@@ -487,7 +501,7 @@ async def test_a_failure_before_turnstarted_still_reports_the_turns_end():
         events.append(event)
 
     lane = Lane(runner=SuccessRunner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
-    assert await lane.submit(_req()) is None
+    assert await lane.submit(_req()) is events[0]
     assert [type(e).__name__ for e in events] == ["TurnFailed"]
     assert events[0].cancelled is False
     assert "sink refused the start" in events[0].error

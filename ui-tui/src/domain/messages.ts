@@ -5,10 +5,12 @@
 
 import type {
   DagGetResult,
+  ErrorEvent,
   SubagentCall,
   SubagentListResult,
   TranscriptDelegated,
-  TranscriptNotice
+  TranscriptNotice,
+  TranscriptTurnEnded
 } from '../rpc/index.js'
 import type { Msg, SessionInfo } from '../types.js'
 import type { DagRunState } from './dagRun.js'
@@ -90,6 +92,9 @@ export const deliveredMessageKey = (status: TranscriptDelegated['status']): stri
   if (status === 'exception') {
     return 'gui.deleg.delivered_exception'
   }
+  if (status === 'cancelled') {
+    return 'gui.deleg.delivered_cancelled'
+  }
   return 'gui.deleg.delivered'
 }
 
@@ -117,6 +122,96 @@ export const noticeLine = (notice?: null | TranscriptNotice): string => {
 }
 
 /**
+ * The line a turn that died reads by, live or replayed -- one wording, for the
+ * same reason `noticeLine` is one. With no reason the label stands alone.
+ */
+export const failedTurnLine = (reason: string): string => {
+  const said = t('gui.turn_died', 'Turn failed - {e}', { e: reason })
+
+  return reason ? said : said.replace(/\s*[-·]\s*$/, '')
+}
+
+/**
+ * The line a stopped turn reads by. Two sentences rather than one: "the output
+ * above is kept" is a promise about nothing over a turn that never got past the
+ * question, so a reader has to be told which of the two they are looking at.
+ */
+export const haltedLine = (kept: boolean): string =>
+  kept ? t('gui.halted', 'Stopped by user - the output above is kept') : t('gui.halted_bare', 'Stopped by user')
+
+/** Whether a row put any of the model's output on the reader's screen. */
+const spoke = (row: Msg): boolean =>
+  Boolean(row.text.trim() || row.episodes?.length || row.tools?.length || row.thinking?.trim())
+
+/**
+ * Whether the rows a stopped turn leaves behind hold any of its output, which
+ * is what picks between the two sentences above.
+ *
+ * Read from the end back to the row that opened the turn, because only this
+ * turn's own output is what the promise is about. The runtime's own rows -- a
+ * notice, a slash echo, a panel, the artifact shelf -- are system rows and are
+ * skipped: they are what the runtime said about the turn, not what it produced.
+ * A trail row is the one system row that is the model's own work (its
+ * reasoning or tool shelf, drawn without a reply beside them), so it counts.
+ */
+export const keptOutput = (rows: readonly Msg[]): boolean => {
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i]!
+
+    if (row.role === 'user') {
+      return false
+    }
+
+    if (row.role === 'tool' || ((row.role === 'assistant' || row.kind === 'trail') && spoke(row))) {
+      return true
+    }
+  }
+
+  return false
+}
+
+/**
+ * The line the closing marker of a stopped or died turn draws; empty when the
+ * entry carries none.
+ */
+export const turnEndedLine = (ended?: null | TranscriptTurnEnded, kept = false): string => {
+  if (!ended) {
+    return ''
+  }
+
+  if (ended.status === 'cancelled') {
+    return haltedLine(kept)
+  }
+
+  return failedTurnLine(typeof ended.reason === 'string' ? ended.reason.trim() : '')
+}
+
+/** One line's worth of failure detail, the bound the runtime's own log lines use. */
+const ERROR_DETAIL_MAX = 200
+
+/**
+ * The line an `error` frame ends a turn with -- the one reading of the three
+ * ways that frame can arrive, so the main lane and a direct chat cannot word
+ * the same frame differently, and a stop reads the same live as replayed.
+ *
+ * The detail is clamped to its first line and to what a single line can carry;
+ * the whole of it stays in the runtime's own log.
+ */
+export const turnErrorLine = (payload: ErrorEvent['payload'], kept = false): string => {
+  if (payload.reason === 'cancelled_by_client') {
+    return haltedLine(kept)
+  }
+
+  const detail = payload.detail ? payload.detail.split('\n')[0]!.slice(0, ERROR_DETAIL_MAX) : ''
+
+  if (payload.message === 'turn_failed') {
+    return failedTurnLine(detail)
+  }
+
+  return `error: ${payload.message} (code=${payload.code})${detail ? `: ${detail}` : ''}`
+}
+
+/**
  * Rows as the transcript draws them, with each closed turn's artifact shelf
  * folded in at the boundary that closed it.
  *
@@ -139,6 +234,10 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
   }
 
   const folded: FoldRow[] = []
+  // Whether the turn being walked has produced anything yet, carried along
+  // rather than re-derived at the marker: `keptOutput` reads the rows a lane
+  // already drew, and here the rows are still being built.
+  let kept = false
   let artifacts = { changes: [], deliveries: [] } as NonNullable<Msg['artifacts']>
   const flushArtifacts = () => {
     const message = artifactMessage(artifacts)
@@ -168,30 +267,33 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
       role,
       text,
       tool_call_id: toolCallId,
-      tool_calls: toolCalls
+      tool_calls: toolCalls,
+      turn_ended: turnEnded
     } = row as TranscriptRow
 
     if (role === 'user' && origin) {
       flushArtifacts()
+      kept = false
       /* A turn the runtime opened, not a person typing. Its text is internal
          prose, so it is replaced rather than shown: the same line the live
          trail prints when a delegated result rejoins the conversation, which is
          also the row this replay was missing -- it arrives on an event, and an
          event is not in the transcript. Only a subagent delivery carries
-         `delegated`; a cron/sentinel/heartbeat-opened turn falls back to the
-         older, label-less line rather than fabricating one. */
+         `delegated`; a cron/sentinel/heartbeat-opened turn says what opened it
+         instead, which is the one thing about it a reader may be told. */
       if (delegated) {
         const key = deliveredMessageKey(delegated.status)
 
         folded.push({ role: 'system', text: `↩ ${delegated.label} — ${t(key, key)}` })
       } else {
-        folded.push({ role: 'system', text: `${origin} ${t('gui.deleg.delivered', 'delivered')}` })
+        folded.push({ role: 'system', text: t(`gui.deleg.by_${origin}`, origin) })
       }
 
       continue
     }
 
     if (role === 'tool') {
+      kept = true
       deliveryFiles(metadata).forEach(file => addUnique(artifacts.deliveries, file))
       folded.push({
         role: 'tool',
@@ -235,6 +337,29 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
       }
     }
 
+    // The marker a stopped or died turn closes on. Its text is the account the
+    // model reads next turn, not the reader's: it is drawn as the system line
+    // the live path wrote, which closes the turn the way the notice below does.
+    const ended = role === 'assistant' ? turnEnded : null
+
+    if (ended) {
+      if (calls.length || reasoning) {
+        kept = true
+        folded.push({
+          role,
+          text: '',
+          ...(calls.length ? { calls } : {}),
+          ...(reasoning ? { reasoning } : {}),
+          ...(reasoningMs != null ? { reasoningMs } : {})
+        })
+      }
+
+      folded.push({ role: 'system', text: turnEndedLine(ended, kept) })
+      kept = false
+
+      continue
+    }
+
     // An assistant entry that carries a notice had its text written by the
     // runtime, not the model -- `_save_turn` renames the stored key for exactly
     // that reason. So the notice is drawn in the text's place and in the
@@ -245,6 +370,7 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
 
     if (runtimeNotice) {
       if (calls.length || reasoning) {
+        kept = true
         folded.push({
           role,
           text: '',
@@ -269,6 +395,12 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
 
     if (role !== 'assistant') {
       flushArtifacts()
+    }
+
+    if (role === 'user') {
+      kept = false
+    } else if (role === 'assistant') {
+      kept = true
     }
 
     folded.push({
@@ -460,4 +592,6 @@ interface TranscriptRow {
   text?: string
   tool_call_id?: string
   tool_calls?: TranscriptToolCallRow[]
+  /** See `GatewayTranscriptMessage.turn_ended`: the marker a stopped or died turn closes on. */
+  turn_ended?: TranscriptTurnEnded
 }

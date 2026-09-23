@@ -22,10 +22,9 @@ Raven does not back with real functionality:
   rollback (we point users at ``git`` instead)
 * ``tools.configure`` — TUI-side tool config editor; in Raven users edit
   ``~/.raven/config.json`` directly
-* ``session.{compress, save, status, steer, usage}`` — hermes session-mgmt
-  slash commands Raven doesn't back yet (``session.title``,
-  ``session.undo``, and ``session.branch`` were promoted to real handlers
-  in methods/session.py)
+* ``session.{save, steer}`` — hermes session-mgmt slash commands Raven
+  doesn't back yet (``session.{branch, compress, status, title, undo, usage}``
+  were promoted to real handlers in methods/session.py)
 * ``skills.reload`` — hermes skill hot-reload UX (Raven uses SkillForge
   closed loop, no manual reload trigger)
 * ``reload.env`` — hermes env-file hot-reload (Raven reads env on process
@@ -122,11 +121,11 @@ _STUB_DEFINITIONS: tuple[tuple[str, str, str | None], ...] = (
     # to a real handler in ``raven.rpc.methods.session.session_undo`` that
     # drops the last turn in place (parity test
     # ``test_rpc_session.py::test_session_undo_*``).
-    (
-        "session.usage",
-        "session.usage not supported in Raven v0.1",
-        "Use the TUI footer token-usage widget (tui.show_token_usage=true).",
-    ),
+    # NOTE: ``session.usage`` was previously stubbed (-32012) but is now
+    # promoted to a real handler in
+    # ``raven.rpc.methods.session.session_usage`` that sums the conversation's
+    # own telemetry rows (parity test
+    # ``test_rpc_session.py::test_session_usage_*``).
     # skills.reload — hermes skill hot-reload. Raven SkillForge runs a
     # closed-loop Detect→Draft→Active→Evolve→Retire pipeline; no manual
     # reload trigger.
@@ -188,7 +187,7 @@ def _make_stub(error_msg: str, hint: str | None):
         data: dict[str, Any] = {"error": error_msg}
         if hint is not None:
             data["hint"] = hint
-        raise NotSupportedError(error_msg, data=data)
+        raise NotSupportedError(data=data)
 
     return _handler
 

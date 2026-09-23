@@ -213,11 +213,11 @@ async def test_a_status_error_never_echoes_the_key(vendor: str, monkeypatch: pyt
     """httpx puts the whole request URL in a status error, and SerpApi carries
     its key as a query parameter, so the default text would hand the credential
     to the model and the log. Every vendor renders as vendor plus status."""
-    with _patched(monkeypatch, {}, status=401):
+    with _patched(monkeypatch, {}, status=500):
         rendered = await WebSearchTool(api_key="SECRET-KEY-123", provider=vendor).execute("q1")
 
     assert "SECRET-KEY-123" not in rendered
-    assert rendered == f"Error: {SEARCH_PROVIDERS[vendor].label} answered HTTP 401"
+    assert rendered == f"Error: {SEARCH_PROVIDERS[vendor].label} answered HTTP 500"
 
 
 @pytest.mark.parametrize("vendor", sorted(_SEARCH_REQUESTS))
@@ -407,12 +407,357 @@ async def test_each_reader_serves_the_page_through_one_envelope(
 async def test_a_reader_status_error_names_the_vendor_and_status_only(
     vendor: str, monkeypatch: pytest.MonkeyPatch, _open_gate: None
 ) -> None:
-    with _patched(monkeypatch, {}, status=402):
+    with _patched(monkeypatch, {}, status=500):
         raw = await WebFetchTool(api_key="SECRET-KEY-123", provider=vendor).execute("https://a.example")
 
     envelope = json.loads(raw)
     assert "SECRET-KEY-123" not in raw
-    assert envelope["error"] == f"{FETCH_PROVIDERS[vendor].label} answered HTTP 402"
+    assert envelope["error"] == f"{FETCH_PROVIDERS[vendor].label} answered HTTP 500"
+
+
+# --------------------------------------------------------------------------- #
+# A refused key pauses the tool instead of failing every call the same way
+
+
+@pytest.mark.parametrize("status", sorted(web_mod.FETCH_REFUSAL_STATUSES))
+@pytest.mark.parametrize("vendor", sorted(FETCH_PROVIDERS))
+async def test_a_reader_refusing_the_key_pauses_the_tool(
+    vendor: str, status: int, monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    """On 2026-09-20 Jina answered 402 on every fetch of a session and the tool
+    kept asking: each call was one more identical envelope. A refusal is about
+    the key, so the next call is answered without a request, in the same words,
+    with what the user has to do."""
+    with _patched(monkeypatch, {}, status=status) as recorder:
+        tool = WebFetchTool(api_key="SECRET-KEY-123", provider=vendor)
+        first = json.loads(await tool.execute("https://a.example"))
+        second = json.loads(await tool.execute("https://b.example"))
+
+    assert len(recorder.calls) == 1, "the second call never reached the vendor"
+    label = FETCH_PROVIDERS[vendor].label
+    assert first["error"] == second["error"] == f"{label} refused the key (HTTP {status})"
+    assert first["paused"] is True and second["paused"] is True
+    assert "SECRET-KEY-123" not in json.dumps([first, second])
+    assert "not sent" in second["detail"] and "Tell the user" in second["detail"]
+    assert FETCH_PROVIDERS[vendor].config_path in first["detail"]
+    assert "tools.web.fetch.provider" in first["detail"]
+    # Each remedy says when it takes effect: the two config routes are read live, the env var on restart.
+    assert (
+        "select another vendor under tools.web.fetch.provider (both are read from the config file without a restart)"
+        in first["detail"]
+    )
+    assert f"or restart with {FETCH_PROVIDERS[vendor].env_var} set" in first["detail"]
+    # The failure streak reads a refusal as a deterministic failure, so a model
+    # that keeps calling meets the stop-repeating nudge rather than a retry.
+    from raven.agent.loop.failure_streak import failure_class, is_hard_tool_failure
+
+    assert is_hard_tool_failure(json.dumps(second))
+    assert failure_class(json.dumps(first)) == failure_class(json.dumps(second))
+
+
+class _RotatingInFlight:
+    """Stands in for ``httpx.AsyncClient``: refuses ``KEY-OLD`` with a 402 and,
+    while that request is in flight, rotates the key source to ``KEY-NEW``,
+    which it serves."""
+
+    def __init__(self, keys: dict[str, str], served: Any) -> None:
+        self.keys, self.served = keys, served
+        self.sent: list[str] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> "_RotatingInFlight":
+        return self
+
+    async def __aenter__(self) -> "_RotatingInFlight":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    def _answer(self, method: str, url: str, kwargs: dict[str, Any]) -> httpx.Response:
+        headers = kwargs.get("headers") or {}
+        sent = headers.get("Authorization", "").removeprefix("Bearer ") or headers.get("X-API-KEY") or ""
+        self.sent.append(sent)
+        request = httpx.Request(method, url)
+        if sent == "KEY-OLD":
+            self.keys["k"] = "KEY-NEW"
+            return httpx.Response(402, json={}, request=request)
+        return httpx.Response(200, json=self.served, request=request)
+
+    async def post(self, url: str, **kwargs: Any) -> httpx.Response:
+        return self._answer("POST", url, kwargs)
+
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        return self._answer("GET", url, kwargs)
+
+
+_TOOLS_ON_A_LIVE_KEY: dict[str, tuple[Any, Any, Any, Any]] = {
+    "web_search": (
+        lambda src: WebSearchTool(api_key=src, provider="tavily"),
+        lambda tool: tool.execute("q"),
+        {"results": [{"title": "T", "url": "https://a.example", "content": "S"}]},
+        lambda out: out.startswith("Results for: q"),
+    ),
+    "image_search": (
+        lambda src: web_mod.ImageSearchTool(api_key=src, provider="serper"),
+        lambda tool: tool.execute(query="sky"),
+        {"images": [{"title": "T", "imageUrl": "https://i.example/a.png", "imageWidth": 1280, "imageHeight": 720}]},
+        lambda out: "1. T" in out,
+    ),
+    "web_fetch": (
+        lambda src: WebFetchTool(api_key=src, provider="tavily"),
+        lambda tool: tool.execute("https://a.example"),
+        {"results": [{"url": "https://a.example", "raw_content": "PAGE"}]},
+        lambda out: json.loads(out).get("text") == "PAGE",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_TOOLS_ON_A_LIVE_KEY))
+async def test_a_key_rotated_while_a_request_is_in_flight_is_tried_before_it_is_paused(
+    name: str, monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    """The key is read once per call and that one value is what the request
+    carries and what a refusal is recorded against. Read again at ``note``
+    time, a key the user replaced during the request's flight was paused
+    without ever having been sent, and the main loop's tools serve every
+    session of the process, so all of them lost the tool for the pause."""
+    build, call, served, is_served = _TOOLS_ON_A_LIVE_KEY[name]
+    keys = {"k": "KEY-OLD"}
+    reads: list[str] = []
+
+    def source() -> str:
+        reads.append(keys["k"])
+        return keys["k"]
+
+    transport = _RotatingInFlight(keys, served)
+    monkeypatch.setattr(web_mod.httpx, "AsyncClient", transport)
+    tool = build(source)
+
+    refused = await call(tool)
+
+    assert transport.sent == ["KEY-OLD"]
+    assert reads == ["KEY-OLD"], "one read per call: the value sent is the value paused"
+    assert "refused the key (HTTP 402)" in refused
+    reads.clear()
+
+    again = await call(tool)
+
+    assert transport.sent == ["KEY-OLD", "KEY-NEW"], "the replacement is tried, not answered from the pause"
+    assert is_served(again), again
+    assert reads == ["KEY-NEW"]
+
+
+class _TwoReaders:
+    """Stands in for ``httpx.AsyncClient``: Tavily answers a page as JSON, Jina as text; both are recorded."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> "_TwoReaders":
+        return self
+
+    async def __aenter__(self) -> "_TwoReaders":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def post(self, url: str, **kwargs: Any) -> httpx.Response:
+        self.calls.append((url, kwargs.get("headers") or {}))
+        payload = {"results": [{"url": "https://a.example", "raw_content": "TAVILY PAGE"}]}
+        return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        self.calls.append((url, kwargs.get("headers") or {}))
+        return httpx.Response(200, text="JINA PAGE", request=httpx.Request("GET", url))
+
+
+async def test_a_keyed_reader_whose_key_is_cleared_falls_back_to_jina_per_call(
+    monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    """The key is live, so the Jina substitution has to be too: a keyed
+    backend whose key is cleared in the file would otherwise stay registered
+    and send an empty ``Authorization: Bearer`` on every call, and the 401 it
+    got back could arm no pause, there being no key to record it against.
+    The substitution is decided per call from the same read as the key."""
+    keys = {"tavily": "sk-tavily"}
+    reader = _TwoReaders()
+    monkeypatch.setattr(web_mod.httpx, "AsyncClient", reader)
+    tool = WebFetchTool(api_key=lambda: keys["tavily"], provider="tavily")
+
+    first = json.loads(await tool.execute("https://a.example"))
+    keys["tavily"] = ""
+    second = json.loads(await tool.execute("https://b.example"))
+
+    assert first["extractor"] == "tavily-extract" and first["text"] == "TAVILY PAGE"
+    assert reader.calls[0][0] == "https://api.tavily.com/extract"
+    assert reader.calls[0][1]["Authorization"] == "Bearer sk-tavily"
+    assert second["extractor"] == "jina-reader" and second["text"] == "JINA PAGE"
+    assert reader.calls[1][0] == "https://r.jina.ai/https://b.example"
+    assert "Authorization" not in reader.calls[1][1], "no credential is sent for a keyless read"
+    assert not [h for _, h in reader.calls if h.get("Authorization") == "Bearer "], "an empty key is never sent"
+
+
+async def test_a_refusal_by_one_vendor_pauses_no_other(monkeypatch: pytest.MonkeyPatch, _open_gate: None) -> None:
+    """The vendor is live too (``tools.web.<kind>.provider`` is read per call),
+    so the pause is recorded against the (vendor, key) pair the request carried:
+    a vendor switched under the tool is a new request, whatever its key."""
+    vendor = {"now": "tavily"}
+    with _patched(monkeypatch, {}, status=402) as recorder:
+        tool = WebFetchTool(api_key="same-key", provider=lambda: vendor["now"])
+        first = json.loads(await tool.execute("https://a.example"))
+        vendor["now"] = "exa"
+        second = json.loads(await tool.execute("https://a.example"))
+
+    assert first["error"] == "Tavily refused the key (HTTP 402)"
+    assert len(recorder.calls) == 2, "another vendor on the same key string is not paused"
+    assert second["error"] == "Exa refused the key (HTTP 402)" and "not sent" not in second["detail"]
+
+
+async def test_a_new_key_lifts_the_pause_at_once(monkeypatch: pytest.MonkeyPatch, _open_gate: None) -> None:
+    """Through the key source the loops hand the tool, not a private field: the
+    refusal tells the user to set a new key, so the value that lifts the pause
+    has to be one the tool reads on the next call."""
+    keys = {"tavily": "old"}
+    with _patched(monkeypatch, {}, status=402) as recorder:
+        tool = WebFetchTool(api_key=lambda: keys["tavily"], provider="tavily")
+        await tool.execute("https://a.example")
+        await tool.execute("https://a.example")
+        assert len(recorder.calls) == 1, "same key: paused, not sent"
+        keys["tavily"] = "new"
+        await tool.execute("https://a.example")
+
+    assert len(recorder.calls) == 2
+    assert recorder.calls[-1][2]["headers"]["Authorization"] == "Bearer new"
+
+
+async def test_the_pause_ends_after_the_cooldown_and_one_request_goes_through(
+    monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    clock = [1000.0]
+    monkeypatch.setattr(web_mod.time, "monotonic", lambda: clock[0])
+    with _patched(monkeypatch, {}, status=402) as recorder:
+        tool = WebFetchTool(api_key="k", provider="tavily")
+        await tool.execute("https://a.example")
+        clock[0] += web_mod.VENDOR_REFUSAL_PAUSE_S - 1
+        paused = json.loads(await tool.execute("https://a.example"))
+        clock[0] += 2
+        again = json.loads(await tool.execute("https://a.example"))
+
+    assert paused["paused"] is True and "not sent" in paused["detail"]
+    assert len(recorder.calls) == 2, "the cooldown's end sends one real request"
+    assert "not sent" not in again["detail"], "a refusal met again re-arms the pause"
+
+
+async def test_a_status_that_is_not_about_the_key_does_not_pause(
+    monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    with _patched(monkeypatch, {}, status=500) as recorder:
+        tool = WebFetchTool(api_key="k", provider="tavily")
+        await tool.execute("https://a.example")
+        await tool.execute("https://a.example")
+
+    assert len(recorder.calls) == 2
+
+
+class _OneHostRefused:
+    """Stands in for ``httpx.AsyncClient``: one host answers ``status``, every other serves a page."""
+
+    def __init__(self, host: str, status: int) -> None:
+        self.host, self.status = host, status
+        self.calls: list[str] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> "_OneHostRefused":
+        return self
+
+    async def __aenter__(self) -> "_OneHostRefused":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        self.calls.append(url)
+        request = httpx.Request("GET", url)
+        if self.host in url:
+            return httpx.Response(self.status, json={"code": self.status}, request=request)
+        return httpx.Response(200, text="PAGE", request=request)
+
+
+@pytest.mark.parametrize("status", sorted(web_mod.SEARCH_REFUSAL_STATUSES))
+async def test_a_keyless_reader_is_never_paused_by_a_status(
+    status: int, monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    """The default reader is Jina without a key, and Jina answers an anonymous
+    request for a domain it has blocked with 403 for every URL under it. A
+    request that carried no key cannot have had one refused, so no status
+    pauses the tool: the blocked page is reported as before, the next URL is
+    fetched, and nobody is told to replace a key that does not exist."""
+    reader = _OneHostRefused("blocked.example", status)
+    monkeypatch.setattr(web_mod.httpx, "AsyncClient", reader)
+    tool = WebFetchTool(provider="jina")
+    assert tool.api_key == ""
+
+    blocked = json.loads(await tool.execute("https://blocked.example/page"))
+    served = [json.loads(await tool.execute(url)) for url in ("https://a.example/", "https://b.example/")]
+
+    assert blocked["error"] == f"Jina Reader answered HTTP {status}" and "paused" not in blocked
+    assert [page["text"] for page in served] == ["PAGE", "PAGE"]
+    assert len(reader.calls) == 3, "every URL reached the reader"
+
+
+@pytest.mark.parametrize("vendor", sorted(FETCH_PROVIDERS))
+async def test_a_readers_403_is_about_the_page_not_the_key(
+    vendor: str, monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    """Through a reader a 403 speaks of the URL, not the key: Jina answers 403
+    for a domain it blocks, Firecrawl for a site its policy does not scrape.
+    It is reported per URL, and the next URL is fetched."""
+    with _patched(monkeypatch, {}, status=403) as recorder:
+        tool = WebFetchTool(api_key="k", provider=vendor)
+        first = json.loads(await tool.execute("https://a.example"))
+        second = json.loads(await tool.execute("https://b.example"))
+
+    assert len(recorder.calls) == 2, "a 403 pauses nothing"
+    assert first["error"] == second["error"] == f"{FETCH_PROVIDERS[vendor].label} answered HTTP 403"
+    assert "paused" not in first and "paused" not in second
+
+
+@pytest.mark.parametrize("status", sorted(web_mod.SEARCH_REFUSAL_STATUSES))
+@pytest.mark.parametrize("vendor", sorted(SEARCH_PROVIDERS))
+async def test_a_search_vendor_refusing_the_key_pauses_the_tool(
+    vendor: str, status: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A search vendor's API is the endpoint, so its 403 speaks of the key the
+    way 401 and 402 do: Serper answers a rejected key with 403."""
+    with _patched(monkeypatch, {}, status=status) as recorder:
+        tool = WebSearchTool(api_key="SECRET-KEY-123", provider=vendor)
+        first = await tool.execute("q1")
+        second = await tool.execute("q2")
+
+    assert len(recorder.calls) == 1
+    label = SEARCH_PROVIDERS[vendor].label
+    assert first.startswith(f"Error: {label} refused the key (HTTP {status}). ")
+    assert second.startswith(f"Error: {label} refused the key (HTTP {status}). ")
+    assert "SECRET-KEY-123" not in first + second
+    assert "tools.web.search.provider" in first and "not sent" in second
+    assert (
+        "select another vendor under tools.web.search.provider (both are read from the config file without a restart)"
+        in first
+    )
+
+
+async def test_an_image_search_refusal_pauses_the_later_queries(monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.agent.tools.web import ImageSearchTool
+
+    with _patched(monkeypatch, {}, status=403) as recorder:
+        tool = ImageSearchTool(api_key="k", provider="serper")
+        first = await tool.execute(query="sky")
+        second = await tool.execute(query="sea")
+
+    assert len(recorder.calls) == 1
+    assert "Serper refused the key (HTTP 403)" in first and "Serper refused the key (HTTP 403)" in second
+    assert "not sent" in second
 
 
 @contextmanager
@@ -512,7 +857,10 @@ async def test_an_anysearch_envelope_failure_is_read_as_one(monkeypatch: pytest.
 # The settings page's own copy of the vendor list
 
 
-_SETTINGS_PAGE = Path(__file__).resolve().parents[1] / "ui-web/src/features/settings/SettingsPage.tsx"
+# The table lives in source.ts rather than the Tools page itself, so the
+# onboarding wizard's web-search step (features/settings/SetupBodies.tsx) can
+# read the same copy through webStepDone rather than a second one.
+_SETTINGS_PAGE = Path(__file__).resolve().parents[1] / "ui-web/src/features/settings/source.ts"
 
 
 def _tsx_vendor_pick(tool: str) -> dict[str, Any]:

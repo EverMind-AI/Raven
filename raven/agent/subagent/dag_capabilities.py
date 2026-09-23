@@ -203,11 +203,9 @@ def _injection_notices(spec: SubAgentDagSpec, capabilities: dict[str, AgentCapab
     notices: list[str] = []
     for node in spec.nodes:
         caps = capabilities.get(node.subagent)
-        if node.skills is not None and caps is not None and not caps.injectable_skills:
-            notices.append(
-                f"node '{node.id}': agent '{node.subagent}' cannot take injected skills "
-                f"(only a built-in raven agent can), so its 'skills' list is ignored"
-            )
+        # `skills` has no gap to notice: an agent with no menu raven controls
+        # gets the skills quoted into its prompt instead (`dag_skills`), and
+        # only a name the catalog lacks is worth a line, which that module says.
         if node.mcps is not None and caps is not None and not caps.injectable_mcps:
             notices.append(
                 f"node '{node.id}': agent '{node.subagent}' cannot take injected mcp servers, "

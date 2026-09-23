@@ -147,6 +147,16 @@ class SubagentRow(_Strict):
             "not offer a switch, a test or a delete for it."
         ),
     )
+    own: bool = Field(
+        default=False,
+        description=(
+            "One of raven's own agents, whichever way this install registered it: the built-in row, a "
+            "product discovered under `agents/`, or a config row whose acp handshake named raven (the "
+            "shipped installer writes a product as a plain config row). The row a client draws with "
+            "raven's own mark, and whose unset model reads as following the main Raven. Absent from a "
+            "server that predates it, which reads as 'not raven's'."
+        ),
+    )
     group: Literal["builtin", "installed", "uninstalled"]
     upgrade_to: str | None = Field(
         default=None,
@@ -173,6 +183,24 @@ class SubagentRow(_Strict):
     last_test_detail: str | None = None
     last_test_at_ms: int | None = None
     test_running: bool
+    model: str | None = Field(
+        default=None, description="The model this row sends, or null to use the agent's own default."
+    )
+    model_choices: list["SubagentModelChoice"] = Field(
+        default_factory=list, description="The models this row's agent advertised, empty when it advertised none."
+    )
+    model_source: Literal["raven", "agent", "fixed"] = Field(
+        default="agent",
+        description=(
+            "What `subagents.update` accepts for `model` on this row, by rule rather than by kind, and "
+            "not ownership, which is `own`: 'raven' for the built-in row and for one of raven's own acp "
+            "rows whose handshake advertised no menu -- both pick from raven's own provider catalogue; "
+            "'agent' for an acp row picking from the choices its handshake advertised (`model_choices`); "
+            "'fixed' for an openai row, whose model is a plain config value, and for a cli row, which has "
+            "no menu at all. The menu, not the whole vocabulary: one of raven's own acp rows also accepts a "
+            "host-qualified id under either rule, since it runs on raven's providers whatever it advertised."
+        ),
+    )
 
 
 class DirectTarget(_Strict):
@@ -374,6 +402,33 @@ class MessageStartEvent(_Strict):
     payload: MessageStartPayload
 
 
+class MessageInjectedPayload(_Strict):
+    """A message merged into the turn already running on this conversation.
+
+    ``message.start`` cannot say this: that event opens a turn, and an inject
+    opens none -- it joins one. Announced so every window draws the same bubble
+    from the same frame, the sender's included: ``turn.send`` answers before the
+    text has reached the running turn, and a second window never sees the call
+    at all.
+    """
+
+    turn_id: str = Field(
+        ...,
+        description=(
+            "The id minted for this text, not the running turn's. It is what the fallback "
+            "turn's events carry if the host ends before draining it, which is how a client "
+            "tells the two views of one message apart."
+        ),
+    )
+    content: str
+    target: DirectTarget | None = None
+
+
+class MessageInjectedEvent(_Strict):
+    type: Literal["message.injected"]
+    payload: MessageInjectedPayload
+
+
 class TurnStartedDelegated(_Strict):
     """Which delegated run re-entered the conversation, on the live boundary.
 
@@ -386,7 +441,7 @@ class TurnStartedDelegated(_Strict):
 
     kind: Literal["spawn", "dag"]
     label: str
-    status: Literal["ok", "error", "exception", "notice"]
+    status: Literal["ok", "error", "exception", "notice", "cancelled"]
     run_id: str | None = None
     node_id: str | None = Field(
         None,
@@ -544,6 +599,27 @@ class FileChange(_Strict):
     )
 
 
+class FileRemoval(_Strict):
+    """One file a tool call made vanish, with the text it held when known.
+
+    The counterpart of :class:`FileChange`, and it cannot be one: a removal has no
+    ``after``, and its ``before`` is not a distinction but a best effort. No tool
+    deletes a file as its purpose, so what is reported here was read off the disk
+    either side of a shell command, and the content is absent when nothing had
+    read it, when it was too large to hold, or when it was not text at all.
+    """
+
+    path: str = Field(description="Absolute path of the file that is gone.")
+    before: str | None = Field(
+        default=None,
+        description=(
+            "The contents the file held before it went, when they could be captured. Absent "
+            "means unknown -- not that the file was empty -- so a client draws the deletion "
+            "with whatever it already knew of the file, or with no body at all."
+        ),
+    )
+
+
 class ToolCompletePayload(_Strict):
     tool_call_id: str
     result_preview: str
@@ -563,6 +639,14 @@ class ToolCompletePayload(_Strict):
         ),
     )
     file_change: FileChange | None = None
+    file_removed: list[FileRemoval] | None = Field(
+        default=None,
+        description=(
+            "The files this call made vanish. Absent on every call that removed nothing, "
+            "which is nearly all of them; nothing else on the wire records a deletion, "
+            "since the file a command unlinked is gone by the time anyone can look."
+        ),
+    )
 
 
 class ToolCompleteEvent(_Strict):
@@ -627,7 +711,7 @@ class CronDeliveredEvent(_Strict):
 class SubagentDeliveredPayload(_Strict):
     kind: Literal["spawn", "dag"]
     label: str = Field(..., description="The spawn's display label, or the dag's run_id.")
-    status: Literal["ok", "error", "exception", "notice"]
+    status: Literal["ok", "error", "exception", "notice", "cancelled"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
     node_id: str | None = Field(
         default=None,
@@ -710,6 +794,34 @@ class SubagentStatusEvent(_Strict):
 DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "exception"]
 
 
+class _FromAStint(_Strict):
+    """The three fields a round of a stint adds to a graph's progress.
+
+    A stint dispatches one ordinary graph a round, so every dag event it causes
+    is an ordinary dag event plus these. Absent on the graphs a tool call
+    dispatched, which is most of them -- a reader that does not know the fields
+    sees exactly what it saw before.
+    """
+
+    stint_id: str | None = Field(
+        default=None,
+        description=(
+            "The multi-round run this graph is one round of. Absent on an ordinary graph, "
+            "which is every graph a tool call dispatched."
+        ),
+    )
+    round_index: int | None = Field(
+        default=None, description="Which round of that run this graph is, counting from one."
+    )
+    round_budget: int | None = Field(
+        default=None,
+        description=(
+            'Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening '
+            "the run. Absent when the dispatcher did not say."
+        ),
+    )
+
+
 class DagRunStartedNode(_Strict):
     id: str
     subagent: str
@@ -718,7 +830,7 @@ class DagRunStartedNode(_Strict):
     node_summary: str | None = None
 
 
-class DagRunStartedPayload(_Strict):
+class DagRunStartedPayload(_FromAStint):
     run_id: str
     tool_call_id: str | None = None
     task_summary: str | None = Field(
@@ -736,7 +848,7 @@ class DagRunStartedEvent(_Strict):
     payload: DagRunStartedPayload
 
 
-class DagNodeUpdatedPayload(_Strict):
+class DagNodeUpdatedPayload(_FromAStint):
     run_id: str
     tool_call_id: str | None = None
     node: str
@@ -793,7 +905,7 @@ class DagRunFile(_Strict):
     error: str | None = None
 
 
-class DagRunCompletedPayload(_Strict):
+class DagRunCompletedPayload(_FromAStint):
     run_id: str
     tool_call_id: str | None = None
     dir: str
@@ -912,6 +1024,107 @@ class DagNodeParams(_Strict):
 
 class DagNodeResult(_Strict):
     node: DagNodeDetail
+
+
+# ---------------------------------------------------------------------------
+# tasks.* -- a conversation's delegated work as tasks, read off disk
+# ---------------------------------------------------------------------------
+
+TaskKind = Literal["spawn", "dag"]
+
+TaskStatus = Literal["running", "completed", "failed", "interrupted", "cancelled"]
+
+
+class TaskCounts(_Strict):
+    total: int
+    pending: int
+    running: int
+    completed: int
+    failed: int
+    skipped: int
+    cancelled: int
+    interrupted: int
+    exception: int = Field(
+        ...,
+        description=(
+            "Nodes suspended on a verdict, waiting for resolve_dag_node. A running row with one of these "
+            "is waiting on a decision, not working."
+        ),
+    )
+
+
+class TaskReplan(_Strict):
+    """Present only on a run a replan superseded; ``started=false`` means the successor never began."""
+
+    run_id: str
+    from_node: str | None = None
+    reason: str | None = None
+    started: bool
+    error: str | None = None
+
+
+class TaskFile(_Strict):
+    """One file a node wrote, as the lane that ran it recorded the tool result."""
+
+    path: str
+    op: Literal["add", "write", "edit", "delete"]
+    add: int
+    del_: int = Field(..., alias="del")
+    size: int | None = None
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class TaskNode(_Strict):
+    """One step of a task: a graph node, or a spawn's single node."""
+
+    node_id: str
+    node_summary: str | None = None
+    agent: str
+    instance: str | None = None
+    status: DagSnapshotNodeStatus
+    depends_on: list[str]
+    started_at: int | None = None
+    ended_at: int | None = None
+    error: str | None = Field(default=None, description="Why it failed, capped at 500 characters.")
+    tokens_in: int | None = Field(
+        default=None, description="Null when the lane cannot report usage -- never zero for that."
+    )
+    tokens_out: int | None = None
+    tool_call_count: int | None = None
+    tool_failure_count: int | None = None
+    has_output: bool | None = None
+    prompt_template: str | None = None
+    inputs: dict[str, Any] | None = None
+    skills: list[str] | None = None
+    mcps: list[str] | None = None
+    files: list[TaskFile]
+
+
+class TaskRow(_Strict):
+    """One unit of delegated work a conversation started, with its nodes inline."""
+
+    id: str
+    kind: TaskKind
+    task_summary: str | None = None
+    status: TaskStatus
+    replan: TaskReplan | None = None
+    started_at: int | None = None
+    ended_at: int | None = None
+    agent: str | None = None
+    handle: str | None = None
+    counts: TaskCounts
+    nodes: list[TaskNode]
+
+
+class TasksListParams(_Strict):
+    session_key: str
+    kind: TaskKind | None = None
+    id: str | None = None
+
+
+class TasksListResult(_Strict):
+    tasks: list[TaskRow]
 
 
 class CronMissedItem(_Strict):
@@ -1034,6 +1247,7 @@ class SessionNamingEndedEvent(_Strict):
 TurnEvent = Annotated[
     Union[
         MessageStartEvent,
+        MessageInjectedEvent,
         TurnStartedEvent,
         EpisodeStartEvent,
         NoticeEvent,
@@ -1079,6 +1293,7 @@ class SessionListItem(_Strict):
     updated_at: float = Field(..., description="Unix timestamp of the latest user or assistant message.")
     title: str
     pinned: bool = Field(default=False, description="User pinned this session to the top of the picker.")
+    running: bool = Field(default=False, description="A turn is in flight on this session right now.")
     workdir: str | None = Field(
         default=None,
         description=(
@@ -1091,6 +1306,9 @@ class SessionListItem(_Strict):
 class SessionListParams(_Strict):
     limit: int | None = Field(default=None, description="Max sessions to return.")
     channels: list[str] | None = Field(default=None, description="Session channels to include; defaults to tui.")
+    archived: bool | None = Field(
+        default=None, description="True lists only archived sessions; absent or false lists the live ones."
+    )
 
 
 class SessionListResult(_Strict):
@@ -1264,6 +1482,45 @@ class SessionExportResult(_Strict):
     )
 
 
+class SessionUsageParams(_Strict):
+    """Params for session.usage — report on the named session."""
+
+    session_id: str = Field(..., description="Full session_key to report on.")
+
+
+class SessionUsageResult(_Strict):
+    """What one conversation has spent, its delegations included.
+
+    Token counters are sums over every call recorded under the session's root
+    key, so ``total`` is those four added up rather than a provider's own total.
+    Cost sums the amounts providers reported and stays None when none of them
+    reported one (a plan-billed model), which is a client's cue to draw no cost
+    row at all; ``cost_missing_calls`` is how many calls went unpriced, and
+    ``cost_status`` says whether the sum is the whole bill or part of it.
+    """
+
+    calls: int = Field(..., description="Recorded calls under this session's root.")
+    model: str = Field(..., description="The model this session runs on now.")
+    input: int = Field(..., description="Fresh input tokens; cache excluded.")
+    output: int = Field(..., description="Output tokens.")
+    cache_read: int = Field(..., description="Cache-read tokens.")
+    cache_write: int = Field(..., description="Cache-write tokens.")
+    total: int = Field(..., description="input + output + cache_read + cache_write.")
+    cost_usd: float | None = Field(
+        default=None,
+        description="Sum of provider-reported USD; null when no call reported a price.",
+    )
+    cost_status: Literal["estimated", "exact"] = Field(
+        ...,
+        description="exact when every call reported a price; estimated when some did not.",
+    )
+    cost_missing_calls: int = Field(..., description="Calls with no reported price, left out of cost_usd.")
+    context_max: int = Field(..., description="Context window of the session's model; 0 when unknown.")
+    context_used: int = Field(..., description="Estimated tokens the next call would send.")
+    context_percent: int = Field(..., description="context_used as a percentage of context_max.")
+    context_estimated: bool = Field(..., description="True when context_used is a tiktoken estimate.")
+
+
 class SessionHistoryParams(_Strict):
     session_key: str
     max_messages: int | None = Field(
@@ -1334,6 +1591,10 @@ class TurnSubscribeParams(_Strict):
 
 class TurnSubscribeResult(_Strict):
     subscription_id: str
+    running: bool = Field(
+        default=False,
+        description="A turn is in flight on this session, and this subscription receives the rest of it.",
+    )
 
 
 class TurnUnsubscribeParams(_Strict):
@@ -1443,6 +1704,9 @@ class ModelLabel(_Strict):
     capabilities: list[str] = Field(default_factory=list)
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
+    #: The bucket a model list files this model under, from what it writes
+    #: (``registry_data.kind_of``): a model that reads images is still text.
+    kind: Literal["text", "image", "audio", "video", "embedding", "reranker"]
     #: Tokens the model reads in one request. Resolved from the tables that also
     #: route, never from the display registry -- a window sizes trimming, so the
     #: number a picker shows has to be the number a request is sized with. None
@@ -1469,6 +1733,7 @@ class ModelOptionProvider(_Strict):
     slug: str
     name: str
     homepage: str | None = None
+    key_url: str | None = None
     #: The vendor's own model index. Distinct from ``homepage`` on purpose: the
     #: question a settings page asks is "which model do I put here", and a
     #: marketing front page does not answer it.
@@ -1493,8 +1758,21 @@ class ModelOptionProvider(_Strict):
     protocols: dict[str, str] = Field(default_factory=dict)
     protocol_overrides: dict[str, str] = Field(default_factory=dict)
     model_labels: dict[str, ModelLabel] | None = None
+    #: Custom request headers by name, each value redacted.
+    extra_headers: dict[str, str] = Field(default_factory=dict)
     total_models: int
     needs_api_base: bool
+    #: The registry's ``is_gateway``: resells other vendors' models under
+    #: vendor/model ids. The catalogue's filter reads it; no client can derive
+    #: it from a slug.
+    gateway: bool = False
+    #: Every model-id prefix that names this provider: its own name plus the
+    #: ones it used to answer to (``ProviderSpec.route_names``). A client
+    #: comparing two spellings of one model has to strip any of them, the way
+    #: ``providers/wire.py``'s ``merge_key`` does, and that spec says to compare
+    #: against this set rather than rebuild it -- so it travels rather than
+    #: being mirrored per surface.
+    route_names: list[str] = Field(default_factory=list)
     #: Addresses to pick between, empty for the providers that have only one.
     #: A row that states these is drawn with the list in place of a host field.
     platforms: list[ModelOptionPlatform] = Field(default_factory=list)
@@ -1598,6 +1876,9 @@ class ModelAddModelParams(_Strict):
     slug: str
     model: str
     label: str | None = None
+    description: str | None = Field(
+        default=None, description="One line about the model; an empty string clears it, as it does for label."
+    )
     capabilities: list[str] | None = None
     input_modalities: list[str] | None = None
     output_modalities: list[str] | None = None
@@ -1606,6 +1887,39 @@ class ModelAddModelParams(_Strict):
 
 class ModelAddModelResult(_Strict):
     provider: ModelOptionProvider
+
+
+class ModelAddModelsParams(_Strict):
+    slug: str
+    models: list[str]
+    session_id: str | None = None
+
+
+class ModelAddModelsResult(_Strict):
+    provider: ModelOptionProvider
+
+
+class ModelSetFieldsParams(_Strict):
+    slug: str
+    fields: dict[str, JsonValue] = Field(
+        ...,
+        description="api_base, deployment, api_version, and extra_headers as a patch {name: value | null}.",
+    )
+
+
+class ModelOauthLoginParams(_Strict):
+    slug: str
+    session_id: str | None = None
+
+
+class ModelOauthLoginResult(_Strict):
+    verification_uri: str
+    user_code: str
+    expires_in: int = Field(..., description="Seconds the code stays valid; the gateway polls until then.")
+
+
+class ModelSetFieldsResult(_Strict):
+    previous: dict[str, JsonValue] = Field(..., description="Previous values, header values redacted.")
 
 
 class ModelRemoveModelParams(_Strict):
@@ -1715,6 +2029,14 @@ class ConfigSetResult(_Strict):
     # moves the sessions that never chose one, so scope alone cannot answer it
     # and a client that guesses shows a model the conversation is not on.
     applies_to_session: bool | None = None
+    needs_restart: bool | None = Field(
+        default=None,
+        description=(
+            "True when the write landed in a process that has no agent loop: the config is right "
+            "and this gateway still cannot run a turn on it, because the wiring a turn needs is "
+            "assembled once at stack build."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1840,6 +2162,102 @@ class ReloadMcpResult(_Strict):
     message: str
     reloaded: int
     tools_changed: bool
+
+
+# ---------------------------------------------------------------------------
+# import.* -- the onboarding wizard's data-sync step, over the cold-start
+# importer raven.importer already runs for the CLI.
+# ---------------------------------------------------------------------------
+
+
+class ImportScanParams(_Strict):
+    pass
+
+
+class ImportPlatformScan(_Strict):
+    platform: str
+    scannable: bool
+    memory_files: int
+    conversations: int
+    estimated_size: int
+    # Skills are directories, not message sources: counted here because a
+    # platform can have only these to import, and the run still installs them.
+    skills: int
+
+
+class ImportScanResult(_Strict):
+    ready: bool
+    reason: str
+    platforms: list[ImportPlatformScan]
+
+
+class ImportRunParams(_Strict):
+    platforms: list[str]
+    tier: Literal["memory_files", "full"]
+
+
+class ImportRunResult(_Strict):
+    started: bool
+    total: int
+    detail: str
+
+
+class ImportStatusParams(_Strict):
+    pass
+
+
+class ImportPlatformCounts(_Strict):
+    total: int
+    submitted: int
+    failed: int
+
+
+class ImportPhase(_Strict):
+    kind: Literal["profile", "skills"]
+    current: int
+    total: int
+
+
+class ImportCurrentSource(_Strict):
+    platform: str
+    source_key: str
+    sent: int
+    total: int
+
+
+class ImportPhases(_Strict):
+    status: Literal["pending", "done", "failed", "cancelled"]
+    errors: list[str]
+
+
+class ImportStatusResult(_Strict):
+    running: bool
+    total: int
+    submitted: int
+    failed: int
+    by_platform: dict[str, ImportPlatformCounts]
+    # The post-import phase in flight, when one is: the message pass reports
+    # through the counts above, the profile mirror and skill install through this.
+    phase: ImportPhase | None = None
+    # The source the message pass is on and how many of its messages have
+    # landed; the per-source counts stand still through a large source.
+    current: ImportCurrentSource | None = None
+    # How the last run's phases stand on disk. The counts above are settled
+    # before the phases begin, so without this a run the gateway lost during
+    # them, or one whose phase failed, would read as finished.
+    phases: ImportPhases | None = None
+    # The last run's own request, so a client that finds it stopped short can
+    # start the same one again without having remembered what was asked.
+    tier: Literal["memory_files", "full"] | None = None
+    platforms: list[str] = []
+
+
+class ImportStopParams(_Strict):
+    pass
+
+
+class ImportStopResult(_Strict):
+    stopped: bool
 
 
 # ---------------------------------------------------------------------------
@@ -2113,6 +2531,19 @@ class SubagentsUpdateParams(_Strict):
     api_key: str | None = None
     mcps: list[str] | None = None
     allow_mcp_secrets: bool | None = None
+    model: str | None = None
+    provider: str | None = Field(
+        default=None,
+        description=(
+            "The provider whose credential serves `model`, for the built-in row: the id is stored naming it, "
+            "the way `config.set model` stores the host's. Ignored for an acp row, whose values are the "
+            "agent's own."
+        ),
+    )
+    clear_model: bool = Field(
+        default=False,
+        description="Drop the row's own model, reverting to the agent's default. Wins over `model` when both are sent.",
+    )
 
 
 class SubagentsUpdateResult(_Strict):
@@ -2162,7 +2593,7 @@ class SubagentsProbeResult(_Strict):
 
 class SubagentsTestParams(_Strict):
     name: str
-    source: Literal["config", "preset"] = "config"
+    source: Literal["config", "preset", "vendored"] = "config"
 
 
 class SubagentsTestResult(_Strict):
@@ -2409,6 +2840,12 @@ class McpSnapshot(_Strict):
             "client is attached, which is every connect started at assembly time."
         ),
     )
+    auth: Literal["none", "apikey", "oauth"] | None = Field(
+        default=None, description="How the server authenticates (ext.list rows only)."
+    )
+    credentialed: bool | None = Field(
+        default=None, description="Whether it holds the credential that mode needs (ext.list rows only)."
+    )
 
 
 class PlughubCatalogItem(_Strict):
@@ -2503,6 +2940,36 @@ class PlugAuthParams(_Strict):
 
 
 class PlugAuthResult(_Strict):
+    name: str
+    mcp: McpSnapshot | None = None
+
+
+class PlugRetryParams(_Strict):
+    name: str
+
+
+class PlugRetryResult(_Strict):
+    name: str
+    mcp: McpSnapshot | None = None
+
+
+class PlugRevokeParams(_Strict):
+    name: str
+
+
+class PlugRevokeResult(_Strict):
+    name: str
+    mcp: McpSnapshot | None = None
+
+
+class PlugConfigureParams(_Strict):
+    name: str
+    form: dict[str, str] = Field(
+        default_factory=dict, description="The catalog form's credential fields; an empty value clears one."
+    )
+
+
+class PlugConfigureResult(_Strict):
     name: str
     mcp: McpSnapshot | None = None
 
@@ -2635,6 +3102,17 @@ class SessionInitInfo(_Strict):
             "client resuming a session is already being told what it is resuming."
         ),
     )
+    running: bool = Field(default=False, description="A turn is in flight on this session right now.")
+    running_ms: int | None = Field(
+        default=None,
+        description=(
+            "How long the turn in flight has been running, in milliseconds, measured on the server; "
+            "null when nothing is running or the question carries no readable stamp. The elapsed "
+            "rather than the stamp it was measured from: that stamp is a server wall clock, and a "
+            "client in another timezone reading it against its own clock gets the offset between "
+            "the two back as the turn's age."
+        ),
+    )
 
 
 class TranscriptTurnEnded(_Strict):
@@ -2660,12 +3138,24 @@ class TranscriptDelegated(_Strict):
 
     kind: Literal["spawn", "dag"]
     label: str
-    status: Literal["ok", "error", "exception", "notice"]
+    status: Literal["ok", "error", "exception", "notice", "cancelled"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
     node_id: str | None = Field(
         default=None,
         description="Set for a dag node's own message, so a client can place it against that row.",
     )
+
+
+class TranscriptFileRemoval(_Strict):
+    """One file a stored tool call made vanish, on its role='tool' entry.
+
+    The line count and not the body: the text of a removed file is what the live
+    event carries, while a reloaded page needs to know the file went and how big
+    the hole is. Nothing else in a stored transcript records a deletion.
+    """
+
+    path: str
+    del_: int = Field(..., alias="del", description="Lines the file held when it went; 0 when unknown.")
 
 
 class TranscriptMessage(_Strict):
@@ -2715,6 +3205,10 @@ class TranscriptMessage(_Strict):
         default=None,
         description="A file tool's unified diff of the change it made, on its role='tool' entry.",
     )
+    file_removed: list[TranscriptFileRemoval] | None = Field(
+        default=None,
+        description="The files that call made vanish, on its role='tool' entry. Absent when it removed none.",
+    )
     turn_ended: TranscriptTurnEnded | None = Field(
         default=None,
         description="Present on the closing entry of a turn that was cancelled or died: why the transcript stops.",
@@ -2748,6 +3242,15 @@ class TranscriptMessage(_Strict):
             "body from inside the untrusted fence in `text`; drawing `text` as prose "
             "attributes to the user a question they never asked, fence markers "
             "included. `origin` names who opened the turn; this says which run came back."
+        ),
+    )
+    mid_turn: bool | None = Field(
+        default=None,
+        description=(
+            "Set on a user entry merged into a turn already running, not the prompt that "
+            "opened one. A reader draws it INSIDE the turn: no new turn number, no fold "
+            "closed over the narration above it, and the text before it is still that "
+            "turn's narration rather than its answer."
         ),
     )
 
@@ -2847,6 +3350,15 @@ class ExtToolRow(_Strict):
         description=(
             "Set when the tool exists but is withheld for want of a key. The model cannot call it; "
             "the row is here so the page can offer the field instead of the tool simply being absent."
+        ),
+    )
+    builtin: bool | None = Field(
+        default=None,
+        description=(
+            "True for a tool whose off switch the loop would not honour: the two tool-search "
+            "meta-tools, and the MCP resource and prompt meta-tools the loop registers and "
+            "withdraws on its own. Not the schema-hidden set: hidden from the schema and withheld "
+            "from the model are different mechanisms, and the DAG controls answer to the switch."
         ),
     )
 
@@ -2968,6 +3480,7 @@ class SettingsSetParams(_Strict):
 class SettingsSetResult(_Strict):
     applied: bool
     previous: JsonValue
+    warning: str | None = None
 
 
 class ApiUsageTotals(_Strict):
@@ -3009,6 +3522,14 @@ class ToolUsage(_Strict):
 class SettingsUsageParams(_Strict):
     session_key: str | None = None
     days: int | None = Field(default=None, description="Window to scan; 30 by default, capped at 90.")
+    from_: str | None = Field(
+        default=None, alias="from", description="First day (YYYY-MM-DD), inclusive; clamped to 90 days back."
+    )
+    to: str | None = Field(default=None, description="Last day (YYYY-MM-DD), inclusive; today when absent.")
+
+
+class DailyUsage(ApiUsageTotals):
+    date: str
 
 
 class SettingsUsageResult(_Strict):
@@ -3016,6 +3537,9 @@ class SettingsUsageResult(_Strict):
     sessions: list[str] = Field(default_factory=list)
     session_titles: dict[str, str] = Field(default_factory=dict)
     days: int
+    from_: str = Field(alias="from")
+    to: str
+    daily: list[DailyUsage] = Field(..., description="One entry per day of the range, zeros for days without a file.")
     llm: LlmUsage
     tools: ToolUsage
 
@@ -3023,10 +3547,22 @@ class SettingsUsageResult(_Strict):
 class EverosSection(_Strict):
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
-    model: str = Field(..., description="Empty when the shipped placeholder is still in place.")
-    base_url: str
-    provider: str
-    api_key_set: bool = Field(..., description="Whether a key is stored; the value never goes on the wire.")
+    model: str = Field(..., description="Empty when nothing is pinned for this role.")
+    provider: str = Field(..., description="The vendor serving `model`. Empty when nothing is pinned.")
+    api_key_set: bool = Field(
+        ...,
+        description=(
+            "Whether that provider has a usable credential -- the same question the memory "
+            "gate answers, so the card and the gate cannot disagree. No key ever goes on the wire."
+        ),
+    )
+    env_managed: bool = Field(
+        default=False,
+        description=(
+            "The endpoint came from exported EVEROS_<ROLE>__* variables, which outrank raven. "
+            "The slot is read-only: raven cannot edit a shell."
+        ),
+    )
 
 
 class SettingsEverosParams(_Strict):
@@ -3036,6 +3572,28 @@ class SettingsEverosParams(_Strict):
 class SettingsEverosResult(_Strict):
     sections: dict[str, EverosSection]
     config_path: str
+    owned: bool = Field(
+        default=True,
+        description=(
+            "Whether raven manages this EverOS root. False makes the role slots read-only: "
+            "raven neither writes that install's config nor starts or stops its server."
+        ),
+    )
+    supports: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Which roles each vendor can serve, so a slot does not offer a provider that "
+            "cannot do the job. Keyed by provider name."
+        ),
+    )
+    required: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Roles that cannot be cleared, so the page knows which slots get a clear "
+            "control. Sent rather than mirrored: a mirrored copy drew one on a slot whose "
+            "clear the write refuses."
+        ),
+    )
     available: bool = Field(
         description="Whether this install has an EverOS to configure at all. False leaves sections empty and note set.",
     )
@@ -3050,21 +3608,31 @@ class SettingsEverosResult(_Strict):
 
 
 class SettingsEverosSetParams(_Strict):
-    section: str
-    fields: dict[str, str] | None = Field(default=None, description="Merged into the section; ignored when clearing.")
-    clear: bool | None = Field(default=None, description="Drop the section; refused for llm and embedding.")
-    borrow_from: str | None = Field(
+    section: str = Field(description="Which EverOS role: llm, embedding, rerank or multimodal.")
+    model: str | None = Field(default=None, description="Model id, as the provider names it.")
+    provider: str | None = Field(
         default=None,
         description=(
-            "Take api_key and base_url from this connected provider, copied not "
-            "referenced. Wins over the same keys in `fields`, which cannot carry a "
-            "real key: the page only ever sees a redacted one."
+            "Which configured provider serves `model`. Its address and key are what the "
+            "call goes out on, resolved at spawn time rather than copied -- so rotating "
+            "a key is one edit in the provider and every role serving on it follows."
         ),
     )
+    protocol: str | None = Field(
+        default=None,
+        description=(
+            "Rerank only, and only for a self-hosted endpoint: which request shape EverOS "
+            "must post (`deepinfra` / `vllm` / `dashscope`). A curated vendor's shape comes "
+            "from the vendor table and this is ignored; somebody's own server is the one "
+            "case nothing but the operator can answer."
+        ),
+    )
+    clear: bool | None = Field(default=None, description="Drop the role; refused for llm and embedding.")
 
 
 class SettingsEverosSetResult(_Strict):
     applied: bool
+    warning: str | None = None
 
 
 class ChannelField(_Strict):
@@ -3185,6 +3753,20 @@ class FsDirsResult(_Strict):
     )
 
 
+class FsPickDirParams(_Strict):
+    pass
+
+
+class FsPickDirResult(_Strict):
+    path: str | None = Field(
+        None, description="The folder chosen, absolute and resolved; absent when the dialog was dismissed."
+    )
+    ok: bool = Field(
+        ...,
+        description="Whether a session may be pinned to the chosen folder (see raven.agent.workdir); false with no path.",
+    )
+
+
 class FsReadParams(_Strict):
     path: str
     max_bytes: int | None = None
@@ -3207,6 +3789,43 @@ class FsUploadResult(_Strict):
     path: str = Field(..., description="Workspace-relative path to hand the agent; uploads never return bytes.")
     abs_path: str
     size: int
+
+
+class DeckTemplatesListParams(_Strict):
+    covers: bool = Field(True, description="False lists the names alone, without rendering a cover for each.")
+
+
+class DeckTemplateRow(_Strict):
+    name: str = Field(..., description="The template's stem, which deck.templates.pick takes.")
+    label: str = Field(..., description="The stem as words, for the picker's caption.")
+    size: int
+    cover: str | None = Field(
+        None, description="The first page as a JPEG data URL, or null where this host cannot render one."
+    )
+
+
+class DeckTemplatesListResult(_Strict):
+    templates: list[DeckTemplateRow]
+    available: bool = Field(
+        ..., description="False when the deck engine is not installed here; the picker then stays hidden."
+    )
+    pending: bool = Field(
+        False, description="True while a cover is still being drawn in the background; ask again for it."
+    )
+
+
+class DeckTemplatesPagesParams(_Strict):
+    name: str = Field(..., description="A row's name from deck.templates.list.")
+
+
+class DeckTemplatesPagesResult(_Strict):
+    pages: list[str] = Field(
+        ..., description="Every page as a JPEG data URL, in order; empty where this host cannot render."
+    )
+
+
+class DeckTemplatesPickParams(_Strict):
+    name: str = Field(..., description="A row's name from deck.templates.list.")
 
 
 class FsRevealParams(_Strict):
@@ -3332,16 +3951,6 @@ class MemoryListResult(_Strict):
     )
 
 
-class MemoryDeleteParams(_Strict):
-    kind: MemoryKind
-    id: str
-
-
-class MemoryDeleteResult(_Strict):
-    ok: bool
-    removed: int = Field(..., description="Deleting an episode also drops its derived facts and foresight.")
-
-
 # ---------------------------------------------------------------------------
 # The round-trip answer sinks, slash routing, and the rest
 # ---------------------------------------------------------------------------
@@ -3368,10 +3977,46 @@ class ApprovalRespondResult(_Strict):
     ok: bool = Field(..., description="False for an unknown, expired or mis-bound request; the caller fails closed.")
 
 
+class ApprovalRevokeParams(_Strict):
+    """Take back the exec allow rule one approval answer wrote."""
+
+    approval_id: str = Field(..., description="The answered request whose grant to take back.")
+
+
+class ApprovalRevokeResult(_Strict):
+    ok: bool = Field(
+        ...,
+        description="False when that answer wrote no rule of its own, the undo came twice, or the file could not be written.",
+    )
+
+
+class ApprovalPendingParams(_Strict):
+    """The approval requests still waiting for an answer, for a page that lost its sheets."""
+
+    session_id: str | None = Field(
+        default=None, description="One conversation's requests; every conversation's when absent."
+    )
+    conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
+
+
+class ApprovalPendingResult(_Strict):
+    requests: list[dict[str, Any]] = Field(
+        ..., description="Each open request's approval.request params, exactly as they were first sent."
+    )
+
+
 class ClarifyRespondParams(_Strict):
     answer: str
     request_id: str | None = None
     conversation_id: str | None = None
+    answers: list[str] | None = Field(
+        default=None,
+        description=(
+            "The whole batch's answers, aligned with the request's `batch`, from a surface that "
+            "collected them as one form; entries after the pending question's index answer the "
+            "later questions without another round trip."
+        ),
+    )
 
 
 class ClarifyRespondResult(_Strict):
@@ -3466,10 +4111,6 @@ class SessionSaveParams(_Strict):
 class SessionSteerParams(_Strict):
     session_id: str | None = None
     text: str | None = None
-
-
-class SessionUsageParams(_Strict):
-    session_id: str | None = None
 
 
 class SkillsReloadParams(_Strict):
@@ -3942,7 +4583,7 @@ class PlaybookRow(_Strict):
     name: str
     description: str
     task_summary: str
-    mode: Literal["dag", "prompt"]
+    mode: Literal["dag", "prompt", "stint"]
     confirm: bool
     origin: str
     disabled: bool
@@ -4014,10 +4655,68 @@ class PlaybookNode(_Strict):
     inputs: dict[str, Any]
 
 
+class PlaybookRole(_Strict):
+    """One role of a ``mode: stint`` playbook: who plays it, what it waits on,
+    and the paths it is judged against. ``terminal`` marks a role nothing else
+    waits on -- the only kind whose output the plan reads when deciding whether
+    to open another round, and so the only kind that can end one early."""
+
+    label: str
+    agent: str
+    node_summary: str
+    depends_on: list[str]
+    owns: list[str]
+    appends: list[str]
+    reads: list[str]
+    enforce_read: Literal["soft", "hard"]
+    enforce_write: Literal["soft", "hard"]
+    journal_section: str
+    verify_after: list[str]
+    max_handbacks: int
+    terminal: bool
+
+
+class PlaybookCheck(_Strict):
+    """One objective check a round may run. ``run`` is a real shell command,
+    which is why a playbook that declares any must be approved before it
+    starts."""
+
+    name: str
+    run: str
+    timeout_sec: float
+    needs_display: bool
+
+
+class PlaybookCarried(_Strict):
+    """A file rounds hand to each other. ``append`` marks the journal: the one
+    that may only grow, and the one a window of ``recent_rounds`` is read back
+    from."""
+
+    path: str
+    append: bool
+    recent_rounds: int
+    max_chars: int
+
+
+class PlaybookStint(_Strict):
+    """What ``mode: stint`` adds to a playbook, and what a person approving one
+    has to be able to read: who runs, what each may write, which commands run,
+    and when it stops. Absent on every other mode."""
+
+    roles: list[PlaybookRole]
+    carried: list[PlaybookCarried]
+    checks: list[PlaybookCheck]
+    max_rounds: int
+    until: str
+    report: Literal["round", "end"]
+
+
 class PlaybookDetail(_Strict):
-    """One whole playbook: its identity, its runtime inputs, and either the graph
-    (``mode: dag``) or the assembly guidance a model turns into one
-    (``mode: prompt``). ``path`` is the file this was read from.
+    """One whole playbook: its identity, its runtime inputs, and the shape it
+    runs as -- the graph (``mode: dag``), the assembly guidance a model turns
+    into one (``mode: prompt``), or the roles and stopping rules of a
+    multi-round run (``mode: stint``, under ``stint``). ``path`` is the file
+    this was read from.
 
     ``version`` is the spec format version the file declares, not a revision of
     the playbook's content."""
@@ -4026,7 +4725,7 @@ class PlaybookDetail(_Strict):
     description: str
     task_summary: str
     version: int
-    mode: Literal["dag", "prompt"]
+    mode: Literal["dag", "prompt", "stint"]
     confirm: bool
     origin: str
     disabled: bool
@@ -4040,6 +4739,10 @@ class PlaybookDetail(_Strict):
 
     Empty for a playbook that names only servers the host configures, which is
     most of them."""
+    stint: PlaybookStint | None = None
+    """Present only on ``mode: stint``. Absent rather than empty: an empty one
+    reads as a plan with no roles, no checks and a budget of zero, which is
+    three statements about a plan that does not exist."""
 
 
 class PlaybooksListParams(_Strict):
@@ -4052,6 +4755,107 @@ class PlaybooksListResult(_Strict):
 
 class PlaybooksGetParams(_Strict):
     name: str
+
+
+class StintRoundRow(_Strict):
+    """One round of a plan, as the list needs it."""
+
+    index: int
+    run_id: str
+    attempt: int
+    status: str
+    checks: list[str]
+    """``<name>=<status>`` per check the round ran, in the order they ran."""
+    violations: list[str]
+
+
+class StintQuestionRow(_Strict):
+    """Something a round asked a person, and what came back."""
+
+    round: int
+    role: str
+    text: str
+    answer: str
+
+
+class StintRow(_Strict):
+    """One multi-round run, as the list needs it.
+
+    ``live`` rather than a status string alone, because "is anything still
+    happening here" is the question a list is read for and ``interrupted`` is a
+    live plan with nobody advancing it.
+    """
+
+    stint_id: str
+    playbook: str
+    round_index: int
+    max_rounds: int
+    status: str
+    live: bool
+    unfinished: bool
+    """Not over: running, interrupted or paused. What `stop` acts on."""
+    stop_reason: str
+    workdir: str
+    branch: str
+    started_at_ms: int
+    ended_at_ms: int
+    open_questions: int
+
+
+class StintDetail(_Strict):
+    """One stint, whole: every round it ran and everything it is waiting on."""
+
+    stint: StintRow
+    rounds: list[StintRoundRow]
+    questions: list[StintQuestionRow]
+
+
+class PlaybooksStintsListParams(_Strict):
+    pass
+
+
+class PlaybooksStintsListResult(_Strict):
+    stints: list[StintRow]
+
+
+class PlaybooksStintsGetParams(_Strict):
+    stint_id: str
+
+
+class PlaybooksStintsStopParams(_Strict):
+    stint_id: str
+    now: bool | None = None
+    """Cut the round in flight short instead of letting it finish."""
+
+
+class PlaybooksStintsPauseParams(_Strict):
+    stint_id: str
+
+
+class PlaybooksStintsResumeParams(_Strict):
+    stint_id: str
+
+
+class PlaybooksStintsExtendParams(_Strict):
+    stint_id: str
+    rounds: int
+
+
+class StintTakeUp(StintDetail):
+    """A stint after a verb that opened a round in this process, with what the driver said.
+
+    The detail alone would not say whether a round started: a resume that found
+    every role finished, or a stint something else is still working, answers
+    with a sentence and no round, and the sentence is the answer.
+    """
+
+    reply: str
+
+
+class PlaybooksStintsAnswerParams(_Strict):
+    stint_id: str
+    question: int
+    text: str
 
 
 class PlaybookCredentialParam(_Strict):
@@ -4334,9 +5138,10 @@ class ShellExecResult(_Strict):
 
 
 class SkillsManageParams(_Strict):
-    action: str = Field(..., description="One of list, inspect, search, browse, install.")
+    action: str = Field(..., description="One of list, inspect, search, browse, install, open.")
     query: str | None = None
     page: int | None = None
+    file: str | None = Field(default=None, description="`open`: a file name relative to the skill's directory.")
 
 
 class SkillsManageResult(_Strict):
@@ -4350,6 +5155,7 @@ class SkillsManageResult(_Strict):
     total: int | None = None
     total_pages: int | None = None
     installed: bool | None = Field(default=None, description="`install`.")
+    opened: bool | None = Field(default=None, description="`open`.")
     name: str | None = None
 
 
@@ -4416,6 +5222,14 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "playbooks.delete": (PlaybooksDeleteParams, PlaybooksDeleteResult),
     "playbooks.run": (PlaybooksRunParams, PlaybooksRunResult),
     "playbooks.create": (PlaybooksCreateParams, PlaybooksCreateResult),
+    # playbooks.stints.* -- the multi-round runs a `mode: stint` playbook started
+    "playbooks.stints.list": (PlaybooksStintsListParams, PlaybooksStintsListResult),
+    "playbooks.stints.get": (PlaybooksStintsGetParams, StintDetail),
+    "playbooks.stints.stop": (PlaybooksStintsStopParams, StintDetail),
+    "playbooks.stints.pause": (PlaybooksStintsPauseParams, StintDetail),
+    "playbooks.stints.resume": (PlaybooksStintsResumeParams, StintTakeUp),
+    "playbooks.stints.extend": (PlaybooksStintsExtendParams, StintTakeUp),
+    "playbooks.stints.answer": (PlaybooksStintsAnswerParams, StintDetail),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
     "plughub.detail": (PlughubDetailParams, PlughubDetailResult),
@@ -4423,6 +5237,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "plug.remove": (PlugRemoveParams, PlugRemoveResult),
     "plug.toggle": (PlugToggleParams, PlugToggleResult),
     "plug.auth": (PlugAuthParams, PlugAuthResult),
+    "plug.retry": (PlugRetryParams, PlugRetryResult),
+    "plug.revoke": (PlugRevokeParams, PlugRevokeResult),
+    "plug.configure": (PlugConfigureParams, PlugConfigureResult),
     "skillhub.search": (SkillhubSearchParams, SkillhubSearchResult),
     "skillhub.detail": (SkillhubDetailParams, SkillhubDetailResult),
     "skillhub.install": (SkillhubInstallParams, SkillhubInstallResult),
@@ -4444,6 +5261,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "session.close": (SessionCloseParams, SessionCloseResult),
     "session.branch": (SessionBranchParams, SessionBranchResult),
     "session.compress": (SessionCompressParams, SessionCompressResult),
+    "session.usage": (SessionUsageParams, SessionUsageResult),
     "session.status": (SessionStatusParams, SessionStatusResult),
     "session.set_mode": (SessionSetModeParams, SessionSetModeResult),
     # ext.list / cron.* / settings.* / channels.status / fs.* -- the console
@@ -4476,17 +5294,23 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "channels.qr": (ChannelsQrParams, ChannelsQrResult),
     "fs.list": (FsListParams, FsListResult),
     "fs.dirs": (FsDirsParams, FsDirsResult),
+    "fs.pick_dir": (FsPickDirParams, FsPickDirResult),
     "fs.read": (FsReadParams, FsReadResult),
     "fs.upload": (FsUploadParams, FsUploadResult),
+    "deck.templates.list": (DeckTemplatesListParams, DeckTemplatesListResult),
+    "deck.templates.pages": (DeckTemplatesPagesParams, DeckTemplatesPagesResult),
+    # The upload's own result: a picked template sits under uploads as an attachment would.
+    "deck.templates.pick": (DeckTemplatesPickParams, FsUploadResult),
     "fs.reveal": (FsRevealParams, FsRevealResult),
     "fs.open": (FsOpenParams, FsOpenResult),
     "deliverables.list": (DeliverablesListParams, DeliverablesListResult),
     # memory.*
     "memory.stats": (MemoryStatsParams, MemoryStatsResult),
     "memory.list": (MemoryListParams, MemoryListResult),
-    "memory.delete": (MemoryDeleteParams, MemoryDeleteResult),
     # the round-trip answer sinks
     "approval.respond": (ApprovalRespondParams, ApprovalRespondResult),
+    "approval.revoke": (ApprovalRevokeParams, ApprovalRevokeResult),
+    "approval.pending": (ApprovalPendingParams, ApprovalPendingResult),
     "clarify.respond": (ClarifyRespondParams, ClarifyRespondResult),
     "confirm.respond": (ConfirmRespondParams, ConfirmRespondResult),
     # slash routing and completion
@@ -4513,6 +5337,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "model.save_key": (ModelSaveKeyParams, ModelSaveKeyResult),
     "model.disconnect": (ModelDisconnectParams, ModelDisconnectResult),
     "model.add_model": (ModelAddModelParams, ModelAddModelResult),
+    "model.add_models": (ModelAddModelsParams, ModelAddModelsResult),
+    "model.set_fields": (ModelSetFieldsParams, ModelSetFieldsResult),
+    "model.oauth_login": (ModelOauthLoginParams, ModelOauthLoginResult),
     "model.fetch_models": (ModelFetchModelsParams, ModelFetchModelsResult),
     "model.remove_model": (ModelRemoveModelParams, ModelRemoveModelResult),
     "model.endpoints": (ModelEndpointsParams, ModelEndpointsResult),
@@ -4553,6 +5380,11 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "setup.status": (SetupStatusParams, SetupStatusResult),
     "reload.mcp": (ReloadMcpParams, ReloadMcpResult),
     "commands.catalog": (CommandsCatalogParams, CommandsCatalogResponse),
+    # import.* -- the onboarding wizard's data-sync step
+    "import.scan": (ImportScanParams, ImportScanResult),
+    "import.run": (ImportRunParams, ImportRunResult),
+    "import.status": (ImportStatusParams, ImportStatusResult),
+    "import.stop": (ImportStopParams, ImportStopResult),
     # hermes-only stubs
     "voice.toggle": (VoiceToggleParams, StubResult),
     "browser.manage": (BrowserManageParams, StubResult),
@@ -4567,7 +5399,6 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "voice.record": (VoiceRecordParams, StubResult),
     "session.save": (SessionSaveParams, StubResult),
     "session.steer": (SessionSteerParams, StubResult),
-    "session.usage": (SessionUsageParams, StubResult),
     "skills.reload": (SkillsReloadParams, StubResult),
     "reload.env": (ReloadEnvParams, StubResult),
     "sudo.respond": (SudoRespondParams, StubResult),
@@ -4588,6 +5419,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # dag.*
     "dag.get": (DagGetParams, DagGetResult),
     "dag.node": (DagNodeParams, DagNodeResult),
+    "tasks.list": (TasksListParams, TasksListResult),
 }
 
 __all__ = [
@@ -4623,6 +5455,8 @@ __all__ = [
     "SessionUndoResult",
     "SessionExportParams",
     "SessionExportResult",
+    "SessionUsageParams",
+    "SessionUsageResult",
     "MessageStartEvent",
     "SessionNamingEndedEvent",
     "SessionNamingEndedPayload",
@@ -4689,7 +5523,11 @@ __all__ = [
     "CronMissedItem",
     "CronMissedPayload",
     # playbooks
+    "PlaybookCarried",
+    "PlaybookCheck",
     "PlaybookDetail",
+    "PlaybookRole",
+    "PlaybookStint",
     "PlaybookNode",
     "PlaybookNodeShape",
     "PlaybookParam",

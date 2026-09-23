@@ -1,0 +1,146 @@
+// @vitest-environment happy-dom
+/* The page's wiring, for the two things import-direction's ratchet pushed
+ * onto this seam rather than onto a direct import: the tasks domain's
+ * openByNode and its five live-event consumers (state/session/stages.ts used
+ * to import features/tasks/store.ts directly for these), and the session
+ * pointer's own reload (features/tasks/store.ts's writes are guarded by the
+ * session key, so something has to ask again once it changes).
+ */
+
+import { describe, expect, it } from 'vitest'
+
+import { fakeGateway, loadPart, looseQuery } from '../../scripts/module-harness.mjs'
+
+import type { TaskRow } from '../features/tasks/types'
+import type { Sources } from '../state/sources'
+
+type Install = typeof import('./install')
+type Session = typeof import('../lib/session')
+
+async function harness(fakes: Record<string, Record<string, unknown>> = {}) {
+  const wiring = await loadPart(() => import('./install'), {
+    fakes: { 'src/lib/dom': { $: looseQuery() }, ...fakes },
+  }) as Install
+  await fakeGateway(() => Promise.resolve({}))
+  return wiring
+}
+
+describe('the tasks seam installSources grows', () => {
+  it('carries openByNode and the five live consumers as functions', async () => {
+    const wiring = await harness()
+    const { setSources, sources } = await import('../state/sources')
+    setSources({ composer: { slash: [] } } as unknown as Partial<Sources>)
+
+    wiring.installSources()
+
+    const tasks = sources.tasks as Sources['tasks']
+    expect(typeof tasks.openByNode).toBe('function')
+    expect(typeof tasks.onRunStarted).toBe('function')
+    expect(typeof tasks.onNodeUpdated).toBe('function')
+    expect(typeof tasks.onRunCompleted).toBe('function')
+    expect(typeof tasks.onRunReplanned).toBe('function')
+    expect(typeof tasks.onSubagentStatus).toBe('function')
+  })
+
+  /* The card's task cell and the delivered row both read this verb off the
+     seam, so a page that forgot to put it there would draw two doors that open
+     nothing -- and neither renderer test can see the wiring. */
+  it('puts the run opener on the transcript seam', async () => {
+    const wiring = await harness()
+    const { setSources, sources } = await import('../state/sources')
+    setSources({ composer: { slash: [] } } as unknown as Partial<Sources>)
+
+    wiring.installSources()
+
+    expect(typeof sources.transcript!.openDagRun).toBe('function')
+  })
+
+  it('opens the desk task a spawn node id resolves to, and answers false otherwise', async () => {
+    const opened: TaskRow[] = []
+    const wiring = await harness({
+      'src/features/desk/store': {
+        openDeskTab: () => {},
+        openDeskTask: (r: TaskRow) => opened.push(r),
+      },
+    })
+    const { setSources, sources } = await import('../state/sources')
+    setSources({ composer: { slash: [] } } as unknown as Partial<Sources>)
+    const row = { kind: 'spawn', id: 'node-9' } as TaskRow
+
+    wiring.installSources()
+    const { set: setTasks } = await import('../features/tasks/store')
+    setTasks({ rows: [row], loaded: true, nodes: {}, tabByPane: {}, nodeVersions: {}, folds: {} })
+
+    const found = sources.tasks!.openByNode!('node-9')
+    const missing = sources.tasks!.openByNode!('no-such-node')
+
+    expect(found).toBe(true)
+    expect(missing).toBe(false)
+    expect(opened).toEqual([row])
+  })
+})
+
+describe('the session-pointer reload (installActions)', () => {
+  it('asks the seam for the conversation arrived at, not only when nothing has loaded yet', async () => {
+    const wiring = await harness()
+    const { setSources } = await import('../state/sources')
+    const asked: Array<string | null> = []
+    setSources({
+      composer: { slash: [] },
+      tasks: {
+        list: async (key: string) => { asked.push(key); return [] },
+        one: async () => null,
+        stop: async () => false,
+        node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+        roster: async () => [],
+      },
+    } as unknown as Partial<Sources>)
+
+    wiring.installActions()
+    const { setCurrent, _resetForTests } = await import('../lib/session') as Session
+    setCurrent('s1')
+    /* refresh() awaits src.list before patching; give its promise a turn. */
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(asked).toContain('s1')
+    _resetForTests()
+  })
+})
+
+/* The wizard's data-sync step and the rail's own click are one verb, so the
+   store is following the run either way -- which is what decides whether its
+   finished row is drawn (features/importSync/store.ts's `stale`). */
+describe('the wizard asks for its import through the rail row (installSources)', () => {
+  it('routes startImport to the store, so the run is one this page follows', async () => {
+    const wiring = await harness()
+    const { ds, setSources } = await import('../state/sources')
+    const store = await import('../features/importSync/store')
+    const runs: Array<[string[], string]> = []
+    setSources({ composer: { slash: [] } } as unknown as Partial<Sources>)
+
+    wiring.installSources()
+    setSources({
+      importSync: {
+        /* Settled with no request on file, so the row is drawn for one reason
+           only: this page followed the run. A resumable one would draw on its
+           own click and prove nothing. */
+        status: async () => ({
+          running: false, total: 1, submitted: 1, failed: 0, by_platform: {},
+          phase: null, phases: null, tier: null, platforms: [],
+        }),
+        run: async (platforms: string[], tier: string) => {
+          runs.push([platforms, tier])
+          return { started: true, total: 1, detail: '' }
+        },
+        stop: async () => ({ stopped: true }),
+      },
+    } as unknown as Partial<Sources>)
+
+    await ds('onboard').startImport(['hermes'], 'memory_files')
+
+    expect(runs).toEqual([[['hermes'], 'memory_files']])
+    expect(store.view(store.get()).kind).toBe('done')
+    store._resetForTests()
+  })
+})

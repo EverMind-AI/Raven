@@ -2,24 +2,33 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { Lightbox } from '../../chrome/Lightbox'
+import { setTranslator } from '../../i18n/t'
+import * as attachmentCache from '../../lib/attachmentCache'
+import * as confirmStore from '../../state/confirm'
+import { close as closeLightbox } from '../../state/lightbox'
+import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import * as tail from '../transcript/tail'
 import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
-import * as turn from './turn'
-import * as attachmentCache from '../../shell/attachment-cache'
-import * as tail from '../transcript/tail'
+import * as turn from './turn';
 
 import type { ComposerSource, SlashCmd } from './types'
-import type { Shell } from '../../shell/bridge'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const directNotes = vi.hoisted((): Array<[string, string]> => [])
 const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
-vi.mock('../transcript/mount', () => ({
+/* Partial, not wholesale: the page calls this module by name for verbs this
+   case is not about. */
+vi.mock('../transcript/mount', async (original) => ({
+  ...(await original<Record<string, unknown>>()),
   note: (label: string, detail: string) => { directNotes.push([label, detail]) },
 }))
-vi.mock('../../shell/toast', () => ({
+vi.mock('../../state/toast', () => ({
   show: (text: string) => { toastWriter.items.push(text) },
 }))
 
@@ -80,14 +89,12 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     sent: [], halted: 0, notes: directNotes, toasts: [],
   }
   toastWriter.items = calls.toasts
-  const fakeShell: Shell = {
-    T: (key, vars) => {
-      const raw = (WORDS[lang] as Record<string, string>)[key] ?? key
-      return vars ? raw.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : raw
-    },
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-  }
+  setTranslator((key, vars) => {
+  const raw = (WORDS[lang] as Record<string, string>)[key] ?? key
+  return vars ? raw.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : raw
+  })
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: ComposerSource = {
     meter: () => '',
     slash: [],
@@ -99,8 +106,7 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     stop: () => { calls.halted += 1 },
     ...over,
   }
-  window.RavenShell = fakeShell
-  window.DS = { composer: source }
+  setSources({ composer: source })
   document.body.innerHTML = DOCK
   return { source, calls }
 }
@@ -152,6 +158,16 @@ afterEach(() => {
   lang = 'zh'
   vi.useRealTimers()
   vi.restoreAllMocks()
+  resetSources()
+})
+
+describe('a sentence sent from outside the field', () => {
+  it('goes through the source trimmed, and an empty one goes nowhere', () => {
+    const { calls } = wire()
+    store.say('  use git clean instead  ')
+    store.say('   ')
+    expect(calls.sent).toEqual(['use git clean instead'])
+  })
 })
 
 describe('the send button', () => {
@@ -295,6 +311,176 @@ describe('composer drafts', () => {
     expect(drafts().a).toBeUndefined()
     expect(drafts().b?.t).toBe('for b')
   })
+
+  /* A staged file is as unsent as the text typed next to it, so the tray
+     follows the same owner: what is in it belongs to one conversation, and the
+     upload that lands late belongs to the one it was staged in. */
+  const stage = async (name: string): Promise<void> => {
+    await act(async () => {
+      store.addFiles([new File(['x'], name, { type: 'text/plain' })])
+      await flush()
+    })
+  }
+
+  const uploader = (): Partial<ComposerSource> => ({
+    upload: (req) => Promise.resolve({ path: `uploads/${req.name}`, size: 4 }),
+  })
+
+  const paths = (): Array<string | null> => store.get().atts.map((a) => a.path)
+
+  it('keeps the staged files of each session with that session', async () => {
+    wire(uploader())
+    const box = mountTray()
+    store.loadDraft('a')
+    await stage('a.txt')
+    expect(box.querySelectorAll('.att').length).toBe(1)
+    expect(go().disabled).toBe(false)
+
+    act(() => { store.loadDraft('b') })
+    expect(store.get().atts).toEqual([])
+    expect(box.hidden).toBe(true)
+    expect(go().disabled).toBe(true)
+
+    act(() => { store.loadDraft('a') })
+    expect(box.querySelectorAll('.att').length).toBe(1)
+    expect(paths()).toEqual(['uploads/a.txt'])
+  })
+
+  it('does not hand one session files staged in another', async () => {
+    const { calls } = wire(uploader())
+    const box = mountTray()
+    store.loadDraft('a')
+    await stage('a.txt')
+
+    act(() => { store.loadDraft('b') })
+    ta().value = 'nothing attached here'
+    act(() => { store.fireSend() })
+    expect(calls.sent).toEqual(['nothing attached here'])
+
+    act(() => { store.loadDraft('a') })
+    expect(box.querySelectorAll('.att').length).toBe(1)
+  })
+
+  it('lands a late upload in the tray it was staged in', async () => {
+    let settle: (r: { path: string; size: number }) => void = () => {}
+    wire({ upload: () => new Promise((r) => { settle = r }) })
+    const box = mountTray()
+    store.loadDraft('a')
+    await stage('slow.bin')
+
+    act(() => { store.loadDraft('b') })
+    await act(async () => {
+      settle({ path: 'uploads/slow.bin', size: 9 })
+      await flush()
+    })
+    expect(store.attsPending()).toBe(0)
+    expect(store.get().atts).toEqual([])
+    expect(box.hidden).toBe(true)
+
+    act(() => { store.loadDraft('a') })
+    expect(store.attsPending()).toBe(0)
+    let taken: string[] = []
+    act(() => { taken = store.takeAtts() })
+    expect(taken).toEqual(['uploads/slow.bin'])
+  })
+
+  /* The other session stages one too: it is what tells a tray that forgot the
+     failed chip apart from one that never held it. */
+  it('drops a failed upload from the tray it was staged in', async () => {
+    let fail: (e: unknown) => void = () => {}
+    const { calls } = wire({
+      upload: (req) => (req.name === 'big.bin'
+        ? new Promise((_r, rej) => { fail = rej })
+        : Promise.resolve({ path: `uploads/${req.name}`, size: 4 })),
+    })
+    mountTray()
+    store.loadDraft('a')
+    await stage('big.bin')
+
+    act(() => { store.loadDraft('b') })
+    await stage('b.txt')
+    await act(async () => {
+      fail({ data: { detail: 'disk full' } })
+      await flush()
+    })
+    expect(calls.notes).toEqual([])
+    expect(calls.toasts).toEqual(['big.bin 上传失败 · disk full'])
+    expect(paths()).toEqual(['uploads/b.txt'])
+
+    act(() => { store.loadDraft('a') })
+    expect(store.get().atts).toEqual([])
+    expect(store.attsPending()).toBe(0)
+  })
+
+  it('files what the new-task page staged under the session that claims it', async () => {
+    wire(uploader())
+    const box = mountTray()
+    store.loadDraft('new')
+    await stage('n.txt')
+    store.claimDraft('created')
+
+    act(() => { store.loadDraft('other') })
+    expect(box.querySelectorAll('.att').length).toBe(0)
+    act(() => { store.loadDraft('created') })
+    expect(paths()).toEqual(['uploads/n.txt'])
+    act(() => { store.loadDraft('new') })
+    expect(box.querySelectorAll('.att').length).toBe(0)
+  })
+
+  it('empties only the tray of the session that sent', async () => {
+    const { calls } = wire(uploader())
+    const box = mountTray()
+    store.loadDraft('a')
+    await stage('a.txt')
+    act(() => { store.loadDraft('b') })
+    await stage('b.txt')
+
+    act(() => { store.loadDraft('a') })
+    act(() => { store.fireSend() })
+    expect(calls.sent[0]).toBe(`\n\n${word('gui.att.note')}\n- uploads/a.txt`)
+    expect(box.querySelectorAll('.att').length).toBe(0)
+
+    act(() => { store.loadDraft('b') })
+    expect(paths()).toEqual(['uploads/b.txt'])
+  })
+
+  it('forgets the files of a dropped session and leaves the others', async () => {
+    wire(uploader())
+    mountTray()
+    store.loadDraft('a')
+    await stage('a.txt')
+    act(() => { store.loadDraft('b') })
+    await stage('b.txt')
+
+    store.dropDraft('a')
+    act(() => { store.loadDraft('a') })
+    expect(store.get().atts).toEqual([])
+    act(() => { store.loadDraft('b') })
+    expect(paths()).toEqual(['uploads/b.txt'])
+  })
+
+  /* A slash command takes the text it owns and nothing else: compressing the
+     context is not a reset, and /clear asks before it destroys anything. */
+  it('leaves the staged files where they are when a slash command runs', async () => {
+    const cmd: SlashCmd = { id: 'gui.clear', fn: vi.fn() }
+    wire({ ...uploader(), slash: [cmd] })
+    const box = mountTray()
+    store.loadDraft('a')
+    ta().value = 'typed'
+    await stage('a.txt')
+
+    act(() => { store.runSlash(cmd) })
+    expect(cmd.fn).toHaveBeenCalledTimes(1)
+    expect(ta().value).toBe('')
+    expect(paths()).toEqual(['uploads/a.txt'])
+    expect(box.querySelectorAll('.att').length).toBe(1)
+    expect(go().disabled).toBe(false)
+
+    act(() => { store.loadDraft('b') })
+    expect(store.get().atts).toEqual([])
+    act(() => { store.loadDraft('a') })
+    expect(paths()).toEqual(['uploads/a.txt'])
+  })
 })
 
 describe('the queue rows', () => {
@@ -372,6 +558,16 @@ describe('the queue rows', () => {
     expect(store.queueSnapshot()).toEqual(['second'])
     expect(document.querySelectorAll('#queued .qrow').length).toBe(1)
   })
+
+  it('keeps its rendered shape', () => {
+    /* English fixture words: the snapshot file is new source, and the repo's
+       source-language gate admits no CJK outside its exemption zones. */
+    lang = 'en'
+    wire()
+    store.queueRestore(['first', 'second'])
+    mountQueue()
+    expect(domSnapshot(document.getElementById('queued')!)).toMatchSnapshot()
+  })
 })
 
 describe('the live turn row', () => {
@@ -386,7 +582,7 @@ describe('the live turn row', () => {
     const host = document.createElement('div')
     host.dataset.cvl = '1'
     render(<TurnLive afterPaint={() => {
-      if (!store.getState().live) { host.remove(); return }
+      if (!store.get().live) { host.remove(); return }
       if (stage.lastElementChild !== host) stage.appendChild(host)
     }} />, { container: host })
 
@@ -488,7 +684,7 @@ describe('the attachment tray', () => {
   })
 
   it('opens an image chip in the viewer, since the square crops it', async () => {
-    const { calls } = wire({ upload: async () => ({ path: 'uploads/p.png', size: 10 }) })
+    wire({ upload: async () => ({ path: 'uploads/p.png', size: 10 }) })
     const box = mountTray()
     await act(async () => {
       store.addFiles([new File(['x'], 'p.png', { type: 'image/png' })])
@@ -496,12 +692,21 @@ describe('the attachment tray', () => {
     })
     const img = box.querySelector('.att.img img') as HTMLImageElement
     expect(img).toBeTruthy()
-    act(() => { fireEvent.click(img) })
-    /* The lightbox is a module in this bundle now, not a shell verb, so the
-       click opens the real overlay rather than recording a call. */
-    const shown = document.querySelector('.lightbox img') as HTMLImageElement
-    expect(shown).toBeTruthy()
-    expect(shown.alt).toBe('p.png')
+    /* The overlay is drawn by src/chrome/Lightbox.tsx, so something has to be
+       rendering it for the click below to put one on screen. Its own component
+       rather than the whole page root: this file mocks the transcript's mount
+       partially, and the page root reaches those verbs by name. */
+    render(<Lightbox />)
+    try {
+      act(() => { fireEvent.click(img) })
+      /* The lightbox is a module in this bundle now, not a shell verb, so the
+         click opens the real overlay rather than recording a call. */
+      const shown = document.querySelector('.lightbox img') as HTMLImageElement
+      expect(shown).toBeTruthy()
+      expect(shown.alt).toBe('p.png')
+    } finally {
+      closeLightbox()
+    }
   })
 
   it('removes a chip, hides the tray when the last one goes, and re-deadens send', async () => {
@@ -529,6 +734,28 @@ describe('the attachment tray', () => {
     })
     expect(box.querySelectorAll('.att').length).toBe(0)
     expect(calls.notes).toEqual([['big.bin 上传失败', 'disk full']])
+    expect(calls.toasts).toEqual([])
+  })
+
+  /* The note is written into a transcript, so it can only be written while the
+     conversation it belongs to is the one on screen. */
+  it('says a late failure in a toast rather than another session\'s transcript', async () => {
+    let fail: (e: unknown) => void = () => {}
+    const { calls } = wire({ upload: () => new Promise((_r, rej) => { fail = rej }) })
+    mountTray()
+    store.loadDraft('a')
+    await act(async () => {
+      store.addFiles([new File(['x'], 'big.bin', { type: '' })])
+      await flush()
+    })
+
+    act(() => { store.loadDraft('b') })
+    await act(async () => {
+      fail({ data: { detail: 'disk full' } })
+      await flush()
+    })
+    expect(calls.notes).toEqual([])
+    expect(calls.toasts).toEqual(['big.bin 上传失败 · disk full'])
   })
 
   it('hands the staged paths over and empties the tray when the message leaves', async () => {
@@ -597,6 +824,17 @@ describe('the attachment tray', () => {
     store.pickFiles(opened)
     expect(opened).not.toHaveBeenCalled()
     expect(calls.toasts).toEqual(['demo: pick a file here'])
+  })
+
+  it('keeps its rendered shape', async () => {
+    lang = 'en'
+    wire({ upload: async () => ({ path: 'uploads/notes.txt', size: 300 }) })
+    const box = mountTray()
+    await act(async () => {
+      store.addFiles([new File(['x'], 'notes.txt', { type: 'text/plain' })])
+      await flush()
+    })
+    expect(domSnapshot(box)).toMatchSnapshot()
   })
 })
 
@@ -707,7 +945,8 @@ describe('a language flip', () => {
     expect(document.querySelector('.turnlive')!.getAttribute('aria-label')).toContain('进行中')
 
     lang = 'en'
-    /* What redrawAll() does: call the same paints again, no reload. */
+    /* What a language flip asks for (state/lang/effects.ts): the same paints
+       again, no reload. */
     act(() => {
       store.drawQueue()
       store.drawSlash('/')

@@ -1070,9 +1070,10 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
 
     from raven.agent.loop import AgentLoop
     from raven.agent.loop.bundles import ToolWiring
+    from raven.config.schema import ToolSearchConfig
     from raven.session.manager import SessionManager
     from raven.spine.message import ChatType, Source
-    from raven.spine.turn import Origin, TurnRequest
+    from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 
     state = ReplayState(mode=mode)
     provider = ReplayProvider(recording, state)
@@ -1109,6 +1110,17 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
                 session_manager=sessions,
                 tools=ToolWiring(
                     restrict_to_workspace=True,
+                    # A replay reproduces a request; it does not assemble one.
+                    # The fold ships on, and a recording made above the
+                    # threshold already IS the folded array -- core plus the
+                    # meta-pair -- so serving it through the strategy again
+                    # counts a catalog under the threshold and drops
+                    # ``tool_search`` from what the replay sends. That reads as
+                    # a divergence in the offered tool names, which halts every
+                    # strict regression case before the first recorded reply.
+                    # Spelled out rather than inherited: this harness is a
+                    # deliberate bypass, not a deployment.
+                    tool_search_config=ToolSearchConfig(enabled=False),
                 ),
             )
             # The loop's ContextBuilder starts the skill file watcher, a
@@ -1138,7 +1150,12 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
                     text=turn.content,
                 )
                 on_token_delta = _drop_delta if turn.trace_id in streamed_traces else None
-                result = await loop._process_message(req, session_key=turn.session_key, on_token_delta=on_token_delta)
+                try:
+                    result = await loop._process_message(
+                        req, session_key=turn.session_key, on_token_delta=on_token_delta
+                    )
+                except AnswerlessTurnError:
+                    result = None
                 replies.append(result[0] if result else None)
                 turns_replayed += 1
     finally:

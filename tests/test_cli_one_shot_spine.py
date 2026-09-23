@@ -11,6 +11,7 @@ from raven.cli._one_shot_spine import (
     make_hub_sink,
 )
 from raven.spine import (
+    AnswerlessTurnError,
     ChatType,
     Notice,
     NoticeKind,
@@ -284,6 +285,53 @@ async def test_build_one_shot_spine_teardown_leaves_no_pending_tasks():
     assert any(not t.done() for t in spawned)  # live spine tasks exist before teardown
     await teardown()  # the same teardown production runs in its finally
     assert all(t.done() for t in spawned)  # teardown stopped every one
+
+
+async def test_build_one_shot_spine_prints_a_failed_turn_in_its_own_words():
+    """The hub sink drops lifecycle events, so a turn that failed used to print
+    nothing at all; the one-shot reader is owed the failure's own words."""
+
+    class _FailingLoop:
+        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False) -> TurnOutcome:
+            raise AnswerlessTurnError("Error calling LLM (network@stub): boom")
+
+    rendered: list[str] = []
+    failures: list[str] = []
+    scheduler, hub, teardown = build_one_shot_spine(
+        _FailingLoop(), "cli", rendered.append, render_error=failures.append
+    )
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"))
+        outcome = await handle.result()
+        assert isinstance(outcome, TurnFailed)
+        assert outcome.error == "Error calling LLM (network@stub): boom"
+        await hub.wait_idle("cli")
+        assert failures == ["Error calling LLM (network@stub): boom"]
+        assert rendered == [], "a failure is not drawn as the reply"
+        # A stop is the reader's own act and prints nothing, as before.
+        await scheduler._sink(TurnFailed(error="cancelled", cancelled=True, conversation_id="cli:c1", turn_id="t2"))
+        await hub.wait_idle("cli")
+        assert failures == ["Error calling LLM (network@stub): boom"]
+    finally:
+        await teardown()
+
+
+async def test_build_one_shot_spine_falls_back_to_render_for_a_failed_turn():
+    class _FailingLoop:
+        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False) -> TurnOutcome:
+            raise AnswerlessTurnError("Error calling LLM (network@stub): boom")
+
+    rendered: list[str] = []
+    scheduler, hub, teardown = build_one_shot_spine(_FailingLoop(), "cli", rendered.append)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"))
+        outcome = await handle.result()
+        assert isinstance(outcome, TurnFailed)
+        assert outcome.error == "Error calling LLM (network@stub): boom"
+        await hub.wait_idle("cli")
+        assert rendered == ["Error calling LLM (network@stub): boom"]
+    finally:
+        await teardown()
 
 
 class _FakeUsageTracker:

@@ -1,0 +1,8 @@
+/* The rail domain's own rules.
+ *
+ * One file per domain, imported by RailPage.tsx and collected by Vite into the
+ * one CSS asset build.py inlines after page.css; ui-web/build.py checks both
+ * directions (features/extAgents/styles.css says how). The rail's older
+ * classes still live in page.css under check-class-namespace's pinned
+ * allowance; a class the domain introduces goes here, prefixed.
+ */

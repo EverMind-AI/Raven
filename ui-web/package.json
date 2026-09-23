@@ -3,17 +3,28 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "vite",
     "gen": "node scripts/gen-rpc-client.mjs",
     "gen:check": "node scripts/gen-rpc-client.mjs --check",
     "type-check": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "build": "vite build"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "@typescript-eslint/eslint-plugin": "^8.59.3",
+    "@typescript-eslint/parser": "^8.59.3",
     "@vitejs/plugin-react": "^6.0.5",
+    "eslint": "^9.39.4",
+    "eslint-plugin-perfectionist": "^5.9.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-unused-imports": "^4.4.1",
+    "globals": "^16.5.0",
     "happy-dom": "^20.11.2",
     "json-schema-to-typescript": "^15.0.4",
     "typescript": "^5.7.0",
@@ -22,6 +33,7 @@
   },
   "dependencies": {
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "temml": "^0.13.5"
   }
 }

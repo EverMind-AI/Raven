@@ -1,0 +1,4 @@
+button#railShow.ghost-ic.tipdn
+  svg
+    rect
+    path

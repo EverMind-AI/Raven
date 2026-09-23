@@ -26,14 +26,20 @@ rather than raising into a backend's happy path.
 
 from __future__ import annotations
 
+import difflib
+import os
 import time
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Collection, Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from loguru import logger
+
+from raven.agent.tools import snapshot as workdir_snapshot
 
 # Names a provider might report token counts under. OpenAI-shaped
 # (``prompt_tokens``) is what raven's own providers normalise to; the camelCase
@@ -58,12 +64,27 @@ class RunActivity:
     agent rather than a gap in the record.
     """
 
+    # This run's name for anything that must outlive it by mistake. A caller
+    # keying on ``id(activity)`` names a memory address, which CPython hands to
+    # the next object the moment this one is collected -- the shared browser
+    # binds a tab per owner and keeps it for ten minutes, so a later run
+    # inherited a finished run's tab and read another conversation's page.
+    # Not in ``as_meta``: it identifies the object, not the work.
+    uid: str = field(default_factory=lambda: uuid4().hex)
     tool_calls: list[str] = field(default_factory=list)
     # The subset of those that reported failure, in order. Recorded because the
     # tally was the one fact about a run that nothing kept: a run whose calls all
     # failed and which then said nothing new left a record indistinguishable from
     # a run that worked, and the caller reading it announced success.
     tool_failures: list[str] = field(default_factory=list)
+    # One entry per path a writing tool touched, in the order it was first
+    # touched: ``{path, op: add|write|edit|delete, add, del, size}``, folded
+    # across repeat touches of one path by ``merge_file_change`` -- see it for
+    # which op survives which. Every lane fills it, from whatever that lane can
+    # see: the in-process one from its tools' own results, the acp one from the
+    # diff blocks its agent reports, and all three from a before/after listing
+    # of the working directory for the files only a command touched.
+    files: list[dict[str, Any]] = field(default_factory=list)
     tokens_in: int | None = None
     tokens_out: int | None = None
     thought_chars: int = 0
@@ -167,6 +188,8 @@ class RunActivity:
             meta["tool_calls"] = self.tool_calls
         if self.tool_failures:
             meta["tool_failures"] = self.tool_failures
+        if self.files:
+            meta["files"] = self.files
         if self.tokens_in is not None:
             meta["tokens_in"] = self.tokens_in
         if self.tokens_out is not None:
@@ -187,24 +210,55 @@ class RunActivity:
 _current: ContextVar[RunActivity | None] = ContextVar("raven_subagent_activity", default=None)
 
 _live: dict[str, RunActivity] = {}
-"""Runs being collected right now, keyed by their record's call id.
+"""Runs being collected right now, keyed by their record's address.
 
 The disk record is written when the run finishes, so while it is in flight the
 only account of it lives in the ``RunActivity`` being collected. This index is
-what lets ``subagent.context`` serve that account to a panel watching the run,
-instead of a prompt and nothing until the end. Entries live exactly as long as
-their ``collecting`` block."""
+what lets ``subagent.context`` and ``tasks.list`` serve that account to a panel
+watching the run, instead of a prompt and nothing until the end. Entries live
+exactly as long as their ``collecting`` block. The key names the record, not
+the run's own id alone: a spawn's id is unique for one conversation only
+(``history.spawn_live_key``), and a dag node's carries its run
+(``dag_store.node_live_key``) -- the index is one per process, and two
+conversations must not share an entry."""
+
+
+_settled: dict[str, dict[str, Any]] = {}
+"""The account of a run's node that has finished while its run has not.
+
+A dag node's account reaches disk with the run's manifest, written once the
+whole run is over; between the node's own end (when ``collecting`` drops it from
+``_live``) and that write, nothing else holds it, and a reader that showed the
+node's usage while it ran would show nothing the moment it finished. The runner
+records the account here as the node settles and forgets the run's entries once
+the manifest is written."""
+
+
+def record_settled(key: str, meta: dict[str, Any]) -> None:
+    """Set aside a finished node's account under its live key."""
+    _settled[key] = dict(meta)
+
+
+def settled(key: str) -> dict[str, Any] | None:
+    """The account of a node that finished while its run has not, or None."""
+    return _settled.get(key)
+
+
+def forget_settled(keys: Iterable[str]) -> None:
+    """Drop the accounts a run set aside, once its manifest carries them."""
+    for key in keys:
+        _settled.pop(key, None)
 
 
 _live_instances: dict[tuple[str, str, str], RunActivity] = {}
 """The same activities, addressed the way a *conversation* reader has to ask.
 
-``_live`` is keyed by the record's own directory, which is what the panel
-watching one call already holds. A reader of an instance's conversation holds
-``(session_key, agent, handle)`` and nothing else -- the record name is a task id
-it never saw -- so the same run is indexed twice rather than having that reader
-guess at a directory layout. Entries live exactly as long as their ``collecting``
-block, as ``_live``'s do."""
+``_live`` is keyed by the record's address -- a node root the panel watching
+one call derives from its session, plus an id it holds. A reader of an
+instance's conversation holds ``(session_key, agent, handle)`` and nothing else
+-- the node id is one it never saw -- so the same run is indexed twice rather
+than having that reader guess at a directory layout. Entries live exactly as
+long as their ``collecting`` block, as ``_live``'s do."""
 
 
 @contextmanager
@@ -336,6 +390,202 @@ def note_tool_call(name: str) -> None:
         activity.tool_calls.append(name)
 
 
+def merge_file_change(entries: list[dict[str, Any]], change: dict[str, Any]) -> None:
+    """Fold one file change into a list holding one entry per path.
+
+    One entry per path, not per call: a node that edits a file twice changed
+    one file, and the readers of this list count it (``tasks.list``'s
+    ``files``, drawn as "N files changed") and key rows by it. ``add``/``del``
+    accumulate because the diff a reader opens is every hunk against the
+    path; ``size`` is the last touch's, which is the file as it stands.
+
+    The ``op`` is what the whole run did to the path, read the way a version
+    control system reads a range of commits rather than as the last tool call:
+
+    * ``add`` outlives a later ``write`` or ``edit`` -- a file this run created
+      is a creation however many times it was then rewritten;
+    * ``write`` outlives ``edit`` in either order, because a node that ever
+      rewrote the path whole produced the file's true current content, which a
+      patch against the pre-node baseline cannot reconstruct;
+    * ``delete`` replaces a ``write`` or ``edit`` and takes the removal's own
+      counts: what the run did to that path is remove it, and the lines it wrote
+      on the way are not in any file a reader can open;
+    * ``add`` then ``delete`` leaves no entry at all. The run created the file
+      and removed it, so nothing of it survives the run -- git shows the same
+      nothing for a file born and deleted inside one range;
+    * ``delete`` then a write of the path is that write: the path exists again,
+      and what is in it was written after the deletion. A creation among them
+      counts as a ``write`` -- an entry survives as a ``delete`` only for a path
+      the run did not create, so putting it back is a rewrite over the range.
+    """
+    for index, entry in enumerate(entries):
+        if entry["path"] != change["path"]:
+            continue
+        if change["op"] == "delete":
+            if entry["op"] == "add":
+                entries.pop(index)
+                return
+            entry["op"] = "delete"
+            entry["add"] = 0
+            entry["del"] = change["del"]
+            entry["size"] = None
+            return
+        if entry["op"] == "delete":
+            if change["op"] == "add":
+                # Read as a creation, a second removal of the path would cancel
+                # the entry away under the add-then-delete rule above, and the
+                # run would show nothing at all for a file it deleted. The lines
+                # the removal took out stay counted: they were in the file the
+                # range started from.
+                entry["op"] = "write"
+                entry["add"] = change["add"]
+                entry["size"] = change["size"]
+                return
+            entry["op"] = change["op"]
+            entry["add"] = change["add"]
+            entry["del"] = change["del"]
+            entry["size"] = change["size"]
+            return
+        entry["add"] += change["add"]
+        entry["del"] += change["del"]
+        entry["size"] = change["size"]
+        if change["op"] == "write" and entry["op"] != "add":
+            entry["op"] = "write"
+        return
+    if len(entries) < _MAX_TOOL_CALLS:
+        entries.append(change)
+
+
+def note_file_change(path: str, op: str, add: int, delete: int, size: int | None) -> None:
+    """Record one file a tool created, wrote, edited or removed, folded by path.
+
+    ``size`` is nullable because a removal has none to report: the file is gone,
+    and zero would read as a file that is there and empty.
+
+    See :func:`merge_file_change` for how a repeat touch of a path already
+    recorded combines with what is there.
+    """
+    record_file_change(_current.get(), path, op, add, delete, size)
+
+
+def record_file_change(
+    activity: "RunActivity | None", path: str, op: str, add: int, delete: int, size: int | None
+) -> None:
+    """:func:`note_file_change` for a lane that holds its run rather than running
+    inside it.
+
+    The ACP collector is called from the connection's read loop, a task created
+    before this run existed, so the ContextVar there names another run or none --
+    see ``_TurnCollector``, which captures the run for exactly this reason.
+    """
+    if activity is None or not isinstance(path, str) or not path:
+        return
+    _touch(activity)
+    merge_file_change(activity.files, {"path": path, "op": op, "add": add, "del": delete, "size": size})
+
+
+def count_line_changes(before: str | None, after: str) -> tuple[int, int]:
+    """Lines added and removed between two whole contents.
+
+    ``before is None`` is a file that did not exist, so every line of ``after``
+    counts as added; otherwise the two are compared line by line.
+    """
+    after_lines = after.splitlines()
+    if before is None:
+        return len(after_lines), 0
+    before_lines = before.splitlines()
+    add = delete = 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, before_lines, after_lines).get_opcodes():
+        if tag in ("insert", "replace"):
+            add += j2 - j1
+        if tag in ("delete", "replace"):
+            delete += i2 - i1
+    return add, delete
+
+
+def workspace_relative(path: str, workspace: Path | str | None) -> str:
+    """The path a file record carries: relative to the run's workspace when the
+    file is under it (the file endpoint anchors relative paths there, and the
+    panel reads ``work/notes.md`` where an absolute path says nothing), absolute
+    otherwise."""
+    if workspace is None:
+        return path
+    try:
+        return str(Path(path).resolve().relative_to(Path(workspace).resolve()))
+    except (ValueError, OSError):
+        return path
+
+
+#: Past this a created file's lines are not counted. Reading it would mean
+#: holding a quarter of a megabyte of text to learn a number the panel shows
+#: beside a file it will open itself.
+SNAPSHOT_TEXT_MAX_BYTES = 256 * 1024
+
+
+def record_snapshot_changes(
+    before: workdir_snapshot.Snapshot | None,
+    after: workdir_snapshot.Snapshot | None,
+    workspace: Path | str | None,
+    *,
+    already: Collection[str] = (),
+    run: "RunActivity | None" = None,
+    seen_created: set[str] | None = None,
+) -> None:
+    """Record what a command left behind, from two listings of its directory.
+
+    Recorded here rather than in ``snapshot`` so that module stays a reading of
+    the filesystem with no opinion about the record it feeds.
+
+    A created file is an ``add`` and counts its lines; a file that merely changed
+    is a ``write`` with no counts, because the listing never held its old
+    content and inventing a count would be worse than showing none. ``already``
+    are the absolute paths this same call accounted for from a tool result or a
+    diff block -- the listing sees those too, and recording one again would
+    count a single deletion twice.
+
+    ``seen_created``, when a lane keeps one across its calls, are the paths its
+    earlier listings already reported created. Two calls in flight at once are
+    two windows over the same tree, and a file written inside both reads as
+    created in both -- recorded twice, its lines are counted twice. A removal
+    takes the path back out, so a file created again after being removed counts
+    again.
+    """
+    created, modified, deleted = workdir_snapshot.diff(before, after)
+    if not (created or modified or deleted):
+        return
+    accounted = {os.path.realpath(path) for path in already}
+    target = run if run is not None else _current.get()
+    for path in created:
+        real = os.path.realpath(path)
+        if real in accounted or (seen_created is not None and real in seen_created):
+            continue
+        if seen_created is not None:
+            seen_created.add(real)
+        size = (after or {})[path][0]
+        record_file_change(target, workspace_relative(path, workspace), "add", _line_count(path, size), 0, size)
+    for path in modified:
+        if os.path.realpath(path) in accounted:
+            continue
+        record_file_change(target, workspace_relative(path, workspace), "write", 0, 0, (after or {})[path][0])
+    for path in deleted:
+        real = os.path.realpath(path)
+        if real in accounted:
+            continue
+        if seen_created is not None:
+            seen_created.discard(real)
+        record_file_change(target, workspace_relative(path, workspace), "delete", 0, 0, None)
+
+
+def _line_count(path: str, size: int) -> int:
+    """Lines in a file the listing found, or 0 when it is too large or not text."""
+    if size > SNAPSHOT_TEXT_MAX_BYTES:
+        return 0
+    try:
+        return len(Path(path).read_text(encoding="utf-8").splitlines())
+    except (OSError, UnicodeDecodeError):
+        return 0
+
+
 def note_tool_failure(name: str) -> None:
     """Record that one call reported failure.
 
@@ -456,6 +706,22 @@ def set_transcript(activity: "RunActivity | None", messages: list[dict[str, Any]
     activity.transcript = [m for m in messages[:_MAX_TRANSCRIPT_MESSAGES] if isinstance(m, dict)]
 
 
+def set_tool_calls(activity: "RunActivity | None", calls: list[str] | None, failures: list[str] | None = None) -> None:
+    """Record the calls one named run has made so far, and which of them failed.
+
+    Replaced, not appended: the acp collector republishes the whole list on
+    every tool frame, because the opening ``tool_call`` frame names a call by
+    its title and only a later frame carries the arguments its label is built
+    from. Named rather than ambient for the reason ``set_transcript`` is.
+    """
+    if activity is None or not isinstance(calls, list):
+        return
+    _touch(activity)
+    activity.tool_calls = [c for c in calls[:_MAX_TOOL_CALLS] if isinstance(c, str) and c]
+    if isinstance(failures, list):
+        activity.tool_failures = [c for c in failures[:_MAX_TOOL_CALLS] if isinstance(c, str) and c]
+
+
 def note_closing(text: str | None) -> None:
     """Record what the run said after its last step, for a lane that can tell.
 
@@ -549,12 +815,19 @@ __all__ = [
     "RunActivity",
     "collecting",
     "current",
+    "forget_settled",
+    "set_tool_calls",
     "set_transcript",
     "live",
     "live_instance",
+    "record_settled",
+    "settled",
+    "count_line_changes",
+    "merge_file_change",
     "note_alive",
     "note_closing",
     "note_console",
+    "note_file_change",
     "note_frames",
     "note_output_limit",
     "note_response_meta",
@@ -566,4 +839,7 @@ __all__ = [
     "note_transcript",
     "note_usage",
     "persisted_output",
+    "record_file_change",
+    "record_snapshot_changes",
+    "workspace_relative",
 ]

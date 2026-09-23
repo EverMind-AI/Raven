@@ -1,0 +1,188 @@
+/* The extAgents domain's own rules.
+ *
+ * One file per domain, imported by that domain's App and collected by Vite into
+ * one CSS asset that build.py inlines after page.css (`cssFileName` in
+ * vite.config.ts) -- so the page still ships one <style> block, and
+ * check-page.mjs's "exactly one style block" holds. build.py checks both
+ * directions: a styles.css with no built asset, or an asset with no source,
+ * fails the build.
+ *
+ * styles/page.css stays the page's own sheet: the frame, the --z ladder and the
+ * shared vocabulary scripts/check-class-namespace.mjs calls SHARED. A rule that
+ * styles one domain's markup belongs here, not there. Every class below carries
+ * this domain's prefix; where a rule reaches a shared class (`.mini`, the brand
+ * mark) it does so inside one of this domain's containers, which is tuning a
+ * component where it is embedded rather than claiming it.
+ *
+ * The geometry is the design prototype's, token names included: every colour
+ * and face below is a page.css token already.
+ */
+
+/* ── the roster ─────────────────────────────────────────────────── */
+
+.extAgents-sec { margin-top: 28px; }
+.extAgents-sec:first-of-type { margin-top: 0; }
+.extAgents-hd { display: flex; align-items: baseline; gap: 9px; margin-bottom: 12px; }
+.extAgents-hd b { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .12em; text-transform: uppercase; }
+.extAgents-n { font-family: var(--mono); font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+/* The rows sit on the line-soft colour with a 1px gap, so the gap is the divider. */
+.extAgents-set { display: grid; gap: 1px; background: var(--line-soft); border: 1px solid var(--line-soft); border-radius: 10px; overflow: hidden; }
+
+.extAgents-row {
+  background: var(--ink); display: flex; align-items: center; gap: 12px;
+  padding: 11px 14px; width: 100%; text-align: left; min-height: 56px;
+  /* A grid item defaults to min-width: auto, and without this the long one-liner
+     pushes the row past its container and the ellipsis never gets its turn. */
+  min-width: 0; color: inherit;
+}
+/* Only a row that opens the sheet (Rows.tsx gives it the button role) reads as
+   pressable; the wizard's rows are plain and get neither the hand nor the
+   hover. */
+.extAgents-row[role="button"] { cursor: pointer; }
+.extAgents-row[role="button"]:hover { background: var(--surface); }
+.extAgents-row:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.extAgents-row[aria-current="true"] { background: var(--surface); }
+
+/* The brand mark is the tile: the shared component, sized inside this box. */
+.extAgents-tile { flex: none; display: grid; place-items: center; }
+.extAgents-tile .agent-mark { width: 36px; height: 36px; border-radius: 10px; background: var(--paper); border: 1px solid var(--line); }
+.extAgents-tile .agent-mark img, .extAgents-tile .agent-mark svg { width: 23px; height: 23px; }
+.extAgents-tile-own .agent-mark img { width: 21px; height: 26px; }
+
+.extAgents-who { flex: 1; min-width: 0; }
+.extAgents-nm { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.extAgents-t { font-size: 13.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.extAgents-led { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--moss); }
+.extAgents-led-warn { background: var(--gold); }
+.extAgents-led-bad { background: var(--clay); }
+.extAgents-led-busy { background: var(--amber); animation: extAgentspulse 1.6s ease-in-out infinite; }
+@keyframes extAgentspulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .extAgents-led-busy { animation: none; } }
+.extAgents-one { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.extAgents-one-bad { color: var(--clay); }
+.extAgents-one-work { font-family: var(--mono); font-size: 11.5px; color: var(--amber); display: flex; align-items: center; gap: 6px; }
+
+/* One control per row, and the buttons in a column are one size: Connect,
+   Disconnect, Retry, Install and Re-check differ in length and the frames must
+   not. The floor is the longest word in the language, so it is two values --
+   68 fits the Chinese words, Disconnect needs 96 -- and neither fits the other. */
+.extAgents-ctl { flex: none; display: flex; align-items: center; gap: 6px; }
+.extAgents-ctl .mini, .extAgents-act .mini {
+  height: 28px; min-width: 68px; padding: 0 12px; border-radius: 7px;
+  justify-content: center; white-space: nowrap; font-size: 12.5px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+:root[data-lang="en"] .extAgents-ctl .mini, :root[data-lang="en"] .extAgents-act .mini { min-width: 96px; }
+.extAgents-ctl .mini.go, .extAgents-act .mini.go { background: var(--text); border-color: var(--text); color: var(--ink); }
+.extAgents-ctl .mini.go:hover:not(:disabled), .extAgents-act .mini.go:hover:not(:disabled) { background: var(--text); filter: brightness(1.18); }
+.extAgents-ctl .mini.danger, .extAgents-act .mini.danger { color: var(--clay); border-color: color-mix(in oklab, var(--clay) 35%, transparent); }
+.extAgents-ctl .mini.danger:hover:not(:disabled), .extAgents-act .mini.danger:hover:not(:disabled) { border-color: var(--clay); background: color-mix(in oklab, var(--clay) 8%, transparent); }
+.extAgents-state { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+
+/* The wizard's agents step: a scanning placeholder before the first
+   `subagents.list` answer lands, and the same ring again on a row's own
+   connect button while its write is in flight. The roster and the sheet wear
+   the same ring. */
+.extAgents-scan { display: flex; align-items: center; gap: 8px; padding: 14px 16px; }
+.extAgents-spin { display: inline-block; width: 11px; height: 11px; margin-right: 7px; vertical-align: -1px;
+  border: 1.5px solid var(--line); border-top-color: var(--amber); border-radius: 50%;
+  animation: extAgentsspin .8s linear infinite; flex: none; }
+.extAgents-one-work .extAgents-spin, .extAgents-by .extAgents-spin, .extAgents-act .extAgents-spin { margin-right: 0; }
+@keyframes extAgentsspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .extAgents-spin { animation: none; } }
+
+/* ── the sheet ──────────────────────────────────────────────────── */
+
+/* The panel is the owner's fixed 520x500 box (page.css sizes `.dpanel` off
+   `data-owner`); the sheet fills it, and spends the padding itself. */
+.extAgents-sheet { width: 100%; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.extAgents-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 20px 48px 0 20px; }
+.extAgents-head .extAgents-tile .agent-mark { width: 46px; height: 46px; border-radius: 12px; }
+.extAgents-head .extAgents-tile .agent-mark img, .extAgents-head .extAgents-tile .agent-mark svg { width: 29px; height: 29px; }
+.extAgents-head .extAgents-tile-own .agent-mark img { width: 26px; height: 33px; }
+.extAgents-meta { flex: 1; min-width: 0; }
+.extAgents-meta h3 { margin: 0; font-family: var(--mono); font-size: 16px; font-weight: 600; letter-spacing: -.02em; }
+.extAgents-by { font-size: 11.5px; color: var(--faint); margin-top: 1px; display: flex; align-items: center; gap: 6px; }
+.extAgents-by .extAgents-led { width: 5px; height: 5px; }
+.extAgents-by-bad { color: var(--clay); }
+
+.extAgents-body { flex: 1; overflow-y: auto; padding: 18px 20px 4px; min-height: 0; }
+.extAgents-fld { display: block; }
+.extAgents-fld + .extAgents-fld { margin-top: 16px; }
+.extAgents-k { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+/* The field's own controls only -- the picker that opens under the model pill
+   lives inside a field too, and its search box keeps the component's look. */
+.extAgents-fld > textarea, .extAgents-fld .keyfield input {
+  width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; outline: 0; font-size: 13px; color: var(--text); box-sizing: border-box;
+}
+.extAgents-fld > textarea { font-family: var(--sans); resize: none; height: 104px; line-height: 1.65; font-size: 12.5px; overflow-y: auto; }
+.extAgents-fld > textarea[readonly] { color: var(--muted); }
+.extAgents-fld .keyfield input { font-family: var(--mono); font-size: 12.5px; }
+.extAgents-fld > textarea:focus, .extAgents-fld .keyfield input:focus { border-color: var(--muted); }
+/* The key field is the shared component; its eye button keeps its own styling. */
+.extAgents-fld .keyfield { display: flex; width: 100%; }
+
+/* Not installed: a read-only introduction, then how to get it. */
+.extAgents-about { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
+.extAgents-inst { margin-top: 16px; }
+.extAgents-cmd {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px 7px 10px;
+}
+.extAgents-cmd code { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; overflow-x: auto; white-space: pre; }
+.extAgents-cmd button { flex: none; font: inherit; font-size: 11.5px; color: var(--muted); padding: 2px 7px; border-radius: 5px; border: 0; background: none; cursor: pointer; }
+.extAgents-cmd button:hover { background: var(--raised); color: var(--text); }
+.extAgents-site { display: inline-flex; align-items: center; gap: 5px; margin-top: 10px; font-size: 12.5px; color: var(--link); text-decoration: none; }
+.extAgents-site:hover { text-decoration: underline; }
+.extAgents-site svg { width: 12px; height: 12px; }
+.extAgents-probe { margin-top: 14px; font-size: 12px; color: var(--faint); display: flex; align-items: center; gap: 7px; }
+.extAgents-probe-bad { color: var(--clay); }
+
+/* The action bar: right-aligned, primary rightmost, the destructive one left of it. */
+.extAgents-act { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 14px 20px 18px; border-top: 1px solid var(--line-soft); }
+
+/* ── the model pill ─────────────────────────────────────────────── */
+
+/* The settings page's pill, in this domain's clothes: id and provider inside
+   one frame, a chevron that gives way to the clear control on hover. */
+.extAgents-pill {
+  position: relative; display: inline-flex; align-items: stretch; width: 320px; max-width: 100%;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--text); overflow: hidden;
+}
+.extAgents-pill:hover:not(.extAgents-pill-fixed) { border-color: var(--amber); }
+.extAgents-pill-fixed { color: var(--faint); }
+.extAgents-pill-dim { background: none; }
+.extAgents-pm {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
+  font: inherit; color: inherit; background: none; border: 0;
+  padding: 5px 8px 5px 10px; cursor: pointer; text-align: left;
+}
+.extAgents-pm:disabled { cursor: default; }
+.extAgents-pm:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.extAgents-mid {
+  flex: 1; min-width: 0; font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.extAgents-pill-dim .extAgents-mid { font-family: var(--sans); font-weight: 400; color: var(--muted); }
+.extAgents-mpv { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.extAgents-mch { color: var(--faint); font-size: 11px; margin-left: 2px; }
+.extAgents-mx {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 30px;
+  font: inherit; font-size: 15px; line-height: 1; border: 0;
+  background: var(--paper); color: var(--faint); cursor: pointer; display: none;
+}
+.extAgents-pill-clearable:hover .extAgents-mx, .extAgents-pill-clearable:focus-within .extAgents-mx { display: block; }
+.extAgents-pill-clearable:hover .extAgents-mch, .extAgents-pill-clearable:focus-within .extAgents-mch { visibility: hidden; }
+/* The clear control sits over the pill's right edge; the provider steps back
+   from under it while it is showing. */
+.extAgents-pill-clearable:hover .extAgents-mpv, .extAgents-pill-clearable:focus-within .extAgents-mpv { margin-right: 18px; }
+.extAgents-mx:hover { color: var(--clay); }
+
+/* The shared picker, sized to hang under the pill inside the 520px sheet: the
+   settings dialog's 720x560 would neither fit below the pill nor above it. */
+/* The panel's box is the placer's now (`lib/popover.ts`'s anchorRow): it runs
+   from the field's left edge to inside the card's right edge and gives up
+   height to the shelf below the field, so a fixed size here would fight it. */
+.extAgents-sheet .model-picker { max-width: calc(100vw - 32px); }

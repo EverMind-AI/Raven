@@ -1,9 +1,13 @@
+import { t } from '../../i18n/t'
+import { argPath, firstErrLine, phraseOf, shortArg, splitMcp, verbIngOf, verbOf } from '../../lib/actVerbs'
+import { readMessage } from '../../lib/attachments'
+import { formatDuration } from '../../lib/duration'
+import * as hunks from '../../lib/hunks'
+import { md } from '../../lib/prose'
+import { ds } from '../../state/sources'
+import { pane } from '../../state/wsPane'
 import * as dagNodes from '../dag/nodes'
-import { ds, shell, t, verb } from '../../shell/bridge'
-import { formatDuration } from '../../shell/duration'
-import { md } from '../../shell/prose'
 import * as deliveries from '../workspace/deliveries'
-import * as hunks from '../workspace/hunks'
 
 import type { DeliveryRow, WsChange } from '../workspace/types'
 import type {
@@ -11,24 +15,23 @@ import type {
   DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
   SpawnListRow, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
 } from './types'
-import type { Shell } from '../../shell/bridge'
 
-/* Plain external store. The legacy layers drive the transcript imperatively
- * (the replay, the live turn machine, the history reader all push segments),
- * so state lives here where the shims can reach it, mutated in place; each
- * segment carries its own version and the components subscribe per segment,
- * which is what keeps a token append from re-rendering anything but the
- * streaming leaf.
+/* Plain external store. The callers that drive the transcript are not React:
+ * the replay, the live turn machine and the history reader all push segments,
+ * and all three are state/session's. So state lives here where they can reach
+ * it, mutated in place; each segment carries its own version and the components
+ * subscribe per segment, which is what keeps a token append from re-rendering
+ * anything but the streaming leaf.
  */
 
-export const source = (): TranscriptSource => ds<TranscriptSource>('transcript')
+const source = (): TranscriptSource => ds('transcript')
 
 /* Tolerated missing rather than thrown on: a page that has installed no
    artifacts source has no products to show, and the bar is drawn from the same
    boot sequence that installs it. */
-export function artifactsSource(): ArtifactsSource {
+function artifactsSource(): ArtifactsSource {
   try {
-    return ds<ArtifactsSource>('artifacts')
+    return ds('artifacts')
   } catch {
     return { changes: () => [] }
   }
@@ -41,7 +44,7 @@ export function artifactsSource(): ArtifactsSource {
    (session.resume carries the write's arguments, and the panel's replay
    rebuilds the same hunk from them). Null when the row carries no content, and
    then the tile shows the file's kind rather than inventing a picture. */
-export function artifactHead(c: WsChange): string | null {
+function artifactHead(c: WsChange): string | null {
   const out: string[] = []
   for (const h of c.hunks || []) {
     for (const r of h.rows || []) {
@@ -74,7 +77,9 @@ export function artifactsOf(lane: Lane, turn: number): ArtifactRow[] {
       head: artifactHead(c),
       lines: c.add || 0,
       deleted: c.del || 0,
-      change: c.kind === 'write' ? 'new' : 'edit',
+      /* Only a write onto nothing is new: a whole-file write over a file that
+         was already there replaced its contents, which is an edit. */
+      change: c.kind === 'add' ? 'new' : c.kind === 'delete' ? 'deleted' : 'edit',
     }
   })
 }
@@ -99,14 +104,14 @@ export const deliveriesOf = (lane: Lane, turn: number): DeliveryRow[] =>
 
 /* Straight to the renderer rather than out through the shell: prose.ts is a
    pure function in this same bundle, and a bridge verb would round-trip
-   window.RavenShell.md -> window.md -> back into it while hiding the
+   the shell bridge and back into it while hiding the
    transcript from anyone auditing md()'s callers. */
 export const mdHtml = (src: string): string => md(src)
 export const durText = formatDuration
 
 const shortPath = (p: string): string => {
   try {
-    return ds<{ shortPath(p: string): string }>('workspace').shortPath(p)
+    return ds('workspace').shortPath(p)
   } catch {
     return String(p || '')
   }
@@ -114,25 +119,13 @@ const shortPath = (p: string): string => {
 
 /* ── segment vocabulary helpers (ported with the renderer) ─────────────── */
 
-export const MIN_RUN_STEPS = 2
+const MIN_RUN_STEPS = 2
 export const DTL_MAX_LINES = 80
 
-export const shortArg = (a: unknown, max = 40): string => {
-  if (!a) return ''
-  const one = String(a).replace(/\s+/g, ' ').trim()
-  return one.length > max ? one.slice(0, max - 1) + '…' : one
-}
-
-const MCP_RE = /^mcp_([^_]+)_(.+)$/
-const rawVerb = (n: string): string => {
-  const m = MCP_RE.exec(n || '')
-  return m ? (m[2] as string).split('_').join(' ') : String(n || '').split('_').join(' ')
-}
-export const verbOf = (n: string): string => t('gui.act.v.' + n, undefined, rawVerb(n))
-export const verbIngOf = (n: string): string => t('gui.act.ing.' + n, undefined, rawVerb(n))
+export { argPath, firstErrLine, phraseOf, shortArg, verbIngOf, verbOf }
 
 /* The demo replay hands the one string it displays where the live RPC hands
-   the argument object; normalised here exactly as the legacy wsArgs did. */
+   the argument object; normalised here so a row reads the same either way. */
 function parseArgs(name: string, args: unknown): Record<string, unknown> {
   if (args && typeof args === 'object') return args as Record<string, unknown>
   const s = String(args == null ? '' : args)
@@ -152,16 +145,8 @@ function actId(name: string, rawArgs: unknown): { name: string; args: Record<str
     name = a.name
     a = (a.arguments && typeof a.arguments === 'object') ? a.arguments as Record<string, unknown> : {}
   }
-  const m = MCP_RE.exec(name)
-  return { name, args: a, via, srv: m ? (m[1] as string) : null }
-}
-
-/* The file a call names, wherever it named it -- schema violations included. */
-export function argPath(a: Record<string, unknown>): string {
-  for (const k of ['path', 'file_path', 'filename', 'file', 'target']) {
-    if (a && typeof a[k] === 'string' && a[k]) return a[k] as string
-  }
-  return ''
+  const { srv } = splitMcp(name)
+  return { name, args: a, via, srv }
 }
 
 /* One-line label for a call, derived from its arguments. */
@@ -209,25 +194,8 @@ export function actLabel(name: string, a: Record<string, unknown>, display?: str
   }
 }
 
-/* The line shown on a failed row: the first error-shaped line if any. */
-export const firstErrLine = (res: unknown, cap?: number): string => {
-  const lines = String(res || '').split('\n').filter((x) => x.trim())
-  const hit = lines.find((x) => /error|failed|traceback|could not|denied|exception/i.test(x))
-  const l = hit || lines[0]
-  return l ? shortArg(l.replace(/^\s*\[|\]\s*$/g, ''), cap || 62) : ''
-}
-
-/* Verbs and counts only -- the folded line answers "what kind of work". */
-export function phraseOf(calls: CallData[]): string {
-  const n = new Map<string, number>()
-  calls.forEach((c) => n.set(c.name, (n.get(c.name) || 0) + 1))
-  return [...n].map(([name, k]) => (k === 1
-    ? verbOf(name)
-    : t('gui.act.n.' + name, { n: k }, `${verbOf(name)} ×${k}`))).join(' · ')
-}
-
 /* When an answer landed: today needs only a clock, older needs the date. */
-export function stamp(when: number | string | Date): string {
+function stamp(when: number | string | Date): string {
   const d = when instanceof Date ? when : new Date(when)
   if (!d || isNaN(d.getTime())) return ''
   const p = (n: number): string => String(n).padStart(2, '0')
@@ -277,6 +245,14 @@ export const DOT_OF: Record<string, string> = {
 /* A graph node that has stopped, whatever it stopped as. `pending` and
    `running` are the two that have not. */
 const NODE_SETTLED = new Set(['completed', 'failed', 'skipped', 'cancelled', 'interrupted'])
+
+/* Whether one node has stopped. Exported because the graph's own clock is not
+   the only reader: the transcript card's state word is about the graph rather
+   than about the call that dispatched it, and "has every node stopped" is the
+   question it asks (features/transcript/TranscriptPage.tsx). An absent status
+   is `pending`, which has not. */
+export const nodeSettled = (status?: string | null): boolean =>
+  NODE_SETTLED.has(String(status || 'pending'))
 
 /* How long the GRAPH has been going, which is not how long the call took.
    `run_subagent_dag` is backgrounded by default, so the call returns as soon as
@@ -352,8 +328,8 @@ function bump(lane: Lane, seg: { v: number }): void {
   emit(lane)
 }
 
-/* The appends the legacy renderer followed with down(): toggles never
-   scroll (they pin the clicked row instead), so this is its own counter. */
+/* The appends that ask the view to scroll down: toggles never scroll (they pin
+   the clicked row instead), so this is its own counter. */
 function poke(lane: Lane): void {
   lane.scrollReq += 1
 }
@@ -411,13 +387,80 @@ function push(lane: Lane, seg: Seg): void {
   bumpList(lane)
 }
 
-export function ask(lane: Lane, body: string, atts: string[], when?: string | null): void {
-  push(lane, {
-    v: 0, id: nextId(), kind: 'ask', body, atts,
+function ask(
+  lane: Lane, body: string, atts: string[], when?: string | null,
+  opts?: { auto?: { origin: string; note: string }; midTurn?: boolean } | null,
+): AskData {
+  const o = opts || {}
+  const seg: AskData = {
+    v: 0, id: nextId(), kind: 'ask', ...(o.auto ? { auto: o.auto } : {}),
+    ...(o.midTurn ? { midTurn: true } : {}), body, atts,
     when: when != null ? when : stamp(Date.now()), expanded: false,
     clipped: body.length > 640 || body.split('\n').length > 12,
     clipOpen: false,
-  } satisfies AskData)
+  }
+  push(lane, seg)
+  return seg
+}
+
+/* Take a segment back off the stage. The one caller is the mid-turn bubble
+   whose message the host turn never merged: it runs as a turn of its own, and
+   that turn's own opening draws the question where the turn begins. */
+export function dropSeg(lane: Lane, id: number): boolean {
+  const i = lane.segs.findIndex((s) => s.id === id)
+  if (i < 0) return false
+  lane.segs.splice(i, 1)
+  bumpList(lane)
+  return true
+}
+
+/* The header of the reminder a cron turn carries, and the two lines inside it
+   a reader may be shown.
+
+   The entry's text as a whole is runtime prose -- the contract's `origin` says
+   so and raven/agent/loop/_shared.py says why -- but it is not prose all the
+   way down. `raven/core/cron_stack.py` writes four parts, and two of them were
+   written FOR the reader: the parenthetical, whose own docstring says it
+   describes when the reminder was set "for the user", and the instruction,
+   which is the sentence the reader wrote when they made the job (the same
+   string the schedules section edits). The two that were not are the header
+   and the closing "when you reply, mention ..." -- wording aimed at the model,
+   and a reader shown those is a reader shown the prompt. */
+const CRON_HEAD = /^\[Scheduled Task\]/
+const CRON_WHEN = /^Task '.*' \((.+)\) has been triggered\.$/
+const CRON_SAID = /^Scheduled instruction: /
+const CRON_TAIL = /^When you reply, mention/
+
+/** A cron reminder read down to its reader-facing halves, or null. */
+export function cronReminder(text: string): { note: string; said: string } | null {
+  const lines = String(text || '').split('\n')
+  if (!CRON_HEAD.test(lines[0] ?? '')) return null
+  const at = lines.findIndex((line) => CRON_SAID.test(line))
+  if (at < 0) return null
+  /* The instruction may be several lines: it runs to the closing paragraph, or
+     to the end of a reminder written without one. */
+  let end = lines.findIndex((line, i) => i > at && CRON_TAIL.test(line))
+  if (end < 0) end = lines.length
+  const said = [(lines[at] as string).replace(CRON_SAID, ''), ...lines.slice(at + 1, end)]
+  let note = ''
+  for (const line of lines) {
+    const when = CRON_WHEN.exec(line)
+    /* Without the backticks the expression is written in: they are markdown
+       for the model, and the chip that carries this is plain text. */
+    if (when) { note = (when[1] as string).replace(/`/g, ''); break }
+  }
+  return { note, said: said.join('\n').trim() }
+}
+
+/* A turn the runtime opened. It stands where a question would, because that is
+   what it is to the turn under it -- and it is drawn on the reader's own side
+   for the same reason, outlined rather than filled because nobody typed it.
+   What it says is the origin, and for a schedule the instruction that fired,
+   which is the reader's own sentence. Every other origin has a shape of its
+   own that nothing here reads, so the row is the chip alone. */
+export function askAuto(lane: Lane, origin: string, text: string, when?: string | null): void {
+  const said = origin === 'cron' ? cronReminder(text) : null
+  ask(lane, said ? said.said : '', [], when, { auto: { origin, note: said ? said.note : '' } })
 }
 
 export function note(lane: Lane, label: string, detail: string, opts?: { quiet?: boolean; retry?: (() => void) | null } | null): NoteHandle {
@@ -557,8 +600,6 @@ export function answerProgress(lane: Lane, seg: AnswerData, shown: number | null
 
 /* ── steps and calls ───────────────────────────────────────────────────── */
 
-const bridge = (): Shell => shell()
-
 function hunkFor(name: string, a: Record<string, unknown>): Hunk | null {
   if (name === 'edit_file' && typeof a.old_text === 'string' && typeof a.new_text === 'string') {
     return hunks.fromEdit(a.old_text, a.new_text)
@@ -648,31 +689,43 @@ function claimRun(lane: Lane, call: CallData): void {
 export const spawnAgentOf = (a: Record<string, unknown>): string =>
   String(a.subagent || a.agent || '')
 
-/* The graph as a run-started payload carries it. Same shape the arguments path
-   builds, so one renderer draws both. */
-/* A failure is the one thing worth opening unasked -- the rule the step's own
-   fold already follows. Written into `sel` rather than derived at render time:
-   derived, it made `null` mean both "nobody picked one" and "the reader closed
-   it", so the panel it opened could not be shut. Once per card, so closing it
-   stays closed and a later failure does not reopen it.
- *
- * Called wherever the node list changes, because a card is built before its
- * nodes have any state: the failure arrives afterwards, from an event or from
- * `dag.get`. */
-function openFirstFailure(call: CallData): void {
-  if (call.selAuto || call.sel) return
-  const failed = call.nodes.find((n) => n.status === 'failed')
-  if (!failed) return
-  call.sel = failed.id
-  call.selAuto = true
-}
-
 /* Test seam: what each raced opening is holding, as (call id, event) pairs.
    Applying an announcement twice is invisible on screen -- `merge` is
    idempotent and `fromStarted` cannot walk a status back -- so the buffer's own
    contents are the only place the claim "buffered once" can be checked. */
 export const _earlyForTests = (): Array<[string, string]> =>
   [...dagEarly].flatMap(([id, evs]) => evs.map((e): [string, string] => [id, e[0]]))
+
+/* Test seam: the node states dagFeed's binding produced, readable now that the
+   card draws no graph of its own. Five regression tests for that binding --
+   two graphs in one turn kept apart, a claimed card not claimed again by the
+   next announcement, one that outran its row, a node that reported inside that
+   gap, and a fenced result binding its run -- used to read this off the
+   card's own nodes and need a seam of their own now that nothing is drawn. */
+export const _dagCallsForTests = (): Array<{
+  runId: string | null
+  nodes: Array<{ id: string; status: string; started_at: number | null; ended_at: number | null }>
+}> => {
+  const out: Array<{
+    runId: string | null
+    nodes: Array<{ id: string; status: string; started_at: number | null; ended_at: number | null }>
+  }> = []
+  for (const lane of lanes) {
+    for (const seg of lane.segs) {
+      if (seg.kind !== 'step') continue
+      for (const call of seg.calls) {
+        if (call.kind !== 'dag') continue
+        out.push({
+          runId: call.runId,
+          nodes: call.nodes.map((n) => (
+            { id: n.id, status: String(n.status), started_at: n.started_at, ended_at: n.ended_at }
+          )),
+        })
+      }
+    }
+  }
+  return out
+}
 
 /* Terminal words for a spawned RUN, which are not the tool call's.
 
@@ -1005,13 +1058,17 @@ export function dagFeed(type: string, p: DagFeedPayload | null): void {
     bump(lane, call)
   } else if (type === 'dag.node_updated') {
     call.nodes = dagNodes.applyUpdate(call.nodes, p)
-    openFirstFailure(call)
     bump(lane, call)
   } else if (type === 'dag.run_completed') {
     ;(p.files || []).forEach((x) => { call.nodes = dagNodes.applyUpdate(call.nodes, x) })
+    /* Before the files, not because of them: the event closes the run whether or
+       not it brought a row per node, and a run closed by a backend error or a
+       cancel brings none. The card reads this rather than the nodes to decide
+       the run is over, so a graph whose last node never reported would otherwise
+       be drawn as running for as long as the page stayed open. */
+    call.graphClosed = true
     dagLive.delete(String(p.run_id))
     if (call.callId) dagByCall.delete(call.callId)
-    openFirstFailure(call)
     bump(lane, call)
   } else if (type === 'dag.run_replanned') {
     /* Always arrives before this run's own `dag.run_completed` -- the backend
@@ -1059,7 +1116,6 @@ function hydrateDag(lane: Lane, call: CallData): void {
        until here. Letting the read win either way would replace a title that is
        already on screen with the identical string on every hydrate. */
     if (!call.runTitle) call.runTitle = String(run?.task_summary || '')
-    openFirstFailure(call)
     bump(lane, call)
   }).catch(() => {
     /* A run whose dir is gone keeps whatever the card already had, and may be
@@ -1081,7 +1137,7 @@ function newCallData(
     label: actLabel(id.name, a, display), rowLabel: '',
     done: false, ok: true, ms: 0, res: '', truncated: false,
     hunk: kind === 'plain' ? hunkFor(id.name, a) : null,
-    open: false, t0: Date.now(), runId: null, runTitle: '', nodes: [], live: false, sel: null, selAuto: false, selFull: false, asked: false,
+    open: false, t0: Date.now(), runId: null, runTitle: '', nodes: [], live: false, asked: false,
     callId: callId ? String(callId) : '',
     spawnAgent: '', spawnInstance: '', spawnLabel: '', spawnStatus: '', spawnId: '',
     spawnTaskId: '', spawnAsked: false, spawnT0: 0, spawnT1: 0, stream: [], reading: false,
@@ -1102,9 +1158,9 @@ function newCallData(
   return c
 }
 
-/* Row-fold transitions the legacy paintWork made: the step that just outgrew
-   a single call folds its rows for the first time, and a failure is the one
-   thing worth opening unasked -- unless the reader pinned the fold. */
+/* The row-fold transitions: the step that just outgrew a single call folds its
+   rows for the first time, and a failure is the one thing worth opening
+   unasked -- unless the reader pinned the fold. */
 function paintWork(lane: Lane, seg: StepData, grewPast1: boolean): void {
   if (seg.calls.length > 1 && grewPast1 && !seg.wkPinned) seg.wkOpen = false
   if (seg.calls.length > 1 && seg.failed && !seg.wkPinned && !seg.wkOpen) seg.wkOpen = true
@@ -1240,35 +1296,16 @@ export function newStep(lane: Lane): StepHandle {
 const stepSolid = (s: StepData): boolean =>
   s.calls.length > 0 || (s.thinkShown && s.hasThink) || !!s.say.trim()
 
-/* Whether anything under this fold is still running.
+/* Every fold this lane opened by itself, shut. The reader's own are left
+ * alone: `toggleFold` clears `auto`, so a fold they have touched is no longer
+ * one of these.
  *
- * A backgrounded sub-agent outlives the turn that dispatched it -- by minutes,
- * and the card carries a live tail of what it is saying, which is the only
- * place a reader can see that at all. */
-function holdsALiveRun(fold: FoldData): boolean {
-  return fold.steps.some((step) => step.calls.some(spawnLive))
-}
-
-/* Every fold this lane opened by itself, shut. Two are left alone.
- *
- * The reader's own: `toggleFold` clears `auto`, so a fold they have touched is
- * no longer one of these.
- *
- * And any that still holds a running sub-agent. Shutting it takes the run's
- * live tail off the screen while the run is still going, and a shut body is
- * not built at all, so nothing is left to watch. Measured: a spawn dispatched
- * in one turn, the reader asks "how is it going" in the next, that next turn's
- * fold opens and shuts this one -- and the answer had to be fetched by reading
- * a file, because the page was no longer showing what the page already knew.
- *
- * The fold's own note already said half of this: "a backgrounded graph
- * outlives the turn that dispatched it, so a reader saw `done` over a task
- * still running below." That was answered by renaming the row. The row was
- * never the part that was hidden. */
+ * A running sub-agent under a fold does not hold it open. The run's own status
+ * lives on the task rows, which is where a reader follows it; the fold is the
+ * turn's, and the turn is over. */
 function shutAutoFolds(lane: Lane, except: FoldData | null): void {
   lane.segs.forEach((s) => {
     if (s.kind !== 'fold' || s === except || !s.auto) return
-    if (holdsALiveRun(s)) return
     s.auto = false
     s.open = false
     bump(lane, s)
@@ -1278,20 +1315,18 @@ function shutAutoFolds(lane: Lane, except: FoldData | null): void {
 /* Once the answer has landed, everything that led to it collapses behind one
    line. A turn gets ONE fold: work landing after an early fold joins it.
  *
- * `live` is the turn the reader just watched, and its fold opens. Shut, it
- * took a sequence they had been reading -- five rows, each naming what the
- * step did -- and replaced it with the word "steps", at the one moment they
- * were most likely to want it. Nothing on the row said five things were under
- * it, so there was not even a reason to click.
+ * `live` is the turn the reader just watched. Its steps were on screen, loose,
+ * the whole time the turn ran; once the answer lands they fold shut behind the
+ * one line, so what stays on screen is the answer and not the trail that led
+ * to it. The trail is one click away, and the row's clock says there is one.
+ * A sub-agent still running under it does not keep it open: that run is
+ * followed on the task rows, not here.
  *
- * One at a time, and the previous one shuts as the next opens, because the
- * weight is what a SESSION accumulates: a forty-turn session built 7361 nodes
- * and 6400 of them sat in shut fold bodies. One open fold is the turn on
- * screen, not a session's worth.
- *
- * Replay opens at most one too -- see :func:`openLastFold`, which is the same
- * rule reached from the other entry point -- so "shut unless the reader is
- * looking at it" is the whole of it, whichever way the turn arrived. */
+ * Replay opens at most one -- see :func:`openLastFold`, the turn a reopened
+ * conversation ends on -- and a live turn shuts any fold the runtime opened
+ * before it, so at most one runtime-opened body is ever built. The weight is
+ * what a SESSION accumulates: a forty-turn session built 7361 nodes and 6400 of
+ * them sat in shut fold bodies. */
 export function collapse(lane: Lane, time?: string | null, live = false): void {
   const segs = lane.segs
   const loose: StepData[] = []
@@ -1304,7 +1339,14 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
        typed, so a scan that only stopped at `ask` walked back over it into the
        previous turn, folded this turn's work into that turn's fold and wrote
        this turn's clock onto it. The reader then saw one fold whose header
-       said 20s over a thought inside it that said 21s. */
+       said 20s over a thought inside it that said 21s.
+
+       A mid-turn bubble opens nothing: it was merged into the turn under way.
+       What is below it is that turn's tail and folds under it, which is where
+       the reader's correction put it; with nothing below it -- the message
+       never reached a gap and runs as a turn of its own -- the turn's work is
+       all ABOVE, and stopping here would leave it loose and unheaded. */
+    if (s.kind === 'ask' && (s as AskData).midTurn) { if (loose.length) break; continue }
     if (s.kind === 'ask' || s.kind === 'sdlv') break
     if (s.kind === 'fold') { fold = s; break }
     if (s.kind === 'step') { loose.unshift(s); firstAt = i }
@@ -1329,7 +1371,7 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
      `shutAutoFolds` stays on the live path, where a whole session's folds
      accumulate. Marked `auto` either way, so the reader's own collapse takes it
      over from the runtime (`toggleFold`) and survives the next poll. */
-  const born = live || !lane.main
+  const born = !lane.main
   const f: FoldData = {
     v: 0, id: nextId(), kind: 'fold', time: time || null, open: born, auto: born, steps: [],
   }
@@ -1361,6 +1403,9 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
 export function openLastFold(lane: Lane): void {
   for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
     const s = lane.segs[i] as Seg
+    /* Not an opening, same as in collapse: the fold this scan is after may be
+       the one over the work that came before the reader's correction. */
+    if (s.kind === 'ask' && (s as AskData).midTurn) continue
     if (s.kind === 'ask' || s.kind === 'sdlv') return
     if (s.kind !== 'fold') continue
     s.open = true
@@ -1373,6 +1418,17 @@ export function openLastFold(lane: Lane): void {
 const isSilent = (s: StepData): boolean =>
   !s.hasSay && !s.hasThink && !s.hasQA && !s.failed && s.calls.length > 0
 
+/* Whether a question stands between these two steps on the stage. Inside one
+   turn that is a mid-turn bubble, and the steps on either side of it are the
+   work before the reader's correction and the work it asked for: merging them
+   would file both under one row at the FIRST one's place, above the bubble. */
+function parted(lane: Lane, a: StepData, b: StepData): boolean {
+  const from = lane.segs.indexOf(a)
+  const to = lane.segs.indexOf(b)
+  if (from < 0 || to < 0) return false
+  return lane.segs.slice(from + 1, to).some((s) => s.kind === 'ask')
+}
+
 /* Consecutive silent steps read as one stretch: their rows merge under one
    summary line. Operates on the turn's own steps, wherever they now sit. */
 export function foldRuns(lane: Lane, steps: StepData[]): void {
@@ -1380,7 +1436,8 @@ export function foldRuns(lane: Lane, steps: StepData[]): void {
   while (i < steps.length) {
     if (!isSilent(steps[i] as StepData)) { i += 1; continue }
     let j = i
-    while (j < steps.length && isSilent(steps[j] as StepData)) j += 1
+    while (j < steps.length && isSilent(steps[j] as StepData)
+      && (j === i || !parted(lane, steps[j - 1] as StepData, steps[j] as StepData))) j += 1
     if (j - i >= MIN_RUN_STEPS) mergeRun(lane, steps.slice(i, j))
     i = j
   }
@@ -1408,12 +1465,13 @@ function mergeThoughts(lane: Lane, group: StepData[]): void {
 /* Same shape as foldRuns, over the other kind of run. Separate passes because
    the two merges keep different things: a silent run keeps its calls under a
    new holder, a thought run keeps its first step and absorbs the rest. */
-export function foldThoughts(lane: Lane, steps: StepData[]): void {
+function foldThoughts(lane: Lane, steps: StepData[]): void {
   let i = 0
   while (i < steps.length) {
     if (!isThoughtOnly(steps[i] as StepData)) { i += 1; continue }
     let j = i
-    while (j < steps.length && isThoughtOnly(steps[j] as StepData)) j += 1
+    while (j < steps.length && isThoughtOnly(steps[j] as StepData)
+      && (j === i || !parted(lane, steps[j - 1] as StepData, steps[j] as StepData))) j += 1
     if (j - i >= MIN_RUN_STEPS) mergeThoughts(lane, steps.slice(i, j))
     i = j
   }
@@ -1501,7 +1559,10 @@ export function finishTurn(lane: Lane, st: StepHandle | null, steps: StepData[],
 export function turnKept(lane: Lane): boolean {
   for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
     const s = lane.segs[i] as Seg
-    if (s.kind === 'ask') return false
+    /* A mid-turn bubble is not where the turn began, so what stands above it
+       is this turn's output: a stop pressed just after one was answered with
+       "nothing to keep" over the work the reader was watching. */
+    if (s.kind === 'ask') { if ((s as AskData).midTurn) continue; return false }
     if (s.kind === 'note' || s.kind === 'status') continue
     return true
   }
@@ -1529,23 +1590,6 @@ export function toggleCall(lane: Lane, c: CallData): void {
      every card of every restored conversation would be a read per card for
      detail nobody opened. */
   if (c.open && c.kind === 'dag') hydrateDag(lane, c)
-  bump(lane, c)
-}
-
-/* The node whose detail the card shows. Clicking the open one closes it, which
-   is what makes the graph readable again without a second control.
-
-   Selecting rather than opening the run's transcript: the panel that does that
-   takes half the screen, and comparing two nodes' configuration is the thing a
-   reader of this card is most often doing. The panel is one explicit click away. */
-export function pickDagNode(lane: Lane, c: CallData, id: string): void {
-  c.sel = c.sel === id ? null : id
-  c.selFull = false
-  bump(lane, c)
-}
-
-export function toggleDagFull(lane: Lane, c: CallData): void {
-  c.selFull = !c.selFull
   bump(lane, c)
 }
 
@@ -1591,10 +1635,14 @@ function callIndex(messages: HistoryMessage[]): Map<string, { name: string; args
    becomes the verb and the command the argument. A raven tool name has no
    colon and comes back unchanged; a shell title spans newlines on purpose. */
 const ACP_TITLE_RE = /^([A-Za-z_][\w.-]{0,31}):\s*(\S[\s\S]*)$/
-export const callParts = (raw: unknown): { name: string; display: string } => {
+const callParts = (raw: unknown): { name: string; display: string } => {
   const m = ACP_TITLE_RE.exec(String(raw || ''))
   return m ? { name: m[1] as string, display: m[2] as string } : { name: String(raw || ''), display: '' }
 }
+
+/* The label a failed turn's row reads, live and replayed alike: one string, so
+   the two views of one turn cannot drift apart. */
+export const failedTurnLabel = (): string => t('gui.turn_died', { e: '' }).replace(/\s*[-·]\s*$/, '')
 
 export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMessage[] = []): void {
   /* A different conversation, so a different roster -- but only on the lane that
@@ -1679,7 +1727,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
     if (lastWord && worked(m)) return false
     for (let j = i + 1; j < ahead.length; j += 1) {
       const n = ahead[j] as HistoryMessage
-      if (n && n.role === 'user' && n.text && n.text.trim()) return true
+      if (n && n.role === 'user' && !n.mid_turn && n.text && n.text.trim()) return true
       if (spoken(n)) return false
       if (lastWord && worked(n)) return false
     }
@@ -1704,12 +1752,12 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
      whose live path is this function rather than finishTurn. */
   let held: { text: string; when: string | null } | null = null
   /* The turn number the workspace record files a change under, counted the way
-     it counts them: one per user message with text (wsOnHistory in
-     demo/100-workspace.js does exactly this, over these same messages). Two
-     readers of one numbering rather than a number passed between them, because
-     the panel's replay and this one are separate entry points on the same
-     payload -- but that makes the rule itself the contract, so it is stated
-     here and there in the same words.
+     it counts them: one per user message with text
+     (features/workspace/record.ts does exactly this, over these same
+     messages). Two readers of one numbering rather than a number passed
+     between them, because the pane's replay and this one are separate entry
+     points on the same payload -- but that makes the rule itself the contract,
+     so it is stated here and there in the same words.
 
      A delegated lane resumes its own count rather than starting over: it is
      painted a slice at a time, so counting from zero over each slice filed every
@@ -1739,9 +1787,11 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
            from the boundary is drawn here off the same identity, so the two
            views agree.
          - `origin` alone (a cron reminder, a sentinel notice, a sub-agent
-           announce an older server wrote): no identity to draw, so the row is
-           the quiet marker that a live view showed, and no workspace turn
-           opens -- that bookkeeping belongs to the delegated shape. */
+           announce an older server wrote): no run to open, so the row is the
+           reader's own side of the turn with the origin on it -- plus, for a
+           schedule, the two lines of its reminder that were written for a
+           reader (`cronReminder`). No workspace turn opens: that bookkeeping
+           belongs to the delegated shape. */
       sealTools()
       closeTurn(msOf(m.timestamp))
       const d = m.delegated
@@ -1761,7 +1811,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
           open: () => {
             const src = source()
             if (isDag) src.openDagRun?.(String(d.run_id || d.label || ''))
-            else src.openSpawn?.('', String(d.label || ''))
+            else src.openSpawn?.('', String(d.label || ''), d.node_id)
           },
         })
       } else {
@@ -1774,8 +1824,22 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
            measured from here. `turnNo` stays put: the workspace-turn
            bookkeeping belongs to the delegated shape, as the note above says. */
         turnAt = msOf(m.timestamp)
-        delivered(lane, { label: String(m.origin || ''), isDag: false, status: 'ok', open: () => {} })
+        askAuto(lane, String(m.origin || ''), m.text || '', stamp(m.timestamp as string))
       }
+      return
+    }
+    if (m.role === 'user' && m.mid_turn && m.text && m.text.trim()) {
+      /* Merged into the turn that was already running, so the turn it belongs
+         to is the one being drawn: nothing is sealed, nothing folded, no
+         products filed and no turn number spent. What a live client draws from
+         `message.injected`, one bubble inside the turn.
+
+         The open step is let go of rather than sealed, which is what the live
+         arm does with its own: the work that follows the message belongs below
+         it, and appending it to the step above would put the reader's
+         correction after the calls it asked for. */
+      askText(lane, m.text, stamp(m.timestamp as string), { midTurn: true })
+      toolRun = null
       return
     }
     if (m.role === 'user' && m.text && m.text.trim()) {
@@ -1801,7 +1865,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
       /* Same promise as the live stop, checked the same way: a replayed turn
          whose whole content is this marker has no output above to keep. */
       const halted = turnKept(lane) ? 'gui.halted' : 'gui.halted_bare'
-      note(lane, stopped ? t(halted) : t('gui.turn_died', { e: '' }).replace(/\s*[-·]\s*$/, ''),
+      note(lane, stopped ? t(halted) : failedTurnLabel(),
         stopped ? '' : (m.turn_ended.reason || ''), { quiet: stopped })
       return
     }
@@ -1861,19 +1925,18 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
 /* The composer bakes an "[attachments]" note plus "- path" bullets into the
    message; the reader gets chips instead. Parsed against both language
    variants, since history may have been written under the other one. */
-export function askText(lane: Lane, text: string, when?: string | null): void {
-  const notes = bridge().attNotes ? bridge().attNotes!() : []
-  const s = String(text)
-  for (const noteWord of notes) {
-    if (!noteWord) continue
-    const ix = s.lastIndexOf('\n\n' + noteWord + '\n')
-    if (ix < 0) continue
-    const tail = s.slice(ix + noteWord.length + 3).split('\n')
-    if (!tail.length || !tail.every((l) => !l.trim() || /^- /.test(l))) continue
-    ask(lane, s.slice(0, ix), tail.filter((l) => /^- /.test(l)).map((l) => l.slice(2).trim()), when)
-    return
-  }
-  ask(lane, s, [], when)
+/* A question as the reader asked it, with its files as chips.
+ *
+ * Both the live send and a replay come through here, and only one of them is
+ * the text the composer built: a message that carried a picture comes back from
+ * `session.resume` with the engine's own lines in it, written for the model.
+ * Reading those as the question is what a reload used to show -- the note, the
+ * paths and the engine's line, all as prose (src/lib/attachments.ts). */
+export function askText(
+  lane: Lane, text: string, when?: string | null, opts?: { midTurn?: boolean } | null,
+): AskData {
+  const { body, atts } = readMessage(String(text))
+  return ask(lane, body, atts, when, opts)
 }
 
 /* ── the agent stage: a delegated run drawn with this same renderer ─────
@@ -2117,14 +2180,14 @@ export function branchOf(lane: Lane): ((text: string) => void) | null {
   try { return source().branch || null } catch { return null }
 }
 
-export function openDagNode(runId: string, nodeId: string, summary?: string | null): void {
-  try { source().openDagNode?.(runId, nodeId, summary) } catch { /* no opener wired */ }
+export function openDagRun(runId: string): void {
+  try { source().openDagRun?.(runId) } catch { /* no opener wired */ }
 }
 
 export function openSpawn(agent: string, label: string): void {
   const src = source()
   if (src.openSpawn) { src.openSpawn(agent, label); return }
-  shell().showWorkspace?.('agents')
+  pane().show('agents')
 }
 
 /* Test seam. */

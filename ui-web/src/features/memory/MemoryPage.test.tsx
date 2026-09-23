@@ -1,11 +1,14 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
 import { MemoryApp } from './MemoryPage'
-import * as store from './store'
+import * as store from './store';
 
-import type { Shell } from '../../shell/bridge'
 import type { MemItem, MemStats, MemorySource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -24,55 +27,60 @@ function item(over: Partial<MemItem> = {}): MemItem {
   }
 }
 
-/* The island runs against the same two seams production wires: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on window.DS.memory. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys, not translations) and a fixture source on sources.memory. */
 function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null) {
-  const calls: string[] = []
   const source: MemorySource = {
     stats: async () => stats,
     list: async () => ({ items: [item()], total: 1 }),
-    remove: async () => {
-      calls.push('remove')
-    },
     ...over,
   }
-  const shellCalls: Array<[string, unknown]> = []
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: (id) => shellCalls.push(['showPage', id]),
-    closeDetail: () => {
-      const d = document.getElementById('detail')
-      if (d) d.dataset.open = 'false'
-    },
-  }
-  window.RavenShell = fakeShell
-  window.DS = { memory: source }
-  document.body.innerHTML =
-    '<section id="memPage"><div id="memBody"></div></section>' +
-    '<aside id="detail" data-open="false"><b id="dTitle">—</b><div id="dBody"></div></aside>'
-  return { source, calls, shellCalls }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  setSources({ memory: source })
+  document.body.innerHTML = '<div id="memoryBody"></div>'
+  return { source }
 }
 
+/* The section as the dialog hosts it: the island in its own box, and the two
+   reads arriving at the section costs (features/memory/store.ts's `enter`,
+   which state/settings.ts spends -- here it is called by hand, because the
+   dialog is not what this file is about). */
 async function mount() {
-  const view = render(<MemoryApp />, { container: document.getElementById('memBody')! })
+  const view = render(<MemoryApp />, { container: document.getElementById('memoryBody')! })
   await act(async () => {
-    store.open()
+    store.setKind('episode')
+    await Promise.all([store.load(), store.refreshStats()])
   })
   return view
 }
 
+/* Scoped to the list: the picked memory carries the same subject in its own
+   header, so an unscoped query answers two elements once a row is open. */
+const row = (text: string): HTMLElement =>
+  within(document.querySelector('.two-pane-side') as HTMLElement).getByText(text)
+
 afterEach(() => {
-  act(() => {
-    store.detailDismissed()
-    store.setKind('episode')
-  })
   cleanup()
+  act(() => { store._resetForTests() })
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('memory island', () => {
+  it('waits as the rows it becomes rather than as a line of grey text', async () => {
+    let land: ((r: { items: MemItem[]; total: number }) => void) | null = null
+    install({ list: () => new Promise((resolve) => { land = resolve }) })
+    render(<MemoryApp />, { container: document.getElementById('memoryBody')! })
+    await act(async () => { store.setKind('episode'); void store.load(); await Promise.resolve() })
+    expect(document.querySelectorAll('.two-pane-wait .two-pane-row').length).toBe(7)
+
+    await act(async () => { land!({ items: [item()], total: 1 }); await Promise.resolve() })
+    expect(document.querySelector('.two-pane-wait')).toBeNull()
+    expect(row('shipped the island')).toBeTruthy()
+  })
+
   it('shows the rows and the stat band the source answers', async () => {
     install(
       { list: async () => ({ items: [item(), item({ id: 'm2', subject: 'fixed the flake' })], total: 2 }) },
@@ -81,7 +89,6 @@ describe('memory island', () => {
     await mount()
     expect(await screen.findByText('shipped the island')).toBeTruthy()
     expect(screen.getByText('fixed the flake')).toBeTruthy()
-    expect(screen.getByText('gui.mem.hero')).toBeTruthy()
     expect(await screen.findByText('12')).toBeTruthy()
     expect(screen.getByText('gui.mem.n_total {"n":2}')).toBeTruthy()
   })
@@ -134,76 +141,30 @@ describe('memory island', () => {
     expect(await screen.findByText('shipped the island')).toBeTruthy()
   })
 
-  it('opens the detail drawer from a row', async () => {
+  /* Beside the list rather than in the shared drawer: inside the settings
+     dialog a drawer is a layer over a layer, and the list it covered is what a
+     reader comparing two memories needs to keep. */
+  it('shows the picked memory beside the list, and drops it on a kind switch', async () => {
     install()
     await mount()
     await act(async () => {
-      ;(await screen.findByText('shipped the island')).click()
+      row('shipped the island').click()
     })
-    expect(document.getElementById('detail')!.dataset.open).toBe('true')
     expect(screen.getByText('gui.mem.sec_detail')).toBeTruthy()
     expect(screen.getByText('the long form of the episode')).toBeTruthy()
+    /* The pick belongs to the kind that was listed, so switching kind has to
+       drop it -- otherwise the reader is left reading a row from a tab they
+       have left. */
+    await act(async () => {
+      screen.getByText('gui.mem.tab_case').click()
+    })
+    expect(screen.queryByText('gui.mem.sec_detail')).toBeNull()
   })
 
-  it('repaints its own item after another page borrowed the drawer', async () => {
+  it('says to pick one until a row is picked', async () => {
     install()
     await mount()
-    await act(async () => {
-      ;(await screen.findByText('shipped the island')).click()
-    })
-    expect(screen.getByText('the long form of the episode')).toBeTruthy()
-    /* What the skills opener does when it takes over the shared drawer:
-       wipes #dBody wholesale and re-sets the already-true open flag. */
-    const dBody = document.getElementById('dBody')!
-    await act(async () => {
-      dBody.innerHTML = '<div>SKILL DETAIL</div>'
-      document.getElementById('detail')!.dataset.open = 'true'
-    })
-    await act(async () => {
-      ;(await screen.findByText('shipped the island')).click()
-    })
-    expect(dBody.textContent).toContain('the long form of the episode')
-    expect(dBody.textContent).not.toContain('SKILL DETAIL')
-  })
-
-  it('keeps the drawer open when a delete fails handled', async () => {
-    install({
-      remove: async () => {
-        // What the live source throws after toasting the reason itself.
-        throw { handled: true }
-      },
-    })
-    await mount()
-    await act(async () => {
-      ;(await screen.findByText('shipped the island')).click()
-    })
-    const del = screen.getByText('gui.mem.delete')
-    await act(async () => {
-      del.click()
-    })
-    await act(async () => {
-      screen.getByText('gui.mem.confirm_del').click()
-    })
-    expect(document.getElementById('detail')!.dataset.open).toBe('true')
-    expect(screen.getByText('gui.mem.sec_detail')).toBeTruthy()
-  })
-
-  it('closes the drawer and reloads after a successful delete', async () => {
-    const { source, calls } = install()
-    const listSpy = vi.spyOn(source, 'list')
-    await mount()
-    await act(async () => {
-      ;(await screen.findByText('shipped the island')).click()
-    })
-    await act(async () => {
-      screen.getByText('gui.mem.delete').click()
-    })
-    await act(async () => {
-      screen.getByText('gui.mem.confirm_del').click()
-    })
-    expect(calls).toContain('remove')
-    expect(document.getElementById('detail')!.dataset.open).toBe('false')
-    expect(listSpy.mock.calls.length).toBeGreaterThan(1)
+    expect(await screen.findByText('gui.mem.pick')).toBeTruthy()
   })
 
   it('switches kind through a stat and reloads with it', async () => {
@@ -219,5 +180,15 @@ describe('memory island', () => {
       screen.getByText('gui.mem.tab_case').click()
     })
     expect(asked).toContain('agent_case')
+  })
+
+  it('keeps its rendered shape', async () => {
+    install(
+      { list: async () => ({ items: [item(), item({ id: 'm2', subject: 'fixed the flake' })], total: 2 }) },
+      { episodes: 12, profiles: 1, agent_cases: 3, agent_skills: 4 },
+    )
+    await mount()
+    await screen.findByText('shipped the island')
+    expect(domSnapshot(document.getElementById('memoryBody')!)).toMatchSnapshot()
   })
 })

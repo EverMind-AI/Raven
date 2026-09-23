@@ -1,0 +1,88 @@
+/* The conversation: the empty state's flag, the reader's own message, and the
+ * one row raven speaks about itself in.
+ *
+ * The renderer is the transcript island (features/transcript/); what is here
+ * is the empty-state flag -- which is a whole layout rather than a message, so
+ * it belongs to the chat column -- and the three verbs the session runtime and
+ * its stages drive the island by.
+ *
+ * The flag is written on `.chat` by reaching for that element: the column is
+ * the chat's own ground, rendered by src/chrome/ChatTop.tsx's neighbours and
+ * owned by nobody who could be handed the flag instead.
+ */
+
+import { ask as drawAsk, dropSeg, note as drawNote } from '../../features/transcript/mount'
+import { setStuck } from '../../features/transcript/tail'
+import { readMessage } from '../../lib/attachments'
+
+import type { NoteHandle } from '../../features/transcript/types'
+
+/* The empty state is the composer itself, moved to the visual centre -- no
+   mark, no facts, no title. `unpitch` lifts the flag again. */
+export function pitch(): void {
+  const c = document.querySelector('.chat') as HTMLElement | null
+  if (c) c.dataset.fresh = '1'
+}
+
+/* Leaving the empty state. Its own verb, because the flag drives a whole layout
+   -- the wordmark, the crew, a centred composer 81px above where the dock sits,
+   and an opaque card instead of the glass one -- so every path out of it has to
+   lift the flag at the same moment, and there are four of them (content
+   arriving, a stored conversation replaying, and either kind of switch through
+   resetView). */
+export function unpitch(): void {
+  const c = document.querySelector('.chat') as HTMLElement | null
+  if (c) delete c.dataset.fresh
+}
+
+/* The composer appends an "[attachments]" note plus "- path" bullets for the
+   model; the reader gets chips instead. Parsed against both language variants
+   of the note, since history may have been written under the other one. */
+export function splitAtts(text: string): { body: string; atts: string[] } {
+  return readMessage(text)
+}
+
+/* Answers the bubble's id so a caller that may have to take it back can: a
+   mid-turn message whose turn ended before it was merged runs as a turn of its
+   own, and that turn draws the question where the turn begins. */
+export function ask(text: string, when?: string, opts?: { midTurn?: boolean } | null): number {
+  unpitch()
+  setStuck(true)
+  /* The bubble, its attachment chips and its footer are the island's. */
+  return drawAsk(text, when, opts)
+}
+
+/* Take a drawn bubble back off the stage. */
+export function unask(id: number): void {
+  dropSeg(id)
+}
+
+/* Writes what the row shows and what it can give back, together; `row` is the
+   island handle `noteRow` returned. */
+export function noteSay(row: NoteHandle, label: string, detail: string): void {
+  row.set(label, detail)
+}
+
+/* The one row for everything raven says about itself in the transcript, so a
+   new kind of notice cannot arrive wearing its own shape. `label` leads, the
+   detail follows after a `.`, and the whole thing is one line: a failure and a
+   framework note differ only in colour. Options: `quiet` for a framework note
+   (no failure happened, so no red) and `retry`, which is the caller's -- this
+   row cannot know what should happen next. Omit it and no action appears. */
+export function noteRow(
+  label: string,
+  detail: string,
+  /* `host` is passed by one caller and has never been forwarded, for the reason
+     below; it is in the type because that call site is real. */
+  opts?: { quiet?: boolean; retry?: (() => void) | null; host?: unknown } | null
+): NoteHandle {
+  const o = opts ?? {}
+  /* The row is an island segment; the handle keeps the two verbs the page still
+     uses on it (noteSay's set, compressNow's remove). `host` needs no
+     forwarding: the island's main lane IS the #stage transcript, and a
+     delegated pane draws its own notes from its own record. */
+  return drawNote(label, detail, {
+    quiet: !!o.quiet,
+    retry: typeof o.retry === 'function' ? o.retry : null,
+  })
+}

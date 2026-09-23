@@ -1,25 +1,27 @@
-/* One diff row, in the legacy shape the demo shell's hunk builders still
-   produce: a tuple of [kind, text, oldLineNo, newLineNo], where a 'gap' row
-   carries the folded lines as its second slot and an `open` expando the
-   reader toggles in place. */
-export type DiffRow = [string, string | string[], (number | null)?, (number | null)?] & {
-  open?: boolean
-}
+/* The diff-row and hunk shapes live with their builders now (src/lib/hunks.ts,
+   a pure leaf two domains share); re-exported here for this domain's own
+   readers. */
+import type { DiffRow, WsHunk } from '../../lib/hunks'
 
-export interface WsHunk {
-  rows: DiffRow[]
-  add: number
-  del: number
-}
+export type { DiffRow, WsHunk }
 
 export interface WsChange {
   key: string
   dir: string
   name: string
-  kind: string
+  /* A file the turn created, a whole-file write over one that existed, an
+     in-place edit, or a file the turn removed -- the four a change row draws a
+     different glyph for. */
+  kind: 'add' | 'write' | 'edit' | 'delete'
   add: number
   del: number
   hunks: WsHunk[]
+  /* The file as this turn last left it, followed call by call: a whole-file
+     write is the file, an edit is applied to it. Null once an edit could not be
+     applied to what was being followed, and absent on a row the turn only
+     edited -- either way nothing here can say what the file holds. Read only
+     when the file is removed and the runtime caught none of its contents. */
+  body?: string | null
   turn: number
   open: boolean
   auto?: boolean
@@ -92,7 +94,30 @@ export interface WorkspaceSnapshot extends WsShared {
   deliveries: DeliveryRow[]
 }
 
-/* The DS.workspace contract. The fixture source (demo shell) offers only
+/* What the host's folder dialog answered (`fs.pick_dir`). */
+export interface DirPick {
+  path?: string | null
+  ok: boolean
+}
+
+/* One directory as `fs.dirs` lists it: where the browser stands, one level up
+   (null at the filesystem root), where it started, whether a conversation may
+   be pinned here, and the subdirectories -- each with the same yes-or-no. */
+export interface DirEntry {
+  name: string
+  path: string
+  ok: boolean
+}
+
+export interface DirListing {
+  path: string
+  parent?: string | null
+  home: string
+  ok: boolean
+  entries: DirEntry[]
+}
+
+/* The DS.workspace contract. A page with no host behind it offers only
    shortPath and the demo toast; the rpc source (live layer) adds the fs.*
    surface and flags it with canBrowse -- which is how the island knows to
    draw the real file view instead of the demo's note. */
@@ -116,4 +141,15 @@ export interface WorkspaceSource {
      machine is worse than not offering. */
   hostIsLocal?(): boolean
   openPath?(p: string): void
+  /* The subdirectories of one absolute directory, the reader's home when none
+     is named: what the composer's working-directory picker walks
+     (state/workdir.ts). Optional like `reveal`: a page with no gateway behind
+     it says so on the menu instead of offering a browser over nothing. */
+  dirs?(path?: string): Promise<DirListing>
+  /* A folder chosen in the gateway host's own folder dialog -- Finder, the
+     Explorer dialog, zenity -- for the same picker. `path` is absent when the
+     dialog was dismissed; `ok` is `fs.dirs`'s judgement of the folder. Only
+     worth offering while `hostIsLocal`, since the dialog opens where the
+     gateway runs. */
+  pickDir?(): Promise<DirPick>
 }

@@ -102,11 +102,12 @@ export interface DelegationStatus {
 
 export interface ApprovalReq {
   approvalId: string
+  // The sub-agent that asked, when the turn belongs to a direct chat with one.
+  // Absent when the main agent asked, which is what the prompt reads as "Raven".
+  asker?: string
   command: string
   conversationId: string
   description: string
-  // Absolute Unix deadline in milliseconds; the gateway wire value is seconds.
-  expiresAt: number
   // The prefix rule the runtime found safe to offer for persisting; absent
   // when there is none, and then the prompt offers no such choice.
   suggestedPattern?: string

@@ -425,3 +425,15 @@ def test_the_new_name_wins_when_a_config_somehow_carries_both(stub_config_path: 
     cfg = ec_module.load_raven_config()
 
     assert cfg.skill_forge.extraction.max_skills_top_k == 9
+
+
+def test_sessions_block_defaults_to_no_auto_archive(stub_config_path: Path) -> None:
+    _write_config(stub_config_path, {"sessions": {}})
+    cfg = ec_module.load_raven_config()
+    assert cfg.sessions.auto_archive_after_days is None
+
+
+def test_sessions_block_reads_camel_case_days(stub_config_path: Path) -> None:
+    _write_config(stub_config_path, {"sessions": {"autoArchiveAfterDays": 30}})
+    cfg = ec_module.load_raven_config()
+    assert cfg.sessions.auto_archive_after_days == 30

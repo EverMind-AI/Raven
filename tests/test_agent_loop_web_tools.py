@@ -229,6 +229,157 @@ def test_a_keyed_reader_without_a_key_registers_jina_instead(workspace, monkeypa
     assert keyed.tools.get("web_fetch").api_key == "fc"
 
 
+class _RefusingThenServing:
+    """Stands in for ``httpx.AsyncClient``: refuses the boot key, serves the new one."""
+
+    def __init__(self) -> None:
+        self.keys_seen: list[str] = []
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+    async def post(self, url: str, **kwargs):
+        import httpx
+
+        key = kwargs["headers"]["Authorization"].removeprefix("Bearer ")
+        self.keys_seen.append(key)
+        request = httpx.Request("POST", url)
+        if key == "sk-boot":
+            return httpx.Response(402, json={}, request=request)
+        return httpx.Response(200, json={"results": [{"url": url, "raw_content": "PAGE"}]}, request=request)
+
+
+@pytest.mark.asyncio
+async def test_a_reader_key_set_after_a_refusal_reaches_the_next_call(workspace, tmp_path: Path, monkeypatch) -> None:
+    """The refusal tells the user to set a working key at the vendor's slot. The
+    tool used to hold the key it was built with, so following that instruction
+    did nothing until a restart; the slot is now what the next call reads."""
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"tools": {"web": {"providers": {"tavily": {"apiKey": "sk-boot"}}}}}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    monkeypatch.setattr("raven.agent.tools.web.validate_url_target", lambda url: (True, ""))
+    client = _RefusingThenServing()
+    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", client)
+    loop = _loop(workspace, web_fetch_provider="tavily", web_provider_keys={"tavily": "sk-boot"})
+    tool = loop.tools.get("web_fetch")
+    assert tool.provider == "tavily"
+
+    refused = json.loads(await tool.execute("https://a.example"))
+    paused = json.loads(await tool.execute("https://b.example"))
+    assert refused["error"] == "Tavily refused the key (HTTP 402)" and paused["paused"] is True
+    assert client.keys_seen == ["sk-boot"], "the paused call was not sent"
+
+    cfg.write_text(
+        json.dumps({"tools": {"web": {"providers": {"tavily": {"apiKey": "sk-rotated"}}}}}), encoding="utf-8"
+    )
+
+    served = json.loads(await tool.execute("https://c.example"))
+    assert served["text"] == "PAGE"
+    assert client.keys_seen == ["sk-boot", "sk-rotated"]
+    assert tool.api_key == "sk-rotated"
+
+
+@pytest.mark.asyncio
+async def test_a_reader_whose_key_is_cleared_in_the_file_reads_through_jina(
+    workspace, tmp_path: Path, monkeypatch
+) -> None:
+    """Clearing ``tools.web.providers.<vendor>.apiKey`` is the edit the refusal
+    text points the user at. The reader registered on that vendor then runs on
+    Jina, keyless, from the next call, rather than sending an empty credential."""
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"tools": {"web": {"providers": {"tavily": {"apiKey": "sk-boot"}}}}}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    monkeypatch.setattr("raven.agent.tools.web.validate_url_target", lambda url: (True, ""))
+    sent: list[tuple[str, dict]] = []
+
+    class _Reader:
+        def __call__(self, *a, **k):
+            return self
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def post(self, url, **kwargs):
+            import httpx
+
+            sent.append((url, kwargs.get("headers") or {}))
+            payload = {"results": [{"url": url, "raw_content": "TAVILY"}]}
+            return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+        async def get(self, url, **kwargs):
+            import httpx
+
+            sent.append((url, kwargs.get("headers") or {}))
+            return httpx.Response(200, text="JINA", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", _Reader())
+    loop = _loop(workspace, web_fetch_provider="tavily", web_provider_keys={"tavily": "sk-boot"})
+    tool = loop.tools.get("web_fetch")
+
+    first = json.loads(await tool.execute("https://a.example"))
+    cfg.write_text(json.dumps({"tools": {"web": {"providers": {"tavily": {"apiKey": ""}}}}}), encoding="utf-8")
+    second = json.loads(await tool.execute("https://b.example"))
+
+    assert first["extractor"] == "tavily-extract" and sent[0][1]["Authorization"] == "Bearer sk-boot"
+    assert second["extractor"] == "jina-reader" and second["text"] == "JINA"
+    assert sent[1][0].startswith("https://r.jina.ai/") and "Authorization" not in sent[1][1]
+    assert tool.provider == "jina"
+
+
+@pytest.mark.asyncio
+async def test_the_subagent_lanes_web_tools_read_their_keys_live_too(tmp_path: Path, monkeypatch) -> None:
+    """All three tools carry the advice to set a key at the config slot, so all
+    three read it there; a boot-snapshot key on two of them made that advice
+    false for one sub-agent run."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.tools.registry import ToolRegistry
+
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    registered: list = []
+    real = ToolRegistry.register
+
+    def _spy(self, tool):
+        real(self, tool)
+        registered.append(tool)
+
+    monkeypatch.setattr(ToolRegistry, "register", _spy)
+    backend = RavenLoopBackend(
+        provider=_StubProvider(),
+        model="stub",
+        agent_home=tmp_path,
+        web_search_provider="tavily",
+        web_fetch_provider="tavily",
+        web_provider_keys={"tavily": "sk-boot"},
+        image_search=True,
+    )
+    await backend.run("task", task_id="t1", workspace=tmp_path, executor=None)
+    tools = {t.name: t for t in registered if t.name in ("web_search", "image_search", "web_fetch")}
+    assert sorted(tools) == ["image_search", "web_fetch", "web_search"]
+    assert {t.provider for t in tools.values()} == {"tavily"}
+    assert {t.api_key for t in tools.values()} == {"sk-boot"}
+
+    cfg.write_text(
+        json.dumps({"tools": {"web": {"providers": {"tavily": {"apiKey": "sk-rotated"}}}}}), encoding="utf-8"
+    )
+
+    assert {name: t.api_key for name, t in tools.items()} == {name: "sk-rotated" for name in tools}
+
+
 @pytest.mark.asyncio
 async def test_the_unconfigured_error_names_the_config_actually_in_force(tmp_path: Path) -> None:
     """Reachable only if the key disappears after registration, but the message

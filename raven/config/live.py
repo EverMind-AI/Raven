@@ -32,15 +32,29 @@ from __future__ import annotations
 
 import json
 import weakref
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from loguru import logger
+from pydantic.alias_generators import to_camel
 
 __all__ = [
     "LiveConfig",
+    "hold_for_this_turn",
+    "held",
+    "context_window_tokens",
+    "curator_pin",
+    "default_live",
     "default_model",
+    "exec_timeout",
+    "memory_top_k",
+    "personalization_enabled",
+    "reasoning_effort",
+    "web_providers",
+    "max_tool_iterations",
     "disabled_playbook_names",
     "disabled_tool_names",
     "exec_extra_deny_patterns",
@@ -48,8 +62,53 @@ __all__ = [
     "media_tool_config",
     "permissions_config",
     "routing_profile",
+    "skill_gate_pin",
+    "web_provider_keys",
     "web_search_key",
 ]
+
+
+#: The values one unit of work has already read, or None outside such a unit.
+#: A ContextVar for the reason the model binding is one: work detached during a
+#: turn copies the context, so a sub-agent keeps the values its turn started on.
+_HELD: ContextVar[dict[str, Any] | None] = ContextVar("raven_live_held", default=None)
+
+
+@contextmanager
+def hold_for_this_turn(**resolved: Any) -> Iterator[None]:
+    """Read each of these values once for the work inside, not once per use.
+
+    Reading live is right for a preference and wrong in the middle of a turn: a
+    turn asks several times, sometimes minutes apart -- the iteration cap is
+    first read after context assembly, and the curator asks for its pin once per
+    step of a tool-calling conversation that carries the previous steps with it.
+    Answering those differently splits one piece of work across two settings:
+    the new model continues the old one's partial plan, or a cap lowered
+    mid-flight stops a request that was already running.
+
+    So a turn holds what it reads, the way it holds its model binding. Values
+    passed here are resolved at the boundary, which is what the cap needs: read
+    lazily it would still be read after assembly, which is the window the edit
+    lands in. Everything else is held at its first read inside.
+
+    Outside a hold -- a caller below ``run_turn``, a background path -- every
+    read is live, which is the behaviour that was there before.
+    """
+    token = _HELD.set(dict(resolved))
+    try:
+        yield
+    finally:
+        _HELD.reset(token)
+
+
+def held(key: str, read: "Callable[[], Any]") -> Any:
+    """``read()``, once per hold; every time outside one."""
+    values = _HELD.get()
+    if values is None:
+        return read()
+    if key not in values:
+        values[key] = read()
+    return values[key]
 
 
 class LiveConfig:
@@ -203,6 +262,48 @@ def web_search_key(live: LiveConfig) -> str | None:
     return _admit(live, "web_search_key", present=True, value=live_web_search_key(raw))
 
 
+def web_jina_key(live: LiveConfig) -> str | None:
+    """The Jina key at the pre-vendor leaf ``tools.web.jinaApiKey``, or None for "no answer".
+
+    :func:`web_search_key`'s twin for the other pre-vendor leaf. The leaf is a
+    scalar on ``tools.web`` rather than a section, so "present" is the leaf
+    itself being in the file. Same contract otherwise: a present and valid
+    leaf governs entirely, including an empty value, and one the schema
+    rejects dispenses no new answer.
+    """
+    from raven.config.schema import live_web_jina_key
+
+    raw = live.get("tools.web")
+    if not isinstance(raw, dict) or "jinaApiKey" not in raw:
+        return _admit(live, "web_jina_key", present=False, value=None)
+    return _admit(live, "web_jina_key", present=True, value=live_web_jina_key(raw))
+
+
+def web_provider_keys(live: LiveConfig) -> dict[str, str]:
+    """Every per-vendor web key the file holds now, keyed by vendor.
+
+    The singular reader answers one vendor a caller already named; a spawn has
+    to hand the whole set down, because the sub-agent picks its own vendor.
+
+    A cleared vendor is present with an empty value, not absent: the caller
+    merges this over what it booted with, and dropping the empty would restore
+    the credential the settings surface just removed. Absent still means "the
+    file says nothing about this vendor", which is the only case the boot value
+    may answer -- the same distinction the singular reader draws.
+    """
+    raw = live.get("tools.web.providers")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for vendor in raw:
+        # Through the singular reader, which is schema-backed and memoised:
+        # the key's spelling belongs to the schema, not to every reader of it.
+        value = web_provider_key(live, str(vendor))
+        if value is not None:
+            out[str(vendor)] = value
+    return out
+
+
 def web_provider_key(live: LiveConfig, vendor: str) -> str | None:
     """One web vendor's key as the file has it, or None for "no answer".
 
@@ -222,6 +323,43 @@ def web_provider_key(live: LiveConfig, vendor: str) -> str | None:
     if raw is None:
         return _admit(live, slot, present=False, value=None)
     return _admit(live, slot, present=True, value=live_web_provider_key(raw, vendor))
+
+
+def live_vendor_key(live: LiveConfig, vendor: str, *, boot: str | None) -> str:
+    """One web vendor's key as the file has it now, else the value the process booted with.
+
+    Resolved in the order ``WebToolsConfig.vendor_key`` uses: the canonical
+    ``tools.web.providers.<vendor>.apiKey`` slot, then the pre-vendor leaf that
+    is Serper's (``tools.web.search.apiKey``) or Jina's (``tools.web.jinaApiKey``),
+    then ``boot``. A vendor the file names with an empty key is revoked, not
+    missed. The boot value serves only when the file says nothing about the
+    vendor at all -- no slot of its own and no leaf -- which is the lane a
+    harness passes a key through with no file behind it; a ``providers``
+    subtree that names other vendors says nothing about this one. A tool that
+    reads its key through this on every call sees a key the user sets or
+    rotates in the file without a restart -- which is what an error message
+    telling them to set one has to be able to promise.
+    """
+    slot = web_provider_key(live, vendor)
+    if slot:
+        return slot
+    leaf = web_search_key(live) if vendor == "serper" else web_jina_key(live) if vendor == "jina" else None
+    if leaf is not None:
+        return leaf
+    if slot == "" and _names_vendor(live, vendor):
+        return ""
+    return boot or ""
+
+
+def _names_vendor(live: LiveConfig, vendor: str) -> bool:
+    """Whether the file's ``tools.web.providers`` subtree has an entry for ``vendor``.
+
+    The schema-backed reader answers an empty key for a vendor the subtree
+    does not name (``WebProvidersConfig.key_for``), the same answer it gives
+    for one named with an empty key; only the second is a revocation.
+    """
+    raw = live.get("tools.web.providers")
+    return isinstance(raw, dict) and vendor in raw
 
 
 def media_tool_config(live: LiveConfig, kind: str):
@@ -272,6 +410,22 @@ def resolve_media_selection(config, kind: str = "image"):
     return _admit(live, f"media_selection:{kind}", present=True, value=value) or MediaToolConfig()
 
 
+@lru_cache(maxsize=1)
+def default_live() -> LiveConfig:
+    """The shared reader for the default config path.
+
+    One instance, because the byte cache is what makes a live read cheap: a
+    fresh ``LiveConfig`` per call has nothing to compare against and parses the
+    file every time, which is the cost this module exists to avoid. Callers
+    that own a long-lived object of their own (the agent loop) keep theirs;
+    this is for the ones that read from a method and have nowhere to put it.
+
+    Safe across a moved config: ``path()`` is resolved per read, and a file
+    whose bytes differ from the cached ones is re-parsed by construction.
+    """
+    return LiveConfig()
+
+
 @lru_cache(maxsize=32)
 def _selection_live(source: str) -> LiveConfig:
     return LiveConfig(Path(source))
@@ -310,6 +464,150 @@ def default_model(live: LiveConfig) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def context_window_tokens(live: LiveConfig) -> int | None:
+    """``agents.defaults.contextWindowTokens`` as the file has it, or None.
+
+    None means "no override": the model's own window from the rates ladder
+    answers instead. Read live, but consumed once per turn rather than per
+    read -- see ``AgentLoop._with_live_window``, which is what holds one
+    turn's budget still while it runs.
+
+    Both spellings, like :func:`disabled_tool_names`: ``settings.set`` writes
+    whichever one the file already uses.
+    """
+    for key in ("agents.defaults.contextWindowTokens", "agents.defaults.context_window_tokens"):
+        value = live.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+def max_tool_iterations(live: LiveConfig) -> int | None:
+    """``agents.defaults.maxToolIterations`` as the file has it, or None for "no answer".
+
+    A cap is a sentence about the next turn, not work to redo, so it belongs
+    here rather than behind a reload. Both spellings, like
+    :func:`disabled_tool_names`: ``settings.set`` writes whichever one the file
+    already uses.
+    """
+    for key in ("agents.defaults.maxToolIterations", "agents.defaults.max_tool_iterations"):
+        value = live.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+def reasoning_effort(live: LiveConfig) -> str | None:
+    """``agents.defaults.reasoningEffort`` as the file has it, or None.
+
+    Held for a turn like the cap: it rides every model call the turn makes, and
+    two calls of one turn at different efforts is the same split the subsystem
+    pins were fixed for.
+
+    The provider keeps its own configured default (``GenerationSettings``),
+    which is deliberately frozen at construction -- the comment on
+    ``ResolvingProvider`` explains why a credentials refresh must not import a
+    live ``agents`` section. So the value is sent as an explicit argument
+    instead, the way a session's pinned effort already is.
+    """
+    for key in ("agents.defaults.reasoningEffort", "agents.defaults.reasoning_effort"):
+        value = live.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def personalization_enabled(live: LiveConfig) -> bool | None:
+    """``agents.defaults.enablePersonalization`` as the file has it, or None."""
+    for key in ("agents.defaults.enablePersonalization", "agents.defaults.enable_personalization"):
+        value = live.get(key)
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def memory_top_k(live: LiveConfig) -> int | None:
+    """``memory.memoryTopK`` as the file has it, or None for "no answer"."""
+    for key in ("memory.memoryTopK", "memory.memory_top_k"):
+        value = live.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+def exec_timeout(live: LiveConfig) -> int | None:
+    """``tools.exec.timeout`` as the file has it, or None for "no answer"."""
+    # One spelling: ``exec`` and ``timeout`` are the same word either way.
+    value = live.get("tools.exec.timeout")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def web_providers(live: LiveConfig) -> tuple[str | None, str | None]:
+    """``tools.web.search.provider`` and ``tools.web.fetch.provider``.
+
+    Read where a sub-agent is spawned rather than copied onto the manager at
+    build: the two vendors are a preference about the next spawn, and the keys
+    beside them (``web_provider_key``) have been read live since they landed.
+    """
+
+    def one(*keys: str) -> str | None:
+        for key in keys:
+            value = live.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    return (
+        one("tools.web.search.provider"),
+        one("tools.web.fetch.provider"),
+    )
+
+
+def _block_pin(live: LiveConfig, blocks: tuple[str, ...], model_field: str, provider_field: str):
+    """One block's ``(model, provider)`` pin, under either spelling of both.
+
+    Both spellings because ``settings.set`` writes whichever one the file
+    already uses (see ``console._as_written``) and a hand-written config may
+    hold either; the config models accept both by alias, so a reader that knew
+    only one would answer None for half the configs on disk.
+    """
+    node: dict[str, Any] = {}
+    for name in blocks:
+        candidate = live.raw().get(name)
+        if isinstance(candidate, dict):
+            node = candidate
+            break
+
+    def field(name: str) -> str | None:
+        value = node.get(to_camel(name), node.get(name))
+        return value if isinstance(value, str) and value else None
+
+    return field(model_field), field(provider_field)
+
+
+def curator_pin(live: LiveConfig) -> tuple[str | None, str | None]:
+    """``context.curatorModel`` and the provider serving it, read live.
+
+    Read per curation rather than resolved once when the context engine is
+    built, so that repointing the curator on a settings surface reaches the
+    next turn instead of the next restart. ``permissions.judgeModel`` and
+    ``sessionTitle.model`` are already read this way; this pair and the skill
+    gate's were the subsystem pins that still owed a reload.
+
+    Turning the pair into a binding stays with the caller: that goes through
+    the provider pool, which is where the cost of building one is visible.
+    """
+    return _block_pin(live, ("context",), "curator_model", "curator_provider")
+
+
+def skill_gate_pin(live: LiveConfig) -> tuple[str | None, str | None]:
+    """``skillForge.llmGateModel`` and the provider serving it, read live.
+
+    Same reasoning as :func:`curator_pin`.
+    """
+    return _block_pin(live, ("skillForge", "skill_forge"), "llm_gate_model", "llm_gate_provider")
+
+
 def disabled_tool_names(live: LiveConfig) -> frozenset[str]:
     """The operator's off switches, as the tool registry wants them.
 
@@ -324,6 +622,23 @@ def disabled_tool_names(live: LiveConfig) -> frozenset[str]:
         if isinstance(value, list):
             names.update(str(x) for x in value if isinstance(x, str))
     return frozenset(names)
+
+
+def skill_blocklist(live: LiveConfig) -> frozenset[str]:
+    """The operator's skill off switches, read on every ask.
+
+    ``settings.set`` writes ``skillForge.blocklist`` and a hand-written config
+    may spell the block ``skill_forge``; a switch that only counts under one
+    spelling works from one surface.
+    """
+    from raven.skill_hub.policy import normalize_blocklist
+
+    names: list[str] = []
+    for key in ("skillForge.blocklist", "skill_forge.blocklist"):
+        value = live.get(key)
+        if isinstance(value, list):
+            names.extend(str(x) for x in value if isinstance(x, str))
+    return normalize_blocklist(names)
 
 
 _LAST_VALID_PERMISSIONS: "weakref.WeakKeyDictionary[LiveConfig, Any]" = weakref.WeakKeyDictionary()

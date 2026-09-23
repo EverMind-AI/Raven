@@ -44,7 +44,9 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -105,8 +107,12 @@ def install_hint() -> str:
     return "apt install libreoffice"
 
 
-def convert_command(source: Path, staged: Path, profile: Path, *, executable: str) -> list[str]:
-    """The argv that converts `source` to PDF into `staged`, using `profile` alone."""
+def convert_command(source: Path, staged: Path, profile: Path, *, executable: str, fmt: str = "pdf") -> list[str]:
+    """The argv that converts `source` to `fmt` into `staged`, using `profile` alone.
+
+    `fmt` is a LibreOffice export filter name. "pdf" is the whole document; "png"
+    is the first page only, which is what a thumbnail wants.
+    """
     return [
         executable,
         "--headless",
@@ -119,7 +125,7 @@ def convert_command(source: Path, staged: Path, profile: Path, *, executable: st
         "--norestore",
         f"-env:UserInstallation={profile.resolve().as_uri()}",
         "--convert-to",
-        "pdf",
+        fmt,
         "--outdir",
         str(staged),
         str(Path(source).resolve()),
@@ -143,8 +149,9 @@ def to_pdf(
     executable: str,
     timeout_s: float,
     profile_root: Path | None = None,
+    fmt: str = "pdf",
 ) -> Converted:
-    """Run one conversion of `source` into `staged`, and say what came of it.
+    """Run one conversion of `source` into `staged` as `fmt`, and say what came of it.
 
     `staged` is the caller's, because where the output lands decides how it is
     moved afterwards -- a rename is not a rename across filesystems. The profile
@@ -159,9 +166,37 @@ def to_pdf(
     with tempfile.TemporaryDirectory(prefix="raven-soffice-", dir=profile_root) as scratch:
         profile = Path(scratch) / "profile"
         profile.mkdir()
-        command = convert_command(Path(source), Path(staged), profile, executable=executable)
+        command = convert_command(Path(source), Path(staged), profile, executable=executable, fmt=fmt)
         returncode, stdout, stderr = _run(command, timeout_s=timeout_s)
-    return Converted(produced=sorted(Path(staged).glob("*.pdf")), returncode=returncode, stdout=stdout, stderr=stderr)
+    return Converted(
+        produced=sorted(Path(staged).glob(f"*.{fmt}")), returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+_LIVE: set[subprocess.Popen] = set()
+"""Every converter this process has started and not yet reaped.
+
+A conversion is waited for in a thread, and cancelling the task that started
+that thread does not reach either the thread or the child: the interpreter
+then holds the whole process open at exit until the converter finishes on its
+own. :func:`stop_running` is what a shutdown has instead."""
+
+_LIVE_LOCK = threading.Lock()
+
+
+def stop_running() -> int:
+    """Stop every converter still running here, and say how many there were.
+
+    For a shutdown, and only for one: a conversion someone is waiting on dies
+    with it. The alternative is a gateway that cannot be stopped for as long as
+    the longest conversion it happens to have started.
+    """
+    with _LIVE_LOCK:
+        live = list(_LIVE)
+    for process in live:
+        with suppress(Exception):
+            terminate(process)
+    return len(live)
 
 
 def _run(command: Sequence[str], *, timeout_s: float) -> tuple[int, str, str]:
@@ -176,6 +211,8 @@ def _run(command: Sequence[str], *, timeout_s: float) -> tuple[int, str, str]:
         start_new_session=not windows,
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if windows else 0,
     )
+    with _LIVE_LOCK:
+        _LIVE.add(process)
     try:
         stdout, stderr = process.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired as exc:
@@ -183,6 +220,9 @@ def _run(command: Sequence[str], *, timeout_s: float) -> tuple[int, str, str]:
         # Reaped here so the directory the run used can be removed after it.
         process.communicate()
         raise TimeoutError(f"the conversion exceeded {timeout_s:g}s and was stopped") from exc
+    finally:
+        with _LIVE_LOCK:
+            _LIVE.discard(process)
     return process.returncode, stdout or "", stderr or ""
 
 

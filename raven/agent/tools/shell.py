@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent import workdir
-from raven.contracts.tool import STOP_RETRY_INSTRUCTION, Continuation, Tool, ToolOutput, ToolResult
+from raven.contracts.tool import STOP_RETRY_INSTRUCTION, Continuation, FileRemoval, Tool, ToolOutput, ToolResult
 from raven.permissions.shell_policy import (
     _MAX_EMBEDDED_SHELL_DEPTH,
     _command_segments_with_separators,
@@ -48,6 +48,7 @@ class ExecTool(Tool):
     # Backstop above the 600s internal exec cap (``_MAX_TIMEOUT``); the
     # executor's own timeout fires first, this only catches a wedged executor.
     timeout_seconds = 660.0
+    approval_kind = "shell.exec"
 
     def __init__(
         self,
@@ -61,7 +62,7 @@ class ExecTool(Tool):
         *,
         follow_binding: bool = True,
     ):
-        self.timeout = timeout
+        self._timeout = timeout
         self.working_dir = working_dir
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
@@ -78,11 +79,37 @@ class ExecTool(Tool):
         self._executor: SandboxExecutor = executor if executor is not None else DirectExecutor()
 
     @property
+    def timeout(self) -> int:
+        """The ceiling a command runs under, as the file has it now.
+
+        Read here rather than copied at construction: a timeout is a preference
+        about the next command, and this tool outlives any number of turns --
+        and a sub-agent's copy outlives the spawn that built it. What it was
+        built with answers when the file has no opinion.
+        """
+        from raven.config.live import default_live, exec_timeout, held
+
+        configured = held("tools.exec.timeout", lambda: exec_timeout(default_live()))
+        return configured or self._timeout
+
+    @property
     def name(self) -> str:
         return "exec"
 
     _MAX_TIMEOUT = 600
     _MAX_OUTPUT = 10_000
+
+    # What the deletion watch will look at and hold. The candidate cap bounds a
+    # stat per token of one command; the byte cap bounds what a removed file's
+    # body costs to carry, and past it the deletion is still reported, without
+    # its text.
+    _MAX_REMOVAL_CANDIDATES = 64
+    _MAX_REMOVAL_BYTES = 256 * 1024
+
+    # A token holding one of these is a pattern, not a path: the shell expands it
+    # to names this tool never sees, so resolving it as written would stat a file
+    # that does not exist under that name.
+    _GLOB_CHARS = frozenset("*?[")
 
     @property
     def description(self) -> str:
@@ -215,8 +242,7 @@ class ExecTool(Tool):
                 "(budget, dedup, ledger). scp and rsync to it are still fine here. Nothing was run."
             )
 
-        bound = str(workdir.current() or "") if self.follow_binding else ""
-        cwd = working_dir or bound or self.working_dir or os.getcwd()
+        cwd = self._cwd_for(working_dir)
 
         if not self._executor.is_sandboxed:
             guard_error = self._guard_command(command, cwd)
@@ -243,13 +269,13 @@ class ExecTool(Tool):
                     "split the work. Nothing was run."
                 )
             from raven.agent.tools import background_exec
-            from raven.sandbox.direct_executor import _baseline_env
+            from raven.sandbox.direct_executor import baseline_env
 
             # The same environment hygiene as the synchronous path: the child
             # gets the executor's baseline allowlist, never the full host
             # environment, so a detached download cannot read credentials the
             # capped path already withholds.
-            bg_env = _baseline_env()
+            bg_env = baseline_env()
             if self.path_append:
                 bg_env["PATH"] = bg_env.get("PATH", "") + os.pathsep + self.path_append
             try:
@@ -260,6 +286,12 @@ class ExecTool(Tool):
 
         # Use `is None` check — `timeout or default` would treat timeout=0 as falsy.
         effective_timeout = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
+
+        # Read from the command as written, before the PATH wrapper below
+        # rewrites it, and only on this lane: a detached command finishes after
+        # the result is gone, and one on another machine names paths that are
+        # not this filesystem's.
+        watched = self._removal_watch(command, cwd)
 
         env: dict[str, str] | None = None
         if self.path_append:
@@ -282,7 +314,70 @@ class ExecTool(Tool):
         # The exit code is the verdict a config change, a security call or a
         # syntax error share, and the text a failing command produced is not
         # token-safe to classify from -- so the caller gets it structurally.
-        return ToolOutput(text, ok=result.exit_code == 0)
+        return ToolOutput(
+            text,
+            ok=result.exit_code == 0,
+            removed=tuple(
+                FileRemoval(path=path, before=before) for path, before in watched.items() if not os.path.exists(path)
+            ),
+        )
+
+    def _removal_watch(self, command: str, cwd: str) -> dict[str, str | None]:
+        """The files this command could remove, with the text they hold now.
+
+        No tool deletes a file as its purpose, so a deletion is only ever
+        visible as a file that was there before a command ran and is not there
+        after. What can be watched is what the command names: a path it computes
+        (a glob the shell expands, a name a substitution produces) is outside
+        this, the same limit the workspace fence declares for itself.
+
+        The text is read here because after the command there is nothing left to
+        read. Absent past the byte cap or on undecodable bytes -- the deletion is
+        still reported, only its body is not.
+        """
+        readable = executable_text(command)
+        try:
+            # The fence's own reading of the command: split on the shell's
+            # operators first, so `rm gone.txt;` names `gone.txt` and not a
+            # file called `gone.txt;` that was never there.
+            tokens = [token for segment, _ in _command_segments_with_separators(readable) for token in segment]
+        except ValueError:
+            # Quoting the lexer cannot close. The command may still run (the
+            # shell is a better lexer than this one), so fall back to the
+            # coarsest split rather than watching nothing.
+            tokens = readable.split()
+        roots = [Path(cwd).resolve(), *(Path(d).resolve() for d in self.extra_allowed_dirs)]
+        watched: dict[str, str | None] = {}
+        for token in tokens:
+            if len(watched) >= self._MAX_REMOVAL_CANDIDATES:
+                break
+            raw = token.strip("\"'")
+            if not raw or self._GLOB_CHARS & set(raw):
+                continue
+            try:
+                candidate = Path(raw).expanduser()
+                if not candidate.is_absolute():
+                    candidate = Path(cwd) / candidate
+                candidate = candidate.resolve()
+                if not candidate.is_file():
+                    continue
+            except OSError:
+                continue
+            if not any(root == candidate or root in candidate.parents for root in roots):
+                continue
+            key = str(candidate)
+            if key not in watched:
+                watched[key] = self._text_before(candidate)
+        return watched
+
+    @classmethod
+    def _text_before(cls, path: Path) -> str | None:
+        try:
+            if path.stat().st_size > cls._MAX_REMOVAL_BYTES:
+                return None
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError, ValueError):
+            return None
 
     @classmethod
     def _boundary_error(cls, message: str) -> ToolResult:
@@ -294,6 +389,18 @@ class ExecTool(Tool):
             continuation=Continuation.CONTINUE,
             ok=False,
         )
+
+    def _cwd_for(self, working_dir: str | None) -> str:
+        bound = str(workdir.current() or "") if self.follow_binding else ""
+        return working_dir or bound or self.working_dir or os.getcwd()
+
+    def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any]:
+        """The command and where it would run, resolved the way ``execute`` will."""
+        command = str(params.get("command") or "")
+        machine = str(params.get("machine") or "").strip()
+        if machine:
+            return {"command": command, "machine": machine}
+        return {"command": command, "cwd": self._cwd_for(params.get("working_dir") or None)}
 
     def _guard_command(self, command: str, cwd: str) -> str | None:
         """The tool's own boundary: the operator's allowlist and the workspace fence.
@@ -461,9 +568,9 @@ class ExecTool(Tool):
         started in: this command's ``$PWD`` is the workspace, whatever this
         process inherited.
         """
-        from raven.sandbox.direct_executor import _baseline_env
+        from raven.sandbox.direct_executor import baseline_env
 
-        env = _baseline_env()
+        env = baseline_env()
         env["PWD"] = str(cwd)
         return env
 

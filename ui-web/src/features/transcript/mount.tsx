@@ -1,8 +1,9 @@
-import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
+import { createRoot } from 'react-dom/client'
 
-import { AgentStageView, StageView } from './TranscriptPage'
+import { holdsHost } from '../../state/session/hosts'
 import * as store from './store'
+import { AgentStageView, StageView } from './TranscriptPage'
 
 import type { AgentCtxLike } from './store'
 import type { AnswerData, HistoryMessage, Lane, NoteHandle, StepHandle } from './types'
@@ -11,14 +12,15 @@ import type { Root } from 'react-dom/client'
 
 /* The transcript island owns a lane host it appends INSIDE the container --
  * #stage for the conversation, a stage box for an agent pane -- instead of
- * the container itself. The container is shared ground the legacy layers
- * still write to (the .turnlive glyph, `innerHTML = ''` session wipes, the
- * parked-turn machinery that moves #stage's children wholesale), and a React
- * root cannot share a container with foreign writers. The host is one
+ * the container itself. The container is shared ground other modules still
+ * write to (the composer's .turnlive glyph, the `innerHTML = ''` session wipes
+ * in state/session/, the session switch that takes a held host off the stage),
+ * and a React root
+ * cannot share a container with foreign writers. The host is one
  * `display: contents` element, so layout, selectors on the segment classes
  * and the scroll math all read exactly as before; a wipe detaches the host
  * and the next segment simply starts a fresh lane (the epoch remount), while
- * a parked host carries its lane with it and resumes on reattach.
+ * a held host carries its lane with it and resumes on reattach.
  */
 
 interface Mounted {
@@ -36,17 +38,16 @@ let seq = 0
 /* A host the page threw away takes its lane and its React root with it --
    otherwise the lane stays in the store's set and every redraw() renders a
    transcript nobody can see, once more per session switch, unbounded.
-   Detached is NOT the whole test: leaving a session mid-turn PARKS the
-   transcript, and live/060-parked.js parks it by keeping #stage's children in
-   a detached array that restoreTurn appends back, so a disconnected host may
-   still be the only copy of a streaming turn. Ask the source before dropping
-   one; a canvas with no parking answers no. Called when a fresh host is
-   built, which is the moment after a wipe. */
+   Detached is NOT the whole test: leaving a conversation mid-turn takes its
+   host off the stage and files it on that conversation, so a disconnected host
+   may still be the only copy of a streaming turn. Ask the session layer's
+   residency rule before dropping one; on a page with no conversations held it
+   answers no. Called when a fresh host is built, which is the moment after a
+   wipe. */
 function release(): void {
-  const parked = store.source().parked
   for (let i = MOUNTED.length - 1; i >= 0; i -= 1) {
     const m = MOUNTED[i]!
-    if (m.host.isConnected || parked?.(m.host)) continue
+    if (m.host.isConnected || holdsHost(m.host)) continue
     MOUNTED.splice(i, 1)
     HOSTS.delete(m.host)
     store.dropLane(m.lane)
@@ -76,8 +77,8 @@ function laneIn(container: HTMLElement, main: boolean, view: (lane: Lane) => Rea
   seq += 1
   const lane = store.newLane(`${main ? 'main' : 'agent'}:${seq}`, main)
   const root = createRoot(host)
-  /* Synchronous like the renderer it replaces: the very next legacy line may
-     read the drawn DOM (the dag sheet selects its node right after). */
+  /* Synchronous because the very next line at the call site may read the drawn
+     DOM (a graph selects its node right after). */
   flushSync(() => root.render(view(lane)))
   const rec: Mounted = { host, lane, root }
   HOSTS.set(host, rec)
@@ -86,7 +87,8 @@ function laneIn(container: HTMLElement, main: boolean, view: (lane: Lane) => Rea
 }
 
 /* Detached lane for a page without a #stage (unit tests exercise the store
-   through the mounted views instead; this keeps the shims from throwing). */
+   through the mounted views instead; this keeps the verbs below answerable on
+   a page that has no stage to draw into). */
 let orphan: Lane | null = null
 
 export function mainLane(): Lane {
@@ -98,10 +100,16 @@ export function mainLane(): Lane {
   return laneIn(stage, true, (lane) => <StageView lane={lane} />)
 }
 
-/* ── the public face the legacy shims call ─────────────────────────────── */
+/* ── the public face the page's own machinery calls ───────────────────── */
 
-export function ask(text: string, when?: string | null): void {
-  store.askText(mainLane(), String(text), when ?? null)
+/* Answers the segment's id: a mid-turn bubble may have to be taken back when
+   its message turns out to be running as a turn of its own (`dropSeg`). */
+export function ask(text: string, when?: string | null, opts?: { midTurn?: boolean } | null): number {
+  return store.askText(mainLane(), String(text), when ?? null, opts).id
+}
+
+export function dropSeg(id: number): boolean {
+  return store.dropSeg(mainLane(), id)
 }
 
 export function step(): StepHandle {
@@ -167,6 +175,11 @@ export function turnKept(): boolean {
   return store.turnKept(mainLane())
 }
 
+/** The words a failed turn's row reads, so the live row says what the replay says. */
+export function failedTurnLabel(): string {
+  return store.failedTurnLabel()
+}
+
 export function history(messages: HistoryMessage[]): void {
   const lane = mainLane()
   store.history(lane, messages)
@@ -209,8 +222,8 @@ export function redraw(): void {
 }
 
 /* ── the agent stage: a delegated run in a workspace pane ──────────────
-   Painted synchronously (the dag sheet reads the drawn DOM in the same
-   task), keeping the reader's scroll unless they were at the tail. */
+   Painted synchronously (a caller may read the drawn DOM in the same task),
+   keeping the reader's scroll unless they were at the tail. */
 export function agentStage(box: HTMLElement, ctx: AgentCtxLike | null,
   opts?: { key?: string; empty?: string; reset?: boolean } | null): void {
   const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 4

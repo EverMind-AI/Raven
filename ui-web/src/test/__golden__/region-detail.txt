@@ -1,0 +1,8 @@
+aside#detail.detail[data-open=false]
+  div.dpanel
+    header
+      b#dTitle
+      button#dClose.dx
+        svg
+          path
+    div#dBody.body

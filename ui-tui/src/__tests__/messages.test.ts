@@ -14,7 +14,7 @@ import { turnController } from '../app/turnController.js'
 import { patchUiState } from '../app/uiStore.js'
 import { EpisodeView } from '../components/episodeView.js'
 import { MessageLine } from '../components/messageLine.js'
-import { toTranscriptMessages, withoutSpentIntro } from '../domain/messages.js'
+import { keptOutput, toTranscriptMessages, turnErrorLine, withoutSpentIntro } from '../domain/messages.js'
 import { composerPromptWidth, TRANSCRIPT_GUTTER_INSET, transcriptGutterWidth } from '../lib/inputMetrics.js'
 import { upsert } from '../lib/messages.js'
 import { stripAnsi } from '../lib/text.js'
@@ -64,7 +64,9 @@ describe('toTranscriptMessages', () => {
     const out = toTranscriptMessages(rows)
 
     expect(out.map(msg => msg.role)).toEqual(['user', 'system', 'assistant'])
-    expect(out[1]?.text).toContain('subagent')
+    // What opened the turn, worded: the raw origin is a wire value, and the
+    // line is read by a person.
+    expect(out[1]?.text).toBe('Sub-agent report')
     expect(out[1]?.text).not.toContain('UNTRUSTED')
     expect(out[1]?.text).not.toContain('raven-1')
   })
@@ -210,7 +212,7 @@ describe('toTranscriptMessages: resumed tool calls', () => {
       }
     ])
 
-    expect(msgs[0]!.text).toBe('↩ raven-code — finished; its result just joined this conversation')
+    expect(msgs[0]!.text).toBe('↩ raven-code — finished')
   })
 
   it('draws the failed variant of the delivered-arrow line for an error status', () => {
@@ -223,7 +225,7 @@ describe('toTranscriptMessages: resumed tool calls', () => {
       }
     ])
 
-    expect(msgs[0]!.text).toBe('↩ raven-research — failed; the error just joined this conversation')
+    expect(msgs[0]!.text).toBe('↩ raven-research — failed')
   })
 
   it('draws the waiting variant of the delivered-arrow line for a suspended node, not the finished one', () => {
@@ -239,9 +241,7 @@ describe('toTranscriptMessages: resumed tool calls', () => {
       }
     ])
 
-    expect(msgs[0]!.text).toBe(
-      '↩ stuck-node — hit an exception and is waiting on a decision; its report just joined this conversation'
-    )
+    expect(msgs[0]!.text).toBe('↩ stuck-node — waiting on a decision')
   })
 
   it('restores delivered and changed files after a restart', () => {
@@ -764,5 +764,123 @@ describe('withoutSpentIntro', () => {
     const rows = [{ role: 'user' as const, text: 'hello' }]
 
     expect(withoutSpentIntro(rows)).toEqual(rows)
+  })
+})
+
+// The catalogue sentences, spelled out rather than read back through the
+// helper under test: an expectation built from that helper moves with it.
+const STOPPED_BARE = 'Stopped by user'
+const STOPPED_KEPT = 'Stopped by user - the output above is kept'
+
+describe('a stopped or died turn replays as the line the live path wrote', () => {
+  it('draws the failed marker as a system line, not as the model speaking', () => {
+    const reason = 'Error calling LLM (first_byte_timeout): no first byte'
+    const msgs = toTranscriptMessages([
+      { role: 'user', text: 'hello' },
+      { role: 'assistant', text: `(turn failed: ${reason})`, turn_ended: { reason, status: 'failed' } }
+    ])
+
+    expect(msgs.some(m => m.role === 'system' && m.text === `Turn failed - ${reason}`)).toBe(true)
+    expect(msgs.some(m => m.text.includes('(turn failed'))).toBe(false)
+  })
+
+  it('draws the cancelled marker as the bare stop line when the turn showed nothing', () => {
+    const msgs = toTranscriptMessages([
+      { role: 'user', text: 'hello' },
+      { role: 'assistant', text: '(turn cancelled by the user)', turn_ended: { status: 'cancelled' } }
+    ])
+
+    expect(msgs.at(-1)).toMatchObject({ role: 'system', text: STOPPED_BARE })
+  })
+
+  it('promises the output above only when this turn produced some', () => {
+    const msgs = toTranscriptMessages([
+      { role: 'user', text: 'hello' },
+      { role: 'assistant', text: 'half an answer' },
+      { role: 'assistant', text: '(turn cancelled by the user)', turn_ended: { status: 'cancelled' } }
+    ])
+
+    expect(msgs.at(-1)).toMatchObject({ role: 'system', text: STOPPED_KEPT })
+  })
+
+  it("does not count an earlier turn's output as this one's", () => {
+    const msgs = toTranscriptMessages([
+      { role: 'user', text: 'first' },
+      { role: 'assistant', text: 'an answer' },
+      { role: 'user', text: 'second' },
+      { role: 'assistant', text: '(turn cancelled by the user)', turn_ended: { status: 'cancelled' } }
+    ])
+
+    expect(msgs.at(-1)).toMatchObject({ role: 'system', text: STOPPED_BARE })
+  })
+
+  it('counts a tool the stopped turn ran as output', () => {
+    const msgs = toTranscriptMessages([
+      { role: 'user', text: 'hello' },
+      { role: 'assistant', text: '', tool_calls: [{ arguments: '{}', id: 'c1', name: 'read_file' }] },
+      { role: 'tool', name: 'read_file', text: 'contents', tool_call_id: 'c1' },
+      { role: 'assistant', text: '(turn cancelled by the user)', turn_ended: { status: 'cancelled' } }
+    ])
+
+    expect(msgs.at(-1)).toMatchObject({ role: 'system', text: STOPPED_KEPT })
+  })
+})
+
+describe('keptOutput', () => {
+  it('stops at the row that opened the turn', () => {
+    expect(
+      keptOutput([
+        { role: 'assistant', text: 'an answer' },
+        { role: 'user', text: 'and now this' }
+      ])
+    ).toBe(false)
+  })
+
+  it("reads the runtime's own rows as talk about the turn, not the turn's output", () => {
+    const rows: Msg[] = [
+      { role: 'user', text: 'hello' },
+      { kind: 'slash', role: 'system', text: '/help' },
+      { kind: 'artifacts', role: 'system', text: '' }
+    ]
+
+    expect(keptOutput(rows)).toBe(false)
+  })
+
+  it('counts an episodes message with no text of its own', () => {
+    const rows: Msg[] = [
+      { role: 'user', text: 'hello' },
+      { episodes: [{ index: 0, tools: [] }], kind: 'episodes', role: 'assistant', text: '' }
+    ]
+
+    expect(keptOutput(rows)).toBe(true)
+  })
+
+  it("counts a trail row, which is the model's own work drawn without a reply", () => {
+    const rows: Msg[] = [
+      { role: 'user', text: 'hello' },
+      { kind: 'trail', role: 'system', text: '', tools: ['read_file src/a.ts'] }
+    ]
+
+    expect(keptOutput(rows)).toBe(true)
+  })
+})
+
+describe('turnErrorLine', () => {
+  it('reads a client cancel as the stop line the lane in question earned', () => {
+    expect(turnErrorLine({ code: 499, message: 'cancelled', reason: 'cancelled_by_client' }, true)).toBe(STOPPED_KEPT)
+    expect(turnErrorLine({ code: 499, message: 'cancelled', reason: 'cancelled_by_client' })).toBe(STOPPED_BARE)
+  })
+
+  it('keeps only the first line of a failure detail, clamped', () => {
+    const detail = `${'x'.repeat(300)}\nsecond line`
+    const line = turnErrorLine({ code: -32000, detail, message: 'turn_failed' })
+
+    expect(line).toBe(`Turn failed - ${'x'.repeat(200)}`)
+  })
+
+  it('names an unrecognised code rather than calling it a failed turn', () => {
+    expect(turnErrorLine({ code: -32001, detail: 'boom', message: 'session_locked' })).toBe(
+      'error: session_locked (code=-32001): boom'
+    )
   })
 })

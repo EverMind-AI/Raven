@@ -37,7 +37,8 @@ from raven.utils.workspace import sync_workspace_templates
 
 if TYPE_CHECKING:
     from raven.config.schema import GatewayPageConfig
-    from raven.core.runtime import SwapCoordinator
+from raven.core import plugin_stack
+from raven.core.runtime import SwapCoordinator
 
 console = Console()
 
@@ -585,20 +586,13 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
             question_broker = None
             control = None
             page_mount = None
-            # Bring the memory backend online before any turn
-            # runs. ``backend`` is ``None`` when no plugin is wired;
-            # the start / stop awaits are then skipped entirely.
-            from loguru import logger as _logger  # local import: gateway
+            # Detached: a resident host serves many turns, and the backend's
+            # own state machine covers the window before the service answers.
+            # ``backend`` is ``None`` when no plugin is wired, which the helper
+            # takes as nothing to do.
+            from loguru import logger as _logger  # local import: gateway has no module-level logger
 
-            # doesn't have a module-
-            # level logger
-            if backend is not None:
-                try:
-                    await backend.start()
-                except Exception:
-                    _logger.exception(
-                        "memory backend start failed; continuing with legacy memory path",
-                    )
+            plugin_stack.start_backend_detached(backend, logger=_logger)
 
             async def _bind_generation():
                 nonlocal gw_teardown, gw_scheduler, question_broker, page_mount, heartbeat
@@ -761,6 +755,15 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     except OSError as exc:
                         logger.warning("page mount failed ({}); gateway continues without the page", exc)
                 if page_mount is not None:
+                    # The page is what shows the deck template gallery, so its
+                    # covers are drawn now, in the background, rather than on
+                    # the click that opens it; a no-op without the engine or
+                    # once the cache is warm.
+                    from raven.rpc import deck_templates
+
+                    deck_templates.warm_covers_in_background(  # pragma: no cover
+                        language=config.language
+                    )
                     # One shared loop, two question surfaces. build_rpc_stack
                     # bound the page's broker over the channel broker wired
                     # above (AskUserTool._broker is process-wide, last write
@@ -830,7 +833,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     cid = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
                     if cmd == "/stop":
                         stopped = gw_scheduler.cancel_conversation(cid)
-                        stopped += await agent.subagents.cancel_by_session(cid)
+                        stopped += await agent.subagents.cancel_by_session(cid, reason="the user sent /stop")
                         content = f"Stopped {stopped} task(s)." if stopped else "No active task to stop."
                         await gw_hub.dispatch(Text(content=content, source=req.source))
                     elif cmd == "/restart":
@@ -883,7 +886,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # as the shutdown path: a result re-injection into a spine
                 # already gone would record as a failure rather than a stop.
                 # dispose() cancels again, which is an idempotent no-op.
-                await agent.subagents.cancel_all()
+                await agent.subagents.cancel_all(reason="the gateway reloaded")
                 if page_mount is not None:
                     await page_mount.teardown()
                     page_mount = None
@@ -997,13 +1000,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     )
                     agent = runtime.loop
                     backend = runtime.backend
-                    if backend is not None:
-                        try:
-                            await backend.start()
-                        except Exception:
-                            _logger.exception(
-                                "memory backend start failed; continuing with legacy memory path",
-                            )
+                    plugin_stack.start_backend_detached(backend, logger=_logger)
                     try:
                         await _bind_generation()
                     except Exception:
@@ -1132,6 +1129,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 else:
                     raise
             finally:
+                # Before anything that waits: a cover still converting holds a
+                # LibreOffice child, and the thread waiting on it would hold the
+                # interpreter open past every teardown below.
+                from raven.rpc import deck_templates as _deck_templates  # pragma: no cover
+
+                _deck_templates.stop_warming()  # pragma: no cover
                 if health_server is not None:
                     health_server.close()
                 # Stop the proactive producers before tearing down the scheduler
@@ -1158,7 +1161,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # every ACP server anyway and no cancelled turn is worth waiting
                 # on when its process is about to go.
                 begin_drain()
-                await agent.subagents.cancel_all()
+                await agent.subagents.cancel_all(reason="the gateway stopped")
                 # The page's spine seals after the sub-agents are cancelled, the
                 # order the generation swap already keeps: a sub-agent whose
                 # conversation lives on the page announces into that spine, and

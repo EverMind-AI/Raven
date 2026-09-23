@@ -50,6 +50,7 @@ KNOWN_EVENT_TYPES = frozenset(
         "tool.start",
         "tool.complete",
         "message.start",
+        "message.injected",
         "turn.started",
         "message.complete",
         "error",
@@ -97,6 +98,9 @@ SIDE_CHANNEL_METHODS = frozenset(
 # reason and not on the code: -32099 is also what a build failure and a draining
 # scheduler use, and those are not cancellations.
 _CANCELLED_REASON = "cancelled_by_client"
+
+# The one notice kind the live translator puts on the wire.
+_ACTION_BLOCKED = "action_blocked"
 
 # A tool result preview is written for a person to read in a panel. The runtime
 # already truncates and sets ``truncated``; this is the backstop for a tool that
@@ -246,7 +250,9 @@ def translate(event: Any, *, cwd: str | None = None) -> Translated:
     # message.start and turn.started carry the turn id, which a client has no use
     # for and which rides ``_meta`` where it matters -- and in ACP the
     # ``session/prompt`` request is itself the record that a turn began, so an
-    # update saying so would be a second one. turn.started's ``delegated`` block
+    # update saying so would be a second one. message.injected is the same case
+    # one step later: the client's own steer request is the record that it sent
+    # a message mid-turn. turn.started's ``delegated`` block
     # names a sub-agent turn, which this surface reports through the tool call
     # that delegated it rather than as a turn of its own. episode.start is a TUI collapsing
     # boundary with no ACP counterpart. The dag.* events would map to `plan`, but
@@ -564,6 +570,38 @@ def _ends_the_stream(event: Any) -> bool:
     return payload.get("code") in STREAM_TERMINAL_ERROR_CODES
 
 
+def notice_text(payload: dict[str, Any]) -> str:
+    """What a runtime notice says to a person.
+
+    One wording for the live frame and the replayed entry, for the same reason
+    the TUI keeps one: a stored notice sits on an assistant entry whose text was
+    written for the model to stop on, so a replay that drew that text would put
+    runtime prose in the assistant's voice. The live translator only ever asks
+    about a blocked action; on replay an unrecognised kind reads as its own name
+    rather than as the entry beside it, and no kind at all reads as nothing,
+    which is a caller's signal that there is no line to draw.
+    """
+    kind = payload.get("kind")
+    if kind == _ACTION_BLOCKED:
+        detail = payload.get("detail")
+        # A refusal quotes what was refused, and what was refused is often a
+        # command line. Same publishing surface as the title, same treatment.
+        return redact(detail) if isinstance(detail, str) and detail.strip() else "The runtime blocked this action."
+    return kind.strip() if isinstance(kind, str) else ""
+
+
+def turn_failure_text(*parts: Any) -> str:
+    """What a failed turn says to a person, live or replayed.
+
+    The parts are whatever the failure carried: a message and a detail on the
+    live event, the stored reason on a replay. A failure that carried none of
+    them still says something, because a turn that stopped for no stated reason
+    reads to a person as the client having lost it.
+    """
+    said = [redact(part) for part in parts if isinstance(part, str) and part.strip()]
+    return " ".join(said) if said else "The turn failed."
+
+
 def _notice(payload: dict[str, Any], meta: dict[str, Any] | None) -> Translated:
     """A runtime notice. Only ``action_blocked`` reaches the wire at all.
 
@@ -572,13 +610,9 @@ def _notice(payload: dict[str, Any], meta: dict[str, Any] | None) -> Translated:
     that. The detail is surfaced as message content because a refusal with no
     explanation is indistinguishable from an empty answer.
     """
-    if payload.get("kind") != "action_blocked":
+    if payload.get("kind") != _ACTION_BLOCKED:
         return Translated()
-    detail = payload.get("detail")
-    # A refusal quotes what was refused, and what was refused is often a command
-    # line. Same publishing surface as the title, same treatment.
-    text = redact(detail) if isinstance(detail, str) and detail.strip() else "The runtime blocked this action."
-    return Translated(updates=(_text_chunk("agent_message_chunk", text, meta),), latch="refusal")
+    return Translated(updates=(_text_chunk("agent_message_chunk", notice_text(payload), meta),), latch="refusal")
 
 
 def _error(payload: dict[str, Any], meta: dict[str, Any] | None) -> Translated:
@@ -593,10 +627,7 @@ def _error(payload: dict[str, Any], meta: dict[str, Any] | None) -> Translated:
     """
     if payload.get("reason") == _CANCELLED_REASON:
         return Translated(stop="cancelled")
-    message = payload.get("message")
-    detail = payload.get("detail")
-    parts = [redact(str(part)) for part in (message, detail) if isinstance(part, str) and part.strip()]
-    text = " ".join(parts) if parts else "The turn failed."
+    text = turn_failure_text(payload.get("message"), payload.get("detail"))
     code = payload.get("code")
     if isinstance(code, int):
         text = f"{text} (code {code})"
@@ -1009,5 +1040,7 @@ __all__ = [
     "Translated",
     "TurnAlreadyRunningError",
     "UpdateTranslator",
+    "notice_text",
     "translate",
+    "turn_failure_text",
 ]

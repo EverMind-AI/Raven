@@ -36,6 +36,14 @@ MIN_NODE_MAJOR=22
 RAVEN_HOME="${RAVEN_HOME:-${HOME:?HOME is required, or set RAVEN_HOME explicitly}/.raven}"
 NODE_RUNTIME_DIR="$RAVEN_HOME/runtime"
 
+# uv does not byte-compile by default, so the first process to import a module
+# compiles it. For raven that process is the memory service the first session
+# starts, and it imports the serving stack -- measured at 22s on a fresh
+# install against 2s once compiled, which overruns the readiness budget and
+# costs that session its long-term memory. Paid here instead, where a wait is
+# what the user is already watching.
+export UV_COMPILE_BYTECODE=1
+
 # --- pretty output ---------------------------------------------------------
 info()  { printf '\033[1;34m>\033[0m %s\n' "$1"; }
 ok()    { printf '\033[1;32m+\033[0m %s\n' "$1"; }

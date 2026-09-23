@@ -114,6 +114,33 @@ def test_run_starts_the_litellm_warm_up_before_the_first_request() -> None:
     assert "warm_up_in_background()" in run_body
 
 
+def test_run_warms_the_deck_template_covers_once_the_page_is_mounted() -> None:
+    """`raven web` is `raven gateway --page-port` underneath, so the gallery's
+    covers are drawn from here, after the page mount, not from `raven serve`
+    alone; pinned by source for the same reason as above."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    page_branch = src.split("if page_mount is not None:", 1)[1]
+    assert "deck_templates.warm_covers_in_background(" in page_branch
+    assert "language=config.language" in page_branch, "in the language the page is in"
+
+
+def test_run_stops_the_cover_warm_up_before_the_teardown_that_waits() -> None:
+    """A cover still converting holds a LibreOffice child, and the thread waiting
+    on it holds the interpreter open past every teardown below; the stop comes
+    first in the same `finally`."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    shutdown = src.split("            finally:\n", 1)[1]
+    assert "_deck_templates.stop_warming()" in shutdown.split("health_server.close()", 1)[0]
+
+
 def test_gateway_refuses_second_instance(tmp_config: Path, monkeypatch) -> None:
     """When the instance lock is already held, gateway exits 1 with a clear
     message and never builds the agent/channel stack."""
@@ -512,7 +539,7 @@ def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
     src = inspect.getsource(gateway_commands.register)
     stop_branch = src.split('if cmd == "/stop":', 1)[1].split('elif cmd == "/restart":', 1)[0]
     assert "cancel_conversation(cid)" in stop_branch
-    assert "cancel_by_session(cid)" in stop_branch
+    assert "cancel_by_session(cid, reason=" in stop_branch
     assert "stopped +=" in stop_branch
 
 
@@ -784,7 +811,7 @@ def test_the_gateway_shutdown_cancels_subagents_before_it_closes_the_transports(
     # same spines down in its own order, pinned by test_generation_swap.py.
     shutdown = src[src.index("except KeyboardInterrupt:") :]
     drain = shutdown.index("begin_drain()")
-    cancel = shutdown.index("await agent.subagents.cancel_all()")
+    cancel = shutdown.index("await agent.subagents.cancel_all(reason=")
     pool = shutdown.index("await close_pool()")
 
     assert drain < cancel < pool
@@ -797,7 +824,7 @@ def test_the_gateway_shutdown_cancels_subagents_before_the_page_spine_seals() ->
     already cancels before the mount goes; the shutdown path has to match."""
     src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "gateway_commands.py").read_text(encoding="utf-8")
     shutdown = src[src.index("except KeyboardInterrupt:") :]
-    cancel = shutdown.index("await agent.subagents.cancel_all()")
+    cancel = shutdown.index("await agent.subagents.cancel_all(reason=")
     page = shutdown.index("await page_mount.teardown()")
     spine = shutdown.index("await gw_teardown()")
 

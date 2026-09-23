@@ -1,7 +1,6 @@
-/* One row per entry of the channel catalogue (ui-web/src/demo/030-fixtures.js).
-   Both sources answer with those same objects, mutated in place: the fixture
-   so demo edits stick across a redraw, the rpc source so the merged status
-   lands on the rows the list is already drawn from. */
+/* One row per entry of the channel catalogue (./catalogue.ts). The source
+   answers with those same objects, mutated in place, so a status that landed
+   between two reads is on the row the reader is looking at. */
 export interface ConnField {
   key: string
   label?: string
@@ -36,12 +35,12 @@ export interface ConnQr {
   connected: boolean
 }
 
-/* The DS.conn contract both the fixture source (demo shell) and the rpc
+/* The DS.connections contract both the offline fixture library and the rpc
    source (live layer) implement. The island only ever talks to this.
    `rows(true)` is the page-open fetch: the rpc source reserves its
    gateway-not-running warning for that one call. `qr` resolving null means
    "nothing to show yet"; the island keeps polling while the dialog is up. */
-export interface ConnSource {
+export interface ConnectionsSource {
   rows(initial?: boolean): Promise<ConnChannel[]>
   /* Whether anything is running that could host a channel adapter at all --
      the gateway lock, read after the last `rows`. A page-level fact, not a

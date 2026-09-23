@@ -15,6 +15,7 @@ from raven.contracts.subagent_backend import (  # noqa: F401
     SubagentBackend,
     SubagentNoAnswerError,
 )
+from raven.providers.base import parse_llm_error
 
 IN_SUBAGENT_RUN: ContextVar[bool] = ContextVar("raven_in_subagent_run", default=False)
 """True while an in-process backend is executing a sub-agent task.
@@ -173,3 +174,22 @@ def optional_keyword(backend: Any, name: str, value: Any) -> dict[str, Any]:
     if name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
         return {name: value}
     return {}
+
+
+def llm_error_reply(reply: Any) -> str | None:
+    """The text when ``reply`` is nothing but a provider's canonical error reply.
+
+    A provider hands a failed model call back as a reply whose whole content is
+    ``format_llm_error``'s shape rather than raising, so a chat can show it. A
+    lane that returns that reply as its answer would be recorded ``completed``
+    with the error as the run's result (see ``SubagentNoAnswerError``); the
+    callers that write a record ask here first. Anchored on the whole text and
+    on one paragraph: an answer that quotes such a line, or opens with one and
+    goes on, is an answer.
+    """
+    if not isinstance(reply, str):
+        return None
+    text = reply.strip()
+    if not text or "\n\n" in text:
+        return None
+    return text if parse_llm_error(text) is not None else None

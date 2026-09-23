@@ -282,3 +282,28 @@ async def test_llm_heading_pick_happens_outside_the_write_lock(tmp_path: Path) -
     provider = _LockObservingProvider(["Goals", "Preferences"], store)
     await import_user_md_sections(["fact one", "fact two"], store, provider=provider, model="m")
     assert not provider.saw_lock_held
+
+
+async def test_a_stop_between_entries_lands_what_was_classified_and_leaves_the_rest(tmp_path: Path) -> None:
+    """The stop file the import polls is asked before each classification call:
+    what has a heading lands, the rest waits for the next run, which finds it
+    absent from its section and picks it up."""
+    store = MemoryStore(tmp_path)
+    provider = _Provider(["Goals", "Preferences", "Notes"])
+    progress: list[tuple[int, int]] = []
+
+    result = await import_user_md_sections(
+        ["first fact", "second fact", "third fact"],
+        store,
+        provider=provider,
+        model="m",
+        on_progress=lambda done, total: progress.append((done, total)),
+        cancelled=lambda: len(provider.calls) >= 1,
+    )
+
+    assert len(provider.calls) == 1
+    assert result.written == ("## Goals",)
+    body = store.read_long_term()
+    assert "first fact" in body
+    assert "second fact" not in body
+    assert progress == [(0, 3), (1, 3)]

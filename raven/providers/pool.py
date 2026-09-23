@@ -25,6 +25,53 @@ if TYPE_CHECKING:
     from raven.config.schema import Config
 
 
+def live_pin_resolver(
+    pool: "ProviderPool | None",
+    read_pin: "Callable[[], tuple[str | None, str | None]]",
+    *,
+    key: str,
+    follower: str,
+) -> "Callable[[], ModelBinding | None]":
+    """A subsystem's pin, re-read per call, reported once when it is unusable.
+
+    Per call rather than once at build: the pair is a preference, and a
+    subsystem whose pin was resolved when its owner was constructed could only
+    be repointed by restarting the process. The pool is what keeps that cheap
+    -- a pair it has already built comes back from the cache.
+
+    ``None`` means run on the conversation's model, which is both what an
+    unset pin means and what an unusable one falls back to. The two are not
+    the same mistake, so a pin that names a vendor with no credentials says so
+    -- once per pin, because the alternative is a line per call for as long as
+    the config stays wrong, and per pin rather than per resolver because the
+    resolver outlives the config that produced it: a later, different unusable
+    pin is a new problem and gets its own line.
+    """
+    warned: set[tuple[str, str | None]] = set()
+
+    def _resolve_now() -> "ModelBinding | None":
+        model, provider_name = read_pin()
+        if not model:
+            return None
+        binding = pool.bind_pin(model, provider_name) if pool is not None else None
+        if binding is None and (model, provider_name) not in warned:
+            warned.add((model, provider_name))
+            logger.warning(
+                "{}={!r} has no usable credentials of its own; {} follows the conversation's model instead",
+                key,
+                model,
+                follower,
+            )
+        return binding
+
+    def resolve() -> "ModelBinding | None":
+        from raven.config.live import held
+
+        return held(key, _resolve_now)
+
+    return resolve
+
+
 class ProviderPool:
     """Resolve and cache one provider per (provider name, model) pair."""
 

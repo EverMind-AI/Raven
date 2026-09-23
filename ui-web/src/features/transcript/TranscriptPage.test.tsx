@@ -1,62 +1,64 @@
 // @vitest-environment happy-dom
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
-
 import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { CARD as dagCARD } from '../dag/graph'
+import catalogue from '../../../../i18n/messages.json'
+import { setTranslator } from '../../i18n/t'
+import { I18N } from '../../i18n/t'
+import * as attachmentCache from '../../lib/attachmentCache'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { hold as holdHost } from '../../state/session/hosts'
+import { resetSources, setSources, sources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { installWsPane } from '../../test/wsPaneHarness'
+import { markMissing as markDeliveryMissing } from '../workspace/deliveries'
+import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
 import * as mount from './mount'
 import { WHEEL_LINE_PX } from './overscroll'
 import * as store from './store'
-import * as tail from './tail'
-import * as attachmentCache from '../../shell/attachment-cache'
-import { markMissing as markDeliveryMissing } from '../workspace/deliveries'
-import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
+import * as tail from './tail';
 
-import type { Shell } from '../../shell/bridge'
-import type { ProseTarget } from '../../shell/prose'
-import type { HistoryMessage, SpawnListRow, TranscriptSource } from './types'
+import type { ProseTarget } from '../../lib/prose'
+import type { WorkspaceSource } from '../workspace/types'
+import type { ArtifactRow, ArtifactsSource, HistoryMessage, SpawnListRow, TranscriptSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-/* The island runs against the same two seams production wires: a fake shell
-   on window.RavenShell (T returns its key, prefixed by the current language
-   so a flip is observable) and a source on window.DS.transcript. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, prefixed by the current
+   language so a flip is observable) and a source on sources.transcript. */
 let lang = 'en'
 
 /* The renders are counted on the REAL renderer, not a stub: the island imports
    it directly now, and a stub would also stop the output being the prose the
    segments actually show. The counter is hoisted because vi.mock is. */
 const seen = vi.hoisted(() => ({ md: 0 }))
-vi.mock('../../shell/prose', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../../shell/prose')>()
+vi.mock('../../lib/prose', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../lib/prose')>()
   return { ...real, md: (src: string) => { seen.md += 1; return real.md(src) } }
 })
 
 function wire(over: Partial<TranscriptSource> = {}): void {
   lang = 'en'
   seen.md = 0
-  const fakeShell: Shell = {
-    T: (key, vars) => `${lang}:${key}` + (vars ? ` ${JSON.stringify(vars)}` : ''),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    attNotes: () => ['[attachments]'],
-  }
-  window.RavenShell = fakeShell
+  setTranslator((key, vars) => `${lang}:${key}` + (vars ? ` ${JSON.stringify(vars)}` : ''))
+  installWsPane()
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: TranscriptSource = {
     clean: (t) => String(t == null ? '' : t).trim(),
     okOf: (_n, p) => !/^\s*(error|traceback|failed)\b/i.test(p),
     ...over,
   }
-  window.DS = {
+  setSources({
     transcript: source,
-    workspace: { shortPath: (p: string) => p, openPath: (p: string) => opened.push(p) },
-    artifacts: { changes: (n: number) => PRODUCED.get(n) || [] },
+    workspace: { shortPath: (p: string) => p, openPath: (p: string) => opened.push(p) } as unknown as WorkspaceSource,
+    artifacts: { changes: (n: number) => PRODUCED.get(n) || [] } as unknown as ArtifactsSource,
     /* The renderer reads this for what counts as an openable path. */
     prose: { pathOf: () => null, linkTargetOf: () => null },
-  }
+  })
   document.body.innerHTML = '<div id="scroll"><div class="col" id="stage"></div></div>'
 }
 
@@ -120,18 +122,64 @@ afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 const iso = (ms: number): string => new Date(ms).toISOString()
+
+/* The marker the composer writes above an attachment list, read from the
+   catalogue rather than quoted: the reader that splits it back off reads the
+   same entry (state/session/conversation.ts's splitAtts). */
+const ATT_NOTE = (I18N.ui['gui.att.note'] as Record<string, string>).en
 
 describe('transcript island, history', () => {
   it('renders a freshly uploaded image from the shared preview cache', () => {
     attachmentCache.set('uploads/shot.png', 'data:image/png;base64,eA==')
     act(() => {
-      mount.history([{ role: 'user', text: 'look\n\n[attachments]\n- uploads/shot.png' }])
+      mount.history([{ role: 'user', text: `look\n\n${ATT_NOTE}\n- uploads/shot.png` }])
     })
-    expect($<HTMLImageElement>('.ask .shot')?.src).toBe('data:image/png;base64,eA==')
-    expect($('.ask .achip')).toBeNull()
+    expect($<HTMLImageElement>('.turn.me .shot')?.src).toBe('data:image/png;base64,eA==')
+    expect($('.turn.me .achip')).toBeNull()
+  })
+
+  it('renders an attached picture from the workspace once the cache is gone', () => {
+    /* The cache holds the bytes only for the page that uploaded them, so after
+       a reload every picture in the scrollback turned into a file name -- which
+       is not what the reader sent. The file is where the composer put it, so
+       the message's own path is enough to draw it. */
+    act(() => {
+      mount.history([{ role: 'user', text: `look\n\n${ATT_NOTE}\n- uploads/shot.png` }])
+    })
+    const img = $<HTMLImageElement>('.turn.me .shot')
+    expect(img).not.toBeNull()
+    expect(img?.getAttribute('src')).toContain('/file?path=uploads%2Fshot.png')
+    expect($('.turn.me .achip')).toBeNull()
+  })
+
+  it('gives the pictures and the files a row each', () => {
+    /* One row for both put a file chip on the pictures' baseline, where it read
+       as a caption on the thumbnail beside it, and pushed whatever did not fit
+       onto a line of its own. */
+    act(() => {
+      mount.history([{
+        role: 'user',
+        text: `look\n\n${ATT_NOTE}\n- uploads/a.png\n- uploads/b.png\n- uploads/deck.pptx\n- uploads/page.html`,
+      }])
+    })
+    const rows = [...document.querySelectorAll('.turn.me .abox > .transcript-arow')]
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.querySelectorAll('.shot')).toHaveLength(2)
+    expect(rows[0]!.querySelectorAll('.achip')).toHaveLength(0)
+    expect(rows[1]!.querySelectorAll('.achip')).toHaveLength(2)
+    expect(rows[1]!.querySelectorAll('.shot')).toHaveLength(0)
+  })
+
+  it('keeps a file that is not a picture as a chip', () => {
+    act(() => {
+      mount.history([{ role: 'user', text: `read it\n\n${ATT_NOTE}\n- uploads/notes.pdf` }])
+    })
+    expect($('.turn.me .shot')).toBeNull()
+    expect($('.turn.me .achip .nm')?.textContent).toBe('notes.pdf')
   })
 
   /* Whether a tool result counts as a failure is the source's call, not this
@@ -537,11 +585,11 @@ describe('transcript island, history', () => {
   })
 
   /* An edit's detail header names the file through the workspace source's
-     shortener, reached as window.DS.workspace rather than through ds(). The
+     shortener, reached as sources.workspace rather than through ds(). The
      fixture answers shortPath with the identity, so bypassing the call is
      invisible: this test gives it something to actually shorten. */
   it('names an edit through the workspace shortener, not the raw path', () => {
-    ;(window.DS as { workspace: { shortPath: (p: string) => string } }).workspace.shortPath =
+    ;(sources.workspace as { shortPath: (p: string) => string }).shortPath =
       (raw) => raw.replace('/home/me/project/', '')
     act(() => {
       mount.history([
@@ -562,6 +610,64 @@ describe('transcript island, history', () => {
     const name = document.querySelector('.dhd .nm')
     expect(name).toBeTruthy()
     expect(name!.textContent).toBe('src/app.ts')
+  })
+
+  /* A cron turn is the reader's own side of the conversation, and what it says
+     is what the reader asked for: the schedule and the instruction they wrote.
+     The rest of the reminder is wording aimed at the model, and a reader shown
+     that is a reader shown the prompt. */
+  describe('the turn a timer opened', () => {
+    const reminder = [
+      '[Scheduled Task] Timer finished.',
+      '',
+      "Task 'gateway watch' (set at 09:12, cron `*/30 * * * *`) has been triggered.",
+      'Scheduled instruction: check the login gateway 5xx rate',
+      'and pull the error log above one percent',
+      '',
+      'When you reply, mention when the reminder was originally set '
+        + '(e.g. "the reminder you set at 17:05 ...") so the user remembers the context.',
+    ].join('\n')
+
+    const bubble = (): HTMLElement => $('.msg.me[data-auto]') as HTMLElement
+
+    it('says what set it off, and the instruction that fired', () => {
+      act(() => {
+        mount.history([{ role: 'user', text: reminder, timestamp: iso(Date.now() - 60000), origin: 'cron' }])
+      })
+      expect(bubble()).toBeTruthy()
+      expect(bubble().querySelector('.transcript-auto')?.textContent)
+        .toBe('en:gui.deleg.by_cron \u00b7 set at 09:12, cron */30 * * * *')
+      /* The instruction, both of its lines, and not a word of the framing. */
+      const said = bubble().textContent ?? ''
+      expect(said).toContain('check the login gateway 5xx rate')
+      expect(said).toContain('and pull the error log above one percent')
+      expect(said).not.toContain('Scheduled instruction:')
+      expect(said).not.toContain('[Scheduled Task]')
+      expect(said).not.toContain('When you reply')
+    })
+
+    /* Every other origin has a shape of its own that nothing here reads, so
+       guessing at one would put runtime prose on screen -- which is the thing
+       this reads around. */
+    it('leaves the chip standing alone for an origin it cannot read', () => {
+      act(() => {
+        mount.history([
+          { role: 'user', text: 'a sentinel said something', timestamp: iso(Date.now() - 60000), origin: 'sentinel' },
+        ])
+      })
+      expect(bubble().querySelector('.transcript-auto')?.textContent).toBe('en:gui.deleg.by_sentinel')
+      expect(bubble().textContent).not.toContain('a sentinel said something')
+    })
+
+    /* And it is a question's row in every other way: its own side of the
+       thread, and no copy button over an empty body. */
+    it('stands where a question would, with nothing to copy when it says nothing', () => {
+      act(() => {
+        mount.history([{ role: 'user', text: 'not a reminder', timestamp: iso(Date.now() - 60000), origin: 'cron' }])
+      })
+      expect(bubble().closest('.turn.me')).toBeTruthy()
+      expect(bubble().closest('.turn')?.querySelector('.acts button')).toBeNull()
+    })
   })
 
   it('starts the clock at the runtime entry that opened the turn, not the last question', () => {
@@ -630,8 +736,8 @@ describe('transcript island, history', () => {
         { role: 'assistant', text: 'the config was wrong', timestamp: iso(t0 + 3000) },
       ])
     })
-    const ask = $('.ask')
-    expect(ask?.querySelector('.b')?.textContent).toBe('check the login timeout')
+    const ask = $('.turn.me')
+    expect(ask?.querySelector('.msg.me')?.textContent).toBe('check the login timeout')
     expect(ask?.querySelector('.ansfoot .turnmeta')?.textContent).toBeTruthy()
     /* Everything that led to the answer folded behind one line with the
        question-to-answer span on it. */
@@ -643,7 +749,7 @@ describe('transcript island, history', () => {
        answer lands -- while implying the TASK had finished, which a
        backgrounded graph outliving its turn makes false. */
     expect(fold?.querySelector('.tfh .lb')?.textContent).toBe('en:gui.fold.steps')
-    expect(fold?.querySelector('.tfh .tm')?.textContent).toBe('3.0s')
+    expect(fold?.querySelector('.tfh .tm')?.textContent).toBe('3s')
     const step = fold?.querySelector('.tfb .step')
     expect(step).toBeTruthy()
     expect((step?.querySelector('.think') as HTMLElement).hidden).toBe(false)
@@ -776,8 +882,8 @@ describe('transcript island, history', () => {
     openFolds()
     expect($('.tfold')?.textContent).toContain('let me check the log')
     /* And it lands AFTER the work it introduced, as a finished turn does. */
-    const order = [...document.querySelectorAll('.ask, .tfold, .answer')].map((n) => n.className.split(' ')[0])
-    expect(order).toEqual(['ask', 'tfold', 'answer'])
+    const order = [...document.querySelectorAll('.turn.me, .tfold, .answer')].map((n) => n.className.split(' ')[0])
+    expect(order).toEqual(['turn', 'tfold', 'answer'])
     expect(mount.turnKept()).toBe(true)
   })
 
@@ -857,9 +963,9 @@ describe('transcript island, history', () => {
       ])
     })
     expect($('.answer .prose')?.textContent).toBe('let me check the log')
-    const order = [...document.querySelectorAll('.ask, .tfold, .answer, .tnote')]
+    const order = [...document.querySelectorAll('.turn.me, .tfold, .answer, .tnote')]
       .map((n) => n.className.split(' ')[0])
-    expect(order).toEqual(['ask', 'tfold', 'answer', 'tnote'])
+    expect(order).toEqual(['turn', 'tfold', 'answer', 'tnote'])
     /* The work is inside the fold, not lost with it. */
     openFolds()
     expect($('.tfold .tfb .wkin .wrow .vb')?.textContent).toBe('en:gui.act.v.read_file')
@@ -895,13 +1001,52 @@ describe('transcript island, history', () => {
     expect(notes[1]?.classList.contains('bad')).toBe(true)
     expect((notes[1] as HTMLElement).title).toBe('send failed · socket closed')
   })
+
+  it('replays a turn that died on a model error as the red row the live page drew', () => {
+    const reason = 'Error calling LLM (first_byte_timeout): no first byte'
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'hello', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'assistant', text: `(turn failed: ${reason})`,
+          turn_ended: { status: 'failed', reason }, timestamp: iso(Date.now() - 3000),
+        },
+      ])
+    })
+    const notes = $$('.tnote')
+    expect(notes).toHaveLength(1)
+    expect(notes[0]?.classList.contains('bad')).toBe(true)
+    expect((notes[0] as HTMLElement).title).toBe(`${mount.failedTurnLabel()} · ${reason}`)
+    expect($$('.answer')).toHaveLength(0)
+  })
+
+  it('keeps its rendered shape', () => {
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'read both' },
+        {
+          role: 'assistant', text: '',
+          tool_calls: [
+            { id: 'c1', name: 'read_file', arguments: '{"path":"/tmp/a.log"}' },
+            { id: 'c2', name: 'read_file', arguments: '{"path":"/tmp/b.log"}' },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'line1' },
+        { role: 'tool', tool_call_id: 'c2', name: 'read_file', text: 'Error: no such file' },
+        { role: 'assistant', text: 'one of them is missing' },
+      ])
+    })
+    openTurns()
+    expect(domSnapshot(document.getElementById('stage')!)).toMatchSnapshot()
+  })
 })
 
 /** Which fold is open, and who decided.
  *
- * Shut is right for a replayed conversation -- that is where the weight is --
- * and wrong for the turn the reader was just watching, whose sequence of steps
- * they were reading a second before it became the word "steps".
+ * Shut is the default, live and replayed alike: a finished turn's fold closes
+ * over the steps as the answer lands, and only the turn a reopened
+ * conversation ends on, or a fold still holding a running sub-agent, is
+ * opened by the runtime. What the reader opens or shuts is theirs.
  */
 /** Whether the thought box keeps up with the model, and whose choice that is.
  *
@@ -1024,11 +1169,12 @@ describe('a thought box while the model is still thinking', () => {
   })
 })
 
-/** A fold does not close over a sub-agent that is still working.
+/** A fold shuts over a sub-agent that is still working, like any other.
  *
- * The card inside carries a live tail of what the run is saying, and a shut
- * fold body is not built at all -- so shutting it is the difference between
- * watching a run and having to ask.
+ * The run goes on for minutes after the turn that dispatched it has answered;
+ * it is followed on the task rows, not by holding the turn's fold open. What
+ * is asserted here is that a spawn in flight buys the fold nothing: not at the
+ * turn's end, and not when the next turn shuts the folds before it.
  */
 describe('a fold holding a run that has not finished', () => {
   const RUNNING = {
@@ -1069,65 +1215,51 @@ describe('a fold holding a run that has not finished', () => {
     act(() => { mount.finishTurn(st, [st], '2s') })
   }
 
-  it('stays open when the next turn arrives', () => {
+  it('shuts at the end of its own turn', () => {
     dispatched('running')
-    expect(openFlags()).toEqual([true])
-
-    askAgain()
-
-    /* Both: the new turn's, because it is the one being watched, and the old
-       one's, because the run under it has not stopped. */
-    expect(openFlags()).toEqual([true, true])
-    expect($$('.tfold .tfb .dlgtail')).not.toHaveLength(0)
+    expect(openFlags()).toEqual([false])
   })
 
-  it('finds a run dispatched in a later step of the turn', () => {
-    /* The ordinary shape: the agent reads something, then dispatches. Looking
-       only at the turn's first step would miss every real dispatch. */
-    let a!: ReturnType<typeof mount.step>
-    let b!: ReturnType<typeof mount.step>
-    act(() => {
-      mount.ask('make me a poster')
-      a = mount.step()
-      a.setSay('let me look at the brief first')
-      a.tool('read_file', { path: '/w/brief.md' }, null).done(true, 'ok', 9)
-      a.seal()
-      b = mount.step()
-      b.setSay('dispatching it now')
-      b.tool('spawn', { task: 'draw the poster' }, null, 'call_7')
-      mount.spawnFeed(RUNNING)
-      b.seal()
+  it('finds no reason to stay open when the next turn arrives', () => {
+    dispatched('running')
+    askAgain()
+    expect(openFlags()).toEqual([false, false])
+  })
+
+  it('does not hold a replay-opened fold open either', async () => {
+    /* The fold a reopened conversation ends on is the runtime's, and the next
+       turn takes it back whether or not a run is still going under it. The
+       restored card learns its run is still going from `subagent.list`. */
+    wire({
+      spawnRecord: async () => ({ messages: [] }),
+      spawnList: async () => [{
+        id: '20260827T095926366482Z-78da7ea7', kind: 'spawn', agent: 'Raven',
+        instance: 'raven-9bc249', label: 'draw the poster', status: 'run',
+      }],
     })
-    act(() => { mount.finishTurn(b, [a, b], '11s') })
+    const t0 = Date.now() - 600000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make me a poster', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: '',
+          tool_calls: [{ id: 'call_7', name: 'spawn', arguments: JSON.stringify({ task: 'draw the poster' }) }],
+        },
+        { role: 'tool', tool_call_id: 'call_7', name: 'spawn', text: 'dispatched', spawn_task_id: '78da7ea7' },
+        { role: 'assistant', text: 'dispatching it now', timestamp: iso(t0 + 3000) },
+      ])
+    })
     expect(openFlags()).toEqual([true])
+    /* A restored card asks the roster only once the reader opens its row. */
+    act(() => { ($('.tfold.open .tfb .wkin .wrow') as HTMLElement).click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    /* The card now says the run is live -- what the old rule would have kept
+       the fold open for. */
+    expect($('.tfold.open .tfb .wrow.run')).toBeTruthy()
 
     askAgain()
 
-    expect(openFlags()).toEqual([true, true])
-  })
-
-  it('is shut by the next turn once the run has finished', () => {
-    /* The exemption is about a run in flight, not about spawns in general. */
-    dispatched('completed')
-    expect(openFlags()).toEqual([true])
-
-    askAgain()
-
-    expect(openFlags()).toEqual([false, true])
-  })
-
-  it('is shut once the run finishes and a later turn arrives', () => {
-    /* The run settles while the fold is being held open; the hold has to end
-       with it, or one long conversation accumulates every fold that ever had a
-       spawn in it. */
-    dispatched('running')
-    askAgain()
-    expect(openFlags()).toEqual([true, true])
-
-    act(() => { mount.spawnFeed({ ...RUNNING, status: 'completed' }) })
-    askAgain()
-
-    expect(openFlags()).toEqual([false, false, true])
+    expect(openFlags()).toEqual([false, false])
   })
 })
 
@@ -1159,16 +1291,19 @@ describe('the fold over a turn just finished', () => {
     act(() => { mount.finishTurn(last, [first, last], time) })
   }
 
-  it('leaves the steps on screen, without the reader opening anything', () => {
+  it('folds the steps away once the answer has landed', () => {
     liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
 
+    expect(openState()).toEqual([false])
+    /* Shut, and so not built: the answer is what stays on screen. */
+    expect($$('.tfold .tfb .step')).toHaveLength(0)
+    expect($('.tfold .tfh .tm')?.textContent).toBe('4s')
+    expect($('.answer .prose')?.textContent).toBe('the pool is the problem')
+    /* The trail is one click away, and it is the whole trail. */
+    clickFold(0)
     expect(openState()).toEqual([true])
-    /* Open, and actually holding the step -- a shut body is not built at all,
-       so the class alone would not say the sequence survived. */
     expect($$('.tfold.open .tfb .step')).toHaveLength(2)
     expect($('.tfold .tfb')?.textContent).toContain('let me check the log')
-    /* And the answer is out in the open, where a finished turn puts it. */
-    expect($('.answer .prose')?.textContent).toBe('the pool is the problem')
   })
 
   it('arrives shut for every replayed turn but the one the conversation ends on', () => {
@@ -1225,16 +1360,27 @@ describe('the fold over a turn just finished', () => {
     expect($$('.tfold .tfb .step')).toHaveLength(0)
   })
 
-  it('shuts the last turn own fold as the next turn opens one', () => {
-    /* One open fold is the turn on screen. Letting them accumulate would walk
-       back into the weight the shut default was for, a turn at a time. */
-    liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
+  it('shuts the replay-opened fold as a live turn lands', () => {
+    /* The fold a reopened conversation ends on is the runtime's, and the
+       runtime opens one body at most: the next turn takes it back. */
+    const t0 = Date.now() - 600000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'first', timestamp: iso(t0) },
+        {
+          role: 'assistant', reasoning_content: 'thinking', reasoning_ms: 500, text: '',
+          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'ok' },
+        { role: 'assistant', text: 'done one', timestamp: iso(t0 + 3000) },
+      ])
+    })
+    expect(openState()).toEqual([true])
+
     liveTurn('and the other one', 'now the other log', 'the disk is full', '3s')
 
-    expect(openState()).toEqual([false, true])
-    expect($$('.tfold.open .tfb .step')).toHaveLength(2)
-    expect($('.tfold.open .tfb')?.textContent).toContain('now the other log')
-    expect($('.tfold.open .tfb')?.textContent).not.toContain('let me check the log')
+    expect(openState()).toEqual([false, false])
+    expect($$('.tfold .tfb .step')).toHaveLength(0)
   })
 
   it('leaves a fold the reader opened open when the next turn arrives', () => {
@@ -1269,38 +1415,33 @@ describe('the fold over a turn just finished', () => {
     liveTurn('and now this', 'working on it', 'all set', '4s')
 
     /* The reader's stays. The replay's own -- still the runtime's -- shuts. */
-    expect(openState()).toEqual([true, false, true])
+    expect(openState()).toEqual([true, false, false])
   })
 
-  it('leaves a fold the reader shut shut, rather than opening it again', () => {
-    /* The other half of the same rule, and the half a fold that opens by
-       itself gets wrong: the reader shut THIS turn's fold, so the next turn
-       must not treat it as still the runtime's and must not reopen it. */
+  it('leaves a fold the reader opened themselves open when the next turn arrives', () => {
+    /* The reader reached for THIS turn's fold after it shut, so it is theirs
+       from then on: the next turn must not treat it as still the runtime's and
+       must not shut it again. */
     liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
+    clickFold(0)
+    expect(openState()).toEqual([true])
+
+    liveTurn('and the other one', 'now the other log', 'the disk is full', '3s')
+
+    expect(openState()).toEqual([true, false])
+  })
+
+  it('leaves a fold the reader changed their mind about', () => {
+    /* Opened and shut again: the reader put it back where the runtime left
+       it, and the runtime keeps its hands off it either way. */
+    liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
+    clickFold(0)
     clickFold(0)
     expect(openState()).toEqual([false])
 
     liveTurn('and the other one', 'now the other log', 'the disk is full', '3s')
 
-    expect(openState()).toEqual([false, true])
-  })
-
-  it('leaves an auto-opened fold the reader changed their mind about', () => {
-    /* The case the other two cannot see. A fold from replay is already not the
-       runtime's, and shutting an auto fold looks the same whoever did it -- so
-       neither notices if the toggle forgets to hand ownership over. Here the
-       reader shuts THIS turn's own fold and opens it again: the state they
-       leave it in is the state the runtime would not have left it in, and the
-       next turn must not take it back. */
-    liveTurn('check the log', 'let me check the log', 'the pool is the problem', '4s')
-    expect(openState()).toEqual([true])
-    clickFold(0)
-    clickFold(0)
-    expect(openState()).toEqual([true])
-
-    liveTurn('and the other one', 'now the other log', 'the disk is full', '3s')
-
-    expect(openState()).toEqual([true, true])
+    expect(openState()).toEqual([false, false])
   })
 })
 
@@ -1380,7 +1521,7 @@ describe('a delegated result coming back', () => {
         { role: 'assistant', text: 'all three came back clean', timestamp: iso(t0 + 11000) },
       ])
     })
-    const asks = [...document.querySelectorAll('.ask .b')].map((n) => n.textContent)
+    const asks = [...document.querySelectorAll('.msg.me')].map((n) => n.textContent)
     expect(asks).toEqual(['research it'])
     expect(document.body.textContent).not.toContain('BEGIN UNTRUSTED')
     expect(document.body.textContent).not.toContain('END UNTRUSTED')
@@ -1395,6 +1536,68 @@ describe('a delegated result coming back', () => {
     /* And the row still opens the run it came from, after a reload. */
     act(() => { (row?.querySelector('.nm') as HTMLElement).click() })
     expect(opened).toEqual(['dag:run-7'])
+  })
+
+  /* A graph's receipt is two kinds of text in one string, and the fold draws
+     them as two: the counts block a machine wrote, then one captioned section
+     per terminal node, which is what the sub-agent actually said. Through the
+     markdown reader the `- node [status]` lines fold into a bullet list and
+     lose the alignment that makes them scannable. */
+  it('splits a graph receipt into the machine block and a section per node', () => {
+    wireDelivery()
+    const t0 = Date.now() - 20000
+    const receipt = [
+      'DAG run run-7 finished: 2 completed, 0 failed, 0 cancelled, 0 skipped (of 2).',
+      'Run dir: ~/.raven/dag/run-7',
+      '',
+      'Node output files:',
+      '- read [completed]: nodes/read/.out.md',
+      '- write [completed]: nodes/write/.out.md',
+      '',
+      'Terminal outputs:',
+      '### read',
+      'twelve files, none of them stale',
+      '### write',
+      'the brief is in reports/brief.md',
+    ].join('\n')
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced(receipt), timestamp: iso(t0),
+          delegated: { kind: 'dag', label: 'run-7', status: 'ok', run_id: 'run-7' },
+        },
+      ])
+    })
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+    const body = $('.sdlv .sdbd') as HTMLElement
+    const raw = body.querySelector('.raw')?.textContent ?? ''
+    expect(raw).toContain('2 completed, 0 failed')
+    expect(raw).toContain('- read [completed]: nodes/read/.out.md')
+    /* The node sections are below it, and not inside it. */
+    expect(raw).not.toContain('twelve files')
+    expect([...body.querySelectorAll('.cap')].map((n) => n.textContent))
+      .toEqual(['en:gui.deleg.body_cap', 'read', 'write'])
+    expect([...body.querySelectorAll('.prose')].map((n) => n.textContent))
+      .toEqual(['twelve files, none of them stale', 'the brief is in reports/brief.md'])
+  })
+
+  /* The other thing a graph delivers: one suspended node's report, in its own
+     words. Same `kind: dag`, and nothing about it is a machine block. */
+  it('leaves a suspended node report as prose', () => {
+    wireDelivery()
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced('the log line carries a live credential; say whether to redact it'),
+          timestamp: iso(Date.now() - 20000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'exception', run_id: 'run-7', node_id: 'trace' },
+        },
+      ])
+    })
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+    expect($('.sdlv')?.className).toContain('warn')
+    expect($('.sdlv .sdbd .raw')).toBeNull()
+    expect($('.sdlv .sdbd .prose')?.textContent).toContain('live credential')
   })
 
   it('replays a spawn delivery with its own label and the framing left out', () => {
@@ -1433,8 +1636,8 @@ describe('a delegated result coming back', () => {
       ])
     })
     const row = $('.sdlv')!
-    expect(row.classList.contains('err')).toBe(true)
-    expect(row.querySelector('.tx')?.textContent).toBe('en:gui.deleg.delivered_err')
+    expect(row.classList.contains('bad')).toBe(true)
+    expect(row.querySelector('.st')?.textContent).toBe('en:gui.deleg.delivered_err')
   })
 
   it('shows a suspended delivery as waiting on a decision, not as failed', () => {
@@ -1448,9 +1651,9 @@ describe('a delegated result coming back', () => {
       ])
     })
     const row = $('.sdlv')!
-    expect(row.classList.contains('err')).toBe(false)
+    expect(row.classList.contains('bad')).toBe(false)
     expect(row.classList.contains('warn')).toBe(true)
-    expect(row.querySelector('.tx')?.textContent).toBe('en:gui.deleg.delivered_exception')
+    expect(row.querySelector('.st')?.textContent).toBe('en:gui.deleg.delivered_exception')
   })
 
   it('gives a delivery that carried nothing no fold to open', () => {
@@ -1492,9 +1695,69 @@ describe('a delegated result coming back', () => {
     }))
     /* Two turns, two bars, each with only its own file. */
     expect(bars.map((b) => b.file)).toEqual(['parent.md', 'delegated.md'])
-    const order = [...document.querySelectorAll('.ask, .sdlv, .answer, .arts')]
+    const order = [...document.querySelectorAll('.turn.me, .sdlv, .answer, .arts')]
       .map((n) => n.className.split(' ')[0])
-    expect(order).toEqual(['ask', 'answer', 'arts', 'sdlv', 'answer', 'arts'])
+    expect(order).toEqual(['turn', 'answer', 'arts', 'sdlv', 'answer', 'arts'])
+  })
+
+  /* Every message the turn holds, in the order it arrived, inside one card:
+     a delivery is a message like any other, so it neither sits loose on the
+     page nor cuts the card in two where it lands. */
+  it('draws a delivery inside the card, without breaking the card in two', () => {
+    wireDelivery()
+    const t0 = Date.now() - 20000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'run the graph', timestamp: iso(t0) },
+        { role: 'assistant', text: 'dispatching it', timestamp: iso(t0 + 1000) },
+        {
+          role: 'user', text: fenced('3 completed, 0 failed'), timestamp: iso(t0 + 9000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'ok', run_id: 'run-7' },
+        },
+        { role: 'assistant', text: 'the graph came back clean', timestamp: iso(t0 + 11000) },
+      ])
+    })
+    const card = $('.sdlv')?.closest('.msg.ai')
+    expect(card).toBeTruthy()
+    expect($$('.msg.ai').length).toBe(1)
+    expect(card?.textContent).toContain('dispatching it')
+    expect(card?.textContent).toContain('the graph came back clean')
+    /* Arrival order, not grouped by kind. */
+    const order = [...(card as HTMLElement).querySelectorAll('.answer, .sdlv')]
+      .map((n) => n.className.split(' ')[0])
+    expect(order).toEqual(['answer', 'sdlv', 'answer'])
+  })
+
+  /* A card that holds several turns needs several footers. With one footer for
+     the whole card the copy button carried the FIRST answer's text whichever
+     answer the reader clicked it beside, and every later answer lost its
+     button altogether. */
+  it('gives every answer in a shared card its own footer', () => {
+    wireDelivery()
+    const t0 = Date.now() - 30000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'run both graphs', timestamp: iso(t0) },
+        { role: 'assistant', text: 'first answer', timestamp: iso(t0 + 1000) },
+        {
+          role: 'user', text: fenced('one done'), timestamp: iso(t0 + 9000),
+          delegated: { kind: 'dag', label: 'run-1', status: 'ok', run_id: 'run-1' },
+        },
+        { role: 'assistant', text: 'second answer', timestamp: iso(t0 + 11000) },
+        {
+          role: 'user', text: fenced('two done'), timestamp: iso(t0 + 19000),
+          delegated: { kind: 'dag', label: 'run-2', status: 'ok', run_id: 'run-2' },
+        },
+        { role: 'assistant', text: 'third answer', timestamp: iso(t0 + 21000) },
+      ])
+    })
+    expect($$('.msg.ai').length).toBe(1)
+    expect($$('.turn.ai .answer').length).toBe(3)
+    expect($$('.turn.ai .ansfoot').length).toBe(3)
+    const copied: string[] = []
+    vi.spyOn(store, 'copyText').mockImplementation((text: string) => { copied.push(text) })
+    $$('.turn.ai .ansfoot .acts button').forEach((b) => act(() => { (b as HTMLElement).click() }))
+    expect(copied).toEqual(['first answer', 'second answer', 'third answer'])
   })
 
   /* The test this whole change exists for: the two paths that draw the same
@@ -1515,7 +1778,7 @@ describe('a delegated result coming back', () => {
     act(() => {
       mount.delivered({
         label: 'run-7', isDag: true, status: 'ok', body: injected,
-        open: () => (window.DS as { transcript?: TranscriptSource }).transcript?.openDagRun?.('run-7'),
+        open: () => sources.transcript?.openDagRun?.('run-7'),
       })
     })
     act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
@@ -1549,7 +1812,9 @@ describe("the turn's delivered files and file changes", () => {
     raven_delivery: {
       files: names.map((name) => ({
         path: `/w/${name}`, name, title: name, size: 12000,
-        media_type: name.endsWith('.png') ? 'image/png' : 'text/markdown',
+        media_type: name.endsWith('.png') ? 'image/png'
+        : name.endsWith('.pptx') ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        : 'text/markdown',
         download_path: `/files/download?token=${name}`,
         description,
         missing,
@@ -1560,7 +1825,7 @@ describe("the turn's delivered files and file changes", () => {
 
   it('keeps explicit deliveries separate from every file the turn created or edited', async () => {
     vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
-    PRODUCED.set(1, [wrote('report.md', '# Report'), wrote('helper.py', 'x = 1', 'edit')])
+    PRODUCED.set(1, [wrote('report.md', '# Report', 'add'), wrote('helper.py', 'x = 1', 'edit')])
     act(() => {
       mount.history([
         { role: 'user', text: 'finish it', timestamp: iso(Date.now() - 9000) },
@@ -1578,10 +1843,56 @@ describe("the turn's delivered files and file changes", () => {
     expect($$('.achange .ca').map((n) => n.textContent)).toEqual(['+1', '+1'])
     expect($$('.achange .cd').map((n) => n.textContent)).toEqual(['\u22120', '\u22120'])
     expect($('.achanges')?.textContent).not.toContain('delivered')
-    const turn = $('.answer-turn') as HTMLElement
-    expect(Array.from(turn.children).map((node) => node.className)).toEqual(['answer in', 'arts', 'ansfoot'])
+    const turn = $('.turn.ai') as HTMLElement
+    expect(Array.from(turn.children).map((node) => node.className)).toEqual(['msg ai', 'ansfoot'])
     expect(turn.querySelector('.answer .ansfoot')).toBeNull()
     expect(turn.querySelector(':scope > .ansfoot .turnmeta')?.textContent).toBeTruthy()
+  })
+
+  /* Only a write onto nothing is new. A whole-file write over a file that was
+     already there replaced its contents, and calling that a creation put "New"
+     on every rewrite the turn made. */
+  it('calls a whole-file write over an existing file edited, not new', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    PRODUCED.set(1, [wrote('notes.md', 'redone', 'write')])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'redo it', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.edit'])
+  })
+
+  /* The third verdict a change row can carry, and the one no tool argument can
+     state: the file is gone, so the card says so rather than calling the lines
+     it held an edit. */
+  it('calls a file the turn removed deleted, not edited', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    PRODUCED.set(1, [wrote('scratch.md', 'gone', 'delete')])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'drop it', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($$('.achange .ck').map((n) => n.textContent)).toEqual(['en:gui.arts.deleted'])
+    expect($('.achange .ck')?.className).toBe('ck deleted')
+  })
+
+  /* The three words come off a lookup keyed by the verdict, which the
+     catalogue gate reads literal keys only and cannot follow -- a verdict whose
+     word was never added renders its own key at the reader with nothing red.
+     Written as a record of the union so a fourth verdict fails to compile until
+     it is listed. */
+  it('has a catalogue word for every verdict a change row can carry', () => {
+    const verdicts: Record<ArtifactRow['change'], string> = {
+      new: 'gui.arts.new', edit: 'gui.arts.edit', deleted: 'gui.arts.deleted',
+    }
+    const ui = (catalogue as { ui: Record<string, unknown> }).ui
+    expect(Object.values(verdicts).filter((key) => !(key in ui))).toEqual([])
   })
 
   /* A file a playbook or a sub-agent wrote landed on another lane, so this
@@ -1612,6 +1923,75 @@ describe("the turn's delivered files and file changes", () => {
     /* Read from the same URL the tile already probed, and only a range of it. */
     const read = asked.find((a) => a.method !== 'HEAD')
     expect(read?.url).toBe('/files/download?token=radar.md')
+  })
+
+  it('shows a delivered deck by its first page, rendered by the gateway', async () => {
+    /* A deck is a picture of itself, not a document face: the tile asks the
+       file route for a thumb rendering of the deck's own path. */
+    vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
+      if (init?.method === 'HEAD') return Promise.resolve({ ok: true })
+      return Promise.resolve({ ok: true, text: () => Promise.resolve('') })
+    })
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make the deck', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['cv.pptx']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    const img = $('.atile .pic.shot img') as HTMLImageElement | null
+    expect(img).toBeTruthy()
+    const src = img?.getAttribute('src') || ''
+    expect(src).toContain('/file?path=' + encodeURIComponent('/w/cv.pptx'))
+    expect(src).toContain('render=thumb')
+  })
+
+  it('shows a delivered pdf by its first page too', async () => {
+    vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
+      if (init?.method === 'HEAD') return Promise.resolve({ ok: true })
+      return Promise.resolve({ ok: true, text: () => Promise.resolve('') })
+    })
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make the report', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['report.pdf']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    const img = $('.atile .pic.shot img') as HTMLImageElement | null
+    expect(img).toBeTruthy()
+    const src = img?.getAttribute('src') || ''
+    expect(src).toContain('/file?path=' + encodeURIComponent('/w/report.pdf'))
+    expect(src).toContain('render=thumb')
+  })
+
+  it('falls back to the document face when the deck cannot be rendered', async () => {
+    vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
+      if (init?.method === 'HEAD') return Promise.resolve({ ok: true })
+      return Promise.resolve({ ok: true, text: () => Promise.resolve('') })
+    })
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make the deck', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['cv.pptx']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    const img = $('.atile .pic.shot img') as HTMLImageElement
+    expect(img).toBeTruthy()
+    /* The tile's probe answers on a later tick than the picture's failure; both
+       land before the assertion. */
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    await act(async () => { img.dispatchEvent(new Event('error')); await new Promise((r) => setTimeout(r, 0)) })
+    expect($('.atile .pic.none .ft')?.textContent).toBe('PPTX')
+    /* The file itself is not in question: no status is asked about it. */
+    expect($('.atile')?.className).not.toContain('missing')
   })
 
   it('leaves a delivered file the tile cannot reach on its kind, not a miniature', async () => {
@@ -2063,10 +2443,13 @@ describe('transcript island, streaming', () => {
       for (let i = 0; i < 100; i += 1) st.sayDelta(`word${i} `)
     })
     /* The store batched everything behind ONE frame callback and nothing
-       rendered yet -- not the prose, not the list. */
+       rendered yet -- not the prose, not the list. Not even the box around
+       them: a step with no thought, no sentence and no call draws nothing at
+       all, so the card appears with its first painted word rather than
+       standing empty for as long as the model takes. */
     expect(rafQ).toHaveLength(1)
     expect(seen.md).toBe(0)
-    expect($('.say')?.textContent).toBe('')
+    expect($('.say')).toBeNull()
     act(() => { rafQ.forEach((cb) => cb(0)) })
     /* One flush, one render of the streaming leaf; the ask bubble above it
        was not remounted or re-rendered. */
@@ -2092,7 +2475,7 @@ describe('transcript island, streaming', () => {
     /* The prose-only step gave way to the answer block where it stood. */
     expect($('.answer .prose')?.textContent).toBe('the whole answer')
     expect($$('.step')).toHaveLength(0)
-    expect($('.answer .ansfoot .turnmeta')?.textContent).toBeTruthy()
+    expect($('.turn.ai > .ansfoot .turnmeta')?.textContent).toBeTruthy()
   })
 })
 
@@ -2118,17 +2501,10 @@ describe('transcript island, the delegation verbs', () => {
     return row.nextElementSibling as HTMLElement
   }
 
-  const nodeStates = (card: HTMLElement): string[] =>
-    [...card.querySelectorAll<HTMLElement>('.nd')].map((n) => n.dataset.st!)
-
-  const pickNode = (card: HTMLElement, i: number): void => {
-    card.querySelectorAll('.nd')[i]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-  }
-
   it('sends a spawn row to the agents panel when nothing else will take it', () => {
     const went: string[] = []
     wire()
-    window.RavenShell!.showWorkspace = (tab) => went.push(tab)
+    installWsPane({ show: (tab: string) => { went.push(tab) } })
     store.openSpawn('researcher', 'read the docs')
     expect(went).toEqual(['agents'])
   })
@@ -2138,16 +2514,16 @@ describe('transcript island, the delegation verbs', () => {
      without one they stay as seeded. */
   it('hydrates a restored dag card from dagRows', async () => {
     wire({ dagRun: () => Promise.resolve({ files: [{ node: 'alpha', status: 'completed' }, { node: 'beta', status: 'failed' }] }) })
-    const card = dagCard()
+    dagCard()
     await act(async () => { await Promise.resolve() })
-    expect(nodeStates(card)).toEqual(['completed', 'failed'])
+    expect(store._dagCallsForTests()[0]!.nodes.map((n) => n.status)).toEqual(['completed', 'failed'])
   })
 
   it('leaves the nodes as seeded when no reader is installed', async () => {
     wire()
-    const card = dagCard()
+    dagCard()
     await act(async () => { await Promise.resolve() })
-    expect(nodeStates(card)).toEqual(['pending', 'pending'])
+    expect(store._dagCallsForTests()[0]!.nodes.map((n) => n.status)).toEqual(['pending', 'pending'])
   })
 
   /* The shape a *stored* result actually has. Every tool result is persisted
@@ -2181,62 +2557,20 @@ describe('transcript island, the delegation verbs', () => {
     act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
-    const card = row.nextElementSibling as HTMLElement
     await act(async () => { await Promise.resolve() })
     expect(asked).toEqual(['run-7'])
-    expect(nodeStates(card)).toEqual(['completed', 'failed'])
+    expect(store._dagCallsForTests()[0]!.nodes.map((n) => n.status)).toEqual(['completed', 'failed'])
   })
 
-  /* The node panel's own control, not the node: clicking a node selects it, so
-     that the run's transcript is a separate intention from reading the request. */
-  it('opens a node through the source, with the run id it recovered', () => {
-    const opened: Array<[string, string]> = []
-    wire({ openDagNode: (runId, nodeId) => opened.push([runId, nodeId]) })
-    const card = dagCard()
-    /* Dispatched rather than `.click()`: a node box is an SVG <g>, and
-       SVGElement has no click() in jsdom. */
-    act(() => { pickNode(card, 0) })
-    act(() => { card.querySelector<HTMLElement>('.npanel .orun')!.click() })
-    expect(opened).toEqual([['run-7', 'alpha']])
-  })
-
-  /* The cascade, which no DOM test here can see: happy-dom renders the markup
-     with no stylesheet attached, so a class that collides with a global rule
-     looks fine in every other test in this file and is wrong only on screen.
-     The collision that prompted this dressed the run link in `.go`, which is
-     the composer's send button -- a 30px circle with grid centring -- and the
-     label was clipped to two characters however wide the panel got. */
-  it('dresses the node panel in no class the page sizes globally', () => {
-    const css = readFileSync('src/styles/page.css', 'utf8') as string
-    /* Bare single-class rules only: those are the ones that apply to any element
-       wearing the name, wherever it is. A scoped rule (`.dagc .nhd .nm`) cannot
-       reach into another feature and is not what this is about. */
-    const boxed = new Set<string>()
-    for (const rule of css.matchAll(/(?:^|\n)\.([a-z][\w-]*)\s*\{([^}]*)\}/g)) {
-      if (/(?:^|;|\s)(?:width|height)\s*:/.test(rule[2] as string)) boxed.add(rule[1] as string)
-    }
-    /* The guard is only worth anything if the stylesheet actually has such
-       rules to collide with. */
-    expect(boxed.size).toBeGreaterThan(0)
-
-    const card = dagCard()
-    act(() => { pickNode(card, 0) })
-    const worn = new Set<string>()
-    card.querySelectorAll('.npanel, .npanel *').forEach((el) => {
-      el.classList.forEach((name) => worn.add(name))
-    })
-    expect([...worn].filter((name) => boxed.has(name))).toEqual([])
-    expect(worn.has('orun')).toBe(true)
-  })
-
-  /* Called directly, not through the chip: React swallows an exception thrown
+  /* Called directly, not through the door: React swallows an exception thrown
      inside an event handler, so a click can never witness this. There is no
      matching case for an ABSENT opener -- optional chaining makes that
-     unfalsifiable, and the case above already proves the call happens when a
-     verb is there, which is the only observable difference. */
-  it('survives a node opener that throws', () => {
-    wire({ openDagNode: () => { throw new Error('no such run') } })
-    expect(() => store.openDagNode('run-7', 'alpha')).not.toThrow()
+     unfalsifiable, and the door cases in "delegated calls" already prove the
+     call happens when a verb is there, which is the only observable
+     difference. */
+  it('survives an opener that throws', () => {
+    wire({ openDagRun: () => { throw new Error('no such run') } })
+    expect(() => store.openDagRun('run-7')).not.toThrow()
   })
 })
 
@@ -2285,12 +2619,12 @@ describe('transcript island, tool episodes', () => {
 
   /* The chip's click is the island's own, and has to be: React's
      stopPropagation -- which the chip needs so the row underneath does not
-     toggle -- stops the native event too, so shell/chips.ts never sees it.
+     toggle -- stops the native event too, so state/proseChips.ts never sees it.
      Without these two cases, dropping the openChip call would leave
      click-to-open dead with the whole suite still green. */
   describe('a path chip in tool output', () => {
     const wireProse = (open: (at: ProseTarget) => void): void => {
-      window.DS = { ...window.DS, prose: { pathOf: () => null, linkTargetOf: () => null, open } }
+      setSources({ prose: { pathOf: () => null, linkTargetOf: () => null, open } })
     }
 
     function chip(): HTMLElement {
@@ -2497,7 +2831,7 @@ describe('transcript island, the agent stage', () => {
 
     expect([...box.querySelectorAll('.answer .prose')].map((n) => n.textContent))
       .toEqual(['Here is the digest.'])
-    expect(box.querySelectorAll('.ask')).toHaveLength(2)
+    expect(box.querySelectorAll('.turn.me')).toHaveLength(2)
   })
 
   it('holds nothing from a settled turn when the pane opens mid-question', () => {
@@ -2550,7 +2884,7 @@ describe('transcript island, the agent stage', () => {
         messages: [{ role: 'user', text: 'survey the repo', timestamp: iso(t0) }],
       }, { key: 'sp:a1', reset: true })
     })
-    expect(box.querySelector('.ask .b')?.textContent).toBe('survey the repo')
+    expect(box.querySelector('.msg.me')?.textContent).toBe('survey the repo')
     /* The answer being written is DRAWN, not withheld: a record that never
        reports itself settled used to hide a finished answer forever. */
     at('half an ans', 'run')
@@ -2576,7 +2910,7 @@ describe('transcript island, the agent stage', () => {
       mount.agentStage(box, { status: 'run', messages: [{ role: 'user', text: 'retry ok' }] },
         { key: 'sp:a1', reset: true })
     })
-    expect(box.querySelector('.ask .b')?.textContent).toBe('retry ok')
+    expect(box.querySelector('.msg.me')?.textContent).toBe('retry ok')
     expect(box.textContent).not.toContain('rpc timeout')
     expect($$('.wsempty').length).toBe(0)
   })
@@ -2617,9 +2951,9 @@ describe('transcript island, lane lifetime', () => {
   it('keeps a parked host: detached is not the same as thrown away', () => {
     turn('streaming')
     const parked = stage().querySelector('[data-tsl]')! as HTMLElement
-    /* What live/060-parked.js does on a mid-turn session switch: the stage's
-       children are held in a detached array, then wiped off the page. */
-    ;(window.DS!.transcript as TranscriptSource).parked = (node) => node === parked
+    /* What a mid-turn session switch does: the conversation being left takes
+       its lane host off the stage and holds it (state/session/residency.ts). */
+    holdHost(parked)
     stage().innerHTML = ''
     turn('the other session')
     seen.md = 0
@@ -2776,7 +3110,7 @@ describe('transcript island, delegated calls', () => {
   /* A conversation as `session.resume` hands it back: the assistant's call, then
      the tool row the server stamped the run's task id onto. */
   /* The spawn turn, and then a turn that only answered.
-     
+
      That second turn is what keeps the first one's fold SHUT, which is the
      state every case below is about: a replay opens the fold of the turn the
      conversation ends on, and a turn with no work of its own has no fold to
@@ -2874,7 +3208,7 @@ describe('transcript island, delegated calls', () => {
 
   it('times the run, not the dispatch', async () => {
     /* The spawn tool returns the moment the work is handed off, so the call's own
-       `ms` is near zero on every card. Reading it printed `0.0s` over a run that
+       `ms` is near zero on every card. Reading it printed `0s` over a run that
        had taken eight seconds -- the same tool-row-versus-run confusion that made
        a live run look finished. */
     listed = [{
@@ -2894,8 +3228,10 @@ describe('transcript island, delegated calls', () => {
     })
     await settle()
     const grid = $('.dlg .dgr')?.textContent || ''
-    expect(grid).toContain('8.3s')
-    expect(grid).not.toContain('0.0s')
+    expect(grid).toContain('8s')
+    /* Not the near-zero dispatch time, as a whole reading rather than a
+       digit that happens to occur inside the correct one. */
+    expect(grid).not.toMatch(/(?<!\d)0s\b/)
   })
 
   it('reads the roster once for the whole conversation', async () => {
@@ -3323,12 +3659,75 @@ describe('transcript island, delegated calls', () => {
     return dtl
   }
 
-  it('draws a playbook load the same graph, from the run that started', () => {
-    /* A dag call the model makes carries `nodes`, so the graph comes from the
-       arguments. The load of a `mode: dag` playbook carries `{name, params}` and
-       the graph exists only once the engine assembled it -- which is the
-       run-started payload. Same card either way: which source the nodes came from
-       is not something the reader should be able to see. */
+  /* The value beside a named key in the field grid, which is a flat run of
+     alternating `.k` / `.v` cells rather than a row per pair. */
+  const dagField = (card: HTMLElement, key: string): string | null => {
+    const cells = [...card.querySelectorAll<HTMLElement>('.dgr > *')]
+    const at = cells.findIndex((c) => c.classList.contains('k') && c.textContent?.endsWith(key))
+    return at < 0 ? null : (cells[at + 1]?.textContent ?? null)
+  }
+
+  /* The door, not a fact at rest: `gov` on the task cell is what makes it
+     clickable, keyboard-reachable and titled, the same shape `DelegRow`'s own
+     task cell already wears. */
+  it('makes the task cell a door once the run has an id, wired to openDagRun', () => {
+    const opened: string[] = []
+    wire({ openDagRun: (runId) => opened.push(runId) })
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        task_summary: 'a graph',
+        nodes: [{ id: 'a', subagent: 'Raven', node_summary: 'step', depends_on: [] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r1', nodes: [{ id: 'a', subagent: 'Raven', depends_on: [] }] })
+    })
+    const card = openDagCard()
+    const door = card.querySelector('.dgr .v.gov') as HTMLElement
+    expect(door).not.toBeNull()
+    expect(door.getAttribute('role')).toBe('button')
+    expect(door.getAttribute('title')).toBe('en:gui.deleg.open_hint')
+    act(() => { door.click() })
+    expect(opened).toEqual(['r1'])
+  })
+
+  it('opens the same door on Enter', () => {
+    const opened: string[] = []
+    wire({ openDagRun: (runId) => opened.push(runId) })
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        task_summary: 'a graph',
+        nodes: [{ id: 'a', subagent: 'Raven', node_summary: 'step', depends_on: [] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r1', nodes: [{ id: 'a', subagent: 'Raven', depends_on: [] }] })
+    })
+    const card = openDagCard()
+    const door = card.querySelector('.dgr .v.gov') as HTMLElement
+    act(() => { door.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+    expect(opened).toEqual(['r1'])
+  })
+
+  /* Nowhere to send a click yet: a run with no id has no task pane to open,
+     so the cell reads as a fact rather than as a promise it cannot keep. */
+  it('leaves the task cell inert when the run has no id yet', () => {
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        task_summary: 'a graph',
+        nodes: [{ id: 'a', subagent: 'Raven', node_summary: 'step', depends_on: [] }],
+      })
+    })
+    const card = openDagCard()
+    expect(dagField(card, 'gui.deleg.d_task')).toBe('a graph')
+    expect(card.querySelector('.dgr .v.gov')).toBeNull()
+  })
+
+  /* The door has to exist before `dag.get` ever answers: a playbook load has
+     no `task_summary` on its own arguments, and `dag.run_started` is the only
+     thing that names the run before the read lands. Gating the door on the
+     title the way the cell's text falls back to it would leave this run with
+     no way in until a read this test never lets finish. */
+  it('gives a playbook load the door as soon as dag.run_started names the run, before dag.get supplies a title', () => {
     act(() => {
       const st = mount.step()
       st.tool('load_playbook', { name: 'topic-briefing', params: { topic: 'crows' } })
@@ -3339,56 +3738,33 @@ describe('transcript island, delegated calls', () => {
           { id: 'tb-brief', subagent: 'writer', depends_on: ['tb-scan'] },
         ],
       })
-      mount.dagFeed('dag.node_updated', { run_id: 'r1', node: 'tb-scan', status: 'completed' })
     })
     const card = openDagCard()
-    const nodes = [...card.querySelectorAll<HTMLElement>('.nd')]
-    expect(nodes).toHaveLength(2)
-    expect(nodes.map((n) => n.dataset.st)).toEqual(['completed', 'pending'])
-    /* The dependency the event carried is drawn as an edge, which is the whole
-       difference between a graph and a list. */
-    expect(card.querySelectorAll('.edge')).toHaveLength(1)
-    /* The label the load produced survives: overwriting it in the dag branch
-       left the row unable to say which playbook was loaded. */
-    expect($('.wk')?.textContent).toContain('topic-briefing')
+    const door = card.querySelector('.dgr .v.gov') as HTMLElement
+    expect(door).not.toBeNull()
+    expect(door.getAttribute('role')).toBe('button')
+    /* The generic word until the read lands, not the playbook's name: that has
+       its own row, and a card that spelt `topic-briefing` twice over would be
+       saying nothing twice. */
+    expect(dagField(card, 'gui.deleg.d_task')).toBe('en:gui.deleg.dag_title')
+    expect(dagField(card, 'gui.dag.playbook')).toBe('topic-briefing')
   })
 
-  /* A node id is not a name a reader picked. A playbook namespaces every node
-     with its own name and a run tag, so the ids across one graph share their
-     first twenty-odd characters and the part that tells them apart is at the
-     end -- exactly where a box runs out of room. The line the model was
-     required to write is what the header shows now. */
-  it('heads a node panel with what the step is for, keeping its id as a field', () => {
+  it('opens the same door on Space', () => {
+    const opened: string[] = []
+    wire({ openDagRun: (runId) => opened.push(runId) })
     act(() => {
       const st = mount.step()
       st.tool('run_subagent_dag', {
-        task_summary: 'compile the daily ai digest',
-        nodes: [
-          {
-            id: 'daily-ai-digest-36e275-scan-news',
-            subagent: 'Raven-Research',
-            node_summary: 'scan today AI news',
-            depends_on: [],
-          },
-          {
-            id: 'daily-ai-digest-36e275-compile-digest',
-            subagent: 'Raven',
-            node_summary: 'compile the findings into a digest',
-            depends_on: ['daily-ai-digest-36e275-scan-news'],
-          },
-        ],
+        task_summary: 'a graph',
+        nodes: [{ id: 'a', subagent: 'Raven', node_summary: 'step', depends_on: [] }],
       })
+      mount.dagFeed('dag.run_started', { run_id: 'r1', nodes: [{ id: 'a', subagent: 'Raven', depends_on: [] }] })
     })
     const card = openDagCard()
-    const box = card.querySelector<HTMLElement>('.nd')
-    expect(box).not.toBeNull()
-    act(() => { box!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    const panel = card.querySelector('.npanel') as HTMLElement
-
-    expect(panel.querySelector('.nhd .nm')!.textContent).toBe('scan today AI news')
-    /* Kept, not dropped: a dependency names a node by its id, and so does the
-       run dir it is stored under. */
-    expect(panel.querySelector('.rows .nid')!.textContent).toBe('daily-ai-digest-36e275-scan-news')
+    const door = card.querySelector('.dgr .v.gov') as HTMLElement
+    act(() => { door.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true })) })
+    expect(opened).toEqual(['r1'])
   })
 
   it('titles a graph row by what it dispatched, whatever else is on the arguments', () => {
@@ -3497,19 +3873,11 @@ describe('transcript island, delegated calls', () => {
 
     const shown = card.querySelector('.dgr')!.textContent as string
     expect(shown).toContain(store.durText(180_000))
-    expect(shown).not.toContain(store.durText(5))
+    /* Not the near-zero call time, as a whole reading rather than a digit
+       that happens to occur inside the correct one ("3m00s" ends in the
+       same two characters `durText(5)` would print on its own). */
+    expect(shown).not.toMatch(/(?<!\d)0s\b/)
   })
-
-  /* The value beside a named key in the field grid, which is a flat run of
-     alternating `.k` / `.v` cells rather than a row per pair. */
-  const dagField = (card: HTMLElement, key: string): string | null => {
-    const cells = [...card.querySelectorAll<HTMLElement>('.dgr > *')]
-    const at = cells.findIndex((c) => c.classList.contains('k') && c.textContent?.endsWith(key))
-    return at < 0 ? null : (cells[at + 1]?.textContent ?? null)
-  }
-
-  const dagNodeStates = (card: HTMLElement): string[] =>
-    [...card.querySelectorAll<HTMLElement>('.nd')].map((n) => n.dataset.st as string)
 
   it('binds a graph that announced itself before its tool row', () => {
     /* The two do not travel together. The dag tool publishes its progress on its
@@ -3534,7 +3902,7 @@ describe('transcript island, delegated calls', () => {
     })
     const card = openDagCard()
 
-    expect(dagNodeStates(card)).toEqual(['completed', 'pending'])
+    expect(store._dagCallsForTests()[0]!.nodes.map((n) => n.status)).toEqual(['completed', 'pending'])
     /* And the run has an identity while it is still running, rather than only
        once the call returns and the id can be read back out of its result. */
     expect(dagField(card, 'gui.dag.run_id')).toBe('r-early')
@@ -3566,10 +3934,11 @@ describe('transcript island, delegated calls', () => {
     })
     act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
     const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
+    const calls = store._dagCallsForTests()
 
     expect(cards.map((c) => dagField(c, 'gui.dag.run_id'))).toEqual(['r-1', 'r-2'])
-    expect(dagNodeStates(cards[0] as HTMLElement)).toEqual(['failed', 'pending'])
-    expect(dagNodeStates(cards[1] as HTMLElement)).toEqual(['pending', 'pending'])
+    expect(calls[0]!.nodes.map((n) => n.status)).toEqual(['failed', 'pending'])
+    expect(calls[1]!.nodes.map((n) => n.status)).toEqual(['pending', 'pending'])
   })
 
   it('does not let a claimed card be claimed again by the next graph', () => {
@@ -3605,7 +3974,7 @@ describe('transcript island, delegated calls', () => {
     const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
 
     expect(cards.map((c) => dagField(c, 'gui.dag.run_id'))).toEqual(['r-1', 'r-2'])
-    expect(cards.map((c) => [...c.querySelectorAll<HTMLElement>('.nd')].map((n) => n.dataset.node)))
+    expect(store._dagCallsForTests().map((c) => c.nodes.map((n) => n.id)))
       .toEqual([['alpha', 'alpha2'], ['beta', 'beta2']])
   })
 
@@ -3655,12 +4024,14 @@ describe('transcript island, delegated calls', () => {
       st.tool('run_subagent_dag', { nodes: [{ id: 'alpha' }, { id: 'beta' }] }, null, 'call-1')
       st.seal()
     })
-    const card = openDagCard()
+    openDagCard()
 
-    expect(dagNodeStates(card)).toEqual(['completed', 'pending'])
+    const nodes = store._dagCallsForTests()[0]!.nodes
+    expect(nodes.map((n) => n.status)).toEqual(['completed', 'pending'])
     /* And with its own clock, which is the part the completion event could not
        have put back. */
-    expect(card.querySelector('.nd .tm')?.textContent).toBe(store.durText(20_000))
+    const alpha = nodes.find((n) => n.id === 'alpha')!
+    expect(alpha.ended_at! - alpha.started_at!).toBe(20_000)
   })
 
   it('carries the graph line into the fields, in full, where the row cannot show it', () => {
@@ -3706,42 +4077,6 @@ describe('transcript island, delegated calls', () => {
     expect(dagField(card, 'gui.deleg.d_cost')).toBeNull()
   })
 
-  it('draws the graph at the card dims rather than the sheet ones', () => {
-    /* The card sits in a 744px reading column and the sheet has the chat's whole
-       width; drawing at the sheet's geometry would run the graph past the card's
-       edge, and nothing about the picture would look wrong enough to notice. */
-    act(() => {
-      const st = mount.step()
-      st.tool('run_subagent_dag', {
-        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
-      })
-    })
-    const card = openDagCard()
-    const svg = card.querySelector('.canvas svg') as SVGElement
-    expect(svg.getAttribute('width')).toBe(String(dagCARD.PAD * 2 + dagCARD.GAP_X + dagCARD.W))
-  })
-
-  it('marks the node whose detail is open, including the failure it opened unasked', () => {
-    /* A failure is the one thing worth opening unasked -- the same rule the
-       step's own fold follows. Derived rather than stored, because the node states
-       arrive after the card was built; so the graph has to be told which node the
-       panel is showing rather than reading the stored selection, which is empty. */
-    act(() => {
-      const st = mount.step()
-      st.tool('run_subagent_dag', {
-        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
-      })
-      mount.dagFeed('dag.run_started', { run_id: 'r2', nodes: [{ id: 'scan' }, { id: 'brief' }] })
-      mount.dagFeed('dag.node_updated', { run_id: 'r2', node: 'scan', status: 'completed' })
-      mount.dagFeed('dag.node_updated', { run_id: 'r2', node: 'brief', status: 'failed' })
-    })
-    const card = openDagCard()
-    expect(card.querySelector('.npanel .nm')!.textContent).toBe('brief')
-    const marked = [...card.querySelectorAll<HTMLElement>('.nd')].filter((g) => g.dataset.sel === '1')
-    expect(marked).toHaveLength(1)
-    expect(marked[0]!.querySelector('.id')!.textContent).toBe('brief')
-  })
-
   it('counts a cancelled node, and does not count it as done', () => {
     /* `cancelled` is one of the six the wire sends (`DagNodeStatus`), and it was
        the one `DOT_OF` had no entry for. A node stopped by the user therefore
@@ -3759,50 +4094,21 @@ describe('transcript island, delegated calls', () => {
       h.done(true, 'stopped', 40)
       st.seal()
     })
-    const state = ([...openDagCard().querySelectorAll('.dgr > .v')][1] as HTMLElement).textContent || ''
-    expect(state).toContain('gui.deleg.dag_done {"ok":"1"}')
+    const card = openDagCard()
+    const nodeRow = dagField(card, 'gui.deleg.d_nodes') || ''
+    expect(nodeRow).toContain('gui.deleg.dag_done {"ok":"1","n":"2"}')
     /* Its own word, not the failures'. `dag_bad` reads "failed" / "失败" in both
        locales, and the runner keeps `cancelled` distinct from `failed` on purpose
        -- one was stopped, the other went wrong. Counting it as bad traded a node
        that vanished for a node that lies. */
-    expect(state).toContain('gui.deleg.dag_stopped {"n":"1"}')
-    expect(state).not.toContain('gui.deleg.dag_bad')
-  })
-
-  it('draws a cancelled node differently from one that finished', () => {
-    /* The status reaches the DOM either way -- `data-st` is written from the raw
-       word -- but with no rule for `cancelled` the box was styled exactly like an
-       untouched one, so a stopped graph looked like a graph still waiting. */
-    act(() => {
-      const st = mount.step()
-      st.tool('run_subagent_dag', {
-        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
-      })
-      mount.dagFeed('dag.run_started', { run_id: 'r10', nodes: [{ id: 'scan' }, { id: 'brief' }] })
-      mount.dagFeed('dag.node_updated', { run_id: 'r10', node: 'brief', status: 'cancelled' })
-      st.seal()
-    })
-    const card = openDagCard()
-    const sts = [...card.querySelectorAll<HTMLElement>('.nd')].map((n) => n.dataset.st)
-    expect(sts).toContain('cancelled')
-    /* The MARKER, not just the box. `Mark` reads `MARKS[status]` and falls back to
-       the pending circle for a word it does not know, so styling the border alone
-       put a "still waiting" glyph inside a stopped-looking box -- two signals
-       saying opposite things. Asserted on what was rendered rather than on the
-       stylesheet text, which cannot see that. */
-    const marks = [...card.querySelectorAll<HTMLElement>('.nd')].map((n) => {
-      const m = n.querySelector('.mk')
-      return m ? `${m.tagName.toLowerCase()}:${m.getAttribute('class')}` : 'none'
-    })
-    /* The cancelled one wears the stop glyph; the untouched one still wears the
-       pending circle, which is what makes this an assertion about telling them
-       apart rather than about the graph as a whole. */
-    expect(marks).toEqual(['circle:mk wait', 'path:mk stop'])
-    /* And the stylesheet has rules for both, which is what the classes are for.
-       The CSS gate cannot see an absent selector, so the assertion is here. */
-    const css = readFileSync('src/styles/page.css', 'utf8') as string
-    expect(css).toMatch(/\.nd\[data-st="cancelled"\]/)
-    expect(css).toMatch(/\.mk\.stop/)
+    expect(nodeRow).toContain('gui.deleg.dag_stopped {"n":"1"}')
+    expect(nodeRow).not.toContain('gui.deleg.dag_bad')
+    /* Both nodes stopped, so nothing is outstanding and the state is the run's
+       own outcome rather than a count repeated beside it. */
+    expect(nodeRow).not.toContain('gui.deleg.dag_left')
+    const state = dagField(card, 'gui.deleg.d_state') || ''
+    expect(state).toContain('gui.deleg.st_ok')
+    expect(state).not.toContain('gui.deleg.dag_done')
   })
 
   it('keeps the failure reason on a run the nodes cannot explain', () => {
@@ -3822,80 +4128,105 @@ describe('transcript island, delegated calls', () => {
       h.done(false, 'Error running DAG r4: backend write failed: disk full', 40)
       st.seal()
     })
-    const state = [...openDagCard().querySelectorAll('.dgr > .v')][1] as HTMLElement
-    expect(state.textContent).toContain('disk full')
-    /* The tally stays beside it: "1 done" is not the same fact as the cause, and
-       it is the only word on what did get through before the run stopped. */
-    expect(state.textContent).toContain('gui.deleg.dag_done')
+    const card = openDagCard()
+    const state = dagField(card, 'gui.deleg.d_state')
+    expect(state).toContain('disk full')
+    /* The receipt is the state's; the tally is the row under it. "1 done" is not
+       the same fact as the cause, and it is the only word on what did get
+       through before the run stopped -- but it is a fact about the nodes, and
+       reading it off the state row was what let a count pass for an outcome. */
+    expect(state).not.toContain('gui.deleg.dag_done')
+    expect(dagField(card, 'gui.deleg.d_nodes')).toContain('gui.deleg.dag_done {"ok":"1","n":"2"}')
   })
 
-  it('closes the panel it opened unasked, and leaves it closed', () => {
-    /* The unasked open is stored rather than derived. Derived, `null` meant both
-       "nobody picked one" and "the reader closed it": the first click on the
-       failed node was a no-op and the second reopened it, so the panel could
-       never be shut -- on the one run where a reader most wants the graph back
-       unobstructed. */
+  it('reads the graph, not the call that dispatched it, once the call has returned', () => {
+    /* `run_subagent_dag` is backgrounded by default: it returns the moment the
+       run is submitted. Reading `ok` off that return put "completed" on a card
+       whose nodes were still going -- beside a clock that was still ticking --
+       and the count next to it, "1" with no denominator, was the only hint that
+       the graph was two nodes deep. The state is the graph's now, and the count
+       is a row of its own. */
+    act(() => {
+      const st = mount.step()
+      const h = st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r7', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r7', node: 'scan', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r7', node: 'brief', status: 'running' })
+      /* The call returns while the second node runs on, which is the case the
+         card used to call finished. */
+      h.done(true, 'submitted', 40)
+      st.seal()
+    })
+    const card = openDagCard()
+    const state = dagField(card, 'gui.deleg.d_state') || ''
+    expect(state).toContain('gui.deleg.st_run')
+    expect(state).not.toContain('gui.deleg.st_ok')
+    const nodeRow = dagField(card, 'gui.deleg.d_nodes') || ''
+    expect(nodeRow).toContain('gui.deleg.dag_done {"ok":"1","n":"2"}')
+    expect(nodeRow).toContain('gui.deleg.dag_left {"n":"1"}')
+  })
+
+  it('counts the nodes before the call returns, and says what is outstanding', () => {
+    /* The tally used to appear only once the call had returned, so a graph the
+       reader was watching run said nothing about its own progress until it was
+       over. */
     act(() => {
       const st = mount.step()
       st.tool('run_subagent_dag', {
         nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
       })
-      mount.dagFeed('dag.run_started', { run_id: 'r5', nodes: [{ id: 'scan' }, { id: 'brief' }] })
-      mount.dagFeed('dag.node_updated', { run_id: 'r5', node: 'brief', status: 'failed' })
+      mount.dagFeed('dag.run_started', { run_id: 'r8', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r8', node: 'scan', status: 'running' })
     })
     const card = openDagCard()
-    const at = (i: number): Element => card.querySelectorAll('.nd')[i] as Element
-    expect(card.querySelector('.npanel .nm')!.textContent).toBe('brief')
-
-    act(() => { at(1).dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    expect(card.querySelector('.npanel')).toBeNull()
-
-    /* And a later failure does not reopen what the reader shut -- the unasked
-       open happens once, like the step's own fold. */
-    act(() => { mount.dagFeed('dag.node_updated', { run_id: 'r5', node: 'scan', status: 'failed' }) })
-    expect(card.querySelector('.npanel')).toBeNull()
-
-    /* Still a working toggle, so the reader can bring it back. */
-    act(() => { at(0).dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    expect(card.querySelector('.npanel .nm')!.textContent).toBe('scan')
+    expect(dagField(card, 'gui.deleg.d_state')).toContain('gui.deleg.st_run')
+    const nodeRow = dagField(card, 'gui.deleg.d_nodes') || ''
+    expect(nodeRow).toContain('gui.deleg.dag_done {"ok":"0","n":"2"}')
+    expect(nodeRow).toContain('gui.deleg.dag_left {"n":"2"}')
   })
 
-  it('gives a playbook load the same node detail a model-made call gets', async () => {
-    /* The point of the read: a playbook's arguments never carried the graph, so
-       without `dag.get` its card can show who ran and in what order and nothing
-       about what any step was asked -- while the identical card for a model-made
-       call shows all of it from its own arguments. */
-    wire({
-      dagRun: async () => ({ files: [
-        { node: 'tb-scan', status: 'completed', subagent: 'scout', depends_on: [] },
-        {
-          node: 'tb-brief',
-          status: 'running',
-          subagent: 'writer',
-          depends_on: ['tb-scan'],
-          prompt_template: 'write up {{ tb-scan.output }} in the house voice',
-          inputs: { voice: { file: 'docs/voice.md' } },
-        },
-      ] }),
-    })
-    await act(async () => {
+  it('leaves a replayed run finished when its nodes have not been read back', () => {
+    /* A card reopened from history before `dag.get` answers has no nodes at all.
+       Nodes this side has not heard about must not argue with a call that
+       returned, or every finished run in the scrollback would read as live. */
+    act(() => {
       const st = mount.step()
-      st.tool('load_playbook', { name: 'topic-briefing' })
-        .done(true, "DAG r9: started 'topic-briefing' (2 steps); results will be delivered when the run completes.", 5)
+      const h = st.tool('run_subagent_dag', { task_summary: 'a graph', nodes: [] })
+      h.done(true, 'done', 40)
       st.seal()
     })
     const card = openDagCard()
-    await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    const nodes = [...card.querySelectorAll<HTMLElement>('.nd')]
-    expect(nodes.map((n) => n.dataset.st)).toEqual(['completed', 'running'])
-    act(() => { nodes[1]!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    const panel = card.querySelector('.npanel') as HTMLElement
-    expect(panel.querySelector('.dep')!.textContent).toBe('tb-scan')
-    expect(panel.querySelector('.ins')!.textContent).toContain('docs/voice.md')
-    expect(panel.querySelector('.tpl')!.textContent).toContain('in the house voice')
-    /* The placeholder is marked up rather than left as text: it is the part that
-       says where this step's material comes from. */
-    expect(panel.querySelector('.tpl .ph')!.textContent).toBe('{{ tb-scan.output }}')
+    expect(dagField(card, 'gui.deleg.d_state')).toContain('gui.deleg.st_ok')
+    expect(dagField(card, 'gui.deleg.d_nodes')).toBeNull()
+  })
+
+  it('lets a terminal event close a graph whose last node never reported', () => {
+    /* `dag.run_completed` carries a file row per node and legitimately carries
+       none: a run closed by a backend error or a cancel has no manifest. Reading
+       the state off the nodes alone therefore left a background run -- whose
+       call returned long ago -- drawn as running for as long as the page stayed
+       open, because the node it never heard from stayed `pending`. */
+    act(() => {
+      const st = mount.step()
+      const h = st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r6', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r6', node: 'scan', status: 'completed' })
+      h.done(true, 'submitted', 40)
+      st.seal()
+      /* The second node never reported, and the run closes with no file rows. */
+      mount.dagFeed('dag.run_completed', { run_id: 'r6', files: [] })
+    })
+    const card = openDagCard()
+    expect(dagField(card, 'gui.deleg.d_state')).toContain('gui.deleg.st_ok')
+    const nodeRow = dagField(card, 'gui.deleg.d_nodes') || ''
+    /* What it heard, and no claim about what it did not: the node that never
+       reported is absent from the count rather than outstanding. */
+    expect(nodeRow).toContain('gui.deleg.dag_done {"ok":"1","n":"2"}')
+    expect(nodeRow).not.toContain('gui.deleg.dag_left')
   })
 
   it('names the run that took over, before the old one is done', () => {
@@ -3942,7 +4273,7 @@ describe('transcript island, delegated calls', () => {
     })
     const card = openDagCard()
     expect(dagField(card, 'gui.dag.replanned_into')).toBe('r2')
-    expect(dagNodeStates(card)).toEqual(['completed', 'completed'])
+    expect(store._dagCallsForTests()[0]!.nodes.map((n) => n.status)).toEqual(['completed', 'completed'])
   })
 })
 

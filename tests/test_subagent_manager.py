@@ -29,6 +29,7 @@ from raven.agent import workdir
 from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
+from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.subagent.registry import AgentRegistry
 from raven.config.schema import (
@@ -941,6 +942,26 @@ def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch, tmp_pat
     assert calls == [False]
 
 
+def test_generated_participant_notes_preserve_each_supported_message_shape() -> None:
+    from raven.agent.subagent.backends.raven_loop import _append_participant_note
+
+    absent: list[dict] = []
+    _append_participant_note(absent, "note")
+    assert absent == []
+
+    text = [{"content": "base"}]
+    _append_participant_note(text, "note")
+    assert text[-1]["content"] == "base\n\nnote"
+
+    blocks = [{"content": [{"type": "text", "text": "base"}]}]
+    _append_participant_note(blocks, "note")
+    assert blocks[-1]["content"][-1] == {"type": "text", "text": "note"}
+
+    empty = [{"content": None}]
+    _append_participant_note(empty, "note")
+    assert empty[-1]["content"] == "note"
+
+
 def test_build_subagent_prompt_hides_orchestration_skills(tmp_path):
     """The catalog handed to a sub-agent must not advertise a skill whose
     procedure needs a tool this backend never registers — the DAG skill tells
@@ -1257,6 +1278,46 @@ async def test_announcement_omits_the_handle_line_for_a_stateless_call() -> None
     assert "Instance handle" not in submitted[0].text
 
 
+async def test_announce_result_carries_the_records_node_id() -> None:
+    """G7: the delegated mark names the record id so the transcript's receipt
+    row can open the task -- the dag mark already carries ``run_id``, this is
+    the matching field for a spawn.
+
+    Asserted against the mark the manager actually emits, validated by the two
+    strict models a client draws on, the way ``announce_dag_exception``'s own
+    mark is checked above.
+    """
+    from raven.rpc.models import SubagentDeliveredPayload, TranscriptDelegated
+
+    mgr = _make_manager(max_concurrent=1)
+    mgr.set_submit(lambda _req: None)
+    delivered: list[dict] = []
+    mgr._emit_delivered = lambda _origin, mark: delivered.append(mark)
+
+    origin = {**_spawn_origin("claude_code", None), "node_id": "audit_checkout"}
+    await mgr._announce_result("abcd1234", "Audit", "do it", "done", origin, "ok")
+
+    assert len(delivered) == 1
+    mark = dict(delivered[0])
+    assert mark["node_id"] == "audit_checkout"
+    content = mark.pop("content")
+    assert SubagentDeliveredPayload(**mark, content=content).node_id == "audit_checkout"
+    assert TranscriptDelegated(**mark).node_id == "audit_checkout"
+
+
+async def test_announce_result_omits_node_id_when_the_origin_carries_none() -> None:
+    """The field is a bare optional string on the wire, not a nullable one, so
+    a mark with nothing to say must leave the key out rather than send null."""
+    mgr = _make_manager(max_concurrent=1)
+    mgr.set_submit(lambda _req: None)
+    delivered: list[dict] = []
+    mgr._emit_delivered = lambda _origin, mark: delivered.append(mark)
+
+    await mgr._announce_result("abcd1234", "One shot", "do it", "done", _spawn_origin("oneshot", None), "ok")
+
+    assert "node_id" not in delivered[0]
+
+
 async def test_announcement_no_longer_tells_the_model_to_drop_technical_detail() -> None:
     """The old wording made the handle a forbidden 'technical detail', which
     would have had the model discard the thing it was just handed."""
@@ -1362,6 +1423,16 @@ class _OneBackendRegistry:
 
     def backend(self, agent: str) -> Any:
         return self._backend
+
+    def get(self, name: str) -> Any:
+        """No row, the way the real table answers for a name it never registered.
+
+        The manager asks this on the paths that read an agent's memory scope,
+        modes and model choices, and every one of them takes ``None`` for "this
+        stand-in table holds no such row" -- which is what these tests want, since
+        they pin the backend directly rather than through a row.
+        """
+        return None
 
 
 def test_dispatch_hands_a_binding_backend_the_session_dir_rule(tmp_path: Path) -> None:
@@ -2302,6 +2373,375 @@ async def test_a_resumed_builtin_run_records_only_its_own_turns(tmp_path) -> Non
     assert not [c for c in contents if "earlier node" in c], "history is not this node's account"
 
 
+class _WriteFileProvider(LLMProvider):
+    """One ``write_file`` call, then a final answer."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1", name="write_file", arguments={"path": "notes.md", "content": "line one\nline two\n"}
+                    )
+                ],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_a_write_file_call_records_the_file_it_wrote(tmp_path) -> None:
+    """G1: a node's own account of what it wrote, for the tasks panel's file
+    and diff chips. Only the in-process lane sees the tool's own
+    ``diff`` / ``file_change``, so this is the one place it is captured.
+
+    The op is ``add`` because the path did not exist: ``before is None`` is the
+    only record that the write created the file, and a panel draws a created
+    file differently from a rewritten one."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_WriteFileProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("write it", task_id="n4", workspace=tmp_path, executor=None)
+
+    assert len(did.files) == 1
+    recorded = did.files[0]
+    assert recorded["path"].endswith("notes.md")
+    assert recorded["op"] == "add"
+    assert recorded["add"] == 2
+    assert recorded["del"] == 0
+    assert recorded["size"] == len("line one\nline two\n".encode("utf-8"))
+    assert did.as_meta()["files"] == did.files
+
+
+class _WriteThenEditProvider(LLMProvider):
+    """A ``write_file`` call, then an ``edit_file`` call, then a final answer."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1", name="write_file", arguments={"path": "notes.md", "content": "old line\nkeep\n"}
+                    )
+                ],
+            )
+        if self.calls == 2:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c2",
+                        name="edit_file",
+                        arguments={"path": "notes.md", "old_text": "old line", "new_text": "new line\nextra"},
+                    )
+                ],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+class _WriteTwiceProvider(LLMProvider):
+    """Two ``write_file`` calls on the same path, then a final answer."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(id="c1", name="write_file", arguments={"path": "notes.md", "content": "a\nb\nc\n"})
+                ],
+            )
+        if self.calls == 2:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(id="c2", name="write_file", arguments={"path": "notes.md", "content": "a\nz\n"})
+                ],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_two_writes_of_one_path_are_one_file(tmp_path) -> None:
+    """Two writes of the same path fold into the file's final state: the
+    counts sum and the op stays the creation the first write was, not two
+    entries for one file the panel would draw as two rows."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_WriteTwiceProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("write twice", task_id="n6", workspace=tmp_path, executor=None)
+
+    assert [f["path"] for f in did.files] == ["notes.md"]
+    only = did.files[0]
+    assert only["op"] == "add"
+    assert only["add"] == 4
+    assert only["del"] == 2
+    assert only["size"] == len(b"a\nz\n")
+
+
+async def test_a_write_then_edit_of_one_path_is_a_single_created_entry(tmp_path) -> None:
+    """A later edit does not unmake a creation: the node produced the file, and
+    ``add`` is what the run did to that path however many patches followed."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_WriteThenEditProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("edit it", task_id="n5", workspace=tmp_path, executor=None)
+
+    assert [f["path"] for f in did.files] == ["notes.md"]
+    only = did.files[0]
+    assert only["op"] == "add"
+    assert only["add"] == 4
+    assert only["del"] == 1
+
+
+class _WriteThenRemoveProvider(LLMProvider):
+    """A ``write_file`` call, then an ``exec`` that removes what it wrote."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1", name="write_file", arguments={"path": "scratch.md", "content": "one\ntwo\nthree\n"}
+                    )
+                ],
+            )
+        if self.calls == 2:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[ToolCallRequest(id="c2", name="exec", arguments={"command": "rm scratch.md"})],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_a_file_written_then_removed_by_a_command_is_recorded_as_a_deletion(tmp_path) -> None:
+    """The one path that has no tool result of its own: ``exec`` produces no
+    file change, so without the run's own watch the panel would show a file the
+    node wrote and no sign that it then took it away.
+
+    The entry is a deletion rather than absent because the write is what created
+    the path for the run -- an ``add`` folded with a ``delete`` nets to nothing,
+    and a pre-existing file rewritten and then removed is a ``delete``."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    # A workspace of its own, not agent home: the suite points the trace store
+    # at ``tmp_path/traces``, and a run whose workspace is that same directory
+    # reads raven's own bookkeeping as files the node wrote.
+    work = tmp_path / "ws"
+    work.mkdir()
+    (work / "scratch.md").write_text("older\n")
+    backend = RavenLoopBackend(provider=_WriteThenRemoveProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("write then remove", task_id="n7", workspace=work, executor=None)
+
+    assert not (work / "scratch.md").exists()
+    assert [f["path"] for f in did.files] == ["scratch.md"]
+    assert did.files[0] == {"path": "scratch.md", "op": "delete", "add": 0, "del": 3, "size": None}
+
+
+async def test_a_file_the_run_created_and_then_removed_leaves_no_entry(tmp_path) -> None:
+    """Net nothing over the run, the way git shows nothing for a file born and
+    deleted inside one range."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    work = tmp_path / "ws"
+    work.mkdir()
+    backend = RavenLoopBackend(provider=_WriteThenRemoveProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("write then remove", task_id="n8", workspace=work, executor=None)
+
+    assert did.files == []
+
+
+class _EditExistingFileProvider(LLMProvider):
+    """One ``edit_file`` call against a file the node did not create."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1",
+                        name="edit_file",
+                        arguments={"path": "notes.md", "old_text": "old line", "new_text": "new line\nextra"},
+                    )
+                ],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_a_node_editing_a_file_it_did_not_create_records_an_edit_entry(tmp_path) -> None:
+    """A path the node only ever edited (never wrote) stays an ``edit`` entry:
+    unlike the write-then-edit case, there is no whole-content touch to prefer."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    (tmp_path / "notes.md").write_text("old line\nkeep\n", encoding="utf-8")
+    backend = RavenLoopBackend(provider=_EditExistingFileProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("edit existing", task_id="n7", workspace=tmp_path, executor=None)
+
+    assert did.files == [{"path": "notes.md", "op": "edit", "add": 2, "del": 1, "size": 20}]
+
+
+class _ExecProvider(LLMProvider):
+    """One ``exec`` call running the given command, then a final answer."""
+
+    def __init__(self, command: str) -> None:
+        super().__init__(api_key="test")
+        self.command = command
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[ToolCallRequest(id="c1", name="exec", arguments={"command": self.command})],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def _ran(command: str, workspace) -> list[dict]:
+    """What one ``exec`` command left in ``workspace``, as the run's own files."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_ExecProvider(command), model="stub", agent_home=workspace.parent)
+    with activity.collecting() as did:
+        await backend.run("run it", task_id="nx", workspace=workspace, executor=None)
+    return did.files
+
+
+async def test_a_file_a_command_created_is_recorded_as_a_creation(tmp_path) -> None:
+    """``exec`` reports its output and nothing else, so the file it wrote is
+    visible only as a directory that changed around the call -- which is the
+    whole of what a deck-building or report-writing command produces."""
+    work = tmp_path / "ws"
+    work.mkdir()
+
+    files = await _ran("printf 'a\nb\n' > made.txt", work)
+
+    assert files == [{"path": "made.txt", "op": "add", "add": 2, "del": 0, "size": 4}]
+
+
+async def test_a_file_a_command_rewrote_is_a_write_without_counts(tmp_path) -> None:
+    """The listing never held the old content, so there are no line counts to
+    give -- and inventing them would be worse than showing none."""
+    work = tmp_path / "ws"
+    work.mkdir()
+    (work / "notes.md").write_text("one\n", encoding="utf-8")
+
+    files = await _ran("printf 'one\ntwo\n' > notes.md", work)
+
+    assert files == [{"path": "notes.md", "op": "write", "add": 0, "del": 0, "size": 8}]
+
+
+async def test_a_file_a_command_removed_is_recorded_as_a_deletion(tmp_path) -> None:
+    """The command named the path, so the shell tool's own fence read the file
+    before it went and the entry carries the lines it held. One entry, not two:
+    the listing saw the same removal and is told to skip a path already
+    accounted for."""
+    work = tmp_path / "ws"
+    work.mkdir()
+    (work / "old.md").write_text("one\ntwo\n", encoding="utf-8")
+
+    files = await _ran("rm old.md", work)
+
+    assert files == [{"path": "old.md", "op": "delete", "add": 0, "del": 2, "size": None}]
+
+
+async def test_a_removal_the_command_never_named_is_still_seen(tmp_path) -> None:
+    """A glob the shell expands names no path the fence could resolve, so the
+    listing is the only thing that saw the file go -- and a deletion nobody
+    records is a node that reports having changed nothing."""
+    work = tmp_path / "ws"
+    work.mkdir()
+    (work / "old.md").write_text("one\ntwo\n", encoding="utf-8")
+
+    files = await _ran("rm *.md", work)
+
+    assert files == [{"path": "old.md", "op": "delete", "add": 0, "del": 0, "size": None}]
+
+
 async def test_the_account_is_published_while_the_run_is_still_going(tmp_path) -> None:
     """A panel watches a running node through the collector, so the account has
     to exist before the answer does.
@@ -2393,6 +2833,88 @@ async def test_a_run_with_nothing_to_say_fails_instead_of_reading_as_done(tmp_pa
 
     with pytest.raises(SubagentNoAnswerError, match="no answer"):
         await backend.run("research it", task_id="n2", workspace=tmp_path, executor=None)
+
+
+_LLM_ERROR_REPLY = "Error calling LLM (unknown@openrouter): HTTP 401: User not found."
+
+
+class _ErrorReplyProvider(LLMProvider):
+    """A provider whose every call fails the way providers fail: a reply whose
+    content is the canonical error text, not an exception."""
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.contracts.llm_provider import ErrorClassification
+
+        return LLMResponse(
+            content=_LLM_ERROR_REPLY,
+            finish_reason="error",
+            error_classification=ErrorClassification("unknown", retryable=False),
+        )
+
+
+async def test_a_failed_model_call_fails_the_run_instead_of_becoming_its_answer(tmp_path) -> None:
+    """The streaming branch already raised on an error reply; the waited-for
+    branch handed the error text back as the answer, so a spawn whose key was
+    refused was recorded completed and drawn with a green dot."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.subagent_backend import SubagentNoAnswerError
+
+    backend = RavenLoopBackend(provider=_ErrorReplyProvider(), model="stub", agent_home=tmp_path)
+
+    with pytest.raises(SubagentNoAnswerError, match="model call failed \\(unknown\\): Error calling LLM"):
+        await backend.run("research it", task_id="n3", workspace=tmp_path, executor=None)
+
+
+class _ErrorReplyBackend:
+    """A lane that hands the provider's error reply back as its answer, the way
+    a child engine does after its own model call failed."""
+
+    streams = False
+
+    async def run(self, task: str, **kwargs: Any) -> str:
+        return _LLM_ERROR_REPLY
+
+
+async def test_a_lane_that_returns_the_error_reply_is_recorded_failed(tmp_path, monkeypatch) -> None:
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1)
+    mgr.registry = _HoldingRegistry(_ErrorReplyBackend())
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    submitted: list[Any] = []
+    mgr.set_submit(lambda req: submitted.append(req))
+
+    receipt = await mgr.spawn(
+        task="check the release notes",
+        task_summary="release check",
+        agent="Coder",
+        session_key="tui:s1",
+        origin_channel="tui",
+        origin_chat_id="default",
+    )
+    assert "started" in receipt
+    await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+    (meta_path,) = list(mgr.session_dir_for("tui:s1").rglob("*.meta.json"))
+    assert json.loads(meta_path.read_text(encoding="utf-8"))["status"] == "failed"
+    (error_path,) = list(mgr.session_dir_for("tui:s1").rglob("*.error.md"))
+    assert _LLM_ERROR_REPLY in error_path.read_text(encoding="utf-8")
+    assert not list(mgr.session_dir_for("tui:s1").rglob("*.out.md")), "the error is not the run's output"
+    (req,) = submitted
+    assert "[Subagent 'release check' failed]" in req.text
+    assert _LLM_ERROR_REPLY in req.text
+
+
+def test_llm_error_reply_matches_the_whole_canonical_shape_only() -> None:
+    from raven.agent.subagent.backends.base import llm_error_reply
+
+    assert llm_error_reply(_LLM_ERROR_REPLY) == _LLM_ERROR_REPLY
+    assert llm_error_reply("  " + _LLM_ERROR_REPLY + "\n") == _LLM_ERROR_REPLY
+    assert llm_error_reply("The upstream said: " + _LLM_ERROR_REPLY) is None, "an answer that quotes one is an answer"
+    assert llm_error_reply(_LLM_ERROR_REPLY + "\n\nSo I fell back to the cached copy.") is None
+    assert llm_error_reply("") is None
+    assert llm_error_reply(None) is None
 
 
 # --- a spawn's memory record has to be findable ------------------------------
@@ -3611,7 +4133,12 @@ async def test_cancel_all_gives_up_on_a_run_that_ignores_its_cancellation() -> N
     stubborn = asyncio.create_task(_deaf())
     await started.wait()
     stub = SimpleNamespace(
-        _running_tasks={"h1": stubborn}, _record_tasks=[], _unprompted_trailing={}, _unprompted_held={}
+        _running_tasks={"h1": stubborn},
+        _record_tasks=[],
+        _unprompted_trailing={},
+        _unprompted_held={},
+        _cancel_reasons={},
+        _unstarted={},
     )
 
     with patch.object(manager_mod, "_CANCEL_DRAIN_TIMEOUT_S", 0.05):
@@ -4128,3 +4655,508 @@ def test_an_agent_with_no_menu_offers_no_model(monkeypatch) -> None:
     assert mgr.agent_model_choices("Researcher") == ()
     with pytest.raises(ValueError):
         mgr.set_instance_model("s1", "Researcher", "h1", "anything")
+
+
+# --- a cancelled run tells its parent -------------------------------------------
+
+
+class _HoldingBackend:
+    """A backend whose run blocks until it is cancelled, so the cancel path can be driven."""
+
+    streams = False
+
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+
+    async def run(self, task: str, **kwargs: Any) -> str:
+        self.entered.set()
+        await asyncio.Event().wait()
+        return "never"
+
+
+class _HoldingRegistry(_OneBackendRegistry):
+    """The one-backend table, also answering the sweep ``remember_origin`` makes."""
+
+    def backends(self) -> list[Any]:
+        return [self._backend]
+
+
+def _cancel_harness(tmp_path: Path, monkeypatch) -> tuple[SubagentManager, _HoldingBackend, list[Any]]:
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1)
+    backend = _HoldingBackend()
+    mgr.registry = _HoldingRegistry(backend)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    submitted: list[Any] = []
+    mgr.set_submit(lambda req: submitted.append(req))
+    return mgr, backend, submitted
+
+
+async def _spawn_and_wait(mgr: SubagentManager, backend: _HoldingBackend, *, summary: str = "poster") -> str:
+    receipt = await mgr.spawn(
+        task="draw the poster",
+        task_summary=summary,
+        agent="Coder",
+        session_key="tui:s1",
+        origin_channel="tui",
+        origin_chat_id="default",
+    )
+    assert "started" in receipt
+    await asyncio.wait_for(backend.entered.wait(), 5)
+    (task_id,) = list(mgr._running_tasks)
+    return task_id
+
+
+async def test_a_cancelled_run_is_announced_to_its_parent_with_the_reason(tmp_path, monkeypatch):
+    """The parent used to hear nothing: the CancelledError branch wrote the
+    record and the status event, and the status event is live-only. A session
+    whose run was stopped under it kept a 'started' receipt with nothing after."""
+    mgr, backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    task_id = await _spawn_and_wait(mgr, backend)
+
+    assert await mgr.cancel_by_id(task_id, reason="a test stopped it")
+
+    (req,) = submitted
+    assert req.conversation == "tui:s1"
+    # `spawn()` mints a node id for every run (`node_id or task_id`), so the mark a
+    # cancellation draws carries it too -- the page links the mark to the run by it.
+    assert req.delegated == {"kind": "spawn", "label": "poster", "status": "cancelled", "node_id": task_id}
+    assert "[Subagent 'poster' was cancelled]" in req.text
+    assert "Cancelled: a test stopped it" in req.text
+    assert f"Working directory: {tmp_path}" in req.text
+    assert "Record:" not in req.text, "a run that wrote no answer has no out.md to point at"
+    (meta_path,) = list(mgr.session_dir_for("tui:s1").rglob("*.meta.json"))
+    assert json.loads(meta_path.read_text(encoding="utf-8"))["status"] == "cancelled"
+    (error_path,) = list(mgr.session_dir_for("tui:s1").rglob("*.error.md"))
+    assert error_path.read_text(encoding="utf-8") == "Cancelled: a test stopped it"
+    assert mgr._cancel_reasons == {}
+
+
+async def test_cancel_all_tells_every_parent_why(tmp_path, monkeypatch):
+    mgr, backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    await _spawn_and_wait(mgr, backend)
+
+    await mgr.cancel_all(reason="the gateway stopped")
+
+    (req,) = submitted
+    assert "[Subagent 'poster' was cancelled]" in req.text
+    assert "Cancelled: the gateway stopped" in req.text
+    assert mgr._cancel_reasons == {}
+
+
+async def test_a_bare_task_cancel_still_announces_with_no_stated_reason(tmp_path, monkeypatch):
+    """A cancellation that reaches the run without passing through a cancel
+    method -- its parent task torn down, a caller holding the task itself --
+    is still announced, saying no reason was given rather than inventing one."""
+    mgr, backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    task_id = await _spawn_and_wait(mgr, backend)
+
+    task = mgr._running_tasks[task_id]
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    (req,) = submitted
+    assert manager_mod.UNEXPLAINED_CANCEL in req.text
+
+
+async def test_a_run_cancelled_while_queued_behind_the_gate_is_announced_too(tmp_path, monkeypatch):
+    """Before dispatch there is no record to finish, but the parent was still
+    handed a 'started' receipt, so the stop has to be announced from the outer
+    frame; the announcement then has no record to point at."""
+    mgr, backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    first = await _spawn_and_wait(mgr, backend)
+    receipt = await mgr.spawn(
+        task="second poster",
+        task_summary="second",
+        agent="Coder",
+        session_key="tui:s1",
+        origin_channel="tui",
+        origin_chat_id="default",
+    )
+    assert "started" in receipt
+    try:
+        second = next(tid for tid in mgr._running_tasks if tid != first)
+        # Let the second task start and park on the gate: a task cancelled
+        # before its first step never enters its body, so nothing would run.
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert await mgr.cancel_by_id(second, reason="a test stopped the queued one")
+
+        (req,) = submitted
+        assert "[Subagent 'second' was cancelled]" in req.text
+        assert "Cancelled: a test stopped the queued one" in req.text
+        assert "Record:" not in req.text
+        assert not list(mgr.session_dir_for("tui:s1").rglob("second*.meta.json")), "a queued run opened no record"
+    finally:
+        await mgr.cancel_all()
+
+
+async def _spawn_without_yielding(
+    mgr: SubagentManager, monkeypatch, *, summary: str = "poster"
+) -> tuple[str, list[str]]:
+    """Spawn and hand back the task id with a record of whether the body ever ran."""
+    entered: list[str] = []
+    real = mgr._run_subagent
+
+    async def spy(task_id, *args, **kwargs):
+        entered.append(task_id)
+        return await real(task_id, *args, **kwargs)
+
+    monkeypatch.setattr(mgr, "_run_subagent", spy)
+    receipt = await mgr.spawn(
+        task="draw the poster",
+        task_summary=summary,
+        agent="Coder",
+        session_key="tui:s1",
+        origin_channel="tui",
+        origin_chat_id="default",
+    )
+    assert "started" in receipt
+    (task_id,) = list(mgr._running_tasks)
+    return task_id, entered
+
+
+async def test_a_run_cancelled_before_its_first_step_is_still_announced(tmp_path, monkeypatch):
+    """``spawn()`` returns once the task exists, so a caller can cancel it before
+    it has taken a step -- and asyncio closes an unstarted coroutine without
+    entering it, so neither CancelledError handler in the body runs. The cancel
+    method then owes what the body would have done: the registry row, the
+    status event and the announcement, or the parent keeps only its receipt."""
+    mgr, _backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    events: list[dict[str, Any]] = []
+
+    async def sink(_key: str, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    mgr.set_delivery_sink(sink)
+    task_id, entered = await _spawn_without_yielding(mgr, monkeypatch)
+
+    # No await between spawn and cancel: the task has not run.
+    assert await mgr.cancel_by_id(task_id, reason="a test stopped it at once")
+    await asyncio.sleep(0)
+
+    assert entered == [], "the body never ran, so this is the unstarted case, not the one the inner handler covers"
+    (req,) = submitted
+    # `spawn()` mints a node id for every run (`node_id or task_id`), so the mark a
+    # cancellation draws carries it too -- the page links the mark to the run by it.
+    assert req.delegated == {"kind": "spawn", "label": "poster", "status": "cancelled", "node_id": task_id}
+    assert "[Subagent 'poster' was cancelled]" in req.text
+    assert "Cancelled: a test stopped it at once" in req.text
+    statuses = [e["payload"]["status"] for e in events if e["type"] == "subagent.status"]
+    assert statuses == ["pending", "cancelled"]
+    rows = [r for r in get_registry().list_instances("tui:s1") if r.get("handle") == task_id]
+    assert [r["status"] for r in rows] == ["cancelled"]
+    assert mgr._unstarted == {} and mgr._cancel_reasons == {}
+
+
+async def test_cancel_all_reports_the_runs_it_stopped_before_they_started(tmp_path, monkeypatch):
+    mgr, _backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    _task_id, entered = await _spawn_without_yielding(mgr, monkeypatch)
+
+    await mgr.cancel_all(reason="the gateway stopped")
+
+    assert entered == []
+    (req,) = submitted
+    assert "[Subagent 'poster' was cancelled]" in req.text and "Cancelled: the gateway stopped" in req.text
+    assert mgr._unstarted == {}
+
+
+async def test_a_run_that_did_start_is_reported_once(tmp_path, monkeypatch):
+    """The body pops its own entry first thing, so the cancel method must not
+    report a run the inner handler already announced."""
+    mgr, backend, submitted = _cancel_harness(tmp_path, monkeypatch)
+    task_id = await _spawn_and_wait(mgr, backend)
+    assert mgr._unstarted == {}
+
+    assert await mgr.cancel_by_id(task_id, reason="a test stopped it")
+
+    assert len(submitted) == 1
+
+
+async def test_announce_result_names_the_working_directory(monkeypatch):
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(lambda req: submitted.append(req))
+
+    await mgr._announce_result(
+        task_id="t1",
+        task_summary="label",
+        task="task",
+        result="result",
+        origin={"channel": "tui", "chat_id": "default", "session_key": "tui:sess", "workspace": Path("/work/here")},
+        status="ok",
+    )
+
+    assert "Working directory: /work/here" in submitted[0].text
+    assert "[Subagent 'label' returned]" in submitted[0].text
+
+
+async def test_announce_passes_through_a_run_that_reports_its_own_directory(monkeypatch):
+    """The receipt names the directory the run was dispatched into. A run that
+    moved beneath it says so itself, in its own reply; the host neither parses
+    that line nor lifts it out of the fence, so the caller holds both and the
+    one that names where the files are is the run's own.
+
+    Measured on a real dispatch: the design engine mints a per-session
+    directory under the dispatch directory, and a caller that resolved the
+    reply's relative paths against the line above delivered nothing.
+    """
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(lambda req: submitted.append(req))
+    own = Path("/work/here/designs/poster-3f2a")
+
+    await mgr._announce_result(
+        task_id="t1",
+        task_summary="poster",
+        task="task",
+        result=f"The poster is ready.\nDesign session directory: {own}\nPaths in this reply resolve against it.",
+        origin={"channel": "tui", "chat_id": "default", "session_key": "tui:sess", "workspace": Path("/work/here")},
+        status="ok",
+    )
+
+    text = submitted[0].text
+    assert "Working directory: /work/here" in text
+    report = f"Design session directory: {own}"
+    assert report in text and "Paths in this reply resolve against it." in text
+    begin = text.index("[BEGIN UNTRUSTED subagent")
+    end = text.index("[END UNTRUSTED subagent")
+    assert begin < text.index(report) < end, "the run's own report rides as the run's, not as the host's claim"
+
+
+# ---- session_model_for (the DAG lane's own resolver) -----------------------
+
+
+def test_session_model_for_reads_the_acp_row_s_own_model() -> None:
+    """The single implementation a DAG node's dispatch resolves through, on
+    the same terms a spawn's inline expression already reads."""
+    mgr = _make_manager(max_concurrent=1)
+    mgr.apply_agents([ThirdPartyAcpSubagentConfig(name="Hermes", command="acp-agent", model="vendor/row")])
+
+    assert mgr.session_model_for(None, "Hermes", None) == "vendor/row"
+    assert mgr.session_model_for(None, "Hermes", "h1") == "vendor/row", "no override yet, so the row wins"
+
+
+def test_session_model_for_prefers_an_instance_override(monkeypatch) -> None:
+    mgr = _make_manager(max_concurrent=1)
+    mgr.apply_agents([ThirdPartyAcpSubagentConfig(name="Hermes", command="acp-agent", model="vendor/row")])
+    monkeypatch.setattr(mgr, "instance_model", lambda session_key, agent, handle: "vendor/override")
+
+    assert mgr.session_model_for(None, "Hermes", "h1") == "vendor/override"
+
+
+def test_session_model_for_is_none_without_an_instance_to_check() -> None:
+    """No ``instance`` named is no override to find, the same gate
+    ``resolve_mode`` applies -- it must not call ``instance_model`` with a
+    blank handle and read whatever happens to be stored there."""
+    mgr = _make_manager(max_concurrent=1)
+    mgr.apply_agents([ThirdPartyAcpSubagentConfig(name="Hermes", command="acp-agent", model="vendor/row")])
+
+    assert mgr.session_model_for(None, "Hermes", None) == "vendor/row"
+
+
+def test_session_model_for_is_none_for_a_builtin_or_cli_row() -> None:
+    """A builtin row's model is a pin its own backend pairs with a credential,
+    and a cli row has no menu this session picks between -- both read ``None``."""
+    mgr = _make_manager(max_concurrent=1)
+    mgr.apply_agents([ThirdPartyCliSubagentConfig(name="Coder", command="claude -p {prompt}")])
+
+    assert mgr.session_model_for(None, GENERIC_AGENT, None) is None
+    assert mgr.session_model_for(None, "Coder", None) is None
+
+
+def test_file_change_counts_fall_back_to_the_contents_when_the_tool_kept_no_diff() -> None:
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.backends.raven_loop import _file_change_counts
+
+    fresh = SimpleNamespace(path="a.md", before=None, after="one\ntwo\n")
+    assert _file_change_counts(fresh, None) == (2, 0)
+    rewritten = SimpleNamespace(path="a.md", before="one\ntwo\nthree\n", after="one\n2\n")
+    assert _file_change_counts(rewritten, None) == (1, 2)
+    with_diff = SimpleNamespace(path="a.md", before="x", after="y")
+    assert _file_change_counts(with_diff, "--- a\n+++ b\n@@\n-x\n+y\n") == (1, 1)
+
+
+# ---- a built-in row's own model ---------------------------------------------
+
+
+class _NamedProvider(LLMProvider):
+    """Answers at once and remembers which model each call asked for."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(api_key="test")
+        self.name = name
+        self.models: list[str | None] = []
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        self.models.append(model)
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_a_builtin_backend_runs_on_its_rows_pinned_pair_over_the_dispatchs(tmp_path) -> None:
+    """The row's own model comes with its own credential, and both win over the
+    pair the dispatch brought: a per-agent model is a fact about this agent,
+    and the turn's binding is the fallback."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.providers.binding import ModelBinding
+
+    pinned, turn = _NamedProvider("pinned"), _NamedProvider("turn")
+    backend = RavenLoopBackend(
+        provider=_NamedProvider("built-with"),
+        model="built/model",
+        agent_home=tmp_path,
+        pin=lambda: ModelBinding(pinned, "vendor/pinned"),
+    )
+
+    await backend.run("do it", task_id="n1", workspace=tmp_path, executor=None, provider=turn, model="turn/model")
+
+    assert pinned.models == ["vendor/pinned"]
+    assert turn.models == []
+
+
+async def test_a_builtin_backend_without_a_usable_pin_runs_on_the_dispatchs_pair(tmp_path) -> None:
+    """The dispatch's pair, not the construction-time one: this backend is
+    cached across bindings, so what it was built with is whatever the manager
+    happened to be on the first time the row was dispatched. Withholding the
+    model once ran a switched conversation's key against that stale model."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    built, turn = _NamedProvider("built-with"), _NamedProvider("turn")
+    backend = RavenLoopBackend(provider=built, model="built/model", agent_home=tmp_path, pin=lambda: None)
+
+    await backend.run("do it", task_id="n1", workspace=tmp_path, executor=None, provider=turn, model="turn/model")
+
+    assert turn.models == ["turn/model"]
+    assert built.models == []
+
+
+def test_the_manager_pairs_a_builtin_rows_model_through_the_pool() -> None:
+    """``build_builtin_backend`` hands the backend the row's model as a pin
+    resolved through the pool, so at dispatch the row's ``model`` is a
+    (credential, model) pair and never a bare id sent on the conversation's key."""
+    from raven.providers.binding import ModelBinding
+
+    asked: list[tuple[str | None, str | None]] = []
+    served = _NamedProvider("pool")
+
+    class _Pool:
+        def bind_pin(self, model, provider_name=None):
+            asked.append((model, provider_name))
+            return ModelBinding(served, model)
+
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        agents=[BuiltinAgentConfig(name=GENERIC_AGENT, model="vendor/pinned")],
+        provider_pool=_Pool(),
+    )
+    backend = mgr.registry.backend(GENERIC_AGENT)
+
+    binding = backend._pin()
+    assert (binding.provider, binding.model) == (served, "vendor/pinned")
+    assert asked == [("vendor/pinned", "vendor")]
+    assert backend.model == mgr.model, "nothing of the row's is baked into the backend itself"
+
+
+def test_a_builtin_row_with_no_pool_follows_the_conversation() -> None:
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        agents=[BuiltinAgentConfig(name=GENERIC_AGENT, model="vendor/pinned")],
+    )
+    assert mgr.registry.backend(GENERIC_AGENT)._pin() is None
+
+
+def test_a_builtin_row_with_no_model_asks_the_pool_nothing() -> None:
+    class _Pool:
+        def bind_pin(self, model, provider_name=None):  # pragma: no cover - must not be reached
+            raise AssertionError("a row with no model has no pin to bind")
+
+    mgr = SubagentManager(provider=_StubProvider(), workspace=Path("/tmp"), provider_pool=_Pool())
+    assert mgr.registry.backend(GENERIC_AGENT)._pin() is None
+
+
+def test_a_builtin_rows_pin_names_the_provider_its_stored_id_carries() -> None:
+    """The pair, not the id: handed the id alone the pool lets a configured
+    gateway take the pin, which is not the credential the reader picked."""
+    from raven.providers.binding import ModelBinding
+
+    asked: list[tuple[str | None, str | None]] = []
+
+    class _Pool:
+        def bind_pin(self, model, provider_name=None):
+            asked.append((model, provider_name))
+            return ModelBinding(_NamedProvider("pool"), model)
+
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        agents=[BuiltinAgentConfig(name=GENERIC_AGENT, model="openai/gpt-5")],
+        provider_pool=_Pool(),
+    )
+    mgr.registry.backend(GENERIC_AGENT)._pin()
+
+    assert asked == [("openai/gpt-5", "openai")]
+
+
+def test_a_builtin_rows_pin_under_a_section_no_spec_matches_names_that_section() -> None:
+    """``subagents.update`` stores a passthrough vendor's pick as
+    ``<section>/<id>``. Handed ``None`` for the provider, the pool would derive
+    one -- a configured gateway, or nothing -- and the stored pair would never
+    run; the section the id names is the credential the reader picked."""
+    from raven.providers.binding import ModelBinding
+
+    asked: list[tuple[str | None, str | None]] = []
+
+    class _Pool:
+        def bind_pin(self, model, provider_name=None):
+            asked.append((model, provider_name))
+            return ModelBinding(_NamedProvider("pool"), model)
+
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        agents=[BuiltinAgentConfig(name=GENERIC_AGENT, model="custom/my-local-model")],
+        provider_pool=_Pool(),
+    )
+    mgr.registry.backend(GENERIC_AGENT)._pin()
+
+    assert asked == [("custom/my-local-model", "custom")]
+
+
+def test_a_prefix_that_names_no_section_is_left_to_the_pool_to_derive() -> None:
+    """``deepseek-ai/DeepSeek-V3`` written by hand before ids carried their
+    provider: the head is a vendor path segment, not a section, and reading it
+    as a provider would drop a pin a configured gateway serves. Handed no
+    provider, the pool takes its gateway branch, where such an id always ran."""
+    from raven.config.schema import Config
+    from raven.providers.binding import ModelBinding
+
+    asked: list[tuple[str | None, str | None]] = []
+
+    class _Pool:
+        config = Config.model_validate(
+            {"providers": {"mylocal": {"apiKey": "k", "apiBase": "http://127.0.0.1:1/v1", "models": ["m"]}}}
+        )
+
+        def bind_pin(self, model, provider_name=None):
+            asked.append((model, provider_name))
+            return ModelBinding(_NamedProvider("pool"), model)
+
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        agents=[
+            BuiltinAgentConfig(name=GENERIC_AGENT, model="deepseek-ai/DeepSeek-V3"),
+            BuiltinAgentConfig(name="local", model="mylocal/m"),
+        ],
+        provider_pool=_Pool(),
+    )
+    mgr.registry.backend(GENERIC_AGENT)._pin()
+    mgr.registry.backend("local")._pin()
+
+    assert asked == [("deepseek-ai/DeepSeek-V3", None), ("mylocal/m", "mylocal")]

@@ -212,3 +212,27 @@ async def test_resolve_download_drops_stale_entry(tmp_path) -> None:
 
     assert resolve_download(store, record.token) is None
     assert store.get(record.token) is None
+
+
+async def test_a_store_that_arrives_after_the_app_is_built_still_serves(tmp_path) -> None:
+    """The routes read the store per request when handed a callable.
+
+    ``raven serve`` assembles its stack late on a first run: the app is built
+    before there is an engine, so the store is None at that moment and only
+    exists once the page writes a model. Read once at build time, that process
+    would answer 410 for every deliverable it ever produced.
+    """
+    holder: dict[str, DeliverableStore | None] = {"store": None}
+    app = web.Application()
+    add_files_routes(app, lambda: holder["store"])
+
+    async with TestClient(TestServer(app)) as client:
+        gone = await client.get("/files/download", params={"token": "whatever"})
+        assert gone.status == 410
+
+        holder["store"] = DeliverableStore(tmp_path / "deliverables.json")
+        record = _register(holder["store"], tmp_path)
+
+        res = await client.get("/files/download", params={"token": record.token})
+        assert res.status == 200
+        assert await res.read() == b"PDF-BYTES"

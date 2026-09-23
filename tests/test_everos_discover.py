@@ -143,6 +143,24 @@ class TestDiscoveryOrder:
         assert self._discover_as_the_wizard_does()[0].root == recorded
         assert roots.pick(self._discover_as_the_wizard_does()).root == recorded
 
+    def test_ravens_own_root_counts_once_its_roles_moved_into_ravens_config(self, tmp_path: Path, _isolate) -> None:
+        """After migration the file no longer carries `[llm]` -- that is the
+        whole point of the move. Judged by the file alone, raven's own root then
+        reads half-built and the wizard offers to create another one beside it.
+        """
+        from raven_everos import config as ue
+
+        recorded = tmp_path / "recorded"
+        recorded.mkdir(parents=True, exist_ok=True)
+        (recorded / "everos.toml").write_text('[api]\nhost = "127.0.0.1"\nport = 18791\n', encoding="utf-8")
+        _isolate.setattr(ue, "_recorded_slice", lambda: {"root": str(recorded), "owned": True})
+        _isolate.setattr(ue, "everos_role_configured", lambda _s: True)
+
+        picked = roots.pick(self._discover_as_the_wizard_does())
+
+        assert picked is not None, "raven's own root read as half-built"
+        assert picked.root == recorded
+
     def test_the_legacy_root_is_found_when_the_new_default_is_empty(self, _isolate) -> None:
         _write_root(self.legacy)
 

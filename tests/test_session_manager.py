@@ -48,6 +48,174 @@ def test_save_writes_nested_channel_path(tmp_path: Path):
     assert (tmp_path / "sessions" / "tui" / "20260610_143052_a1b2c3.jsonl").exists()
 
 
+def _last_metadata(path: Path) -> dict:
+    last: dict = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        if row.get("_type") == "metadata":
+            last = row.get("metadata") or {}
+    return last
+
+
+def test_a_save_keeps_a_key_another_writer_added(tmp_path: Path):
+    """A save speaks for the keys its own copy carries and for no others.
+
+    A page and a terminal over one home are two managers over one file. The
+    saved record used to be this copy's metadata whole, so a flag the other
+    one wrote after this copy was loaded -- archiving, most visibly -- was gone
+    the next time anything here saved, and the conversation came back.
+    """
+    key = "tui:20260610_100000_merge"
+    holder = SessionManager(tmp_path)
+    session = holder.get_or_create(key)
+    session.add_message("user", "hello")
+    holder.save(session)
+
+    SessionManager(tmp_path).append_metadata_patch(key, {"archived": True})
+    assert session.metadata.get("archived") is None, "this copy never saw it"
+
+    session.add_message("user", "still talking here")
+    holder.save(session)
+
+    path = holder.session_path(key)
+    assert _last_metadata(path).get("archived") is True
+    assert SessionManager(tmp_path).peek(key).metadata.get("archived") is True
+
+
+def test_a_save_does_not_write_back_a_value_it_only_read(tmp_path: Path):
+    """A copy speaks for what it changed, not for every key it happens to hold.
+
+    ``metadata`` is the whole snapshot this copy loaded, so overlaying it whole
+    keeps a key it never touched at the value it read: restore persists
+    archived False, a second client loads that, the first archives again, and
+    the second's next ordinary turn writes its stale False back over the newer
+    True -- the conversation comes back after having been restored once, which
+    is the shape a reader meets it in.
+    """
+    key = "tui:20260610_100000_stale"
+    first = SessionManager(tmp_path)
+    session = first.get_or_create(key)
+    session.add_message("user", "hello")
+    session.metadata["archived"] = False
+    first.save(session)
+
+    # A second client loads the conversation, archived False and all.
+    second = SessionManager(tmp_path)
+    held = second.get_or_create(key)
+    assert held.metadata["archived"] is False
+
+    first.append_metadata_patch(key, {"archived": True})
+
+    held.add_message("user", "an ordinary turn over here")
+    second.save(held)
+
+    assert _last_metadata(second.session_path(key)).get("archived") is True
+
+
+def test_a_patch_stops_being_a_local_change_once_it_is_on_disk(tmp_path: Path):
+    """A key this copy wrote through is written, not still pending.
+
+    ``append_metadata_patch`` puts the key on the file and on the cached
+    session, so it is no longer that copy's unsaved opinion. Left out of the
+    baseline it reads as a local change for the rest of the process's life and
+    is asserted again on every later save -- so a client that archived once
+    would undo somebody else's restore with its next ordinary turn.
+    """
+    key = "tui:20260610_100000_patched"
+    first = SessionManager(tmp_path)
+    session = first.get_or_create(key)
+    session.add_message("user", "hello")
+    session.metadata["archived"] = False
+    first.save(session)
+
+    first.append_metadata_patch(key, {"archived": True})
+    assert session.metadata["archived"] is True
+
+    SessionManager(tmp_path).append_metadata_patch(key, {"archived": False})
+
+    session.add_message("user", "an ordinary turn, long after")
+    first.save(session)
+
+    assert _last_metadata(first.session_path(key)).get("archived") is False
+
+
+def test_a_save_does_not_resurrect_a_key_this_copy_cleared(tmp_path: Path):
+    """The merge keeps what it did not write, which makes clearing explicit.
+
+    Nothing may clear a key by leaving it out any more -- the record on disk
+    would hand it back. Every remover states a false value instead, and this
+    pins that the stated value wins over the one on disk.
+    """
+    key = "tui:20260610_100000_cleared"
+    holder = SessionManager(tmp_path)
+    session = holder.get_or_create(key)
+    session.add_message("user", "hello")
+    session.metadata["pinned"] = True
+    holder.save(session)
+
+    # Another writer touches the file, so the next save has to merge.
+    SessionManager(tmp_path).append_metadata_patch(key, {"archived": True})
+
+    session.metadata["pinned"] = False
+    session.add_message("user", "unpinned now")
+    holder.save(session)
+
+    stored = _last_metadata(holder.session_path(key))
+    assert stored.get("pinned") is False
+    assert stored.get("archived") is True
+
+
+def test_a_save_over_a_transcript_with_no_record_writes_its_own(tmp_path: Path):
+    """Nothing to merge under is not an error; this copy's metadata stands.
+
+    A transcript can lose its metadata record -- a crashed writer, a truncated
+    file -- and the merge has nothing to read. Refusing to save then would
+    lose the conversation over a record that is already gone.
+    """
+    key = "tui:20260610_100000_norecord"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(key)
+    session.add_message("user", "hello")
+    session.metadata["archived"] = True
+    mgr.save(session)
+
+    path = mgr.session_path(key)
+    kept = [line for line in path.read_text(encoding="utf-8").splitlines() if '"_type": "metadata"' not in line]
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+    session.add_message("user", "again")
+    mgr.save(session)
+
+    assert _last_metadata(path).get("archived") is True
+
+
+def test_a_save_re_reads_only_when_the_file_moved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The merge costs a scan, and an undisturbed conversation does not pay it.
+
+    Every turn saves, so re-reading the transcript on each one would put the
+    file's whole length on the hot path. The copy knows what it last wrote, so
+    it only looks when the bytes moved.
+    """
+    key = "tui:20260610_100000_stamp"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(key)
+    session.add_message("user", "hello")
+    mgr.save(session)
+
+    scans: list[Path] = []
+    real_scan = mgr._scan_file
+    monkeypatch.setattr(mgr, "_scan_file", lambda path: (scans.append(path), real_scan(path))[1])
+
+    session.add_message("user", "nobody else wrote")
+    mgr.save(session)
+    assert scans == []
+
+    SessionManager(tmp_path).append_metadata_patch(key, {"archived": True})
+    session.add_message("user", "somebody did")
+    mgr.save(session)
+    assert scans == [mgr.session_path(key)]
+
+
 def test_key_from_path_reverses_nested_encoding(tmp_path: Path):
     """key_from_path maps sessions/{channel}/{chat_id}.jsonl back to
     channel:chat_id; a chat_id containing an underscore is preserved verbatim."""
@@ -147,6 +315,26 @@ def test_created_session_is_lazy_until_first_save(tmp_path: Path):
     mgr.save(session)
     assert (tmp_path / "sessions" / "tui" / "lazy01.jsonl").exists()
     assert [info["key"] for info in mgr.list_sessions()] == ["tui:lazy01"]
+
+
+def test_a_session_holding_only_its_open_question_is_a_complete_row(tmp_path: Path):
+    """A turn now files its question before it starts answering, so a session
+    whose first turn is still running is on disk with exactly one message. The
+    picker has to be able to draw that row -- a name, a count and a stamp --
+    rather than skip it as half-written."""
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("tui:opening")
+    session.add_message("user", "read the repo and summarise it")
+    mgr.save(session)
+
+    rows = [info for info in mgr.list_sessions() if info["key"] == "tui:opening"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["message_count"] == 1
+    assert row["first_user_message"] == "read the repo and summarise it"
+    assert row["metadata"]["title"] == "read the repo and summarise it"
+    assert row["metadata"]["title_auto"] is True
+    assert row["last_message_at"], "the row has no stamp to sort the picker by"
 
 
 def test_list_sessions_sees_nested_layout(tmp_path: Path):

@@ -8,12 +8,14 @@ A real Chromium run belongs in tests/integration, not in the unit suite.
 
 from __future__ import annotations
 
+import base64
+import time
 from typing import Any
 
 import pytest
 
 from raven.browser import driver as driver_module
-from raven.browser.driver import Browser, BrowserUnavailableError, get_browser
+from raven.browser.driver import Browser, BrowserUnavailableError, _Owner, get_browser
 from raven.rpc.methods import browser as rpc_browser
 
 
@@ -408,7 +410,7 @@ async def test_tab_activate_switches_the_shared_page_and_restreams(monkeypatch: 
         streams.append("restream")
 
     monkeypatch.setattr(b, "_restream", restream)
-    monkeypatch.setattr(b, "_state", lambda error=None: _fake_state(b))
+    monkeypatch.setattr(b, "_state", lambda error=None, page=None: _fake_state(b))
 
     await b.tab_activate(1)
 
@@ -425,7 +427,7 @@ async def test_tab_close_of_the_active_tab_moves_to_a_neighbour(monkeypatch: pyt
         pass
 
     monkeypatch.setattr(b, "_restream", restream)
-    monkeypatch.setattr(b, "_state", lambda error=None: _fake_state(b))
+    monkeypatch.setattr(b, "_state", lambda error=None, page=None: _fake_state(b))
 
     await b.tab_close(1)
 
@@ -462,3 +464,486 @@ async def test_tabs_rpc_lists_without_starting_a_browser() -> None:
     assert out["ok"] is True
     assert out["tabs"] == []
     assert out["started"] is False
+
+
+# ── the verbs, on a fake page ──────────────────────────────────────────
+#
+# The real-Chromium suite (tests/integration/test_browser_tools_real_web.py)
+# is the acceptance for these; it needs a browser and a desktop, so what the
+# unit suite pins here is the branching around each verb: which page a call
+# lands on, what an owner inherits, and what a failure reports.
+
+
+class _FakeLocator:
+    def __init__(self, page: "_ActingPage", ref: str) -> None:
+        self._page = page
+        self._ref = ref
+
+    async def evaluate(self, js: str, **kw: Any) -> Any:
+        return self._page.opens_tab
+
+    async def click(self, **kw: Any) -> None:
+        if self._page.raises:
+            raise RuntimeError(self._page.raises)
+        self._page.acts.append(("click", self._ref))
+
+    async def fill(self, text: str, **kw: Any) -> None:
+        self._page.acts.append(("fill", self._ref, text))
+
+
+class _FakeMouse:
+    def __init__(self, page: "_ActingPage") -> None:
+        self._page = page
+
+    async def click(self, x: float, y: float, **kw: Any) -> None:
+        self._page.acts.append(("mouse_click", x, y))
+
+    async def wheel(self, dx: float, dy: float) -> None:
+        self._page.acts.append(("wheel", dx, dy))
+
+    async def move(self, x: float, y: float) -> None:
+        self._page.acts.append(("move", x, y))
+
+    async def down(self, **kw: Any) -> None:
+        self._page.acts.append(("down",))
+
+    async def up(self, **kw: Any) -> None:
+        self._page.acts.append(("up",))
+
+
+class _FakeKeyboard:
+    def __init__(self, page: "_ActingPage") -> None:
+        self._page = page
+
+    async def type(self, text: str) -> None:
+        self._page.acts.append(("type", text))
+
+    async def press(self, key: str) -> None:
+        self._page.acts.append(("press", key))
+
+    async def down(self, key: str) -> None:
+        self._page.acts.append(("keydown", key))
+
+    async def up(self, key: str) -> None:
+        self._page.acts.append(("keyup", key))
+
+    async def insert_text(self, text: str) -> None:
+        self._page.acts.append(("insert", text))
+
+
+class _ActingPage(_FakePage):
+    """A page the acting verbs can be driven against."""
+
+    def __init__(self, url: str = "https://a.test", title: str = "A") -> None:
+        super().__init__(url, title)
+        self.acts: list[tuple[Any, ...]] = []
+        self.raises: str = ""
+        self.opens_tab = False
+        self.handlers: dict[str, list[Any]] = {}
+        self.mouse = _FakeMouse(self)
+        self.keyboard = _FakeKeyboard(self)
+
+    def set_default_timeout(self, ms: int) -> None:
+        pass
+
+    def on(self, event: str, handler: Any) -> None:
+        self.handlers.setdefault(event, []).append(handler)
+
+    def locator(self, selector: str) -> _FakeLocator:
+        return _FakeLocator(self, selector)
+
+    async def goto(self, url: str, **kw: Any) -> None:
+        if self.raises:
+            raise RuntimeError(self.raises)
+        self.url = url
+        self.acts.append(("goto", url))
+
+    async def go_back(self, **kw: Any) -> None:
+        self.acts.append(("back",))
+
+    async def go_forward(self, **kw: Any) -> None:
+        self.acts.append(("forward",))
+
+    async def reload(self, **kw: Any) -> None:
+        if self.raises:
+            raise RuntimeError(self.raises)
+        self.acts.append(("reload",))
+
+    async def wait_for_load_state(self, state: str, **kw: Any) -> None:
+        self.acts.append(("settled", state))
+
+    async def evaluate(self, js: str, *args: Any) -> Any:
+        if self.raises:
+            raise RuntimeError(self.raises)
+        return {"url": self.url, "title": self._title, "text": "body text", "refs": []}
+
+    async def screenshot(self, **kw: Any) -> bytes:
+        self.acts.append(("shot", kw.get("full_page")))
+        return b"\xff\xd8jpeg"
+
+
+def _driving(b: Browser, pages: list[_FakePage], active: int = 0) -> None:
+    """A driver whose pages are fakes and whose stream and history are inert."""
+    _with_pages(b, pages, active=active)
+
+    async def ensure() -> Any:
+        return b._s.page
+
+    async def restream() -> None:
+        pass
+
+    async def reach(page: Any = None) -> tuple[bool, bool]:
+        return True, False
+
+    async def settle() -> None:
+        pass
+
+    b._ensure = ensure  # type: ignore[method-assign]
+    b._restream = restream  # type: ignore[method-assign]
+    b._history_reach = reach  # type: ignore[method-assign]
+    b._settle = settle  # type: ignore[method-assign]
+
+
+async def test_goto_reports_the_page_it_landed_on_and_an_error_as_an_error() -> None:
+    b = get_browser()
+    page = _ActingPage()
+    _driving(b, [page])
+
+    out = await b.goto("https://ok.test/", owner="run:a")
+    assert out["url"] == "https://ok.test/" and "error" not in out
+    assert out["can_back"] is True and out["can_forward"] is False
+
+    page.raises = "net::ERR_NAME_NOT_RESOLVED"
+    bad = await b.goto("https://nope.test/", owner="run:a")
+    assert bad["error"] == "net::ERR_NAME_NOT_RESOLVED"
+
+
+async def test_a_refused_target_never_starts_a_browser() -> None:
+    b = get_browser()
+    page = _ActingPage()
+    _driving(b, [page])
+
+    out = await b.goto("file:///etc/passwd", owner="run:a")
+
+    assert "error" in out
+    assert page.acts == [], "the refusal must come before the page is touched"
+
+
+async def test_history_moves_go_where_they_are_asked() -> None:
+    b = get_browser()
+    page = _ActingPage()
+    _driving(b, [page])
+
+    for direction, act in (("back", ("back",)), ("forward", ("forward",)), ("reload", ("reload",))):
+        page.acts.clear()
+        await b.go(direction, owner="run:a")
+        assert page.acts == [act]
+
+    page.raises = "boom"
+    assert (await b.go("reload", owner="run:a"))["error"] == "boom"
+
+
+async def test_click_takes_a_ref_a_point_or_neither() -> None:
+    b = get_browser()
+    page = _ActingPage()
+    _driving(b, [page])
+
+    await b.click(ref="ref_3", owner="run:a")
+    assert ("click", '[data-raven-ref="ref_3"]') in page.acts
+
+    await b.click(x=10, y=20, owner="run:a")
+    assert ("mouse_click", 10, 20) in page.acts
+
+    out = await b.click(owner="run:a")
+    assert out["error"] == "click needs a ref or x/y"
+
+    page.raises = "element is not visible"
+    assert (await b.click(ref="ref_3", owner="run:a"))["error"] == "element is not visible"
+
+
+async def test_typing_fills_a_ref_types_into_focus_and_submits() -> None:
+    b = get_browser()
+    page = _ActingPage()
+    _driving(b, [page])
+
+    await b.type_text("Ada", ref="ref_1", owner="run:a")
+    assert ("fill", '[data-raven-ref="ref_1"]', "Ada") in page.acts
+
+    page.acts.clear()
+    await b.type_text("loose text", owner="run:a")
+    assert page.acts == [("type", "loose text")]
+
+    page.acts.clear()
+    await b.type_text("query", submit=True, owner="run:a")
+    assert ("press", "Enter") in page.acts and ("settled", "domcontentloaded") in page.acts
+
+
+async def test_press_and_scroll_report_the_page_afterwards() -> None:
+    b = get_browser()
+    page = _ActingPage()
+    _driving(b, [page])
+
+    out = await b.press("Escape", owner="run:a")
+    assert ("press", "Escape") in page.acts and out["url"] == page.url
+
+    out = await b.scroll(dx=0, dy=400, owner="run:a")
+    assert ("wheel", 0, 400) in page.acts and "error" not in out
+
+
+async def test_a_readers_raw_input_needs_no_owner_and_no_readback() -> None:
+    b = get_browser()
+    page = _ActingPage()
+    _driving(b, [page])
+
+    await b.mouse("move", x=5, y=6)
+    await b.mouse("down")
+    await b.mouse("up")
+    await b.mouse("wheel", dx=1, dy=2)
+    await b.key_event("a", action="down")
+    await b.key_event("a", action="up")
+
+    assert page.acts == [("move", 5, 6), ("down",), ("up",), ("wheel", 1, 2), ("keydown", "a"), ("keyup", "a")]
+
+
+async def test_a_snapshot_failure_is_a_state_with_an_error() -> None:
+    b = get_browser()
+    page = _ActingPage()
+    _driving(b, [page])
+    page.raises = "Execution context was destroyed"
+
+    out = await b.snapshot(owner="run:a")
+
+    assert out["error"] == "Execution context was destroyed"
+
+
+async def test_a_screenshot_is_base64_and_leaves_the_front_tab_alone() -> None:
+    b = get_browser()
+    first, second = _ActingPage("https://a.test", "A"), _ActingPage("https://b.test", "B")
+    _driving(b, [first, second], active=1)
+    b._s.owners["run:a"] = _Owner(first, time.monotonic())
+
+    shot = await b.screenshot(quality=70, owner="run:a")
+
+    assert base64.b64decode(shot) == b"\xff\xd8jpeg"
+    assert b._s.page is second, "a read must not move what the panel shows"
+
+
+async def test_an_owner_keeps_its_tab_and_can_hand_it_back() -> None:
+    b = get_browser()
+    first, second = _ActingPage("https://a.test", "A"), _ActingPage("https://b.test", "B")
+    _driving(b, [first, second])
+
+    assert b.url_for("run:a") == "https://a.test", "an unbound owner reads the active tab"
+    b._s.owners["run:a"] = _Owner(second, time.monotonic())
+    assert b.url_for("run:a") == "https://b.test"
+
+    b.release("run:a")
+    assert b.url_for("run:a") == "https://a.test"
+    assert not second.is_closed(), "releasing a binding leaves the tab open"
+
+
+async def test_a_popup_moves_the_owner_that_opened_it() -> None:
+    b = get_browser()
+    opener, popup = _ActingPage("https://a.test", "A"), _ActingPage("https://p.test", "P")
+
+    async def opened_by() -> Any:
+        return opener
+
+    popup.opener = opened_by  # type: ignore[attr-defined]
+    _driving(b, [opener])
+    b._s.owners["run:a"] = _Owner(opener, time.monotonic())
+    b._s.context.pages.append(popup)
+
+    await b._adopt(popup)
+
+    assert b._s.owners["run:a"].page is popup
+    assert b._s.page is popup
+
+
+async def test_the_touch_stamp_is_the_readers_and_not_an_owners() -> None:
+    b = get_browser()
+    page = _ActingPage()
+    _driving(b, [page])
+    when = time.monotonic()
+
+    await b.click(x=1, y=1, owner="run:a")
+    assert b.touched_since(when) is False, "an owner's act is not the reader's hand"
+
+    await b.mouse("move", x=2, y=2)
+    assert b.touched_since(when) is True
+
+
+async def test_a_tab_whose_title_cannot_be_read_is_still_listed() -> None:
+    b = get_browser()
+    page = _ActingPage("https://a.test", "A")
+
+    async def no_title() -> str:
+        raise RuntimeError("Execution context was destroyed")
+
+    page.title = no_title  # type: ignore[method-assign]
+    _driving(b, [page])
+
+    tabs = await b.tabs()
+
+    assert tabs == [{"index": 0, "url": "https://a.test", "title": "", "active": True, "loading": False}]
+
+
+async def test_the_tab_verbs_open_switch_and_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = get_browser()
+    first, second = _ActingPage("https://a.test", "A"), _ActingPage("https://b.test", "B")
+    _driving(b, [first, second])
+
+    opened = _ActingPage("about:blank", "")
+
+    async def new_page() -> Any:
+        b._s.context.pages.append(opened)
+        return opened
+
+    b._s.context.new_page = new_page  # type: ignore[attr-defined]
+
+    await b.tab_new(owner="run:a")
+    assert b._s.owners["run:a"].page is opened
+    assert b._s.page is opened
+
+    switched = await b.tab_activate(1, owner="run:a")
+    assert b._s.page is second and "error" not in switched
+
+    closed = await b.tab_close(1, owner="run:a")
+    assert second.is_closed() and "error" not in closed
+
+    assert (await b.tab_activate(9, owner="run:a"))["error"] == "no tab 9"
+    assert (await b.tab_close(9, owner="run:a"))["error"] == "no tab 9"
+
+
+async def test_the_tab_limit_answers_rather_than_opening_the_twenty_first() -> None:
+    b = get_browser()
+    pages = [_ActingPage(f"https://{i}.test") for i in range(driver_module.MAX_TABS)]
+    _driving(b, pages)
+
+    out = await b.tab_new()
+
+    assert "tab limit reached" in out["error"]
+
+
+async def test_a_stream_that_cannot_restart_after_a_tab_switch_says_so_and_carries_on() -> None:
+    """The reader loses the live view, not the session: a failed restream is
+    logged where a raise would have taken the tab switch down with it."""
+    b = get_browser()
+    page = _ActingPage()
+    _with_pages(b, [page])
+    started: list[int] = []
+
+    async def start_stream(sink: Any, **kw: Any) -> None:
+        started.append(1)
+        raise RuntimeError("target closed")
+
+    b.start_stream = start_stream  # type: ignore[method-assign]
+    b._s.on_frame = lambda *a: None
+
+    await b._restream()
+
+    assert started == [1]
+
+
+async def test_stopping_a_stream_that_is_already_gone_is_not_an_error() -> None:
+    b = get_browser()
+    page = _ActingPage()
+    _with_pages(b, [page])
+
+    class _Cdp:
+        async def send(self, method: str, params: Any = None) -> Any:
+            raise RuntimeError("session closed")
+
+        async def detach(self) -> None:
+            raise RuntimeError("session closed")
+
+    b._s.cdp = _Cdp()
+
+    await b.stop_stream()
+
+    assert b._s.cdp is None and b._s.on_frame is None
+
+
+async def test_an_owner_cannot_close_the_users_unheld_tab() -> None:
+    """An unowned tab is the reader's, not idle: the panel's tab may hold a
+    login the user was asked to complete, and closing the last tab closes the
+    whole browser -- an auto-approved call must never take it out silently."""
+    b = get_browser()
+    users, own = _ActingPage("https://login.test", "L"), _ActingPage("https://b.test", "B")
+    _driving(b, [users, own], active=0)
+    b._s.owners["run:a"] = _Owner(own, time.monotonic())
+
+    refused = await b.tab_close(0, owner="run:a")
+
+    assert "user's tab" in refused["error"]
+    assert not users.is_closed()
+
+    allowed = await b.tab_close(1, owner="run:a")
+    assert own.is_closed() and "error" not in allowed
+
+    by_reader = await b.tab_close(0)
+    assert users.is_closed() and "error" not in by_reader
+
+
+async def test_a_read_that_must_open_a_tab_leaves_the_panel_alone() -> None:
+    """The delegation case: the active tab is held by another owner, so the
+    reader-owner's first snapshot has to open its own tab -- and the panel must
+    not follow it. The context's "page" event fires for that tab exactly as it
+    does for a popup, so this drives the un-stubbed adoption path."""
+    b = get_browser()
+    held = _ActingPage("https://parent.test", "P")
+    _driving(b, [held])
+    b._s.owners["run:parent"] = _Owner(held, time.monotonic())
+    streams: list[str] = []
+
+    async def restream() -> None:
+        streams.append("restream")
+
+    b._restream = restream  # type: ignore[method-assign]
+
+    class _SpawningContext(_FakeContext):
+        async def new_page(self) -> Any:
+            page = _ActingPage("about:blank", "")
+            self.pages.append(page)
+            b._on_new_page(page)
+            return page
+
+    b._s.context = _SpawningContext([held])
+
+    out = await b.snapshot(owner="run:child")
+    for task in list(b._s.adopting):
+        await task
+
+    assert not out.get("error")
+    assert b._s.page is held, "a read must not move what the panel shows"
+    assert streams == [], "a read must not restream the panel"
+    assert b._s.owners["run:child"].page is not held, "the read got its own tab"
+
+
+async def test_an_acting_owner_that_opens_a_tab_still_fronts_it() -> None:
+    b = get_browser()
+    held = _ActingPage("https://parent.test", "P")
+    _driving(b, [held])
+    b._s.owners["run:parent"] = _Owner(held, time.monotonic())
+    streams: list[str] = []
+
+    async def restream() -> None:
+        streams.append("restream")
+
+    b._restream = restream  # type: ignore[method-assign]
+
+    class _SpawningContext(_FakeContext):
+        async def new_page(self) -> Any:
+            page = _ActingPage("about:blank", "")
+            self.pages.append(page)
+            b._on_new_page(page)
+            return page
+
+    b._s.context = _SpawningContext([held])
+
+    page = await b._page_for("run:child", act=True)
+    for task in list(b._s.adopting):
+        await task
+
+    assert b._s.page is page and page is not held
+    assert streams == ["restream"], "an act fronts the new tab exactly once"

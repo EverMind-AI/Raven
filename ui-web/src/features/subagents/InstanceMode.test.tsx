@@ -8,11 +8,19 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import * as tier from '../../shell/tier'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import * as tier from '../../state/tier'
+import { mountPageRoot } from '../../test/pageRoot'
 import { InstanceMode } from './InstanceMode'
 
-import type { Shell } from '../../shell/bridge'
-import type { AgentsSource, InstanceModeReply, InstanceRow } from './types'
+import type { InstanceModeReply, InstanceRow, SubagentsSource } from './types'
+
+/* The chip's menu rows render from src/App.tsx into the shared #menu host, so
+   the page's own root has to be standing for them to appear. */
+mountPageRoot()
 
 const ROW: InstanceRow = { sessionKey: 's1', agent: 'raven-research', handle: 'h1', kind: 'cli' }
 
@@ -31,20 +39,18 @@ const MENU = [
 let asked: unknown[]
 let answer: (mode: string | null | undefined) => Promise<InstanceModeReply>
 
-function wire(over: Partial<AgentsSource> = {}): void {
+function wire(over: Partial<SubagentsSource> = {}): void {
   asked = []
-  window.RavenShell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: () => {},
-    showPage: () => {},
-  } as Shell
-  const source: AgentsSource = {
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
+  const source: SubagentsSource = {
     list: async () => [],
     instanceMode: async (agent, handle) => { asked.push(['read', agent, handle]); return answer(undefined) },
     instanceSetMode: async (agent, handle, mode) => { asked.push(['set', agent, handle, mode]); return answer(mode) },
     ...over,
   }
-  window.DS = { agents: source } as unknown as typeof window.DS
+  setSources({ subagents: source })
   document.body.innerHTML = '<div id="menu" data-open="false"></div><div id="toasts"></div>'
 }
 
@@ -59,8 +65,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
-  delete window.RavenShell
+  resetTranslator()
   document.body.innerHTML = ''
+  resetSources()
 })
 
 const chip = (): HTMLElement | null => document.querySelector('.pane-imode')

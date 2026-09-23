@@ -118,13 +118,13 @@ Keyed by preset key, so a row renamed by its owner keeps its hint and a row that
 merely wears a preset's name gets none -- the same boundary the table draws
 everywhere else.
 
-Only the rows whose vendor publishes the agent on npm are listed. The three
-:data:`ACP_REGISTRY_SHIM_PRESETS`-adjacent lanes need nothing: a shim command is
-an ``npx`` one and always resolves, so the absent-executable branch these hints
-serve is unreachable for them. An agent distributed as a per-platform binary is
-absent here rather than guessed at, because one command cannot name the install
-for six platform targets and a wrong one is worse than the executable name the
-probe already reports.
+Only the rows whose vendor publishes the agent on npm are listed. A shim-launched
+row is not listed here: its ``npx`` command always resolves, so the executable it
+needs is declared beside its install in ``presets.SHIM_REQUIRED_EXECUTABLES``,
+which is the table the probe reads for such a row. An agent distributed as a
+per-platform binary is absent here rather than guessed at, because one command
+cannot name the install for six platform targets and a wrong one is worse than
+the executable name the probe already reports.
 """
 
 ACP_REGISTRY_PRESETS: dict[str, dict[str, Any]] = {

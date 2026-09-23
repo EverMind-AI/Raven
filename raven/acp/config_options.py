@@ -57,15 +57,21 @@ MAX_MODELS_PER_PROVIDER = 40
 Call = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
-async def model_option(call: Call) -> dict[str, Any] | None:
+async def model_option(call: Call, *, session_id: str | None = None) -> dict[str, Any] | None:
     """The ``SessionConfigOption`` for the model, or ``None`` if there is none.
 
     ``None`` rather than an empty selector when no provider is configured: an
     option whose list is empty is a dropdown a person can open and not choose
     from, which reads as a broken menu rather than as "set this up first".
+
+    ``session_id`` is whose ``currentValue`` this is. The model is per session,
+    so the catalogue is asked about this one, and a switch it made reads back
+    as its current value; asked without a session the catalogue answers with
+    the configured default, which is right until the session's first switch
+    and wrong from then on.
     """
     try:
-        options = await call("model.options", {})
+        options = await call("model.options", {"session_id": session_id} if session_id else {})
     except Exception as exc:
         # A missing or failing model surface is not a reason to fail the
         # handshake or the session it was asked during.

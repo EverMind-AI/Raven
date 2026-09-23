@@ -66,3 +66,18 @@ def test_host_does_not_import_plugin_internals() -> None:
 def test_plugin_does_not_import_host_private_modules() -> None:
     offenders = {_rel(p) for p in _plugin_files() if _HOST_PRIVATE.search(p.read_text(encoding="utf-8"))}
     assert offenders == set(), f"new plugin->host imports: {sorted(offenders)}"
+
+
+def test_nothing_under_raven_decides_ownership() -> None:
+    """Who may write an EverOS root is the plugin's judgement, never the host's.
+
+    A20's only acceptance evidence. The host asking `everos_owned` for itself is
+    how the guard came to live in two places with one of them out of date -- the
+    write primitives are where it belongs, so a new caller cannot opt out of it.
+    A grep, because the property is about absence: nothing under `raven/` may
+    name it, and a test that only checked the callers it knows about would pass
+    the moment somebody adds one it does not.
+    """
+    offenders = {_rel(p) for p in _host_files() if re.search(r"\beveros_owned\b", p.read_text(encoding="utf-8"))}
+
+    assert offenders == set(), f"the host is deciding EverOS ownership in: {sorted(offenders)}"

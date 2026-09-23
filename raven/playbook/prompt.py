@@ -29,6 +29,15 @@ EMIT_TOOL_NAME = "emit_playbook"
 # The model proposes a name, which the generator normalizes into a slug.
 _CODE_FILLED_TOP = {"version"}
 
+# Withheld from the model, which is a different reason from the line above.
+# `verify` is a list of shell commands and a stint runs for hours
+# unattended, so a generated one would be a model writing commands and a budget
+# for somebody else's machine. A person writes a stint playbook by hand, and
+# the `mode` enum below is narrowed to match, so the model is not offered a
+# value whose sections it cannot fill.
+_NOT_THE_MODEL_S = frozenset(PlaybookSpec.STINT_SECTIONS)
+_GENERATED_MODES = ("dag", "prompt")
+
 
 def _inline_local_refs(schema: dict[str, Any]) -> dict[str, Any]:
     """Inline local ``$defs`` references for tool-schema compatibility."""
@@ -63,10 +72,13 @@ def emit_tool() -> list[dict[str, Any]]:
     the generator routes them into the body's review section (open
     questions and assumptions are for a human, not for the runtime)."""
     schema = _inline_local_refs(PlaybookSpec.model_json_schema(by_alias=True))
-    for key in _CODE_FILLED_TOP:
+    withheld = _CODE_FILLED_TOP | _NOT_THE_MODEL_S
+    for key in withheld:
         schema.get("properties", {}).pop(key, None)
-    schema["required"] = [r for r in schema.get("required", []) if r not in _CODE_FILLED_TOP]
+    schema["required"] = [r for r in schema.get("required", []) if r not in withheld]
     props = schema.setdefault("properties", {})
+    if isinstance(props.get("mode"), dict):
+        props["mode"] = {**props["mode"], "enum": list(_GENERATED_MODES)}
     props["blockingQuestions"] = {
         "type": "array",
         "items": {"type": "string"},
@@ -176,9 +188,10 @@ otherwise set it to false. Never put `confirm` on an individual node.
 - `subagent` must come from the available-agents list below.
 - Agent capabilities are hard constraints: use `instance` only when
   `stateful=true`; use path placeholders only when `readsLocalFiles=true`;
-  set `skills` only when `injectableSkills=true`; and set `mcps` only when
-  `injectableMcps=true`. Otherwise leave that field unset or choose a capable
-  agent.
+  and set `mcps` only when `injectableMcps=true`. Otherwise leave that field
+  unset or choose a capable agent. `skills` may be set on any agent: where
+  `injectableSkills=true` the list narrows that agent's own menu, elsewhere the
+  named skills are quoted into the step's prompt before dispatch.
 - `nodeSummary` is this step's title, written before the prompt: the
   length of a chat title, under ten words -- not a sentence and not a
   summary of the prompt. It is the node's row while the run happens, so

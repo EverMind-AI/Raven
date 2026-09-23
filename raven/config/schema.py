@@ -787,9 +787,9 @@ only -- a deployment bringing its own modes and naming no default degrades to
 its first entry instead."""
 
 _TIER_TEXTS: dict[str, str] = {
-    "medium": "The least effort a sub-agent is asked for.",
-    "high": "The middle amount of effort, between the other two.",
-    "max": "The most effort a sub-agent is asked for.",
+    "medium": "Faster and cheaper, for small, well-defined tasks.",
+    "high": "A balance of speed and quality.",
+    "max": "Deepest reasoning and full sub-agent effort, for complex or open-ended work.",
 }
 """One sentence per rung, saying only what differs between them.
 
@@ -1133,6 +1133,17 @@ class AskUserToolConfig(Base):
     timeout: int = Field(default=600, gt=0)  # seconds, per call not per question
 
 
+class BrowserToolConfig(Base):
+    """Browser tools configuration."""
+
+    headful_on_agent_use: bool = False
+    """Pop the shared browser out into a real Chromium window the first time the
+    model acts on it (a navigate or a new tab), instead of leaving it headless in
+    the panel. Off by default: the window belongs to the person at the machine, so
+    a deployment without a desktop to pop into (a server, CI) must not be assumed
+    to want one -- and the agent's reads and clicks work the same either way."""
+
+
 class MediaToolConfig(Base):
     """Config for a media-generation tool (key + base + model).
 
@@ -1247,9 +1258,17 @@ class ToolSearchConfig(Base):
     there (``ToolRegistry.hide_from_schema``), and that has nothing to do with
     catalog size. Turning this off folds nothing; it does not take the name
     route away.
+
+    On by default, which costs a deploy under the threshold nothing: the
+    strategy drops ``tool_search`` from every request while the catalog fits, so
+    the switch only starts deciding anything once a deploy has more tools than a
+    request should carry. Neither name can be taken away through
+    ``tools.disabled_tools`` -- their absence is how the fold reads "this request
+    has no search route", so an off switch there would unfold the array rather
+    than slim it. This setting is the one that speaks for both.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     compaction_threshold: int = 50
     """Tool-catalog size that triggers compaction: at or below this many tools
     everything is exposed directly; above it, schemas are withheld."""
@@ -1268,9 +1287,16 @@ class PermissionsConfig(Base):
     (``"git *"``) each mapping to a tier; several matching patterns resolve to
     the strictest. ``judge_model`` pins the smart-mode reviewer to one model id;
     empty means the running turn's own binding.
+
+    ``smart`` out of the box. ``ask`` stopped the agent on every mutation of a
+    conversation, which a reader answers by reflex rather than by reading, and
+    a prompt answered by reflex is not a gate. Smart is not the weaker setting
+    it sounds like: builtin denials and user deny rules hold in every mode, the
+    reviewer speaks only for the ask tier, and a reviewer that cannot run
+    leaves the call at the same prompt ``ask`` would have shown.
     """
 
-    mode: Literal["ask", "smart", "full"] = "ask"
+    mode: Literal["ask", "smart", "full"] = "smart"
     tools: dict[str, str | dict[str, str]] = Field(default_factory=dict)
     judge_model: str = ""
     judge_timeout_seconds: float = 10.0
@@ -1295,6 +1321,7 @@ class ToolsConfig(Base):
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
+    browser: BrowserToolConfig = Field(default_factory=BrowserToolConfig)
     ask_user: AskUserToolConfig = Field(default_factory=AskUserToolConfig)
     media: MediaGenConfig = Field(default_factory=MediaGenConfig)
     deep_research: DeepResearchToolConfig = Field(default_factory=DeepResearchToolConfig)
@@ -2001,6 +2028,8 @@ class ThirdPartyAcpSubagentConfig(Base):
     agent whose whole capability is raven's own. Round-trip retention only:
     readiness keeps probing the manifest's own declaration, and the merge
     reads nothing from this field."""
+    model: str | None = None
+    """The ``model`` sent with every ``session/new``, or ``None`` to let the agent pick its own default."""
 
     @model_validator(mode="before")
     @classmethod
@@ -2577,6 +2606,24 @@ def live_web_search_key(section: Any) -> str | None:
         return None
     try:
         return WebSearchConfig.model_validate(section).api_key
+    except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
+        return None
+
+
+def live_web_jina_key(section: Any) -> str | None:
+    """The Jina key from a raw ``tools.web`` subtree, or ``None``.
+
+    The pre-vendor leaf ``tools.web.jinaApiKey`` is a scalar on the section
+    rather than a subtree of its own, so the leaf is validated alone, the way
+    ``set_web_provider_key`` validates one slot: a neighbouring field the
+    schema rejects does not take the credential with it. ``None`` is "no
+    usable answer" -- no leaf, or one the schema rejects; an empty leaf is a
+    real answer, which is how the key gets revoked without a restart.
+    """
+    if not isinstance(section, dict) or "jinaApiKey" not in section:
+        return None
+    try:
+        return WebToolsConfig.model_validate({"jinaApiKey": section["jinaApiKey"]}).jina_api_key
     except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
         return None
 

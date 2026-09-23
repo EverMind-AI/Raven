@@ -75,10 +75,13 @@ class AgentCaps:
 class Injectable:
     """Whether per-node configuration can be pushed into this agent's session.
 
-    Only an in-process raven loop has a skill menu and an MCP client raven owns,
-    so only ``builtin`` rows can take either. Recorded as a field rather than
-    left as a verbal rule so a node that declares ``skills`` for a cli agent gets
-    told it will do nothing, instead of appearing to work.
+    ``skills`` says whether raven controls the agent's skill menu -- only an
+    in-process raven loop's -- and so whether a node's list narrows that menu.
+    It does not say whether the list reaches the agent: where it is false the
+    skills are quoted into the node's prompt instead (``dag_skills``), so the
+    field decides the delivery, not whether there is one. ``mcps`` is whether a
+    node's server list can be attached to the session, which a peer that does
+    not isolate its sessions cannot take.
     """
 
     skills: bool
