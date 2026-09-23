@@ -2303,6 +2303,10 @@
       "en": "The model did not answer; trying again.",
       "zh": "模型这次没有回应，正在重试。"
     },
+    "gui.notice.organ_degraded": {
+      "en": "Part of the runtime is unavailable, so this answer comes without it.",
+      "zh": "本回合有部分能力不可用，这个回答不会用到它们。"
+    },
     "gui.hub.auto_use": {
       "zh": "技能由 Raven 按需自动使用，暂不支持单独停用",
       "en": "Skills are picked up by Raven on demand; per-skill toggling is not supported yet"

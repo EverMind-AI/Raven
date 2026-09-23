@@ -752,6 +752,59 @@ async def test_a_blocked_action_rides_notice_and_never_the_token_stream():
     assert not any(ev["type"] == "token.delta" for _, ev in emitter.emitted)
 
 
+async def test_a_degraded_organ_reaches_the_page_as_a_closing_notice():
+    """The only surface that ever heard this was a channel; the page and the
+    terminal never did, so a memoryless answer was indistinguishable there from
+    a remembered one -- which is the whole point of the degrade-with-notice
+    ruling. It accompanies the answer, so it is a row and not a status."""
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        Notice(kind=NoticeKind.ORGAN_DEGRADED, detail="long-term memory was unavailable", conversation_id="tui:c1")
+    )
+    assert emitter.emitted == [
+        (
+            "tui:c1",
+            {
+                "type": "notice",
+                "payload": {
+                    "kind": "organ_degraded",
+                    "detail": "long-term memory was unavailable",
+                    "transient": False,
+                },
+            },
+        )
+    ]
+
+
+async def test_a_retry_wait_rides_notice_marked_transient_and_tagged_with_its_lane():
+    """The other notice the runtime raises about a turn, and the opposite of a
+    blocked action: the turn is still running, so a client must draw it where the
+    next output frame replaces it rather than as the turn's outcome.
+
+    Tagged, because a direct chat runs on its own lane and the client holds one
+    subscription per session: an untagged notice reads as the main agent's, and a
+    sub-agent's retry was drawn into the main conversation.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter, {"tui:c1#sub/h1": {"agent": "sub", "handle": "h1"}})
+    await outlet.deliver(Notice(kind=NoticeKind.LLM_RETRY, detail="server", conversation_id="tui:c1#sub/h1"))
+    assert emitter.emitted == [
+        (
+            "tui:c1",
+            {
+                "type": "notice",
+                "payload": {
+                    "kind": "llm_retry",
+                    "detail": "server",
+                    "transient": True,
+                    "target": {"agent": "sub", "handle": "h1"},
+                },
+            },
+        )
+    ]
+
+
 async def test_every_outlet_emission_validates_against_the_wire_contract():
     """Whatever the outlet emits must parse as a declared ``TurnEvent``.
 
