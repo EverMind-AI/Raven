@@ -7,6 +7,7 @@ TUI-set reminder always delivers to the TUI instead of racing to an IM channel.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from raven.proactive_engine.schedulers.cron.service import CronService
@@ -99,6 +100,31 @@ async def test_a_channel_added_to_the_partition_makes_its_job_claimable(tmp_path
     svc.allowed_channels.add("tui")
     await svc._process_due()
     assert fired == [job_id]
+
+
+async def test_admitting_a_channel_wakes_the_sleeping_loop(tmp_path: Path) -> None:
+    """The loop sleeps up to the 30 s poll cap while nothing claimable is due, and a
+    job it just excluded as foreign does not count. Mutating the set alone left a
+    reminder that was already due when its channel hot-started asleep for the rest
+    of that cap; ``admit_channel`` wakes the loop, so it fires within a beat."""
+    store = tmp_path / "jobs.json"
+    job_id = _add_due_tui_job(CronService(store, allowed_channels={"tui"}))
+
+    fired: asyncio.Queue[str] = asyncio.Queue()
+
+    async def on_job(job) -> None:
+        await fired.put(job.id)
+
+    svc = CronService(store, allowed_channels={"weixin"})
+    svc.on_job = on_job
+    await svc.start()
+    try:
+        await asyncio.sleep(0.2)
+        assert fired.empty(), "foreign while weixin is the whole partition"
+        svc.admit_channel("tui")
+        assert await asyncio.wait_for(fired.get(), timeout=2.0) == job_id
+    finally:
+        svc.stop()
 
 
 async def test_foreign_channel_skip_logs_once_per_job(tmp_path: Path) -> None:

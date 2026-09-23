@@ -171,8 +171,11 @@ def _wire_cron_partition(channels, cron) -> None:
     (2026-09-23, weixin). Composed over the hooks the caller already set, like
     :func:`_wire_channel_intake`, so the outlet and the partition cannot drift apart.
 
-    ``tui`` is not touched here: it is not a manager channel, and its claim follows the
-    page mount rather than a channel start (see :func:`_build_gateway_channels`).
+    Through the service's own ``admit_channel`` / ``retire_channel``, which also wake
+    its loop: a reminder already due when the channel comes up must not wait out the
+    loop's 30 s poll cap. ``tui`` is not touched here: it is not a manager channel, and
+    its claim follows the page mount rather than a channel start (see
+    :func:`_build_gateway_channels`).
     """
     started_hook = channels.on_started
     stopped_hook = channels.on_stopped
@@ -180,12 +183,12 @@ def _wire_cron_partition(channels, cron) -> None:
     def on_started(ch) -> None:
         if started_hook is not None:
             started_hook(ch)
-        cron.allowed_channels.add(ch.name)
+        cron.admit_channel(ch.name)
 
     async def on_stopped(name: str) -> None:
         if stopped_hook is not None:
             await stopped_hook(name)
-        cron.allowed_channels.discard(name)
+        cron.retire_channel(name)
 
     channels.on_started = on_started
     channels.on_stopped = on_stopped

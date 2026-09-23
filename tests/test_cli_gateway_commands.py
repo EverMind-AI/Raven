@@ -410,24 +410,41 @@ def test_the_gateway_command_wires_the_intake_through_the_helper() -> None:
     assert "_ch.intake.set_submit(_inbound_dispatch)" not in src
 
 
+class _FakeCron:
+    """The two members the partition wiring touches, plus a count of the wakes:
+    the service's real methods wake its loop, and that is the half a bare set
+    could not have shown."""
+
+    def __init__(self, allowed: set[str]) -> None:
+        self.allowed_channels = allowed
+        self.wakes = 0
+
+    def admit_channel(self, name: str) -> None:
+        self.allowed_channels.add(name)
+        self.wakes += 1
+
+    def retire_channel(self, name: str) -> None:
+        self.allowed_channels.discard(name)
+        self.wakes += 1
+
+
 def test_a_channel_started_while_the_gateway_runs_joins_the_cron_partition() -> None:
     """The cron partition is a launch-time snapshot, so a channel the page enabled
     stayed outside it for the life of the process: it received and replied, while a
     reminder addressed to it was logged once as foreign and never fired until a
     restart (2026-09-23, weixin)."""
-    from types import SimpleNamespace
-
     from raven.cli.gateway_commands import _wire_cron_partition
 
     outlets: list[object] = []
     manager = _FakeChannelManager(on_started=outlets.append)
-    cron = SimpleNamespace(allowed_channels={"telegram"})
+    cron = _FakeCron({"telegram"})
 
     _wire_cron_partition(manager, cron)
     late = _FakeChannel("weixin")
     manager.on_started(late)
 
     assert cron.allowed_channels == {"telegram", "weixin"}
+    assert cron.wakes == 1, "the loop is asleep on its poll cap and has to be told"
     assert outlets == [late], "and must keep the outlet the hook already carried"
 
 
@@ -435,8 +452,6 @@ async def test_a_channel_stopped_leaves_the_cron_partition() -> None:
     """The mirror, and the half that also covers a channel enabled at launch: once
     it is off, the gateway has no outlet for it, so claiming its jobs would burn a
     model turn on a reply the hub drops."""
-    from types import SimpleNamespace
-
     from raven.cli.gateway_commands import _wire_cron_partition
 
     retired: list[str] = []
@@ -445,7 +460,7 @@ async def test_a_channel_stopped_leaves_the_cron_partition() -> None:
         retired.append(name)
 
     manager = _FakeChannelManager(on_stopped=retire)
-    cron = SimpleNamespace(allowed_channels={"telegram", "weixin"})
+    cron = _FakeCron({"telegram", "weixin"})
 
     _wire_cron_partition(manager, cron)
     await manager.on_stopped("telegram")
@@ -457,12 +472,10 @@ async def test_a_channel_stopped_leaves_the_cron_partition() -> None:
 async def test_the_cron_partition_follows_a_manager_with_no_outlet_hooks() -> None:
     """A gateway built without the hub is not a reason to drop the partition half:
     both hooks are composed over whatever was there, including nothing."""
-    from types import SimpleNamespace
-
     from raven.cli.gateway_commands import _wire_cron_partition
 
     manager = _FakeChannelManager(on_started=None, on_stopped=None)
-    cron = SimpleNamespace(allowed_channels=set())
+    cron = _FakeCron(set())
 
     _wire_cron_partition(manager, cron)
     manager.on_started(_FakeChannel("weixin"))
