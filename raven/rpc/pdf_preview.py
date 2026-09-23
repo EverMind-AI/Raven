@@ -329,8 +329,18 @@ async def page_png_for(
     if page < 1:
         raise PdfPreviewError(f"{source.name} has no page {page}")
     budget = CONVERT_TIMEOUT_S if timeout_s is None else timeout_s
-    pdf = source if source.suffix.lower() == ".pdf" else await pdf_for(source, workspace=workspace, timeout_s=budget)
-    key = f"{cache_key(pdf)}-p{page}"
+    # Keyed on the SOURCE, never on the rendering. A deck's rendering is a
+    # cache entry, and `pdf_for` hands a cached entry back through `_touched`,
+    # which dates it by this use so the sweep cannot take a file still being
+    # served. That write moves the mtime `cache_key` hashes, so a key taken
+    # from the rendering was a different key on every read: the same page of
+    # the same deck was rasterised again for each one, and each drew its own
+    # file. The source's own stat is what "this deck's page 3" means anyway,
+    # and it moves when the deck is rebuilt, which is when the page should be
+    # drawn again. The cost is that a deck and its published sibling PDF no
+    # longer share the pages they happen to render to; they are two requests,
+    # and each keeps its own.
+    key = f"{cache_key(source)}-p{page}"
     cached = cache_dir() / f"{key}.png"
     if cached.is_file():
         return _touched(cached)
@@ -338,6 +348,12 @@ async def page_png_for(
     async with lock:
         if cached.is_file():
             return _touched(cached)
+        # The rendering is resolved here rather than above, so a page already
+        # drawn costs neither a conversion nor the lookup that would start one:
+        # a deck reopened is a file read, as its PDF has always been.
+        pdf = (
+            source if source.suffix.lower() == ".pdf" else await pdf_for(source, workspace=workspace, timeout_s=budget)
+        )
         await asyncio.to_thread(_rasterise_pdf_page, pdf, cached, PAGE_WIDTH_PX, budget, page)
     return cached
 
@@ -576,7 +592,13 @@ def _sweep(root: Path) -> None:
     # accumulate for as long as the installation lives. Their owner removes
     # them when the document goes; this is what bounds the ones whose owner
     # never got the chance.
-    for entry in (*root.glob("*.pdf"), *root.glob("*/*")):
+    #
+    # The pictures as well as the PDFs. Only ``*.pdf`` was swept at the root,
+    # so every tile thumbnail ever drawn stayed for the life of the install --
+    # and a viewer that draws a picture per page writes far more of them. They
+    # are dated by use like the PDFs are, so one still being read is not a
+    # candidate however old the render was.
+    for entry in (*root.glob("*.pdf"), *root.glob("*.png"), *root.glob("*/*")):
         try:
             if entry.is_file() and entry.stat().st_mtime < cutoff:
                 entry.unlink()

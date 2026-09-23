@@ -8,6 +8,7 @@ viewer serves; what it may not, the viewer refuses.
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -1390,3 +1391,66 @@ async def test_a_deck_is_paged_through_its_own_pdf(
     assert sum("--convert-to pdf" in c for c in soffice.calls()) == 1
     assert len(drawn) == 2 and drawn[0] == drawn[1]
     assert drawn[0].suffix == ".pdf"
+
+
+async def test_a_deck_page_is_drawn_once_however_often_it_is_read(
+    client: TestClient, tmp_path: Path, soffice: FakeSoffice, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same page of the same deck is one render and one file, read after read.
+
+    A deck's rendering is itself a cache entry, and the cache hands one back
+    through ``_touched``, which dates it by this use so the sweep cannot take a
+    file still being served. That write moves the mtime the key is built from,
+    so a key taken from the RENDERING was a different key on every read: the
+    page was rasterised again for each one and each drew its own file, with
+    nothing to expire them. The source's own stat is stable across reads, which
+    is why the key comes from there.
+
+    The PDF case cannot catch this -- a source PDF is not a cache entry and
+    nothing touches it -- so this asks for a deck, which is the path that broke.
+    """
+    from raven.rpc import pdf_preview
+
+    drawn: list[int] = []
+
+    def rasterise(source: Path, target: Path, width: int, timeout_s: float, page: int = 1) -> None:
+        drawn.append(page)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(FAKE_PNG)
+
+    monkeypatch.setattr(pdf_preview, "_rasterise_pdf_page", rasterise)
+    monkeypatch.setattr(pdf_preview, "_count_pages", lambda pdf: 2)
+    deck = _deck(tmp_path)
+    before = {p.name for p in pdf_preview.cache_dir().glob("*-p*.png")}
+
+    for _ in range(3):
+        r = await _page(client, deck, 1)
+        assert r.status == 200
+
+    assert drawn == [1], "one render for one page, however many times it is read"
+    after = {p.name for p in pdf_preview.cache_dir().glob("*-p*.png")}
+    assert len(after - before) == 1, "and one file, not one per read"
+
+
+async def test_the_sweep_reaches_the_pictures_it_draws(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An expired picture is swept like an expired PDF.
+
+    Only ``*.pdf`` was swept at the root, so every thumbnail ever drawn stayed
+    for the life of the install -- and a viewer that draws one picture per page
+    writes far more of them.
+    """
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path)
+    old = time.time() - pdf_preview.CACHE_TTL_S - 60
+    stale_png, stale_pdf, fresh_png = tmp_path / "a-p1.png", tmp_path / "a.pdf", tmp_path / "b-p1.png"
+    for f in (stale_png, stale_pdf, fresh_png):
+        f.write_bytes(b"x")
+    os.utime(stale_png, (old, old))
+    os.utime(stale_pdf, (old, old))
+
+    pdf_preview._sweep(tmp_path)
+
+    assert not stale_png.exists(), "an expired picture goes, like an expired PDF"
+    assert not stale_pdf.exists()
+    assert fresh_png.exists(), "one still in service stays"
