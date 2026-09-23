@@ -466,6 +466,27 @@ async def test_cli_backend_publishes_stdout_to_the_live_console(tmp_path: Path) 
     assert "watch me work" in did.console
 
 
+async def test_cli_backend_records_the_files_its_child_left_behind(tmp_path: Path) -> None:
+    """This lane sees nothing of what the child did -- no tool results, no
+    protocol -- so the only account of the files is the directory before the
+    process started against the directory after it exited."""
+    from raven.agent.subagent import activity
+
+    work = tmp_path / "ws"
+    work.mkdir()
+    (work / "seed.md").write_text("one\n", encoding="utf-8")
+    command = "sh -c \"printf 'a\\nb\\n' > made.txt; rm seed.md; echo done\""
+    be = CliAgentBackend(name="maker", command=command)
+    with activity.collecting() as did:
+        out = await be.run("make it", task_id="t-files", workspace=work, executor=None)
+
+    assert out == "done"
+    assert did.files == [
+        {"path": "made.txt", "op": "add", "add": 2, "del": 0, "size": 4},
+        {"path": "seed.md", "op": "delete", "add": 0, "del": 0, "size": None},
+    ]
+
+
 async def test_cli_backend_publishes_stderr_logs_to_the_live_console(tmp_path: Path) -> None:
     from raven.agent.subagent import activity
 

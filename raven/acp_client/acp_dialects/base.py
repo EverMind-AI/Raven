@@ -178,6 +178,13 @@ class AcpDialect:
     plan_tool_name = "plan"
     """What to call the tool behind a ``sessionUpdate: "plan"`` frame."""
 
+    missing_old_text_is_creation = True
+    """Whether a ``diff`` block with no ``oldText`` means the file was not there.
+
+    The spec says so, and the codex and raven adapters send it that way; the one
+    adapter that does not overrides this, and the run's file record then has to
+    tell a creation from a rewrite some other way."""
+
     def tool_name(self, update: dict[str, Any]) -> str:
         """The transport's own name for the call, at the finest grain it gives.
 
