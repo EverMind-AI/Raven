@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 195 methods, 109 component schemas.
+// 202 methods, 118 component schemas.
 
 /* eslint-disable */
 /**
@@ -1496,6 +1496,18 @@ export interface DagNodeDetail {
 export interface DagRunStartedEvent {
   type: 'dag.run_started';
   payload: {
+    /**
+     * The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.
+     */
+    stint_id?: string;
+    /**
+     * Which round of that run this graph is, counting from one.
+     */
+    round_index?: number;
+    /**
+     * Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening the run. Absent when the dispatcher did not say.
+     */
+    round_budget?: number;
     run_id: string;
     /**
      * The call this run belongs to. Absent on hosts that do not correlate progress with a tool row.
@@ -1526,6 +1538,18 @@ export interface DagRunStartedEvent {
 export interface DagNodeUpdatedEvent {
   type: 'dag.node_updated';
   payload: {
+    /**
+     * The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.
+     */
+    stint_id?: string;
+    /**
+     * Which round of that run this graph is, counting from one.
+     */
+    round_index?: number;
+    /**
+     * Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening the run. Absent when the dispatcher did not say.
+     */
+    round_budget?: number;
     run_id: string;
     tool_call_id?: string;
     node: string;
@@ -1565,6 +1589,18 @@ export interface DagNodeStalledEvent {
 export interface DagRunCompletedEvent {
   type: 'dag.run_completed';
   payload: {
+    /**
+     * The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.
+     */
+    stint_id?: string;
+    /**
+     * Which round of that run this graph is, counting from one.
+     */
+    round_index?: number;
+    /**
+     * Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening the run. Absent when the dispatcher did not say.
+     */
+    round_budget?: number;
     run_id: string;
     tool_call_id?: string;
     dir: string;
@@ -1688,7 +1724,7 @@ export interface PlaybookRow {
   name: string;
   description: string;
   task_summary: string;
-  mode: 'dag' | 'prompt';
+  mode: 'dag' | 'prompt' | 'stint';
   confirm: boolean;
   origin: string;
   disabled: boolean;
@@ -1727,9 +1763,7 @@ export interface PlaybookNode {
   };
 }
 /**
- * One whole playbook: its identity, its runtime inputs, and either the graph
- * (``mode: dag``) or the assembly guidance a model turns into one
- * (``mode: prompt``). ``path`` is the file this was read from.
+ * One whole playbook: its identity, its runtime inputs, and the shape it runs as -- the graph (``mode: dag``), the assembly guidance a model turns into one (``mode: prompt``), or the roles and stopping rules of a multi-round run (``mode: stint``, under ``rounds``). ``path`` is the file this was read from.
  *
  * ``version`` is the spec format version the file declares, not a revision of
  * the playbook's content.
@@ -1739,7 +1773,7 @@ export interface PlaybookDetail {
   description: string;
   task_summary: string;
   version: number;
-  mode: 'dag' | 'prompt';
+  mode: 'dag' | 'prompt' | 'stint';
   confirm: boolean;
   origin: string;
   disabled: boolean;
@@ -1753,6 +1787,7 @@ export interface PlaybookDetail {
   mcp_servers?: {
     [k: string]: PlaybookMcpServer;
   };
+  stint?: PlaybookStint;
 }
 /**
  * One MCP server the playbook itself carries, as the file declares it. Carries every field the runtime reads to decide what the server is and whether it runs. `env` and `headers` are declarations rather than resolved values: a carried server references a credential through `{{ params.X }}` and the run supplies it, so nothing here is ever a secret's value, and `has_oauth_config` says only whether the file declares OAuth endpoints, never what they are.
@@ -1772,6 +1807,53 @@ export interface PlaybookMcpServer {
   enabled?: boolean;
   auth?: 'none' | 'apikey' | 'oauth';
   has_oauth_config?: boolean;
+}
+/**
+ * What `mode: stint` adds to a playbook, and what a person approving one has to be able to read: who runs, what each may write, which commands run, and when it stops. Absent on every other mode.
+ */
+export interface PlaybookStint {
+  roles: PlaybookRole[];
+  carried: PlaybookCarried[];
+  checks: PlaybookCheck[];
+  max_rounds: number;
+  until: string;
+  report: 'round' | 'end';
+}
+/**
+ * One role of a `mode: stint` playbook: who plays it, what it waits on, and the paths it is judged against. `terminal` marks a role nothing else waits on -- the only kind whose output the plan reads when deciding whether to open another round, and so the only kind that can end one early.
+ */
+export interface PlaybookRole {
+  label: string;
+  agent: string;
+  node_summary: string;
+  depends_on: string[];
+  owns: string[];
+  appends: string[];
+  reads: string[];
+  enforce_read: 'soft' | 'hard';
+  enforce_write: 'soft' | 'hard';
+  journal_section: string;
+  verify_after: string[];
+  max_handbacks: number;
+  terminal: boolean;
+}
+/**
+ * A file rounds hand to each other. `append` marks the journal: the one that may only grow, and the one a window of `recent_rounds` is read back from.
+ */
+export interface PlaybookCarried {
+  path: string;
+  append: boolean;
+  recent_rounds: number;
+  max_chars: number;
+}
+/**
+ * One objective check a round may run. `run` is a real shell command, which is why a playbook that declares any must be approved before it starts.
+ */
+export interface PlaybookCheck {
+  name: string;
+  run: string;
+  timeout_sec: number;
+  needs_display: boolean;
 }
 /**
  * One `secret` param of a playbook and whether this machine holds a value for it. Never the value.
@@ -1944,6 +2026,64 @@ export interface TaskRow {
   handle?: string | null;
   counts: TaskCounts;
   nodes: TaskNode[];
+}
+/**
+ * One round of a plan, as the list needs it.
+ */
+export interface StintRoundRow {
+  index: number;
+  run_id: string;
+  attempt: number;
+  status: string;
+  checks: string[];
+  violations: string[];
+}
+/**
+ * Something a round asked a person, and what came back.
+ */
+export interface StintQuestionRow {
+  round: number;
+  role: string;
+  text: string;
+  answer: string;
+}
+/**
+ * One multi-round run a rounds playbook started.
+ */
+export interface StintRow {
+  stint_id: string;
+  playbook: string;
+  round_index: number;
+  max_rounds: number;
+  status: string;
+  live: boolean;
+  /**
+   * Not over: running, interrupted or paused. What `stop` acts on.
+   */
+  unfinished: boolean;
+  stop_reason: string;
+  workdir: string;
+  branch: string;
+  started_at_ms: number;
+  ended_at_ms: number;
+  open_questions: number;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface StintDetail {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+}
+/**
+ * A stint after a verb opened a round in this engine, with what the driver said about it.
+ */
+export interface StintTakeUp {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+  reply: string;
 }
 export interface SessionListParams {
   /**
@@ -4741,6 +4881,85 @@ export interface ImportStopParams {}
 export interface ImportStopResult {
   stopped: boolean;
 }
+export interface PlaybooksStintsListParams {}
+export interface PlaybooksStintsListResult {
+  stints: StintRow[];
+}
+export interface PlaybooksStintsGetParams {
+  stint_id: string;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface PlaybooksStintsGetResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+}
+export interface PlaybooksStintsStopParams {
+  stint_id: string;
+  /**
+   * Cut the round in flight short instead of letting it finish. Reaches only a round this process is running.
+   */
+  now?: boolean;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface PlaybooksStintsStopResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+}
+export interface PlaybooksStintsAnswerParams {
+  stint_id: string;
+  question: number;
+  text: string;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface PlaybooksStintsAnswerResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+}
+export interface PlaybooksStintsPauseParams {
+  stint_id: string;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface PlaybooksStintsPauseResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+}
+export interface PlaybooksStintsResumeParams {
+  stint_id: string;
+}
+/**
+ * A stint after a verb opened a round in this engine, with what the driver said about it.
+ */
+export interface PlaybooksStintsResumeResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+  reply: string;
+}
+export interface PlaybooksStintsExtendParams {
+  stint_id: string;
+  rounds: number;
+}
+/**
+ * A stint after a verb opened a round in this engine, with what the driver said about it.
+ */
+export interface PlaybooksStintsExtendResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+  reply: string;
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -4943,6 +5162,13 @@ export interface RpcMethods {
   'import.run': { params: ImportRunParams; result: ImportRunResult };
   'import.status': { params: ImportStatusParams; result: ImportStatusResult };
   'import.stop': { params: ImportStopParams; result: ImportStopResult };
+  'playbooks.stints.list': { params: PlaybooksStintsListParams; result: PlaybooksStintsListResult };
+  'playbooks.stints.get': { params: PlaybooksStintsGetParams; result: PlaybooksStintsGetResult };
+  'playbooks.stints.stop': { params: PlaybooksStintsStopParams; result: PlaybooksStintsStopResult };
+  'playbooks.stints.answer': { params: PlaybooksStintsAnswerParams; result: PlaybooksStintsAnswerResult };
+  'playbooks.stints.pause': { params: PlaybooksStintsPauseParams; result: PlaybooksStintsPauseResult };
+  'playbooks.stints.resume': { params: PlaybooksStintsResumeParams; result: PlaybooksStintsResumeResult };
+  'playbooks.stints.extend': { params: PlaybooksStintsExtendParams; result: PlaybooksStintsExtendResult };
 }
 
 /** The literal union of callable method names. */
@@ -5051,6 +5277,13 @@ export const RPC_METHODS = [
   "playbooks.oauth.clear",
   "playbooks.run",
   "playbooks.set_enabled",
+  "playbooks.stints.answer",
+  "playbooks.stints.extend",
+  "playbooks.stints.get",
+  "playbooks.stints.list",
+  "playbooks.stints.pause",
+  "playbooks.stints.resume",
+  "playbooks.stints.stop",
   "playbooks.validate",
   "plug.auth",
   "plug.configure",

@@ -251,13 +251,13 @@ class ExecTool(Tool):
                     "split the work. Nothing was run."
                 )
             from raven.agent.tools import background_exec
-            from raven.sandbox.direct_executor import _baseline_env
+            from raven.sandbox.direct_executor import baseline_env
 
             # The same environment hygiene as the synchronous path: the child
             # gets the executor's baseline allowlist, never the full host
             # environment, so a detached download cannot read credentials the
             # capped path already withholds.
-            bg_env = _baseline_env()
+            bg_env = baseline_env()
             if self.path_append:
                 bg_env["PATH"] = bg_env.get("PATH", "") + os.pathsep + self.path_append
             try:
@@ -550,9 +550,9 @@ class ExecTool(Tool):
         started in: this command's ``$PWD`` is the workspace, whatever this
         process inherited.
         """
-        from raven.sandbox.direct_executor import _baseline_env
+        from raven.sandbox.direct_executor import baseline_env
 
-        env = _baseline_env()
+        env = baseline_env()
         env["PWD"] = str(cwd)
         return env
 

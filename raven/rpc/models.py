@@ -794,6 +794,34 @@ class SubagentStatusEvent(_Strict):
 DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "exception"]
 
 
+class _FromAStint(_Strict):
+    """The three fields a round of a stint adds to a graph's progress.
+
+    A stint dispatches one ordinary graph a round, so every dag event it causes
+    is an ordinary dag event plus these. Absent on the graphs a tool call
+    dispatched, which is most of them -- a reader that does not know the fields
+    sees exactly what it saw before.
+    """
+
+    stint_id: str | None = Field(
+        default=None,
+        description=(
+            "The multi-round run this graph is one round of. Absent on an ordinary graph, "
+            "which is every graph a tool call dispatched."
+        ),
+    )
+    round_index: int | None = Field(
+        default=None, description="Which round of that run this graph is, counting from one."
+    )
+    round_budget: int | None = Field(
+        default=None,
+        description=(
+            'Rounds the run may open in all, so a reader can draw "round 3 of 30" without opening '
+            "the run. Absent when the dispatcher did not say."
+        ),
+    )
+
+
 class DagRunStartedNode(_Strict):
     id: str
     subagent: str
@@ -802,7 +830,7 @@ class DagRunStartedNode(_Strict):
     node_summary: str | None = None
 
 
-class DagRunStartedPayload(_Strict):
+class DagRunStartedPayload(_FromAStint):
     run_id: str
     tool_call_id: str | None = None
     task_summary: str | None = Field(
@@ -820,7 +848,7 @@ class DagRunStartedEvent(_Strict):
     payload: DagRunStartedPayload
 
 
-class DagNodeUpdatedPayload(_Strict):
+class DagNodeUpdatedPayload(_FromAStint):
     run_id: str
     tool_call_id: str | None = None
     node: str
@@ -877,7 +905,7 @@ class DagRunFile(_Strict):
     error: str | None = None
 
 
-class DagRunCompletedPayload(_Strict):
+class DagRunCompletedPayload(_FromAStint):
     run_id: str
     tool_call_id: str | None = None
     dir: str
@@ -4555,7 +4583,7 @@ class PlaybookRow(_Strict):
     name: str
     description: str
     task_summary: str
-    mode: Literal["dag", "prompt"]
+    mode: Literal["dag", "prompt", "stint"]
     confirm: bool
     origin: str
     disabled: bool
@@ -4627,10 +4655,68 @@ class PlaybookNode(_Strict):
     inputs: dict[str, Any]
 
 
+class PlaybookRole(_Strict):
+    """One role of a ``mode: stint`` playbook: who plays it, what it waits on,
+    and the paths it is judged against. ``terminal`` marks a role nothing else
+    waits on -- the only kind whose output the plan reads when deciding whether
+    to open another round, and so the only kind that can end one early."""
+
+    label: str
+    agent: str
+    node_summary: str
+    depends_on: list[str]
+    owns: list[str]
+    appends: list[str]
+    reads: list[str]
+    enforce_read: Literal["soft", "hard"]
+    enforce_write: Literal["soft", "hard"]
+    journal_section: str
+    verify_after: list[str]
+    max_handbacks: int
+    terminal: bool
+
+
+class PlaybookCheck(_Strict):
+    """One objective check a round may run. ``run`` is a real shell command,
+    which is why a playbook that declares any must be approved before it
+    starts."""
+
+    name: str
+    run: str
+    timeout_sec: float
+    needs_display: bool
+
+
+class PlaybookCarried(_Strict):
+    """A file rounds hand to each other. ``append`` marks the journal: the one
+    that may only grow, and the one a window of ``recent_rounds`` is read back
+    from."""
+
+    path: str
+    append: bool
+    recent_rounds: int
+    max_chars: int
+
+
+class PlaybookStint(_Strict):
+    """What ``mode: stint`` adds to a playbook, and what a person approving one
+    has to be able to read: who runs, what each may write, which commands run,
+    and when it stops. Absent on every other mode."""
+
+    roles: list[PlaybookRole]
+    carried: list[PlaybookCarried]
+    checks: list[PlaybookCheck]
+    max_rounds: int
+    until: str
+    report: Literal["round", "end"]
+
+
 class PlaybookDetail(_Strict):
-    """One whole playbook: its identity, its runtime inputs, and either the graph
-    (``mode: dag``) or the assembly guidance a model turns into one
-    (``mode: prompt``). ``path`` is the file this was read from.
+    """One whole playbook: its identity, its runtime inputs, and the shape it
+    runs as -- the graph (``mode: dag``), the assembly guidance a model turns
+    into one (``mode: prompt``), or the roles and stopping rules of a
+    multi-round run (``mode: stint``, under ``stint``). ``path`` is the file
+    this was read from.
 
     ``version`` is the spec format version the file declares, not a revision of
     the playbook's content."""
@@ -4639,7 +4725,7 @@ class PlaybookDetail(_Strict):
     description: str
     task_summary: str
     version: int
-    mode: Literal["dag", "prompt"]
+    mode: Literal["dag", "prompt", "stint"]
     confirm: bool
     origin: str
     disabled: bool
@@ -4653,6 +4739,10 @@ class PlaybookDetail(_Strict):
 
     Empty for a playbook that names only servers the host configures, which is
     most of them."""
+    stint: PlaybookStint | None = None
+    """Present only on ``mode: stint``. Absent rather than empty: an empty one
+    reads as a plan with no roles, no checks and a budget of zero, which is
+    three statements about a plan that does not exist."""
 
 
 class PlaybooksListParams(_Strict):
@@ -4665,6 +4755,107 @@ class PlaybooksListResult(_Strict):
 
 class PlaybooksGetParams(_Strict):
     name: str
+
+
+class StintRoundRow(_Strict):
+    """One round of a plan, as the list needs it."""
+
+    index: int
+    run_id: str
+    attempt: int
+    status: str
+    checks: list[str]
+    """``<name>=<status>`` per check the round ran, in the order they ran."""
+    violations: list[str]
+
+
+class StintQuestionRow(_Strict):
+    """Something a round asked a person, and what came back."""
+
+    round: int
+    role: str
+    text: str
+    answer: str
+
+
+class StintRow(_Strict):
+    """One multi-round run, as the list needs it.
+
+    ``live`` rather than a status string alone, because "is anything still
+    happening here" is the question a list is read for and ``interrupted`` is a
+    live plan with nobody advancing it.
+    """
+
+    stint_id: str
+    playbook: str
+    round_index: int
+    max_rounds: int
+    status: str
+    live: bool
+    unfinished: bool
+    """Not over: running, interrupted or paused. What `stop` acts on."""
+    stop_reason: str
+    workdir: str
+    branch: str
+    started_at_ms: int
+    ended_at_ms: int
+    open_questions: int
+
+
+class StintDetail(_Strict):
+    """One stint, whole: every round it ran and everything it is waiting on."""
+
+    stint: StintRow
+    rounds: list[StintRoundRow]
+    questions: list[StintQuestionRow]
+
+
+class PlaybooksStintsListParams(_Strict):
+    pass
+
+
+class PlaybooksStintsListResult(_Strict):
+    stints: list[StintRow]
+
+
+class PlaybooksStintsGetParams(_Strict):
+    stint_id: str
+
+
+class PlaybooksStintsStopParams(_Strict):
+    stint_id: str
+    now: bool | None = None
+    """Cut the round in flight short instead of letting it finish."""
+
+
+class PlaybooksStintsPauseParams(_Strict):
+    stint_id: str
+
+
+class PlaybooksStintsResumeParams(_Strict):
+    stint_id: str
+
+
+class PlaybooksStintsExtendParams(_Strict):
+    stint_id: str
+    rounds: int
+
+
+class StintTakeUp(StintDetail):
+    """A stint after a verb that opened a round in this process, with what the driver said.
+
+    The detail alone would not say whether a round started: a resume that found
+    every role finished, or a stint something else is still working, answers
+    with a sentence and no round, and the sentence is the answer.
+    """
+
+    reply: str
+
+
+class PlaybooksStintsAnswerParams(_Strict):
+    stint_id: str
+    question: int
+    text: str
 
 
 class PlaybookCredentialParam(_Strict):
@@ -5031,6 +5222,14 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "playbooks.delete": (PlaybooksDeleteParams, PlaybooksDeleteResult),
     "playbooks.run": (PlaybooksRunParams, PlaybooksRunResult),
     "playbooks.create": (PlaybooksCreateParams, PlaybooksCreateResult),
+    # playbooks.stints.* -- the multi-round runs a `mode: stint` playbook started
+    "playbooks.stints.list": (PlaybooksStintsListParams, PlaybooksStintsListResult),
+    "playbooks.stints.get": (PlaybooksStintsGetParams, StintDetail),
+    "playbooks.stints.stop": (PlaybooksStintsStopParams, StintDetail),
+    "playbooks.stints.pause": (PlaybooksStintsPauseParams, StintDetail),
+    "playbooks.stints.resume": (PlaybooksStintsResumeParams, StintTakeUp),
+    "playbooks.stints.extend": (PlaybooksStintsExtendParams, StintTakeUp),
+    "playbooks.stints.answer": (PlaybooksStintsAnswerParams, StintDetail),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
     "plughub.detail": (PlughubDetailParams, PlughubDetailResult),
@@ -5324,7 +5523,11 @@ __all__ = [
     "CronMissedItem",
     "CronMissedPayload",
     # playbooks
+    "PlaybookCarried",
+    "PlaybookCheck",
     "PlaybookDetail",
+    "PlaybookRole",
+    "PlaybookStint",
     "PlaybookNode",
     "PlaybookNodeShape",
     "PlaybookParam",

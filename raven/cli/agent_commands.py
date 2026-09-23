@@ -12,6 +12,7 @@ and exits non-zero.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -76,14 +77,22 @@ def _print_turn_failure(text: str) -> None:
 
 
 def _print_agent_response(response: str, render_markdown: bool) -> None:
-    """Render assistant response with consistent terminal styling."""
+    """Render assistant response with consistent terminal styling.
+
+    ``--no-markdown`` prints the reply soft-wrapped, which means the console
+    inserts no newlines of its own. It matters for a caller that parses what a
+    one-shot printed: hard-wrapping at the terminal width puts a line break
+    inside a JSON string literal, and the reply stops being parseable at all.
+    """
     content = response or ""
     if _print_llm_error(content):
         return
-    body = Markdown(content) if render_markdown else Text(content)
     console.print()
     console.print(f"[cyan]{__logo__} Raven[/cyan]")
-    console.print(body)
+    if render_markdown:
+        console.print(Markdown(content))
+    else:
+        console.print(Text(content), soft_wrap=True)
     console.print()
 
 
@@ -143,6 +152,25 @@ def register(app: typer.Typer) -> None:
     @app.command()
     def agent(
         message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
+        message_file: Path | None = typer.Option(
+            None,
+            "--message-file",
+            help=(
+                "Read the message from this file instead of the command line. An unattended "
+                "driver should prefer it: a prompt passed with -m sits in this process's argv, "
+                "where every other process in the sandbox can read it -- and be killed by it, "
+                "if something in the run matches on a command line."
+            ),
+        ),
+        permission_mode: str | None = typer.Option(
+            None,
+            "--permission-mode",
+            help=(
+                "How this turn reads the ask tier: ask, smart or full. A one-shot has nobody to "
+                "ask, so a call routed to approval fails closed; `full` is how an unattended "
+                "driver says it accepts that. Builtin denies and user deny rules hold regardless."
+            ),
+        ),
         session_id: str | None = typer.Option(
             None,
             "--session",
@@ -182,6 +210,25 @@ def register(app: typer.Typer) -> None:
         """Run a one-shot agent turn (requires -m); interactive chat lives in `raven tui`."""
         if sum((session_id is not None, continue_, resume is not None)) > 1:
             raise typer.BadParameter("--session, --continue and --resume are mutually exclusive")
+
+        if message is not None and message_file is not None:
+            raise typer.BadParameter("--message and --message-file are mutually exclusive")
+        if message_file is not None:
+            try:
+                message = message_file.read_text(encoding="utf-8")
+            except OSError as error:
+                raise typer.BadParameter(f"--message-file: {error}") from error
+            if not message.strip():
+                raise typer.BadParameter(f"--message-file: {message_file} is empty")
+
+        if permission_mode is not None:
+            from raven.contracts.permissions import PermissionMode
+
+            try:
+                permission_mode = PermissionMode(permission_mode.strip().lower()).value
+            except ValueError:
+                allowed = ", ".join(mode.value for mode in PermissionMode)
+                raise typer.BadParameter(f"--permission-mode: expected one of {allowed}") from None
 
         if message is None:
             console.print(
@@ -246,6 +293,11 @@ def register(app: typer.Typer) -> None:
             from raven.cli.session_commands import resolve_session_cross_channel
 
             session_id = resolve_session_cross_channel(session_manager, session_id)
+
+        if permission_mode is not None:
+            from raven.permissions import set_session_mode
+
+            set_session_mode(session_id, permission_mode)
 
         # Build Sentinel stack if enabled — same wiring gateway uses, so the two
         # processes share state via ~/.raven/sentinel/state.json. Discover

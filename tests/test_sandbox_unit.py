@@ -2049,12 +2049,12 @@ def test_instance_identity_survives_into_the_child(monkeypatch):
     2026-08-31 on a cold start: with them stripped, a `raven ops connection add`
     run from a tool call wrote the row into the default home, and the machine
     the owner had just registered stayed invisible to this instance."""
-    from raven.sandbox.direct_executor import _baseline_env
+    from raven.sandbox.direct_executor import baseline_env
 
     monkeypatch.setenv("RAVEN_HOME", "/tmp/some-instance")
     monkeypatch.setenv("RAVEN_CONNECTIONS", "/tmp/some-instance/connections.json")
     monkeypatch.setenv("ONCALL_API_KEY", "sk-secret-must-not-pass")
-    env = _baseline_env()
+    env = baseline_env()
     assert env["RAVEN_HOME"] == "/tmp/some-instance"
     assert env["RAVEN_CONNECTIONS"] == "/tmp/some-instance/connections.json"
     assert "ONCALL_API_KEY" not in env, "the allowlist stays a list of paths, never keys"

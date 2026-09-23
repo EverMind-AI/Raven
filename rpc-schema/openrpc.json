@@ -9090,7 +9090,10 @@
               }
             },
             "current": {
-              "type": ["object", "null"],
+              "type": [
+                "object",
+                "null"
+              ],
               "additionalProperties": false,
               "required": [
                 "platform",
@@ -9099,10 +9102,18 @@
                 "total"
               ],
               "properties": {
-                "platform": { "type": "string" },
-                "source_key": { "type": "string" },
-                "sent": { "type": "integer" },
-                "total": { "type": "integer" }
+                "platform": {
+                  "type": "string"
+                },
+                "source_key": {
+                  "type": "string"
+                },
+                "sent": {
+                  "type": "integer"
+                },
+                "total": {
+                  "type": "integer"
+                }
               }
             },
             "phase": {
@@ -9203,6 +9214,179 @@
         }
       },
       "errors": []
+    },
+    {
+      "name": "playbooks.stints.list",
+      "summary": "Every multi-round run this machine has started, newest first.",
+      "params": [],
+      "errors": [],
+      "result": {
+        "name": "PlaybooksStintsListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "stints": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/StintRow"
+              }
+            }
+          },
+          "required": [
+            "stints"
+          ]
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.get",
+      "summary": "One plan in full: its rounds, what was undone, and what it is waiting on.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintDetail",
+        "schema": {
+          "$ref": "#/components/schemas/StintDetail"
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.stop",
+      "summary": "Open no further rounds. A round already running finishes and reports first, unless now is set.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "now",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Cut the round in flight short instead of letting it finish. Reaches only a round this process is running."
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintDetail",
+        "schema": {
+          "$ref": "#/components/schemas/StintDetail"
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.answer",
+      "summary": "Answer a question a round left; it reaches the round after this one.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "question",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintDetail",
+        "schema": {
+          "$ref": "#/components/schemas/StintDetail"
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.pause",
+      "summary": "Open no further rounds, and keep the stint so resume can take it up. A round already running finishes and reports first.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintDetail",
+        "schema": {
+          "$ref": "#/components/schemas/StintDetail"
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.resume",
+      "summary": "Take a stint up again in this engine, from the node it stopped at; finished roles are named, not re-run.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintTakeUp",
+        "schema": {
+          "$ref": "#/components/schemas/StintTakeUp"
+        }
+      }
+    },
+    {
+      "name": "playbooks.stints.extend",
+      "summary": "Give a stint more rounds; a stint that is over opens its next round in this engine.",
+      "params": [
+        {
+          "name": "stint_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "rounds",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "errors": [],
+      "result": {
+        "name": "StintTakeUp",
+        "schema": {
+          "$ref": "#/components/schemas/StintTakeUp"
+        }
+      }
     }
   ],
   "components": {
@@ -12683,6 +12867,18 @@
               "nodes"
             ],
             "properties": {
+              "stint_id": {
+                "description": "The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.",
+                "type": "string"
+              },
+              "round_index": {
+                "description": "Which round of that run this graph is, counting from one.",
+                "type": "integer"
+              },
+              "round_budget": {
+                "description": "Rounds the run may open in all, so a reader can draw \"round 3 of 30\" without opening the run. Absent when the dispatcher did not say.",
+                "type": "integer"
+              },
               "run_id": {
                 "type": "string"
               },
@@ -12754,6 +12950,18 @@
               "status"
             ],
             "properties": {
+              "stint_id": {
+                "description": "The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.",
+                "type": "string"
+              },
+              "round_index": {
+                "description": "Which round of that run this graph is, counting from one.",
+                "type": "integer"
+              },
+              "round_budget": {
+                "description": "Rounds the run may open in all, so a reader can draw \"round 3 of 30\" without opening the run. Absent when the dispatcher did not say.",
+                "type": "integer"
+              },
               "run_id": {
                 "type": "string"
               },
@@ -12879,6 +13087,18 @@
               "files"
             ],
             "properties": {
+              "stint_id": {
+                "description": "The multi-round run this graph is one round of. Absent on an ordinary graph, which is every graph a tool call dispatched.",
+                "type": "string"
+              },
+              "round_index": {
+                "description": "Which round of that run this graph is, counting from one.",
+                "type": "integer"
+              },
+              "round_budget": {
+                "description": "Rounds the run may open in all, so a reader can draw \"round 3 of 30\" without opening the run. Absent when the dispatcher did not say.",
+                "type": "integer"
+              },
               "run_id": {
                 "type": "string"
               },
@@ -13281,7 +13501,8 @@
           "mode": {
             "enum": [
               "dag",
-              "prompt"
+              "prompt",
+              "stint"
             ],
             "type": "string"
           },
@@ -13421,7 +13642,8 @@
           "mode": {
             "enum": [
               "dag",
-              "prompt"
+              "prompt",
+              "stint"
             ],
             "type": "string"
           },
@@ -13463,6 +13685,9 @@
               "$ref": "#/components/schemas/PlaybookMcpServer"
             },
             "type": "object"
+          },
+          "stint": {
+            "$ref": "#/components/schemas/PlaybookStint"
           }
         },
         "required": [
@@ -13481,7 +13706,7 @@
           "prompts"
         ],
         "type": "object",
-        "description": "One whole playbook: its identity, its runtime inputs, and either the graph\n(``mode: dag``) or the assembly guidance a model turns into one\n(``mode: prompt``). ``path`` is the file this was read from.\n\n``version`` is the spec format version the file declares, not a revision of\nthe playbook's content."
+        "description": "One whole playbook: its identity, its runtime inputs, and the shape it runs as -- the graph (``mode: dag``), the assembly guidance a model turns into one (``mode: prompt``), or the roles and stopping rules of a multi-round run (``mode: stint``, under ``rounds``). ``path`` is the file this was read from.\n\n``version`` is the spec format version the file declares, not a revision of\nthe playbook's content."
       },
       "PlaybookMcpServer": {
         "additionalProperties": false,
@@ -13950,6 +14175,370 @@
             }
           }
         }
+      },
+      "StintRoundRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One round of a plan, as the list needs it.",
+        "properties": {
+          "index": {
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "index",
+          "run_id",
+          "attempt",
+          "status",
+          "checks",
+          "violations"
+        ]
+      },
+      "StintQuestionRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Something a round asked a person, and what came back.",
+        "properties": {
+          "round": {
+            "type": "integer"
+          },
+          "role": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "round",
+          "role",
+          "text",
+          "answer"
+        ]
+      },
+      "StintRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One multi-round run a rounds playbook started.",
+        "properties": {
+          "stint_id": {
+            "type": "string"
+          },
+          "playbook": {
+            "type": "string"
+          },
+          "round_index": {
+            "type": "integer"
+          },
+          "max_rounds": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "unfinished": {
+            "type": "boolean",
+            "description": "Not over: running, interrupted or paused. What `stop` acts on."
+          },
+          "stop_reason": {
+            "type": "string"
+          },
+          "workdir": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "started_at_ms": {
+            "type": "integer"
+          },
+          "ended_at_ms": {
+            "type": "integer"
+          },
+          "open_questions": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stint_id",
+          "playbook",
+          "round_index",
+          "max_rounds",
+          "status",
+          "live",
+          "unfinished",
+          "stop_reason",
+          "workdir",
+          "branch",
+          "started_at_ms",
+          "ended_at_ms",
+          "open_questions"
+        ]
+      },
+      "StintDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One plan, whole: every round it ran and everything it is waiting on.",
+        "properties": {
+          "stint": {
+            "$ref": "#/components/schemas/StintRow"
+          },
+          "rounds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StintRoundRow"
+            }
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StintQuestionRow"
+            }
+          }
+        },
+        "required": [
+          "stint",
+          "rounds",
+          "questions"
+        ]
+      },
+      "PlaybookRole": {
+        "additionalProperties": false,
+        "type": "object",
+        "description": "One role of a `mode: stint` playbook: who plays it, what it waits on, and the paths it is judged against. `terminal` marks a role nothing else waits on -- the only kind whose output the plan reads when deciding whether to open another round, and so the only kind that can end one early.",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "node_summary": {
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "owns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "appends": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reads": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enforce_read": {
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "type": "string"
+          },
+          "enforce_write": {
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "type": "string"
+          },
+          "journal_section": {
+            "type": "string"
+          },
+          "verify_after": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "max_handbacks": {
+            "type": "integer"
+          },
+          "terminal": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "label",
+          "agent",
+          "node_summary",
+          "depends_on",
+          "owns",
+          "appends",
+          "reads",
+          "enforce_read",
+          "enforce_write",
+          "journal_section",
+          "verify_after",
+          "max_handbacks",
+          "terminal"
+        ]
+      },
+      "PlaybookCheck": {
+        "additionalProperties": false,
+        "type": "object",
+        "description": "One objective check a round may run. `run` is a real shell command, which is why a playbook that declares any must be approved before it starts.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          },
+          "timeout_sec": {
+            "type": "number"
+          },
+          "needs_display": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "run",
+          "timeout_sec",
+          "needs_display"
+        ]
+      },
+      "PlaybookCarried": {
+        "additionalProperties": false,
+        "type": "object",
+        "description": "A file rounds hand to each other. `append` marks the journal: the one that may only grow, and the one a window of `recent_rounds` is read back from.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "append": {
+            "type": "boolean"
+          },
+          "recent_rounds": {
+            "type": "integer"
+          },
+          "max_chars": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "append",
+          "recent_rounds",
+          "max_chars"
+        ]
+      },
+      "PlaybookStint": {
+        "additionalProperties": false,
+        "type": "object",
+        "description": "What `mode: stint` adds to a playbook, and what a person approving one has to be able to read: who runs, what each may write, which commands run, and when it stops. Absent on every other mode.",
+        "properties": {
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/PlaybookRole"
+            },
+            "type": "array"
+          },
+          "carried": {
+            "items": {
+              "$ref": "#/components/schemas/PlaybookCarried"
+            },
+            "type": "array"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/PlaybookCheck"
+            },
+            "type": "array"
+          },
+          "max_rounds": {
+            "type": "integer"
+          },
+          "until": {
+            "type": "string"
+          },
+          "report": {
+            "enum": [
+              "round",
+              "end"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "roles",
+          "carried",
+          "checks",
+          "max_rounds",
+          "until",
+          "report"
+        ]
+      },
+      "StintTakeUp": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "A stint after a verb opened a round in this engine, with what the driver said about it.",
+        "properties": {
+          "stint": {
+            "$ref": "#/components/schemas/StintRow"
+          },
+          "rounds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StintRoundRow"
+            }
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StintQuestionRow"
+            }
+          },
+          "reply": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stint",
+          "rounds",
+          "questions",
+          "reply"
+        ]
       }
     },
     "errors": {
