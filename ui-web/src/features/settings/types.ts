@@ -157,6 +157,8 @@ export interface ModelCandidate extends ModelTagFacts {
   kind: string
   added: boolean
   description?: string
+  /* Whether the vendor named it just now or it comes from the bundled catalogue. */
+  source?: string
 }
 
 /* `status` is the probe's own vocabulary -- `ok`, or why the vendor did not
@@ -165,6 +167,18 @@ export interface ModelCandidate extends ModelTagFacts {
 export interface ModelCatalogue {
   models: ModelCandidate[]
   status: string
+  error?: string | null
+}
+
+/* What a provider's credential check answered, after a connect or on a
+   "check again". `status` is the probe's word -- valid, invalid_key,
+   key_unchecked, no_credits, rate_limited, network_error, proxy_unreachable,
+   no_probe_endpoint, http_<code>. */
+export interface ConnectProbe {
+  ok: boolean
+  status: string
+  http_status?: number | null
+  models_count?: number | null
   error?: string | null
 }
 
@@ -208,7 +222,10 @@ export interface SettingsSource {
   provider(op: ProviderOp, params: Record<string, unknown>): Promise<SettingsSnapshot>
   /* Ask the provider what it serves right now. A read: nothing is written
      until a row is added. */
-  fetchModels(slug: string): Promise<ModelCatalogue>
+  fetchModels(slug: string, verify?: boolean): Promise<ModelCatalogue>
+  /* The provider offer again, with no write before it: what a live read put in
+     the server's served-models cache changes it. */
+  reloadProviders(): Promise<SettingsSnapshot>
   addModels(slug: string, models: string[]): Promise<SettingsSnapshot>
   /* The non-credential fields: api_base, deployment, api_version, and an
      extra_headers patch ({name: value | null}). */

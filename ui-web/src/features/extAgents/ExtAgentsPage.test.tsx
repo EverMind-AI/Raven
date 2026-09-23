@@ -1078,8 +1078,9 @@ describe('the model pill', () => {
     const { acts } = install([row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })])
     await mount()
     await openSheet('Raven-Code')
-    expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.agent.test_label'])
-    await click(sheet()!.querySelectorAll('.extAgents-act button')[1])
+    /* Part of Raven, so testable but never disconnected. */
+    expect(sheetActs()).toEqual(['gui.agent.test_label'])
+    await click(sheet()!.querySelectorAll('.extAgents-act button')[0])
     expect(acts.map((a) => a.slice(0, 2))).toEqual([['test', 'Raven-Code']])
   })
 })

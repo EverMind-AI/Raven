@@ -9,7 +9,7 @@ import { t } from '../../../i18n/t'
 import { Fold, IconBtn, Rov, Sec } from '../Fields'
 import * as store from '../store'
 import { ownId } from './AddModelPop'
-import { AZURE, OauthNote, kindOf, needsKey, takesBase, takesKey } from './Providers'
+import { AZURE, OauthNote, ProbeNote, kindOf, needsKey, takesBase, takesKey } from './Providers'
 import { roleName, rolesUsing } from './Roles'
 
 import type { ProviderRow } from '../types'
@@ -77,6 +77,7 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
   const [key, setKey] = useState('')
   const [base, setBase] = useState(p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || '')
   const kind = kindOf(p)
+  const checking = store.isBusy(busy(p.id))
   const save = (): void => {
     const k = key.trim()
     const b = base.trim()
@@ -85,9 +86,10 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
     const params: Record<string, unknown> = { slug: p.id }
     if (k) params.api_key = k
     if (b) params.api_base = b
-    void store.run(busy(p.id), () => store.source().provider('save_key', params)).then((ok) => { if (ok) setKey('') })
+    void store.connect(busy(p.id), p.id, params).then((ok) => { if (ok) setKey('') })
   }
   const btn = p.on ? t('gui.settings.update') : t('gui.settings.providers.connect')
+  const tested = !!store.get().probes[p.id] || store.isBusy(`probe:${p.id}`)
   return (
     <>
       {kind === 'oauth' && (
@@ -118,11 +120,20 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
           <span className="settings-taglist">
             <KeyInput className="settings-tbox" value={key} aria-label={t('gui.settings.providers.api_key')}
               placeholder={p.on ? t('gui.settings.key_set_ph') : t('gui.settings.providers.paste_key')}
-              onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
-            {needsKey(p) && <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>}
-            {!needsKey(p) && <button type="button" className="mini ghost" disabled={store.isBusy(busy(p.id))} onClick={save}>{t('gui.settings.update')}</button>}
+              onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !checking) save() }} />
+            {needsKey(p) && <button type="button" className="mini" disabled={checking} onClick={save}>{btn}</button>}
+            {!needsKey(p) && <button type="button" className="mini ghost" disabled={checking} onClick={save}>{t('gui.settings.update')}</button>}
           </span>
         </Sec>
+      )}
+      {kind !== 'oauth' && p.on && (
+        <div className="settings-pline">
+          {tested ? <ProbeNote slug={p.id} /> : (
+            <button type="button" className="settings-plink" onClick={() => void store.recheck(p.id)}>
+              {t('gui.settings.providers.probe_check')}
+            </button>
+          )}
+        </div>
       )}
       {/* The address for a provider that takes no key -- unless the block above
           has already drawn it: a local server that takes an address and no
@@ -379,7 +390,7 @@ function Foot({ p }: { p: ProviderRow }): JSX.Element {
   const disconnect = (): void => {
     const used = rolesUsing(store.get().snap, p.id)
     if (used.length) { store.refuse(t('gui.settings.providers.in_use', { roles: used.map(roleName).join(', ') })); return }
-    void store.run(busy(p.id), () => store.source().provider('disconnect', { slug: p.id }))
+    void store.run(busy(p.id), () => store.source().provider('disconnect', { slug: p.id })).then((ok) => { if (ok) store.dropProbe(p.id) })
   }
   return (
     <div className="settings-tp-foot">

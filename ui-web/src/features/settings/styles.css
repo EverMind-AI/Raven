@@ -232,6 +232,7 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-ff .settings-acts2 {display:flex; gap:8px}
 .settings-mnote {color:var(--faint); font-size:12px}
 .settings-inline-err {color:var(--clay); font-size:12px; padding:0 15px 9px}
+.settings-padderr {color:var(--clay); font-size:12px; line-height:1.4}
 .settings-okmark {color:var(--moss); font-weight:600}
 .settings-fl2 {color:var(--muted); font-size:13px; white-space:nowrap}
 .settings-tkrow input[type="date"] {flex:0 0 auto; min-width:0}
@@ -286,6 +287,12 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
   font-weight:600; padding:12px 15px 5px; background:var(--surface-2)}
 .settings-prow2 {display:flex; align-items:center; gap:9px; padding:10px 15px; border-bottom:1px solid var(--line-soft); flex-wrap:wrap}
 .settings-prow2:last-child {border-bottom:none}
+/* The card's title and the add form under it are one block -- the title names
+   what the form adds -- so the rule moves from under the title to under the
+   form, where the list of connected providers begins. */
+.settings-card:has(> .settings-padd) > .settings-ch {border-bottom:0}
+.settings-card > .settings-cfg.settings-padd {margin-bottom:12px}
+.settings-card > .settings-padd + .settings-prow2 {border-top:1px solid var(--line-soft)}
 .settings-prow2 .settings-pn2 {font-size:14px; font-weight:600}
 .settings-crumb .settings-kd {font-family:var(--sans); font-size:13px; color:var(--faint); border:0; border-radius:4px; padding:0}
 .settings-arow {display:flex; align-items:center; gap:12px; padding:12px 15px; border-bottom:1px solid var(--line-soft)}
@@ -413,6 +420,35 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
   min-height:0}
 .settings-cfg.settings-padd .settings-row .settings-k:empty {display:none}
 .settings-cfg.settings-padd .settings-row .settings-ctl {justify-self:start}
+/* The vendor dropdown: the field keeps the page's select box, the list is a
+   body-level surface of fixed height that scrolls. It stacks above the wizard
+   and the dialog both, since either may be what opened it. */
+.settings-vpick {display:inline-flex; align-items:center; gap:8px; width:240px; text-align:left; white-space:nowrap; overflow:hidden}
+/* One column in the add form: the vendor, its key and its address stacked as
+   boxes of one width, wide enough for a vendor's default address to show whole. */
+.settings-cfg.settings-padd .settings-vpick,.settings-cfg.settings-padd .keyfield,
+.settings-cfg.settings-padd .settings-ctl > .settings-tbox {width:280px; max-width:100%; box-sizing:border-box}
+.settings-cfg.settings-padd .keyfield > .settings-tbox {width:100%; min-width:0; box-sizing:border-box}
+.settings-vpick > span {overflow:hidden; text-overflow:ellipsis}
+.settings-vpick .provider-icon, .settings-vopt .provider-icon {flex:none}
+.settings-vlist {position:fixed; z-index:calc(var(--z-onboarding) + 1); overflow-y:auto; padding:4px; border-radius:10px;
+  background:var(--paper); border:1px solid var(--line);
+  box-shadow:0 1px 2px rgba(0,0,0,.06), 0 10px 24px -12px rgba(0,0,0,.2), 0 24px 56px -22px rgba(0,0,0,.3)}
+.settings-vgrp {font-size:11.5px; color:var(--faint); padding:8px 9px 4px}
+.settings-vopt {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; font-size:13px;
+  background:none; border:0; border-radius:7px; color:var(--text); padding:6px 9px; cursor:pointer}
+.settings-vopt > span {overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-vopt:hover, .settings-vopt:focus-visible {background:var(--surface); outline:none}
+.settings-vopt[aria-selected="true"] {background:var(--raised); font-weight:600}
+/* A credential check's verdict: green when the vendor said yes, clay when it
+   refused or could not be reached, grey when it cannot be asked at all. */
+.settings-pnote {display:inline-flex; align-items:center; gap:8px; font-size:12px; color:var(--clay); min-width:0}
+.settings-pnote[data-tone="ok"] {color:var(--moss)}
+.settings-pnote[data-tone="muted"] {color:var(--faint)}
+.settings-plink {font:inherit; font-size:12px; background:none; border:0; padding:0; color:var(--amber); cursor:pointer}
+.settings-plink:hover:not(:disabled) {text-decoration:underline}
+.settings-plink:disabled {color:var(--faint); cursor:default}
+.settings-pline {margin:-4px 0 10px}
 .settings-xrow {cursor:pointer}
 .settings-xrow:hover {background:var(--surface)}
 .settings-xrow .settings-k {gap:9px}
@@ -514,13 +550,14 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
    values behind it. This sheet loads after page.css, which is what lets these
    tune .foldcap's own declarations. */
 .settings-disc {font-size:12px; line-height:1.3; margin:5px 0 0 -4px; padding:3px 8px 3px 4px; border-radius:6px;
-  flex-wrap:wrap; gap:3px 6px; max-width:100%; text-align:left}
+  flex-wrap:nowrap; gap:6px; max-width:100%; min-width:0; text-align:left}
 .settings-disc:hover {background:var(--line-soft)}
 .settings-disc .settings-sl {white-space:nowrap}
 .settings-disc .settings-sv {color:var(--text); font-variant-numeric:tabular-nums; white-space:nowrap}
-/* The separator trails its own value rather than leading the next, so a
-   summary that wraps starts the new line on a label, not on a dot. */
-.settings-disc .settings-sv:not(:last-child)::after {content:"\00b7"; color:var(--faint); margin-left:6px}
+/* A glance, so one line: a column too narrow for all three ends in an
+   ellipsis rather than folding the summary under itself. */
+.settings-disc .settings-sum {min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-disc .settings-sv:not(:last-child)::after {content:"\00b7"; color:var(--faint); margin:0 6px}
 .settings-disc .settings-sn {color:var(--faint); margin-right:3px}
 .settings-opttag {font-size:11px; font-family:var(--disp); font-weight:600; letter-spacing:.04em; color:var(--muted); background:var(--raised); border-radius:4px; padding:0 5px}
 

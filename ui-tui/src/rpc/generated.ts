@@ -3182,6 +3182,7 @@ export interface ModelDisconnectResult {
  */
 export interface ModelFetchModelsParams {
   slug: string;
+  verify?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

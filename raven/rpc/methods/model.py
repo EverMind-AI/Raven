@@ -156,13 +156,19 @@ def _provider_models(slug: str, *, configured: bool, section: Any = _UNLOADED) -
     # providers have no shortlist at all, which is why the picker used to offer
     # them nothing; the live source is last because asking may cost a request
     # (see ``_runtime_models``).
+    from raven.providers.served_models import recall
     from raven.providers.wire import merge_key
 
     out: list[str] = []
     seen: set[str] = set()
+    # What the vendor itself last named, after the shortlist and before the
+    # bundled catalogue: current where the catalogue lags, and read from disk,
+    # so offering it costs the picker no request.
+    served = tuple(recall(slug)) if configured else ()
     chain = (
         *from_config,
         *common_models_for(slug),
+        *served,
         *litellm_models_for(slug),
         *_runtime_models(slug, configured=configured, section=section),
     )
@@ -244,13 +250,20 @@ def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -
     from raven.providers.catalog import describe
     from raven.providers.rates import resolve_context_window
     from raven.providers.registry_data import kind_of
+    from raven.providers.served_models import recall
 
     overlays = _configured_overlays(slug, section=section)
+    served = recall(slug)
     out: dict[str, dict[str, Any]] = {}
     for model in models:
         row = describe(slug, model, overlay=_overlay_for(overlays, slug, model))
         window = resolve_context_window(model, allow_fetch=False)
         if not (row.described or row.tagged or window):
+            # A model only the vendor's own list names still has the kind that
+            # list proved, which is what keeps an embedding model out of the
+            # chat slot's column.
+            if model in served:
+                out[model] = {"label": row.label, "kind": served[model]}
             continue
         entry: dict[str, Any] = {"label": row.label, "kind": kind_of(row.capabilities, row.output_modalities)}
         if row.description:
@@ -633,6 +646,9 @@ async def model_disconnect(params: dict, *, agent_loop_factory: "AgentLoopFactor
     except KeyError as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     _everos_follows(parsed.slug, agent_loop_factory)
+    from raven.providers.served_models import forget
+
+    await asyncio.to_thread(forget, parsed.slug)
     return {"disconnected": True}
 
 
@@ -715,7 +731,9 @@ async def model_fetch_models(params: dict) -> dict:
     # Off-thread: this is a network round trip to somebody else's server, and
     # the gateway's loop is carrying a token stream while it happens. Cheap when
     # there is no credential to send -- the probe refuses before any socket.
-    probe = await asyncio.to_thread(test_provider, slug, timeout_s=_FETCH_TIMEOUT_S, full_catalogue=True)
+    probe = await asyncio.to_thread(
+        test_provider, slug, timeout_s=_FETCH_TIMEOUT_S, full_catalogue=True, check_credential=parsed.verify
+    )
     asked = bool(probe.get("ok"))
     live = [m for m in (probe.get("model_ids") or []) if isinstance(m, str) and m]
 
@@ -771,6 +789,11 @@ async def model_fetch_models(params: dict) -> dict:
         if window := resolve_context_window(stored, allow_fetch=False):
             entry["context_window"] = window
         rows[key] = entry
+
+    if asked:
+        from raven.providers.served_models import remember
+
+        await asyncio.to_thread(remember, slug, {r["id"]: r["kind"] for r in rows.values() if r["source"] == "live"})
 
     # By name, and stably: the order a vendor lists its catalogue in is not an
     # order anybody reads, and it changes between calls for some of them.

@@ -433,9 +433,13 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   } else if (shown === 'on') {
     actions = row.builtin ? null : (
       <>
-        <button className="mini danger" onClick={() => store.disconnectRow(row)}>
-          {t('gui.agent.disconnect')}
-        </button>
+        {/* Raven's shipped specialists are part of Raven, not something the
+            reader connected, so there is nothing to disconnect. */}
+        {row.vendored ? null : (
+          <button className="mini danger" onClick={() => store.disconnectRow(row)}>
+            {t('gui.agent.disconnect')}
+          </button>
+        )}
         {canTest(row) && testing ? (
           <button className="mini danger" onClick={() => store.stopTest(row)}>
             <Spin />

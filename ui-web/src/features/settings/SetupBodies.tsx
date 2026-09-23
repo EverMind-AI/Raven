@@ -11,7 +11,7 @@ import * as lang from '../../state/lang'
 import { Card, Chip, InlineErr, Row, Rov } from './Fields'
 import { KeyRow, VendorSelect } from './pages/Tools'
 import { Providers } from './providers/Providers'
-import { Roles } from './providers/Roles'
+import { RoleRows, Roles } from './providers/Roles'
 import { SetupWait } from './Skeletons'
 import { FETCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, keySet, legacyKey, vendorKey, webVendor } from './source'
 import * as store from './store'
@@ -26,11 +26,27 @@ export function ModelStepBody(): JSX.Element {
       {s.loaded ? (
         <>
           <Providers setup />
-          <Roles />
+          <Roles setup />
         </>
       ) : (
         <SetupWait step="model" />
       )}
+      {/* An open add form says it beside its own button: down here it is a
+          screen below the field it is about. */}
+      <InlineErr text={s.provAdd === null ? s.err : ''} />
+    </div>
+  )
+}
+
+/* The embedding model, for the wizard's data-sync step: an import is embedded
+   as it is distilled, so the step asks for it where the reader already is
+   rather than sending them back to step one. */
+export function MemoryStepBody(): JSX.Element {
+  const s = useSyncExternalStore(store.subscribe, store.get)
+  useSyncExternalStore(lang.subscribe, lang.get)
+  return (
+    <div className="settings-panel settings-setup" data-section="memory" key={s.epoch}>
+      <RoleRows ids={['embedding']} setup needed />
       <InlineErr text={s.err} />
     </div>
   )

@@ -402,30 +402,29 @@ async def test_the_qr_poll_carries_the_rebind_phase() -> None:
     assert r["rebind"]["code_age_s"] == 4.0
 
 
-async def test_the_qr_poll_reports_a_paused_session_as_unpaired() -> None:
-    """An errcode -14 pause is an hour in which nothing is received and every
-    send raises, so the answer the row is drawn from must not go on calling the
-    account paired -- and it says when the pause lifts, so a client can tell
-    this apart from a code that was never scanned."""
-    import time
-
+async def test_the_qr_poll_offers_the_new_code_after_a_session_ended(tmp_path) -> None:
+    """errcode -14 drops the session inside the running adapter, which pairs
+    again on the spot. The answer the card is drawn from has to leave
+    ``connected`` and carry the new code, or the page keeps waiting on a
+    pairing the service already retired."""
     from raven.channels.adapters.weixin.channel import WeixinChannel
 
     ch = WeixinChannel(make_channel_config("weixin"))
+    ch._state_dir = tmp_path
     ch._running = True
     ch._token = "tok"
     d = Dispatcher()
     register_control_methods(d, channel_manager=_OnlyChannel(ch))
 
     r = (await _dispatch(d, "gateway.channels.qr", {"name": "weixin"}))["result"]
-    assert r["connected"] is True
-    assert r["rebind"]["paused_until"] is None
+    assert r["connected"] is True and r["qr"] is None
 
-    ch._session_pause_until = time.time() + 600
+    ch._drop_session()
+    ch.pending_qr = "https://scan/after-the-drop"
     r = (await _dispatch(d, "gateway.channels.qr", {"name": "weixin"}))["result"]
     assert r["running"] is True
     assert r["connected"] is False
-    assert r["rebind"]["paused_until"] == ch._session_pause_until
+    assert r["qr"].startswith("data:image/png;base64,")
 
 
 def test_the_control_app_serves_only_the_socket() -> None:

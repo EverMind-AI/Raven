@@ -2459,6 +2459,7 @@ export interface ModelDisconnectResult {
 }
 export interface ModelFetchModelsParams {
   slug: string;
+  verify?: boolean;
 }
 export interface ModelFetchModelsResult {
   models: ModelCandidate[];
