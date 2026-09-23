@@ -544,7 +544,11 @@ The opt-in policy for when the model returns no text: re-feed its reasoning (PRE
 inject a nudge after a tool call (NUDGE), or plain RETRY — each bounded by
 `RecoveryLimits`. A response with text in it, or recovery switched off, COMPLETEs;
 spending every budget with nothing ever returned is FAIL, and the Agent Loop ends the turn
-with status `error` and a reply naming the failure. PREFILL is asked of the provider first
+with status `error` and a sentence saying how many attempts went into it. Either way a turn
+that reaches its end with no text raises `AnswerlessTurnError` rather than replying -- unless
+one of its tools already put an answer in front of the reader (the message tool's
+`sent_in_turn`, or an inline research answer the turn itself streamed).
+PREFILL is asked of the provider first
 (`LLMProvider.supports_assistant_prefill`): the Anthropic family rejects a trailing
 assistant message while thinking is on, and through a gateway that rejection can arrive as
 a stream that never yields a byte, so a provider that answers no never gets PREFILL -- the
@@ -659,7 +663,8 @@ those are emitted by the Spine worker, not a runner.
 **AnswerlessTurnError**:
 The exception a runner raises to say the turn it ran ended with no answer and that its message is
 already the report a reader should see — the model call the loop gave up on, in the provider's words,
-or the loop's when the provider gave none.
+or the loop's when the provider gave none; or an empty-response recovery that spent its budgets, in the
+loop's one-sentence account of the attempts.
 `describe_failure` passes its text through unchanged (it arrives bounded from the layer that built
 it), and the `turn_ended` marker that says so is filed before the failure leaves the loop. The marker
 is worded twice, for its two readers: `turn_ended.reason` keeps the provider's account for whoever is
