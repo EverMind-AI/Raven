@@ -85,6 +85,7 @@ describe('workspace geometry', () => {
       previousColumns: 1,
       nextColumns: 2,
       availableWidth: 1200,
+      splitWidth: 1630,
     })).toBe(1054)
   })
 
@@ -94,6 +95,7 @@ describe('workspace geometry', () => {
       previousColumns: 1,
       nextColumns: 2,
       availableWidth: 970,
+      splitWidth: 1400,
     })).toBe(970)
   })
 
@@ -106,8 +108,39 @@ describe('workspace geometry', () => {
       previousColumns: 0,
       nextColumns: 1,
       availableWidth: 1200,
+      splitWidth: 1630,
       firstPane: { id: 'p1', kind: 'task', row: {} as never },
     })).toBe(440)
+  })
+
+  /* A file used to open at a fixed 960, which on a laptop took nearly all of
+     the split and left the composer too narrow to write in. */
+  it('opens a file pane at half of the split, so the chat keeps the other half', () => {
+    const file = { id: 'p1', kind: 'file', path: 'a.md' } as never
+    expect(workspaceTransitionWidth({
+      previousWidth: 0, previousColumns: 0, nextColumns: 1, availableWidth: 570, splitWidth: 1000, firstPane: file,
+    })).toBe(500)
+    expect(workspaceTransitionWidth({
+      previousWidth: 0, previousColumns: 0, nextColumns: 1, availableWidth: 1400, splitWidth: 1830, firstPane: file,
+    })).toBe(915)
+  })
+
+  it('reopens at the width the reader last dragged it to, within what is available', () => {
+    const file = { id: 'p1', kind: 'file', path: 'a.md' } as never
+    const task = { id: 'p1', kind: 'task', row: {} as never } as never
+    const open = (firstPane: never, rememberedWidth: number | null, availableWidth = 1400): number =>
+      workspaceTransitionWidth({ previousWidth: 0, previousColumns: 0, nextColumns: 1, availableWidth, splitWidth: 1830, rememberedWidth, firstPane })
+    expect(open(file, 640)).toBe(640)
+    expect(open(task, 640)).toBe(640)
+    expect(open(file, 1300, 900)).toBe(900)
+    expect(open(file, null)).toBe(915)
+  })
+
+  it('never opens a file pane narrower than the pane floor', () => {
+    expect(workspaceTransitionWidth({
+      previousWidth: 0, previousColumns: 0, nextColumns: 1, availableWidth: 600, splitWidth: 600,
+      firstPane: { id: 'p1', kind: 'file', path: 'a.md' } as never,
+    })).toBe(320)
   })
 })
 

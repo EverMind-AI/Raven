@@ -86,7 +86,7 @@ export function deskReserve(desk: {
 }
 
 const CHAT_MIN_FALLBACK = 430
-const FILE_PANE_INITIAL_WIDTH = 960
+const FILE_PANE_MIN_WIDTH = 320
 const AGENT_PANE_INITIAL_WIDTH = 440
 const WORKSPACE_EDGE_GUTTER = 8
 const COLUMN_GAP = 6
@@ -165,12 +165,17 @@ export function workspaceTransitionWidth({
   previousColumns,
   nextColumns,
   availableWidth,
+  splitWidth,
+  rememberedWidth,
   firstPane,
 }: {
   previousWidth: number
   previousColumns: 0 | 1 | 2
   nextColumns: 1 | 2
   availableWidth: number
+  splitWidth: number
+  /* The width the reader last dragged the column to, if ever. */
+  rememberedWidth?: number | null
   firstPane?: DeskPane
 }): number {
   let desired = previousWidth
@@ -178,10 +183,16 @@ export function workspaceTransitionWidth({
     /* A task pane's own board is sized like the agent conversation's, not
        like a file: 440 is the width the board's own card grid was laid out
        against (two 196px columns plus their gap and padding), and opening
-       one at 720 would spend that extra width on nothing the graph uses. */
-    desired = firstPane?.kind === 'agent' || firstPane?.kind === 'agent-record' || firstPane?.kind === 'task'
+       one at 720 would spend that extra width on nothing the graph uses.
+       A file opens at half of what the chat and the pane share: a fixed 960
+       took the whole of a laptop's width and left the composer too narrow to
+       write in, and half-and-half is the split that serves reading the file
+       and writing about it at once. A width the reader dragged the column to
+       outranks all of these: it is the one they chose, and reopening should
+       not take it back. */
+    desired = rememberedWidth ? rememberedWidth : firstPane?.kind === 'agent' || firstPane?.kind === 'agent-record' || firstPane?.kind === 'task'
       ? AGENT_PANE_INITIAL_WIDTH
-      : FILE_PANE_INITIAL_WIDTH
+      : Math.max(FILE_PANE_MIN_WIDTH, Math.round(splitWidth / 2))
   }
   else if (nextColumns > previousColumns) desired = previousWidth * 2 + COLUMN_TRANSITION_DELTA
   else if (nextColumns < previousColumns) desired = Math.max(CHAT_MIN_FALLBACK, (previousWidth - COLUMN_TRANSITION_DELTA) / 2)
