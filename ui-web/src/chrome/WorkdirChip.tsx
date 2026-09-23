@@ -17,7 +17,8 @@
  * page used to be served with, so there is nothing for it to keep showing.
  *
  * The click toggles rather than opens, for the reason the permission chip's
- * does: the popover has no close button, and the chip is the way back out.
+ * does: the popover has no close button, and the chip is the way back out
+ * with the pointer.
  */
 
 import { useSyncExternalStore } from 'react'

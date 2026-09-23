@@ -47,9 +47,9 @@ import { onDblClick as shellZoom, onMouseDown as shellDrag } from './shellWindow
 import * as tip from './tooltip'
 import { close as closeWorkdir } from './workdir'
 
-/* The three composer popovers have no close button and no Escape branch: a
-   pointer landing outside one is the way back out. Capture, because the row
-   under the pointer may stop the event.
+/* The three composer popovers have no close button: a pointer landing outside
+   one is one way back out, and Escape is the other (state/escapeOrder.ts).
+   Capture, because the row under the pointer may stop the event.
 
    The More group is rail navigation rather than a popover, which is why it is
    not here: it folds on its own toggle only, never on an outside click. */
