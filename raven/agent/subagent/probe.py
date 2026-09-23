@@ -174,57 +174,33 @@ def _missing_exe_detail(cfg: Any, exe: str) -> str:
     return _missing_detail(exe, install_hint_for(cfg))
 
 
-def _auth_line(stderr: str, marks: Sequence[str]) -> str | None:
-    """The first stderr line carrying one of the agent's own credential marks.
+def _said(exc: BaseException) -> tuple[str, str | None]:
+    """What to show for a failed ping, and the part of it that is the agent's answer.
 
-    For the agents that answer the protocol with a bare code and write the
-    reason nowhere but here. Measured 2026-09-23: `hermes acp` returned
-    ``[-32603] Internal error`` -- six words, none of them actionable -- while
-    its own stderr carried "Hermes is not logged into Nous Portal. Run `hermes
-    model` to re-authenticate. (code: nous_auth_missing)". The tail this reads
-    is already kept, for the neighbouring case where the protocol reports
-    success and only stderr says the provider refused (`AcpClient.stderr_tail`).
-
-    Only marks, never prose. A stderr tail is whatever the agent logged on its
-    way up, and reading its prose for a diagnosis cannot tell "registered a
-    handler for http 401" from "http 401", or "no authentication required" from
-    "authentication required": a red-team pass of 864 realistic lines against a
-    phrase list with a denial veto and a level gate misclassified 319 benign ones
-    as credential failures. A mark is the agent reporting the failure in its own
-    machine-readable terms, read from its source (`SignIn.stderr_marks`), so an
-    agent nobody measured gets its bare protocol error -- which is where its
-    reader was before this path existed.
-
-    The *first* such line rather than the newest, because the lines after it
-    are the same missing credential reported again downstream.
+    Shown: the failure as raised, with the agent's reason (`reason_of`) spliced in
+    after its own words -- they were in the answer all along, and ``str()`` drops
+    them. Classified: the agent's answer alone. A wrapper can add words of its
+    own -- raven's MCP-grant note does ("withheld because OAuth needs user
+    interaction") -- and those are raven describing an MCP server, not the agent
+    describing its credential; the verdict must not come from them. ``None``
+    when no agent answered at all (a timeout, a process that never started), and
+    the whole text is then all there is to go on.
     """
-    if not marks:
-        return None
-    for line in stderr.splitlines():
-        text = line.strip()
-        if text and any(mark in text for mark in marks):
-            return text
-    return None
+    from raven.acp_client.protocol import reason_of, remote_error_in
+
+    shown = str(exc)
+    error = remote_error_in(exc)
+    if error is None:
+        return shown, None
+    answer = reason_of(error)
+    added = answer[len(error.message) :]
+    if added:
+        own = str(error)
+        shown = shown.replace(own, own + added, 1) if own in shown else shown + added
+    return shown, answer
 
 
-def _launched_stderr(pool: Any, cfg: Any) -> str:
-    """What this ping's own agent wrote to its stderr, or ``""``.
-
-    Read before the pool is closed, and only from this call's pool, which holds
-    nothing but the connection this ping opened.
-
-    Guarded whole because the two callers of this module promise never to
-    raise, and a pool whose connection died mid-ping is exactly when this is
-    asked: losing the words is a worse message, not a crash.
-    """
-    try:
-        name = getattr(cfg, "name", "") or ""
-        return "\n".join(c.client.stderr_tail() for c in pool.connections(name) if c.client is not None)
-    except Exception:  # noqa: BLE001 - the detail is a courtesy, never the verdict
-        return ""
-
-
-def _refusal_detail(cfg: Any, said: str, *, stderr: str = "") -> str:
+def _refusal_detail(cfg: Any, said: str, answer: str | None = None) -> str:
     """What the reader is told when the test message came back a failure.
 
     The agent's own words are the evidence and they are kept, but they are not
@@ -241,14 +217,12 @@ def _refusal_detail(cfg: Any, said: str, *, stderr: str = "") -> str:
     a key rather than an installed agent, with where the key goes, since
     "sign in" is not a thing its reader can do.
 
-    Two sources, in that order. The words the protocol carried are read first.
-    Where they carry nothing -- measured, an agent whose whole answer was
-    ``[-32603] Internal error`` while its own stderr named the missing
-    credential and the command for it -- the child's stderr is read as well,
-    for that agent's own measured marks only, and on a hit the log line is
-    added to the failure rather than put in its place. The
-    rest are unchanged: a failure neither source can classify keeps the words
-    it came with rather than being given a guess about what they mean.
+    ``answer`` is the agent's own answer, ``data`` included, when one came back
+    (`_said`); it is what gets classified, and ``said`` is what gets shown. The
+    SDKs put the reason in ``data`` and a placeholder in ``message``, so
+    classifying the placeholder alone would leave every such refusal
+    unclassified. A failure this cannot classify keeps the words it came with
+    rather than being given a guess about what they mean.
 
     The same question the roster asks (`acp_client.capabilities.looks_like_auth`)
     rather than a second spelling of it -- the roster already marks such a row
@@ -256,15 +230,8 @@ def _refusal_detail(cfg: Any, said: str, *, stderr: str = "") -> str:
     """
     from raven.acp_client.capabilities import looks_like_auth
 
-    evidence = said
-    logged = ""
-    if not looks_like_auth(evidence):
-        # The words the protocol carried say nothing. Before giving up on
-        # classifying, ask the child what it said on its own channel.
-        hint = sign_in_hint_for(cfg)
-        logged = _auth_line(stderr, hint.stderr_marks if hint else ()) or ""
-        if not logged:
-            return said[:_DETAIL_CAP]
+    if not looks_like_auth(said if answer is None else answer):
+        return said[:_DETAIL_CAP]
     if getattr(cfg, "kind", None) == "openai":
         # Nothing was installed and there is nothing to sign in to: this row is
         # an endpoint and a key. Telling its reader to sign in would send them
@@ -288,13 +255,7 @@ def _refusal_detail(cfg: Any, said: str, *, stderr: str = "") -> str:
             local = shutil.which(hint.exe, path=_login_path()) is not None
             command = hint.local if local or hint.anywhere is None else hint.anywhere
             advice = f"sign in with `{command}` and connect again"
-    # What came back is kept whether or not it was the half that classified.
-    # A diagnosis drawn from a log line is the weaker of the two -- the line was
-    # written while starting up, not in answer to this call -- so dropping the
-    # failure it was read against would leave a reader who was diagnosed wrongly
-    # with no way to see that, and nothing to report but this sentence.
-    tail = f". Its log said: {logged}" if logged else ""
-    return f"{lead}; {advice}. It said: {evidence}{tail}"[:_DETAIL_CAP]
+    return f"{lead}; {advice}. It said: {said}"[:_DETAIL_CAP]
 
 
 def _missing_detail(exe: str, hint: str | None) -> str:
@@ -663,9 +624,7 @@ async def ping_agent(cfg: Any) -> PingResult:
     except asyncio.TimeoutError:
         return PingResult(False, f"it did not answer within {_ENABLE_PING_TIMEOUT_SECONDS}s")
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
-        # Composed before the `finally` closes the pool, which is what makes the
-        # child's own stderr still reachable here.
-        return PingResult(False, _refusal_detail(cfg, str(exc), stderr=_launched_stderr(pool, cfg)))
+        return PingResult(False, _refusal_detail(cfg, *_said(exc)))
     finally:
         # The pool is this call's alone, so nothing else will ever close it, and a
         # pool left open holds the child process it launched for the rest of the

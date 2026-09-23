@@ -302,6 +302,30 @@ async def test_a_refusal_about_anything_else_is_not_a_credential_verdict() -> No
     assert credential.needs_auth is True
 
 
+async def test_the_roster_and_the_connect_button_read_one_answer() -> None:
+    """One refusal, one verdict, whichever of the two asks.
+
+    Both ACP SDKs refuse with the placeholder Internal error and the reason
+    in data.details. The connect button came to read data while the
+    roster still read the message alone, and on the measured hermes refusal the
+    two disagreed: Connect said "no usable credential", the row did not say
+    Unauthorized, and Test showed the placeholder. Both read `reason_of` now,
+    through the same rule, so this runs one agent process through both.
+    """
+    from raven.agent.subagent.probe import ping_agent
+
+    reason = "Stub is not connected to any AI provider yet"
+
+    snapshot = await verify_agent(stub_config(mode="no_session_sdk"))
+    assert snapshot.needs_auth is True, "the roster reads the reason, not the placeholder"
+    assert reason in snapshot.detail, "and Test and the saved row detail show it"
+
+    pinged = await ping_agent(stub_config(mode="no_session_sdk"))
+    assert pinged.ok is False
+    assert "no usable credential" in pinged.detail
+    assert reason in pinged.detail
+
+
 async def test_the_credential_verdict_outlives_the_process_that_measured_it(tmp_path: Path) -> None:
     """It is read back from disk on every later page load, so it has to persist.
 
