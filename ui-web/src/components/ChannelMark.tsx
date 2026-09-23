@@ -1,4 +1,5 @@
-/* Channel branding for the entrances list, on the same terms as AgentMark.tsx. */
+/* Channel branding for the entrances list: each app's own mark, keyed by channel
+   id the way AgentMark.tsx keys by preset. */
 
 import { useState } from 'react'
 
