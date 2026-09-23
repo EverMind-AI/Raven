@@ -442,6 +442,39 @@ class TestSessionLoad:
         for frame in rig.written:
             validate_outbound(frame)
 
+    async def test_a_reloaded_turn_that_the_runtime_ended_says_what_it_says_live(self, rig):
+        """``notice`` and ``turn_ended`` mark entries whose text was written for
+        the model. The stub answers ``session.resume`` directly, so these
+        fixtures are already in the wire shape the transcript mapper produces."""
+        rig.stack.stored["acp:old"] = [
+            {"role": "user", "text": "delete the logs"},
+            {
+                "role": "assistant",
+                "text": "The operation was not completed, and no alternative method will be attempted.",
+                "notice": {"kind": "action_blocked", "detail": "rm -rf /var/log was refused by policy"},
+            },
+            {
+                "role": "assistant",
+                "text": "(turn failed: Error calling LLM (server@stub): 503)",
+                "turn_ended": {"status": "failed", "reason": "Error calling LLM (server@stub): 503"},
+            },
+        ]
+        await rig.handshake()
+
+        await rig.call(
+            "session/load",
+            {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "project"), "mcpServers": []},
+        )
+
+        said = [u["content"]["text"] for u in rig.updates() if u["sessionUpdate"].endswith("message_chunk")]
+        assert said == [
+            "delete the logs",
+            "rm -rf /var/log was refused by policy",
+            "Error calling LLM (server@stub): 503",
+        ]
+        for frame in rig.written:
+            validate_outbound(frame)
+
     async def test_the_session_becomes_promptable(self, rig):
         """A load that did not register the session would replay a history the
         client then cannot continue."""
