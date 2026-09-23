@@ -67,6 +67,20 @@ describe('the model chip', () => {
     expect(mark()).not.toBeNull()
   })
 
+  it('marks the account the conversation is on, not another that lists the same id', () => {
+    /* A gateway and a direct vendor can both list one id. Reading the account
+       off the lists alone answered with whichever came first, so the chip could
+       name an account the conversation is not running on -- which is the one
+       question the mark exists to answer. */
+    install([
+      { id: 'anthropic', name: 'Anthropic', on: true, models: ['claude-opus-5'], configured: ['claude-opus-5'] },
+      { id: 'openrouter', name: 'OpenRouter', on: true, models: ['claude-opus-5'], configured: ['claude-opus-5'] },
+    ])
+    store.setCurrent('claude-opus-5', 'openrouter')
+    mount()
+    expect(mark()!.getAttribute('data-provider')).toBe('openrouter')
+  })
+
   it('marks it when the list spells the model with a name the account used to answer to', () => {
     /* A model id written before a provider was renamed. The wire canonicalizes
        the account's slug but hands back the configured list as it stands, so

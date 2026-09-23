@@ -831,6 +831,42 @@ describe('what the picker offers', () => {
     expect(rows('models').map((x) => x.querySelector('.nm')!.textContent)).toEqual(['my-embedder'])
   })
 
+  it('pins the running model under the account it is on, even where another lists it too', () => {
+    /* Onboarding and the CLI can set a model without adding it to the account's
+       list, so the pin is what puts it somewhere it can be seen marked. The
+       rule that drops the pin once another account lists the model exists
+       because the wire's flag went stale on a switch; where the page has been
+       told which account outright, that guess is not needed and marking the
+       account that merely lists the model names the wrong one. */
+    install({}, [
+      { id: 'anthropic', name: 'Anthropic', on: true, models: ['claude-opus-5'], configured: ['claude-opus-5'], current: true },
+      { id: 'openrouter', name: 'OpenRouter', on: true, models: ['fable-5'], configured: ['fable-5'] },
+    ])
+    store.setCurrent('fable-5', 'anthropic')
+    mount()
+    openIt()
+    const ticked = rows('models').filter((x) => x.querySelector('.tick'))
+    expect(ticked).toHaveLength(1)
+    expect(ticked[0]!.closest('.model-group')!.querySelector('.model-group-hd .nm')!.textContent).toBe('Anthropic')
+  })
+
+  it('marks the account the pick was made from, not another that lists the same id', async () => {
+    /* A gateway and a direct vendor can both list one id. The pick names an
+       account; what the page kept was the id alone, so reopening marked both
+       rows and the reader could not tell which account the conversation is on. */
+    install({}, [
+      { id: 'anthropic', name: 'Anthropic', on: true, models: ['claude-opus-5'], configured: ['claude-opus-5'] },
+      { id: 'openrouter', name: 'OpenRouter', on: true, models: ['claude-opus-5'], configured: ['claude-opus-5'] },
+    ])
+    mount()
+    openIt()
+    await act(async () => { fireEvent.click(rows('models')[1]!) })
+    openIt()
+    const ticked = rows('models').filter((x) => x.querySelector('.tick'))
+    expect(ticked).toHaveLength(1)
+    expect(ticked[0]!.closest('.model-group')!.querySelector('.model-group-hd .nm')!.textContent).toBe('OpenRouter')
+  })
+
   it('marks it when the account spells it with a name it used to answer to', () => {
     /* The same mixed spellings, one rename apart: `merge_key` strips any prefix
        the provider answers to, and the row carries that set so this page can

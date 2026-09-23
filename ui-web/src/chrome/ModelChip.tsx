@@ -43,7 +43,13 @@ const CHEVRON = 'M6 9l6 6 6-6'
    through to the raw id. */
 function serving(current: string): { provider: Provider; id: string } | null {
   try {
-    for (const p of model.source().providers()) {
+    const rows = model.source().providers()
+    const named = model.currentProvider()
+    /* The account a pick or the gateway named first, because two accounts can
+       list one id and only that one answers which the conversation is on. The
+       scan behind it is for a page that has been told neither. */
+    const order = named ? [...rows.filter((p) => p.id === named), ...rows.filter((p) => p.id !== named)] : rows
+    for (const p of order) {
       const id = model.column(p).find((m) => sameModel(p, m, current))
       if (id !== undefined) return { provider: p, id }
     }
