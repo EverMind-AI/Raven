@@ -159,10 +159,18 @@
   --z-onboarding: 110;
   /* A toast is the page's one transient notice, and it has to reach the
      reader over whatever surface they are on -- the first-run wizard included,
-     whose provider and key writes report their refusals this way. Only the
-     splash, which nothing happens under, stands above it. */
+     whose provider and key writes report their refusals this way. The two
+     steps above it are the pre-JavaScript pair, and neither is a surface a
+     toast could be reporting about: the splash, which nothing happens under,
+     and the notice that outranks the splash when nothing ran at all. */
   --z-toast: 115;
   --z-splash: 120;
+  /* The one step above the splash, and the only surface that needs it. Both
+     are markup rather than components, and the splash is opaque and covers the
+     viewport, so at any lower step the single message written for a reader
+     with no JavaScript paints nothing at all. What keeps it off a normal boot
+     is time, not the ladder -- see #noJs below. */
+  --z-noscript: 125;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -5075,6 +5083,22 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .sp-in { display: flex; flex-direction: column; align-items: center;
   transition: transform .5s ease; }
 #splash[data-off] .sp-in { transform: scale(.985); }
+/* The splash's twin, and what the splash was hiding. #noJs is markup too, it is
+   painted by the same first frame, and app/splash.ts takes it down as main.tsx
+   starts -- so the reader who still has it is the reader whose bundle never ran,
+   and for that reader the splash above covered every pixel of the one message
+   written for them. The delay, not the step, is what keeps it off a normal
+   boot: dropNoJs() runs far inside this window, and until it expires the notice
+   keeps the step its own style attribute gives it, which is where it also
+   stays if the animation never runs at all. Duration is zero because this
+   changes a step rather than moving anything -- which is also why it carries no
+   prefers-reduced-motion override, unlike every other animation here:
+   `animation: none` would not calm a motion, it would put the notice back
+   under the splash for exactly the readers who asked for less movement. */
+#noJs { animation: nojs-over-splash 0s linear 3s forwards; }
+@keyframes nojs-over-splash {
+  to { z-index: var(--z-noscript); }
+}
 /* The mark, near the size its own drawing carries: assets/raven.png is 86x86 --
    square, because the same file is the favicon and a tab scales it into a
    square box -- with the bird 68px of that and the rest transparent air. So a

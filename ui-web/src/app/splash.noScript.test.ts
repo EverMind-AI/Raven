@@ -68,3 +68,58 @@ describe('the no-script notice', () => {
     expect(text(blocks).length).toBeGreaterThanOrEqual(SENTENCE)
   })
 })
+
+/* The stylesheet's own ladder, by token name. */
+function ladder(): Record<string, number> {
+  const css = readFileSync('src/styles/page.css', 'utf8') as string
+  const out: Record<string, number> = {}
+  for (const m of css.matchAll(/--z-([a-z-]+):[ ]*([0-9]+);/g)) out[m[1]!] = Number(m[2])
+  return out
+}
+
+/** The `animation` shorthand page.css gives #noJs, as written. */
+function animation(): string {
+  const css = readFileSync('src/styles/page.css', 'utf8') as string
+  const rule = /#noJs[ ]*\{([^}]*)\}/.exec(css)
+  expect(rule, 'src/styles/page.css carries no #noJs rule').toBeTruthy()
+  const decl = /animation:([^;]+);/.exec(rule![1]!)
+  expect(decl, '#noJs declares no animation').toBeTruthy()
+  return decl![1]!.trim()
+}
+
+/* Longer than evaluating the bundle takes on a slow machine. app/splash.ts
+   removes #noJs as main.tsx starts, so this delay is the whole of what keeps a
+   reader whose bundle DID run from seeing an amber bar over the splash. */
+const BOOT_HEADROOM = 2
+
+/** A CSS time, in seconds. */
+const seconds = (v: string): number => (v.endsWith('ms') ? Number(v.slice(0, -2)) / 1000 : Number(v.slice(0, -1)))
+
+describe('the no-script notice against the splash', () => {
+  /* Only a browser can show the pixels: happy-dom has no compositor, so what is
+     pinned here is the stacking decision, not the paint. Measured in headless
+     Chrome with no script: zero amber pixels before this, full bar after. */
+  it('outranks the splash that would otherwise paint over it', () => {
+    const z = ladder()
+    expect(z.noscript, 'the ladder declares no --z-noscript').toBeGreaterThan(0)
+    expect(z.noscript).toBeGreaterThan(z.splash!)
+  })
+
+  it('reaches that step through the animation #noJs runs', () => {
+    const name = animation().split(/[ ]+/)[0]!
+    const css = readFileSync('src/styles/page.css', 'utf8') as string
+    const at = css.indexOf(`@keyframes ${name}`)
+    expect(at, `no @keyframes ${name}`).toBeGreaterThan(-1)
+    expect(css.slice(at, at + 300)).toContain('var(--z-noscript)')
+  })
+
+  it('waits longer than a boot takes before it shows', () => {
+    const shorthand = animation()
+    /* Two time values in the shorthand, and the SECOND is the delay -- the
+       first is the duration, which is zero here. */
+    const times = shorthand.match(/[0-9.]+m?s/g) ?? []
+    expect(times.length, 'the animation names a duration but no delay').toBeGreaterThanOrEqual(2)
+    expect(shorthand, 'without a forwards fill the raise does not persist').toMatch(/forwards|both/)
+    expect(seconds(times[1]!)).toBeGreaterThanOrEqual(BOOT_HEADROOM)
+  })
+})
