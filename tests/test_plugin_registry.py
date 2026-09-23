@@ -14,9 +14,7 @@ from raven.plugins import (
     ManifestOrigin,
     MemoryBackendContribution,
     OnboardContribution,
-    PluginConflictError,
     PluginContext,
-    PluginFactoryImportError,
     PluginManifest,
     PluginNotFoundError,
     PluginRegistry,
@@ -190,23 +188,116 @@ class TestConflicts:
         _install_test_module("_test_plugin_f", {"make_backend": fake_b})
 
         reg = PluginRegistry()
-        with pytest.raises(PluginConflictError, match="everos"):
+        reg.activate(
+            [
+                _make_discovered(
+                    "alpha",
+                    backends=[
+                        ("everos", "_test_plugin_e:make_backend"),
+                    ],
+                ),
+                _make_discovered(
+                    "beta",
+                    backends=[
+                        ("everos", "_test_plugin_f:make_backend"),
+                    ],
+                ),
+            ]
+        )
+        assert reg.activated_ids() == ["alpha"]
+        assert reg.get_memory_backend_factory("everos") is fake_a
+        [failure] = reg.activation_failures()
+        assert failure.plugin_id == "beta"
+        assert "memory_backend 'everos' contributed by both 'alpha' and 'beta'" in failure.reason
+
+
+# ---------------------------------------------------------------------------
+# One plugin's failure is its own
+# ---------------------------------------------------------------------------
+
+
+class TestFailureIsolation:
+    def test_a_broken_plugin_leaves_the_others_activated(self) -> None:
+        _install_test_module("_test_iso_ok", {"make_backend": lambda ctx: "ok"})
+        reg = PluginRegistry()
+        reg.activate(
+            [
+                _make_discovered("alpha", backends=[("a", "_test_iso_ok:make_backend")]),
+                _make_discovered("broken", backends=[("b", "_nonexistent_iso_zzz:make_backend")]),
+                _make_discovered("gamma", backends=[("c", "_test_iso_ok:make_backend")]),
+            ]
+        )
+        assert reg.activated_ids() == ["alpha", "gamma"]
+        assert reg.memory_backend_names() == ["a", "c"]
+        assert [f.plugin_id for f in reg.activation_failures()] == ["broken"]
+
+    def test_a_plugin_that_fails_halfway_registers_nothing(self) -> None:
+        _install_test_module("_test_iso_half", {"make_backend": lambda ctx: "half"})
+        reg = PluginRegistry()
+        reg.activate(
+            [
+                _make_discovered(
+                    "half",
+                    backends=[("half", "_test_iso_half:make_backend")],
+                    onboard=[("half", "_test_iso_half:missing_step")],
+                ),
+            ]
+        )
+        assert reg.activated_ids() == []
+        assert reg.manifest_for("half") is None
+        assert reg.memory_backend_names() == []
+        assert reg.onboard_names() == []
+        [failure] = reg.activation_failures()
+        assert failure.manifest.id == "half"
+
+    def test_an_attribute_lookup_that_raises_is_a_failure_not_a_crash(self) -> None:
+        mod = types.ModuleType("_test_iso_getattr")
+
+        def boom(name: str):
+            raise RuntimeError(f"lazy import of {name} failed")
+
+        mod.__getattr__ = boom  # type: ignore[attr-defined]
+        sys.modules["_test_iso_getattr"] = mod
+        _install_test_module("_test_iso_ok2", {"make_backend": lambda ctx: "ok"})
+        reg = PluginRegistry()
+        reg.activate(
+            [
+                _make_discovered("lazy", backends=[("lazy", "_test_iso_getattr:make_backend")]),
+                _make_discovered("steady", backends=[("steady", "_test_iso_ok2:make_backend")]),
+            ]
+        )
+        assert reg.activated_ids() == ["steady"]
+        [failure] = reg.activation_failures()
+        assert "lazy import of make_backend failed" in failure.reason
+
+    def test_a_failed_file_plugin_takes_its_directory_back_off_sys_path(self, tmp_path: Path) -> None:
+        broken_dir = tmp_path / "broken"
+        (broken_dir / "_iso_broken_pkg").mkdir(parents=True)
+        (broken_dir / "_iso_broken_pkg" / "__init__.py").write_text("raise ImportError('boom')\n")
+        good_dir = tmp_path / "good"
+        (good_dir / "_iso_good_pkg").mkdir(parents=True)
+        (good_dir / "_iso_good_pkg" / "__init__.py").write_text("def make(ctx):\n    return 'good'\n")
+
+        def file_plugin(plugin_id: str, root: Path, ref: str) -> DiscoveredPlugin:
+            d = _make_discovered(plugin_id, backends=[(plugin_id, ref)])
+            return DiscoveredPlugin(
+                manifest=d.manifest, source=ManifestOrigin.USER, location=root / "raven-plugin.toml"
+            )
+
+        before = list(sys.path)
+        try:
+            reg = PluginRegistry()
             reg.activate(
                 [
-                    _make_discovered(
-                        "alpha",
-                        backends=[
-                            ("everos", "_test_plugin_e:make_backend"),
-                        ],
-                    ),
-                    _make_discovered(
-                        "beta",
-                        backends=[
-                            ("everos", "_test_plugin_f:make_backend"),
-                        ],
-                    ),
+                    file_plugin("broken", broken_dir, "_iso_broken_pkg:make"),
+                    file_plugin("good", good_dir, "_iso_good_pkg:make"),
                 ]
             )
+            assert reg.activated_ids() == ["good"]
+            assert str(broken_dir) not in sys.path
+            assert str(good_dir) in sys.path
+        finally:
+            sys.path[:] = before
 
 
 # ---------------------------------------------------------------------------
@@ -217,47 +308,59 @@ class TestConflicts:
 class TestFactoryResolutionErrors:
     def test_missing_module(self) -> None:
         reg = PluginRegistry()
-        with pytest.raises(PluginFactoryImportError, match="importing"):
-            reg.activate(
-                [
-                    _make_discovered(
-                        "plug",
-                        backends=[
-                            ("everos", "_nonexistent_module_zzz:make_backend"),
-                        ],
-                    ),
-                ]
-            )
+        reg.activate(
+            [
+                _make_discovered(
+                    "plug",
+                    backends=[
+                        ("everos", "_nonexistent_module_zzz:make_backend"),
+                    ],
+                ),
+            ]
+        )
+        assert reg.activated_ids() == []
+        assert reg.memory_backend_names() == []
+        [failure] = reg.activation_failures()
+        assert failure.plugin_id == "plug"
+        assert "importing '_nonexistent_module_zzz' failed" in failure.reason
 
     def test_module_lacks_attribute(self) -> None:
         _install_test_module("_test_plugin_g", {"other_thing": object()})
         reg = PluginRegistry()
-        with pytest.raises(PluginFactoryImportError, match="attribute"):
-            reg.activate(
-                [
-                    _make_discovered(
-                        "plug",
-                        backends=[
-                            ("everos", "_test_plugin_g:make_backend"),
-                        ],
-                    ),
-                ]
-            )
+        reg.activate(
+            [
+                _make_discovered(
+                    "plug",
+                    backends=[
+                        ("everos", "_test_plugin_g:make_backend"),
+                    ],
+                ),
+            ]
+        )
+        assert reg.activated_ids() == []
+        assert reg.memory_backend_names() == []
+        [failure] = reg.activation_failures()
+        assert failure.plugin_id == "plug"
+        assert "'_test_plugin_g' has no attribute 'make_backend'" in failure.reason
 
     def test_attribute_not_callable(self) -> None:
         _install_test_module("_test_plugin_h", {"make_backend": 42})
         reg = PluginRegistry()
-        with pytest.raises(PluginFactoryImportError, match="non-callable"):
-            reg.activate(
-                [
-                    _make_discovered(
-                        "plug",
-                        backends=[
-                            ("everos", "_test_plugin_h:make_backend"),
-                        ],
-                    ),
-                ]
-            )
+        reg.activate(
+            [
+                _make_discovered(
+                    "plug",
+                    backends=[
+                        ("everos", "_test_plugin_h:make_backend"),
+                    ],
+                ),
+            ]
+        )
+        assert reg.activated_ids() == []
+        assert reg.memory_backend_names() == []
+        [failure] = reg.activation_failures()
+        assert failure.plugin_id == "plug"
+        assert "resolved to a non-callable int" in failure.reason
 
 
 # ---------------------------------------------------------------------------
@@ -347,14 +450,18 @@ def test_two_plugins_contribute_same_onboard_name() -> None:
         {"make_backend": lambda ctx: "b", "make_onboard_step": lambda ctx: "b"},
     )
     reg = PluginRegistry()
-    with pytest.raises(PluginConflictError, match="memory_backend 'shared'"):
-        reg.activate(
-            [
-                _make_discovered("alpha", backends=[("shared", "_test_onboard_a:make_backend")]),
-                _make_discovered(
-                    "beta",
-                    backends=[("shared", "_test_onboard_b:make_backend")],
-                    onboard=[("shared", "_test_onboard_b:make_onboard_step")],
-                ),
-            ]
-        )
+    reg.activate(
+        [
+            _make_discovered("alpha", backends=[("shared", "_test_onboard_a:make_backend")]),
+            _make_discovered(
+                "beta",
+                backends=[("shared", "_test_onboard_b:make_backend")],
+                onboard=[("shared", "_test_onboard_b:make_onboard_step")],
+            ),
+        ]
+    )
+    assert reg.activated_ids() == ["alpha"]
+    assert reg.onboard_names() == []
+    [failure] = reg.activation_failures()
+    assert failure.plugin_id == "beta"
+    assert "memory_backend 'shared'" in failure.reason

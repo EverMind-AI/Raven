@@ -87,8 +87,14 @@ settings before using them. Unknown configuration keys may warn and pass through
 
 Prefix new tool names with the plugin/agent identity. A plugin tool using a
 built-in name deliberately replaces that built-in; two plugins contributing
-the same tool name conflict. A host can remain up after activation fails and
-log a warning, so check the effective tool roster as well as boot success.
+the same tool name conflict: the plugin activated first keeps the name and the
+other is skipped. A plugin that fails to activate -- a factory that will not
+import, or a name conflict -- is skipped alone: the host stays up, every other
+plugin loads, the host prints a notice naming the plugin and its cause, and
+`raven plugins` lists it as `failed`. So check the effective tool roster as well
+as boot success. Adding its id to `plugins.disabled` stops the host loading it,
+and the host's product sub-agents inherit that opt-out (a product never
+inherits the opt-out of its own engine plugin).
 
 ## Hooks and per-turn participants
 

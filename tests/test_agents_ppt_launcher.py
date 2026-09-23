@@ -1170,3 +1170,19 @@ def test_copying_a_published_deck_is_not_denied():
         policy.evaluate('cp out/deck.pptx "/work/community elderly care operations plan.pptx"')
         is not CommandDecision.HARD_DENY
     )
+
+
+def test_the_hosts_plugin_opt_outs_reach_the_render_but_not_the_engine(grounded, tmp_path):
+    """The child scans the host's plugin roots, so a plugin the host switched
+    off has to be off in the render too; the deck engine is this product and
+    stays on even when the host turned it off for its own agent."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps({"plugins": {"disabled": ["everme-memory", "ppt-engine"]}}), encoding="utf-8"
+    )
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["plugins"]["disabled"] == ["everme-memory"]
+    assert "ppt-engine" in data["plugins"]["config"]

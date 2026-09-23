@@ -172,9 +172,10 @@ def build_runtime(
         # Every entrance wants the same pool over the same loader; deriving
         # it here is what keeps it out of the entrances' hands.
         provider_pool = ProviderPool(lambda: load_runtime_config(None, None))
-    plugin_registry = plugin_stack.build_plugin_registry(ec_config)
+    notify = host.notify if host is not None else None
+    plugin_registry = plugin_stack.build_plugin_registry(ec_config, notify=notify)
     backend = plugin_stack.maybe_build_memory_backend(
-        config.workspace_path, ec_config, registry=plugin_registry, notify=(host.notify if host is not None else None)
+        config.workspace_path, ec_config, registry=plugin_registry, notify=notify
     )
     plugin_tools = plugin_stack.build_plugin_tools(
         config.workspace_path, ec_config, registry=plugin_registry, provider=provider

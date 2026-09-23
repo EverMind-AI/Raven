@@ -1351,8 +1351,13 @@ one announce path while the tools ride the plugin contract.
 The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled`,
 resolves each `module:callable` factory by dynamic import, and registers
 contributions into per-kind tables — deduping plugins by `id` and contributions by `name`
-(`PluginConflictError` on collision). `build_memory_backend()` / `build_tool()` construct a
-contribution with a fresh `PluginContext`.
+(on collision the plugin activated first keeps the name). Activation is per plugin: one
+whose factory will not import or whose name collides is rolled back whole and recorded as
+a `PluginActivationFailure` (`activation_failures()`), and every other plugin still
+activates; `build_plugin_registry` says each one to the host's notifier. A product
+launcher's render inherits the host's `plugins.disabled`, except its own engine plugin
+(`product_render.inherit_plugin_opt_outs`). `build_memory_backend()` / `build_tool()`
+construct a contribution with a fresh `PluginContext`.
 
 **Service** (`raven/contracts/services.py`):
 A plugin's background-service contribution (the `services` kind): a resident host runs it

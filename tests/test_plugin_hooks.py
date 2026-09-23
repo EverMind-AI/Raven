@@ -22,7 +22,6 @@ from raven.plugins import (
     DiscoveredPlugin,
     HookContribution,
     ManifestOrigin,
-    PluginConflictError,
     PluginManifest,
     PluginRegistry,
 )
@@ -112,11 +111,15 @@ class TestRegistryHooks:
         assert built == "hook-instance"
         assert seen["config"] == {"warn": 0.8}
 
-    def test_cross_plugin_name_conflict_raises(self) -> None:
+    def test_cross_plugin_name_conflict_skips_the_later_plugin(self) -> None:
         _install_module("_ph_b", {"make": lambda ctx: None})
         reg = PluginRegistry()
-        with pytest.raises(PluginConflictError, match="hook 'same'"):
-            reg.activate([_discovered("one", [("same", "_ph_b:make")]), _discovered("two", [("same", "_ph_b:make")])])
+        reg.activate([_discovered("one", [("same", "_ph_b:make")]), _discovered("two", [("same", "_ph_b:make")])])
+        assert reg.activated_ids() == ["one"]
+        assert reg.hook_plugin_id("same") == "one"
+        [failure] = reg.activation_failures()
+        assert failure.plugin_id == "two"
+        assert "hook 'same' contributed by both 'one' and 'two'" in failure.reason
 
 
 class TestBuildPluginHooks:
