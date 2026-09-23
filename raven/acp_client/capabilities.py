@@ -639,7 +639,14 @@ def relearn_session_modes(
     return updated
 
 
-def _looks_like_auth(text: str) -> bool:
+def looks_like_auth(text: str) -> bool:
+    """Whether a refusal reads as one about a credential.
+
+    Public because the connect path asks it too. It was private while this
+    module was its only reader, and a second reader copying the hint list
+    would be two spellings of one rule -- which is how the roster and the
+    connect button came to disagree about the same failure in the first place.
+    """
     lowered = text.lower()
     return any(hint in lowered for hint in _AUTH_HINTS)
 
@@ -736,7 +743,7 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
                 # advertisement there would label any unrelated session failure,
                 # a transient one included, as a credential story with no way out.
                 advertised = bool(handshake.auth_methods)
-                refused_over_a_credential = _looks_like_auth(exc.message)
+                refused_over_a_credential = looks_like_auth(exc.message)
                 needs_auth = refused_over_a_credential
                 status: SnapshotStatus = "attention" if advertised or refused_over_a_credential else "unknown"
                 hint = f" (auth methods: {', '.join(handshake.auth_methods)})" if handshake.auth_methods else ""

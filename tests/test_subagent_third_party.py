@@ -4226,3 +4226,61 @@ def test_the_modes_a_manager_reports_are_the_probes(tmp_path: Path, monkeypatch)
     assert [m.id for m in mgr.agent_modes("Researcher")] == ["fast", "deep"]
     assert mgr.agent_modes("claude_code") == ()
     assert mgr.agent_modes("nobody") == ()
+
+
+def test_a_credential_refusal_is_named_as_one_with_its_command() -> None:
+    """The connect path says what the reader can act on, not only what the agent said.
+
+    The agent's own words arrive as whatever prose its vendor chose inside a
+    JSON-RPC code, and the fact a reader needs -- installed, no credential -- is
+    never in them. This is the message measured from a live adapter against a
+    CLI whose own ``auth status`` reported ``loggedIn: false``.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.probe import _refusal_detail
+
+    said = (
+        "request failed: [-32603] Internal error: "
+        "Failed to authenticate: OAuth session expired and could not be refreshed."
+    )
+
+    known = _refusal_detail(SimpleNamespace(preset="claude_code"), said)
+    assert "no usable credential" in known
+    assert "claude auth login" in known, "the command is the whole point for a row that has one"
+    assert said in known, "the agent's own words stay as the evidence"
+
+    # A row whose sign-in command this repo does not know still gets the fact.
+    unknown = _refusal_detail(SimpleNamespace(preset="hermes"), said)
+    assert "no usable credential" in unknown
+    assert "sign in to it" in unknown
+    assert "`" not in unknown, "no command is better than a guessed one"
+
+
+def test_a_failure_that_is_not_about_credentials_keeps_its_own_words() -> None:
+    """Only the refusals that read as credential ones are renamed.
+
+    Everything else is reported as it came: a guess about what an unclassified
+    failure means would send a reader to fix the wrong thing.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.probe import _refusal_detail
+
+    for said in ("it started and then answered nothing", "connection ended (exit 127)"):
+        out = _refusal_detail(SimpleNamespace(preset="claude_code"), said)
+        assert out == said
+        assert "credential" not in out
+
+
+def test_the_connect_path_and_the_roster_ask_one_question() -> None:
+    """Both read the same rule, so they cannot disagree about one failure.
+
+    They did: the roster marked such a row "go and sign in" while the connect
+    button printed the raw error, because only one of them classified it.
+    """
+    from raven.acp_client.capabilities import looks_like_auth
+
+    said = "Failed to authenticate: OAuth session expired and could not be refreshed."
+    assert looks_like_auth(said)
+    assert not looks_like_auth("it started and then answered nothing")

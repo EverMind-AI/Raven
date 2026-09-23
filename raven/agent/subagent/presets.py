@@ -317,6 +317,36 @@ def install_hint_for(cfg: Any) -> str | None:
     return ACP_REGISTRY_INSTALL_HINTS.get(preset) if preset else None
 
 
+SIGN_IN_HINTS: dict[str, str] = {
+    "claude_code": "claude auth login",
+}
+"""How to sign in to the agent a row defers to, by preset key.
+
+For the failure the tables above cannot catch. ``SHIM_REQUIRED_EXECUTABLES``
+answers "the agent is not installed", which the probe can see before it spends
+anything; this answers "it is installed and has no credential", which only the
+agent itself can report, and which it reports as prose in whatever words its
+vendor chose.
+
+Only agents whose sign-in command was read from the installed tool are listed.
+An unlisted agent gets the sentence without the command, which is still the
+difference between "go and sign in" and a JSON-RPC error code -- and a wrong
+command would send a reader to fix the wrong thing, which is worse than no
+command at all.
+"""
+
+
+def sign_in_hint_for(cfg: Any) -> str | None:
+    """How to sign in to the agent this row defers to, or ``None`` when unknown.
+
+    By provenance, like :func:`install_hint_for` and for the same reason: the
+    name is the owner's to edit, so a hand-written row wearing a preset's name
+    is not that agent and must not be told to run that agent's login.
+    """
+    preset = getattr(cfg, "preset", None)
+    return SIGN_IN_HINTS.get(preset) if preset else None
+
+
 def shim_requirement_for(cfg: Any) -> tuple[str, str] | None:
     """The agent a shim-launched row needs installed, with its install, or ``None``.
 
@@ -331,8 +361,10 @@ def shim_requirement_for(cfg: Any) -> tuple[str, str] | None:
 __all__ = [
     "SHIM_LAUNCHED_PRESETS",
     "SHIM_REQUIRED_EXECUTABLES",
+    "SIGN_IN_HINTS",
     "install_hint_for",
     "shim_requirement_for",
+    "sign_in_hint_for",
     "THIRD_PARTY_SUBAGENT_PRESETS",
     "session_mcp_for",
     "third_party_subagent_presets",
